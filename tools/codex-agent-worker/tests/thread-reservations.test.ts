@@ -7,7 +7,12 @@ import {
   getCodexThreadReservations,
   releaseCodexThreadReservationsForTask,
 } from '../src/codex/thread-reservations.ts'
-import { abortTask, taskRegistry } from '../src/codex/sdk-wrapper.ts'
+import {
+  confirmTaskProcessExit,
+  requestTaskCancellation,
+  taskRegistry,
+} from '../src/codex/sdk-wrapper.ts'
+import type { TerminationOperationSummary } from '../src/models.ts'
 
 test.beforeEach(() => {
   clearCodexThreadReservationsForTests()
@@ -103,7 +108,24 @@ test('thread reservations can be released through the owning task lifecycle', as
   assert.deepEqual([...getCodexThreadReservations().keys()], ['thread-3'])
 })
 
-test('abortTask aborts the execution and releases its thread reservation through one lifecycle entry', async () => {
+function remoteCancelOperation(operationId = 'operation-1'): TerminationOperationSummary {
+  return {
+    operation_id: operationId,
+    task_id: 'task-1',
+    worker_id: 'navigator-worker-reservations',
+    kind: 'REMOTE_CANCEL',
+    origin: 'UPSTREAM_USER',
+    actor_id: 'user-1',
+    actor_type: 'USER',
+    authorization_decision_id: 'decision-1',
+    reason_code: 'USER_CANCELLED',
+    correlation_id: 'corr-1',
+    requested_at: new Date().toISOString(),
+    status: 'CANCEL_REQUESTED',
+  }
+}
+
+test('explicit cancellation remains CANCEL_REQUESTED and retains its thread reservation until observed exit', async () => {
   const abortController = new AbortController()
   taskRegistry.set('task-1', {
     taskId: 'task-1',
@@ -117,13 +139,15 @@ test('abortTask aborts the execution and releases its thread reservation through
     listProcesses: async () => [],
   })
 
-  assert.equal(abortTask('task-1', 'Codex CLI process disappeared'), true)
-  assert.equal(taskRegistry.get('task-1')?.status, 'aborted')
-  assert.equal(abortController.signal.reason, 'Codex CLI process disappeared')
+  assert.equal(requestTaskCancellation('task-1', remoteCancelOperation())?.status, 'cancel_requested')
+  assert.equal(abortController.signal.aborted, true)
+  assert.equal(getCodexThreadReservations().size, 1)
+
+  assert.equal(confirmTaskProcessExit('task-1', 'operation-1')?.status, 'aborted')
   assert.equal(getCodexThreadReservations().size, 0)
 })
 
-test('a released reservation does not allow resume while the old Codex CLI process is still alive', async () => {
+test('a cancellation-pending reservation does not allow resume while the old Codex CLI process is still alive', async () => {
   taskRegistry.set('task-old', {
     taskId: 'task-old',
     status: 'running',
@@ -136,8 +160,8 @@ test('a released reservation does not allow resume while the old Codex CLI proce
     listProcesses: async () => [],
   })
 
-  assert.equal(abortTask('task-old', 'User requested process termination'), true)
-  assert.equal(getCodexThreadReservations().size, 0)
+  assert.equal(requestTaskCancellation('task-old', remoteCancelOperation('operation-old'))?.status, 'cancel_requested')
+  assert.equal(getCodexThreadReservations().size, 1)
 
   await assert.rejects(
     acquireCodexThreadReservation('thread-1', 'task-new', {
@@ -150,7 +174,7 @@ test('a released reservation does not allow resume while the old Codex CLI proce
       }],
     }),
     (error: unknown) => error instanceof CodexThreadActiveError
-      && error.conflict.source === 'process_scan'
-      && error.conflict.pid === 321,
+      && error.conflict.source === 'reservation'
+      && error.conflict.taskId === 'task-old',
   )
 })

@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -27,7 +28,7 @@ import java.util.stream.Collectors;
  * │ DB 状态                   │ CLI 存活      │ 处理                                           │
  * ├──────────────────────────┼──────────────┼────────────────────────────────────────────────┤
  * │ RUNNING / AWAITING       │ ✓ 存活        │ touchAlive()，重置超时基准                      │
- * │ RUNNING / AWAITING       │ ✗ 已死亡      │ 先查 Worker status：有未同步事件则 reconnect，否则连续 3 次 miss 后 FAIL │
+ * │ RUNNING / AWAITING       │ ✗ 未列出      │ 先查 Worker status；有未同步事件则 reconnect，否则 PROCESS_UNVERIFIED │
  * │ COMPLETED / FAILED / ... │ ✓ 存活        │ 孤儿！记录首次发现时间，仅检测+日志（用户通过 UI 手动管理） │
  * │ COMPLETED / FAILED / ... │ ✗ 已死亡      │ 清理孤儿记录（如有）                            │
  * └──────────────────────────┴──────────────┴────────────────────────────────────────────────┘
@@ -46,12 +47,6 @@ public class TaskStateReconciler {
     // -------------------------------------------------------------------------
     // 常量配置
     // -------------------------------------------------------------------------
-
-    /**
-     * CLI 进程丢失连续阈值：连续多少次 reconcile 未见 CLI 进程后才强制失败。
-     * 容忍 Worker API 瞬间不可用或 Worker 热重启，默认 3 次 × 60s ≈ 3 分钟。
-     */
-    private static final int DEAD_CLI_MISS_THRESHOLD = 3;
 
     /**
      * 新建任务保护期（分钟）：任务刚创建时 CLI 进程可能尚未启动，忽略孤儿/丢失检测。
@@ -95,7 +90,8 @@ public class TaskStateReconciler {
             try {
                 reconcileWorker(worker);
             } catch (Exception e) {
-                log.warn("Reconciler: failed for worker={}: {}", worker.getWorkerId(), e.getMessage());
+                log.warn("Reconciler: failed for worker={}: errorCode={}, errorType={}", worker.getWorkerId(),
+                        lifecycleDiagnosticCode(e), exceptionType(e));
             }
         }
         cleanStaleMissEntries();
@@ -116,7 +112,8 @@ public class TaskStateReconciler {
                     .listCliProcesses()
                     .block(Duration.ofSeconds(8));
         } catch (Exception e) {
-            log.debug("Reconciler: cannot reach worker={}, skipping: {}", workerId, e.getMessage());
+            log.debug("Reconciler: cannot reach worker={}, skipping: errorCode={}, errorType={}", workerId,
+                    lifecycleDiagnosticCode(e), exceptionType(e));
             return; // Worker 离线由 WorkerHealthChecker 处理
         }
 
@@ -146,7 +143,7 @@ public class TaskStateReconciler {
         }
 
         // 3. 从 DB 获取该 Worker 的所有活跃任务
-        List<String> activeStatuses = List.of("RUNNING", "AWAITING_PERMISSION");
+        List<String> activeStatuses = List.of("RUNNING", "AWAITING_PERMISSION", "CANCEL_REQUESTED");
         List<ClaudeTaskEntity> activeTasks =
                 taskRepository.findByWorkerIdAndStatusIn(workerId, activeStatuses);
         Set<String> activeTaskIds = activeTasks.stream()
@@ -191,7 +188,8 @@ public class TaskStateReconciler {
                             }
                         }
                     } catch (Exception e) {
-                        log.debug("Reconciler: task status query failed for {}: {}", taskId, e.getMessage());
+                        log.debug("Reconciler: task status query failed for {}: errorCode={}, errorType={}", taskId,
+                                lifecycleDiagnosticCode(e), exceptionType(e));
                     }
                 }
 
@@ -203,89 +201,37 @@ public class TaskStateReconciler {
                     continue;
                 }
 
-                // ★ 先查 Worker 的 task status：CLI 可能正常完成后退出，Worker 持久化层仍有完整事件
-                boolean recoveredFromWorker = false;
+                // A missing process is not a reliable terminal signal: it can
+                // be a late spawn, an incomplete process listing, a worker
+                // restart, or a network failure.  Replay real Worker events
+                // when available; otherwise retain ownership with attention.
+                boolean replayStarted = false;
                 try {
                     String workerLookupTaskId = taskService.resolveWorkerTaskLookupId(task);
                     Map<String, Object> taskStatus = workerService.createClient(worker)
                             .getTaskStatus(workerLookupTaskId)
                             .block(Duration.ofSeconds(5));
                     if (taskStatus != null) {
-                        boolean closed = Boolean.TRUE.equals(taskStatus.get("closed"));
                         int workerLatestSeq = ((Number) taskStatus.getOrDefault("latest_seq", 0)).intValue();
                         AtomicInteger javaSeqTracker = streamRelay.getLastAckedSeq(taskId);
                         int javaLatestSeq = javaSeqTracker != null ? javaSeqTracker.get() : 0;
-
                         if (workerLatestSeq > javaLatestSeq) {
-                            // Worker 有 Java 未收到的事件 → 触发重连补数据（而非直接 FAIL）
-                            log.info("Reconciler: task={} CLI exited but Worker has unsync'd events "
-                                            + "(closed={}, worker_seq={}, java_seq={}, gap={}), "
-                                            + "triggering reconnect instead of FAIL",
-                                    taskId, closed, workerLatestSeq, javaLatestSeq,
-                                    workerLatestSeq - javaLatestSeq);
-                            cliDeadMissCount.remove(taskId);
+                            log.info("Reconciler: task={} has {} unconsumed Worker events; reconnecting for evidence",
+                                    taskId, workerLatestSeq - javaLatestSeq);
                             streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
-                            recoveredFromWorker = true;
-                        } else if (closed && workerLatestSeq > 0 && workerLatestSeq == javaLatestSeq) {
-                            // Worker 已 closed 且 seq 一致 → Java 已收齐全部事件。
-                            // 如果 DB 仍是活跃态，说明 completion/error 事件没有成功收口，直接终结任务，
-                            // 避免下一轮继续等待或重复触发 reconnect 提示。
-                            log.info("Reconciler: task={} CLI exited, Worker closed, seq aligned (seq={}) - "
-                                            + "marking COMPLETED to close stale active state",
-                                    taskId, workerLatestSeq);
-                            cliDeadMissCount.remove(taskId);
-                            taskService.reconcilerCompleteTask(taskId,
-                                    "Worker stream closed and all events were acknowledged by Java");
-                            recoveredFromWorker = true;
+                            replayStarted = true;
                         }
                     }
                 } catch (Exception e) {
-                    log.debug("Reconciler: Worker status query failed for dead-CLI task {}: {}",
-                            taskId, e.getMessage());
+                    log.debug("Reconciler: Worker status query failed for uncertain task {}: errorCode={}, errorType={}",
+                            taskId, lifecycleDiagnosticCode(e), exceptionType(e));
                 }
 
-                if (!recoveredFromWorker) {
-                    // Worker 也无数据或查询失败 → 走宽限 miss 计数逻辑
+                if (!replayStarted) {
                     int misses = cliDeadMissCount.merge(taskId, 1, Integer::sum);
-                    log.warn("Reconciler: task={} status={} CLI dead, no Worker recovery possible (miss={}/{})",
-                            taskId, task.getStatus(), misses, DEAD_CLI_MISS_THRESHOLD);
-
-                    if (misses >= DEAD_CLI_MISS_THRESHOLD) {
-                        // ★ 再次向 Worker 确认 CLI 是否真的已死
-                        boolean confirmedCliDead = false;
-                        try {
-                            String workerLookupTaskId = taskService.resolveWorkerTaskLookupId(task);
-                            Map<String, Object> taskStatus = workerService.createClient(worker)
-                                    .getTaskStatus(workerLookupTaskId)
-                                    .block(Duration.ofSeconds(5));
-                            if (taskStatus != null) {
-                                Boolean cliAlive = (Boolean) taskStatus.get("cli_alive");
-                                confirmedCliDead = Boolean.FALSE.equals(cliAlive);
-                                log.info("Reconciler: task={} Worker CLI alive check result: cli_alive={}, confirmedDead={}",
-                                        taskId, cliAlive, confirmedCliDead);
-                            }
-                        } catch (Exception e) {
-                            log.debug("Reconciler: Worker CLI alive check failed for {}: {}", taskId, e.getMessage());
-                            // 查询失败时保守处理，认为已死（避免留下僵尸任务）
-                            confirmedCliDead = true;
-                        }
-
-                        if (confirmedCliDead) {
-                            // Rule 1: CLI exited = task done → mark COMPLETED (not FAILED)
-                            log.info("Reconciler: task={} CLI confirmed dead after {} checks — marking COMPLETED",
-                                    taskId, misses);
-                            cliDeadMissCount.remove(taskId);
-                            taskService.reconcilerCompleteTask(taskId,
-                                    "CLI process exited (detected by reconciler after "
-                                    + misses + " consecutive checks)");
-                        } else {
-                            // CLI still alive per Worker → trust Worker, just touchAlive and reset
-                            log.info("Reconciler: task={} CLI still alive per Worker — trusting Worker, resetting miss count",
-                                    taskId);
-                            cliDeadMissCount.remove(taskId);
-                            taskService.touchAlive(taskId);
-                        }
-                    }
+                    taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
+                    log.warn("Reconciler: retained task={} pending decision after missing-process observation (miss={})",
+                            taskId, misses);
                 }
             }
         }
@@ -349,8 +295,33 @@ public class TaskStateReconciler {
             Optional<ClaudeTaskEntity> opt = taskRepository.findByTaskId(taskId);
             if (opt.isEmpty()) return true;
             String status = opt.get().getStatus();
-            return !"RUNNING".equals(status) && !"AWAITING_PERMISSION".equals(status);
+            return !"RUNNING".equals(status)
+                    && !"AWAITING_PERMISSION".equals(status)
+                    && !"CANCEL_REQUESTED".equals(status);
         });
+    }
+
+    /**
+     * Preserve a bounded, useful transport code without allowing a Worker
+     * response body or CLI stderr to enter lifecycle logs.
+     */
+    private static String lifecycleDiagnosticCode(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof WebClientResponseException response) {
+                return "CLAUDE_WORKER_HTTP_" + response.getStatusCode().value();
+            }
+            String message = current.getMessage();
+            if (message != null && message.matches("[A-Z][A-Z0-9_]{0,127}")) {
+                return message;
+            }
+            current = current.getCause();
+        }
+        return "CLAUDE_RECONCILIATION_UNCONFIRMED";
+    }
+
+    private static String exceptionType(Throwable error) {
+        return error == null ? "UnknownException" : error.getClass().getSimpleName();
     }
 
     // -------------------------------------------------------------------------

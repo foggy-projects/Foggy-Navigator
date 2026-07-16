@@ -49,6 +49,12 @@ AGENT_WORKER_WORKER_NAME=我的开发机
 AGENT_WORKER_WORKER_TOKEN=随便取一个强密码
 ```
 
+若要启用 Navigator 发起的签名取消或人工 PID 终止，还必须配置平台分配的、稳定的 Worker ID（不是显示名称）：
+
+```properties
+AGENT_WORKER_NAVIGATOR_WORKER_ID=Navigator-中注册的-Worker-ID
+```
+
 ### 3. 启动
 
 ```powershell
@@ -129,6 +135,8 @@ curl http://localhost:3031/health
 | `AGENT_WORKER_HOST` | `0.0.0.0` | 监听地址。`0.0.0.0` 允许远程访问 |
 | `AGENT_WORKER_WORKER_NAME` | `""` | Worker 显示名称，在 Navigator 前端展示 |
 | `AGENT_WORKER_WORKER_TOKEN` | `""` | 认证令牌。Navigator 调用 Worker 时携带此令牌。**留空则跳过认证（仅限开发）** |
+| `AGENT_WORKER_NAVIGATOR_WORKER_ID` | `""` | 平台分配的稳定 Worker ID。签名终止 capability 的 `worker_id` 必须精确匹配；留空时取消/PID 终止接口会失败关闭 |
+| `AGENT_WORKER_TERMINATION_OPERATION_LEDGER_DIR` | 包内 `logs/termination-operations/` | 已签名终止 operation 的持久一次性 receipt 目录；覆盖值必须为绝对路径，生产必须在同一 PhysicalWorker 重启后保留并复用 |
 
 ### 安全配置
 
@@ -148,6 +156,8 @@ AGENT_WORKER_ALLOWED_CWDS=["/home/user/projects","/opt/work"]
 ```
 
 **目录规则**：配置父目录即可覆盖所有子目录。例如配置 `D:\projects`，则 `D:\projects\foo`、`D:\projects\bar\baz` 都允许访问。
+
+签名取消和人工 PID kill 在发出任何 interrupt/信号前会原子写入 receipt。相同 `worker_id + operation_id` 的重放返回 `409`；receipt 目录损坏、不可写或容量已满时返回 `503`，不会降级为内存防重放。默认 ledger 与事件持久化独立，即使关闭事件持久化也必须保留。不要让同一 Navigator PhysicalWorker ID 在多个独立或易失 ledger 副本上并行运行；应使用独立 Worker ID/路由，或另行验证共享原子 claim 存储。
 
 ### LLM 凭证配置（Fallback）
 

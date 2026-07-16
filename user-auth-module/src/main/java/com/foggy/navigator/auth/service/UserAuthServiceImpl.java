@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -263,8 +264,15 @@ public class UserAuthServiceImpl implements UserAuthService {
     @Override
     public boolean hasRole(String userId, String role) {
         return userRepository.findById(userId)
-                .map(user -> user.getRoles() != null && user.getRoles().contains(role))
+                .map(user -> hasExactRole(user.getRoles(), role))
                 .orElse(false);
+    }
+
+    private boolean hasExactRole(String roles, String requiredRole) {
+        return roles != null && requiredRole != null
+                && Arrays.stream(roles.split(","))
+                .map(String::trim)
+                .anyMatch(requiredRole::equals);
     }
 
     @Override

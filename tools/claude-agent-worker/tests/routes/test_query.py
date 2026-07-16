@@ -13,6 +13,7 @@ Route-level HTTP tests (SSE streaming) are left for L3 integration tests.
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,7 +23,9 @@ from agent_worker.routes.query import (
     _purge_stale_tasks,
     _resolve_task_entry,
     _validate_cwd,
+    respond_to_permission,
 )
+from agent_worker.models import PermissionResponse
 from agent_worker.claude.sdk_wrapper import (
     permission_pending,
     task_registry,
@@ -80,7 +83,7 @@ class TestValidateCwd:
 # ---------------------------------------------------------------------------
 
 class TestPurgeStale:
-    """_purge_stale_tasks removes registry entries whose asyncio task is done."""
+    """Only terminal-observed tasks are released by stale-entry maintenance."""
 
     def setup_method(self):
         task_registry.clear()
@@ -96,10 +99,12 @@ class TestPurgeStale:
         task_registry["stale-1"] = {
             "asyncio_task": mock_task,
             "foggy_task_id": "foggy-1",
+            "terminal_observed": True,
+            "terminal_status": "COMPLETED",
+            "terminal_source": "PROVIDER_TERMINAL_EVENT",
         }
 
-        with patch("agent_worker.routes.query._find_sdk_cli_pids", return_value=set()):
-            _purge_stale_tasks()
+        _purge_stale_tasks()
 
         assert "stale-1" not in task_registry
 
@@ -109,12 +114,14 @@ class TestPurgeStale:
         task_registry["stale-1"] = {
             "asyncio_task": mock_task,
             "foggy_task_id": "foggy-1",
+            "terminal_observed": True,
+            "terminal_status": "ABORTED",
+            "terminal_source": "VERIFIED_MANAGED_PROCESS_EXIT",
         }
         permission_pending["perm-1"] = {"task_id": "stale-1"}
         permission_pending["perm-2"] = {"task_id": "other-task"}
 
-        with patch("agent_worker.routes.query._find_sdk_cli_pids", return_value=set()):
-            _purge_stale_tasks()
+        _purge_stale_tasks()
 
         assert "perm-1" not in permission_pending
         assert "perm-2" in permission_pending  # different task, preserved
@@ -127,14 +134,60 @@ class TestPurgeStale:
             "foggy_task_id": "foggy-1",
         }
 
-        with patch("agent_worker.routes.query._find_sdk_cli_pids", return_value=set()):
-            _purge_stale_tasks()
+        _purge_stale_tasks()
 
         assert "active-1" in task_registry
 
+    def test_done_task_without_terminal_evidence_is_retained(self):
+        mock_task = MagicMock()
+        mock_task.done.return_value = True
+        task_registry["unverified-1"] = {
+            "asyncio_task": mock_task,
+            "foggy_task_id": "foggy-unverified",
+        }
+
+        _purge_stale_tasks()
+
+        assert "unverified-1" in task_registry
+        assert task_registry["unverified-1"]["attention_state"] == "PROCESS_UNVERIFIED"
+
+    def test_closed_stream_with_active_producer_is_not_purged(self):
+        outer_task = MagicMock()
+        outer_task.done.return_value = True
+        producer_task = MagicMock()
+        producer_task.done.return_value = False
+        broadcast = MagicMock()
+        broadcast.closed = True
+        task_registry["still-running"] = {
+            "asyncio_task": outer_task,
+            "producer_task": producer_task,
+            "broadcast": broadcast,
+            "foggy_task_id": "foggy-still-running",
+        }
+
+        _purge_stale_tasks()
+
+        assert "still-running" in task_registry
+
+    def test_producer_and_stream_completion_without_terminal_event_is_retained(self):
+        producer_task = MagicMock()
+        producer_task.done.return_value = True
+        broadcast = MagicMock()
+        broadcast.closed = True
+        task_registry["completed-1"] = {
+            "producer_task": producer_task,
+            "broadcast": broadcast,
+            "foggy_task_id": "foggy-completed",
+        }
+
+        with patch("agent_worker.claude.process_detection.get_pids_for_task", return_value=[]):
+            _purge_stale_tasks()
+
+        assert "completed-1" in task_registry
+        assert task_registry["completed-1"]["attention_state"] == "PROCESS_UNVERIFIED"
+
     def test_empty_registry_noop(self):
-        with patch("agent_worker.routes.query._find_sdk_cli_pids", return_value=set()):
-            _purge_stale_tasks()  # should not raise
+        _purge_stale_tasks()  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +233,40 @@ class TestResolveTaskEntry:
         assert result is not None
         tid, _ = result
         assert tid == "direct-match"
+
+
+# ---------------------------------------------------------------------------
+# respond_to_permission
+# ---------------------------------------------------------------------------
+
+class TestRespondToPermission:
+    """Permission response diagnostics retain metadata, never answer content."""
+
+    def setup_method(self):
+        permission_pending.clear()
+
+    def teardown_method(self):
+        permission_pending.clear()
+
+    @pytest.mark.asyncio
+    async def test_response_log_redacts_answer_values(self, caplog):
+        secret_answer = "customer-answer-secret-9b8b"
+        event = asyncio.Event()
+        permission_pending["perm-log-redaction"] = {
+            "task_id": "task-log-redaction",
+            "event": event,
+        }
+
+        body = PermissionResponse(
+            permission_id="perm-log-redaction",
+            decision="allow",
+            answers={"question-secret-9b8b": secret_answer},
+        )
+        with caplog.at_level(logging.INFO, logger="agent_worker.routes.query"):
+            response = await respond_to_permission("task-log-redaction", body)
+
+        assert response["status"] == "responded"
+        assert event.is_set()
+        assert secret_answer not in caplog.text
+        assert "question-secret-9b8b" not in caplog.text
+        assert "answer_count=1" in caplog.text

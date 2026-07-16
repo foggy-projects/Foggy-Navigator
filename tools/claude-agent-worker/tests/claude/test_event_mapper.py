@@ -164,6 +164,9 @@ class TestMapResult:
         assert d["model"] == "claude-sonnet-4-20250514"
         assert d["task_id"] == "t1"
         assert d["session_id"] == "s1"
+        assert d["terminal_observed"] is True
+        assert d["terminal_status"] == "COMPLETED"
+        assert d["terminal_source"] == "PROVIDER_TERMINAL_EVENT"
 
     def test_minimal_result(self):
         d = map_result(task_id="t1", result_text=None, cost_usd=None, duration_ms=None)
@@ -201,6 +204,25 @@ class TestMapSystem:
     def test_with_session_id(self):
         d = map_system(task_id="t1", subtype="status", session_id="s1")
         assert d["session_id"] == "s1"
+
+    def test_with_lifecycle_metadata(self):
+        d = map_system(
+            task_id="t1",
+            subtype="lifecycle_attention",
+            attention=[{"code": "TIMEOUT_PENDING_DECISION", "recoverable": True}],
+            attention_status="TIMEOUT_PENDING_DECISION",
+            available_actions=["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"],
+            lifecycle_state="RUNNING",
+            termination_operation={
+                "operation_id": "op-1",
+                "worker_id": "navigator-worker-1",
+                "status": "UNCONFIRMED",
+            },
+        )
+        assert d["attention_status"] == "TIMEOUT_PENDING_DECISION"
+        assert d["available_actions"] == ["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"]
+        assert d["termination_operation"]["operation_id"] == "op-1"
+        assert d["termination_operation"]["worker_id"] == "navigator-worker-1"
 
 
 class TestMapPermissionRequest:
@@ -310,6 +332,21 @@ class TestMapError:
         assert d["type"] == "error"
         assert d["error"] == "Something went wrong"
         assert d["task_id"] == "t1"
+        assert "terminal_observed" not in d
+        assert "terminal_status" not in d
+        assert "terminal_source" not in d
+
+    def test_with_verified_terminal_metadata(self):
+        d = map_error(
+            task_id="t1",
+            error="CLI returned a verified failure",
+            terminal_observed=True,
+            terminal_status="FAILED",
+            terminal_source="PROVIDER_TERMINAL_EVENT",
+        )
+        assert d["terminal_observed"] is True
+        assert d["terminal_status"] == "FAILED"
+        assert d["terminal_source"] == "PROVIDER_TERMINAL_EVENT"
 
     def test_with_session(self):
         d = map_error(task_id="t1", error="Timeout", session_id="s1")

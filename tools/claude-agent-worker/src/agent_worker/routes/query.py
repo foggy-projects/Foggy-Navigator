@@ -6,19 +6,33 @@ import logging
 import os
 import platform
 import shutil
-import signal
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import verify_token
-from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk, _find_sdk_cli_pids, EventBroadcast
+from ..claude.sdk_wrapper import (
+    SdkWrapper,
+    task_registry,
+    permission_pending,
+    _sdk_available,
+    _use_agent_sdk,
+    EventBroadcast,
+    has_verified_terminal_evidence,
+)
+from ..claude import event_mapper
 from ..config import settings
 from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest, RewindRequest
+from ..termination import (
+    OPERATION_HEADER,
+    SIGNATURE_HEADER,
+    verify_termination_capability,
+)
 from .utils import is_path_within_allowed_root
 
 logger = logging.getLogger(__name__)
@@ -26,6 +40,130 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["query"], dependencies=[Depends(verify_token)])
 
 _wrapper = SdkWrapper()
+
+_PENDING_DECISION_ACTIONS = ["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"]
+_TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "ABORTED"})
+_VERIFIED_TERMINAL_SOURCES = frozenset({
+    "PROVIDER_TERMINAL_EVENT",
+    "VERIFIED_MANAGED_PROCESS_EXIT",
+})
+
+
+def _load_persisted_terminal_evidence(
+    store: Any,
+    task_id: str,
+) -> dict[str, Any] | None:
+    """Return the latest explicit, durable terminal event for a task.
+
+    Event-stream closure and a replay sequence only establish transport state.
+    They are deliberately not terminal evidence: a diagnostic ``error`` or a
+    detached producer can close the stream while the managed CLI remains
+    unresolved.  Persisted terminal state therefore requires all three
+    additive fields and a known verified source.
+    """
+
+    load_events = getattr(store, "load_events", None)
+    if not callable(load_events):
+        logger.warning("Event store does not support durable terminal lookup: task=%s", task_id)
+        return None
+
+    try:
+        events = load_events(task_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load durable events for terminal lookup: task=%s type=%s",
+            task_id,
+            type(exc).__name__,
+        )
+        return None
+
+    for event in reversed(events):
+        if not isinstance(event, dict) or event.get("terminal_observed") is not True:
+            continue
+        terminal_status = event.get("terminal_status")
+        terminal_source = event.get("terminal_source")
+        if (
+            not isinstance(terminal_status, str)
+            or terminal_status not in _TERMINAL_STATUSES
+            or not isinstance(terminal_source, str)
+            or terminal_source not in _VERIFIED_TERMINAL_SOURCES
+        ):
+            continue
+        return {
+            "terminal_status": terminal_status,
+            "terminal_source": terminal_source,
+            "event_seq": event.get("seq"),
+        }
+
+    return None
+
+
+def _attention_payload(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expose the current recoverable attention without changing old fields."""
+
+    attention_state = entry.get("attention_state")
+    if not isinstance(attention_state, str) or not attention_state:
+        return []
+    evidence = entry.get("lifecycle_evidence")
+    payload: dict[str, Any] = {
+        "code": attention_state,
+        "recoverable": not has_verified_terminal_evidence(entry),
+    }
+    if isinstance(evidence, dict):
+        source = evidence.get("source")
+        if isinstance(source, str) and source:
+            payload["source"] = source
+        observed_at = evidence.get("observed_at")
+        if isinstance(observed_at, str) and observed_at:
+            payload["observed_at"] = observed_at
+    return [payload]
+
+
+def _available_actions(entry: dict[str, Any]) -> list[str]:
+    """Return explicit next actions only while a task remains non-terminal."""
+
+    if has_verified_terminal_evidence(entry):
+        return []
+    if entry.get("attention_state") or entry.get("cancel_requested"):
+        return list(_PENDING_DECISION_ACTIONS)
+    return []
+
+
+def _lifecycle_state(entry: dict[str, Any]) -> str:
+    """Translate internal observation bookkeeping to the stable v2 state."""
+
+    if has_verified_terminal_evidence(entry):
+        return str(entry.get("terminal_lifecycle_state") or "COMPLETED")
+    if entry.get("execution_state") == "CANCEL_REQUESTED" or entry.get("cancel_requested"):
+        return "CANCEL_REQUESTED"
+    return "RUNNING"
+
+
+async def _emit_lifecycle_event(
+    *,
+    task_id: str,
+    entry: dict[str, Any],
+    subtype: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Publish an additive lifecycle event when the task stream is still open."""
+
+    broadcast: EventBroadcast | None = entry.get("broadcast")
+    if broadcast is None or broadcast.closed:
+        return
+    await broadcast.put(
+        event_mapper.map_system(
+            task_id=task_id,
+            subtype=subtype,
+            data=data,
+            session_id=entry.get("session_id"),
+            attention=_attention_payload(entry),
+            attention_status=entry.get("attention_state"),
+            available_actions=_available_actions(entry),
+            lifecycle_state=_lifecycle_state(entry),
+            termination_operation=entry.get("termination_operation"),
+        )
+    )
 
 
 def _find_claude_cli() -> str:
@@ -67,26 +205,46 @@ def _find_claude_cli() -> str:
 
 
 def _purge_stale_tasks() -> None:
-    """Remove task_registry entries whose asyncio task has finished but were
-    never cleaned up (e.g. ``has_external_subscriber`` leak, crashed generator).
+    """Purge only tasks with observed terminal evidence.
 
-    Also checks system-level Claude CLI processes via ``_find_sdk_cli_pids()``
-    to confirm there is truly nothing running.
+    An ``asyncio.Task.done()`` observation alone is not permission to release a
+    managed CLI.  The SDK task may have detached while a child CLI is still
+    alive, so ambiguous cases remain queryable with ``PROCESS_UNVERIFIED``.
     """
+
+    from ..claude.process_detection import get_pids_for_task, is_cli_process
 
     stale_ids: list[str] = []
     for tid, entry in list(task_registry.items()):
         atask: asyncio.Task | None = entry.get("asyncio_task")
-        if atask is not None and atask.done():
+        producer_task: asyncio.Task | None = entry.get("producer_task")
+        observation_task = producer_task or atask
+        if has_verified_terminal_evidence(entry):
             stale_ids.append(tid)
+            continue
+        if observation_task is None or not observation_task.done():
+            continue
+
+        broadcast: EventBroadcast | None = entry.get("broadcast")
+        live_pids = [pid for pid in get_pids_for_task(tid) if is_cli_process(pid)]
+        entry["execution_state"] = (
+            "CANCEL_REQUESTED" if entry.get("cancel_requested") else "ACTIVE_TASK_EXECUTION"
+        )
+        entry["attention_state"] = "PROCESS_UNVERIFIED"
+        entry["lifecycle_evidence"] = {
+            "source": "ASYNCIO_TASK_OBSERVATION_UNVERIFIED",
+            "reason": "TASK_DONE_WITHOUT_EXPLICIT_TERMINAL_EVENT",
+            "stream_closed": bool(broadcast and broadcast.closed),
+            "live_pid_count": len(live_pids),
+        }
+        logger.warning(
+            "Retained task with unverified process state: task_id=%s foggy_task_id=%s",
+            tid,
+            entry.get("foggy_task_id"),
+        )
 
     if not stale_ids:
         return
-
-    # Double-check: if there are still live CLI processes, only purge entries
-    # whose asyncio task is done (the CLI might be an orphan from another
-    # entry, but that's safer than accidentally dropping a live task).
-    live_cli_pids = _find_sdk_cli_pids()
 
     for tid in stale_ids:
         entry = task_registry.pop(tid, None)
@@ -96,9 +254,8 @@ def _purge_stale_tasks() -> None:
                 if permission_pending[pid].get("task_id") == tid:
                     permission_pending.pop(pid, None)
             logger.warning(
-                "Purged stale task from registry: task_id=%s, foggy_task_id=%s "
-                "(asyncio_task done, live_cli_pids=%d)",
-                tid, entry.get("foggy_task_id"), len(live_cli_pids),
+                "Purged terminal-observed task from registry: task_id=%s, foggy_task_id=%s",
+                tid, entry.get("foggy_task_id"),
             )
 
 
@@ -176,15 +333,15 @@ async def _event_generator(
         cancel_event = QueryEvent(
             type="error",
             task_id=task_id,
-            error="Task was cancelled",
+            error="CLAUDE_CANCEL_REQUESTED",
         )
         yield {"event": "message", "data": cancel_event.model_dump_json()}
     except Exception as exc:
-        logger.exception("Unexpected error in task %s", task_id)
+        logger.error("Unexpected error in task %s: type=%s", task_id, type(exc).__name__)
         error_event = QueryEvent(
             type="error",
             task_id=task_id,
-            error=str(exc),
+            error="CLAUDE_QUERY_STREAM_UNCONFIRMED",
         )
         yield {"event": "message", "data": error_event.model_dump_json()}
 
@@ -272,9 +429,13 @@ async def respond_to_permission(task_id: str, body: PermissionResponse):
         entry["answers"] = body.answers
     entry["event"].set()
 
+    answer_count = len(body.answers) if isinstance(body.answers, dict) else 0
     logger.info(
-        "Permission responded: task_id=%s, permission_id=%s, decision=%s, answers=%s",
-        task_id, body.permission_id, body.decision, body.answers,
+        "Permission responded: task_id=%s, permission_id=%s, decision=%s, answer_count=%d",
+        task_id,
+        body.permission_id,
+        body.decision,
+        answer_count,
     )
 
     return {"task_id": task_id, "permission_id": body.permission_id, "status": "responded"}
@@ -291,7 +452,7 @@ async def rewind_files(body: RewindRequest):
     if not _sdk_available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Claude Code SDK is not installed",
+            detail="CLAUDE_SDK_UNAVAILABLE",
         )
 
     cwd = _validate_cwd(body.cwd)
@@ -300,7 +461,7 @@ async def rewind_files(body: RewindRequest):
     if _use_agent_sdk:
         try:
             cli_path = _find_claude_cli()
-            logger.info("Using Claude CLI at: %s", cli_path)
+            logger.info("Using configured Claude CLI for rewind")
             env = _wrapper._build_env()
             result = subprocess.run(
                 [cli_path, "--resume", body.claude_session_id,
@@ -313,11 +474,10 @@ async def rewind_files(body: RewindRequest):
             )
 
             if result.returncode != 0:
-                logger.error("Rewind CLI failed: returncode=%d, stderr=%s",
-                             result.returncode, result.stderr[:500] if result.stderr else None)
+                logger.error("Rewind CLI failed: returncode=%d", result.returncode)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Rewind failed: {result.stderr or 'unknown error'}",
+                    detail="CLAUDE_REWIND_FAILED",
                 )
 
             logger.info("Rewind successful: session=%s, checkpoint=%s",
@@ -329,82 +489,154 @@ async def rewind_files(body: RewindRequest):
             }
 
         except subprocess.TimeoutExpired:
+            logger.warning("Rewind CLI timed out")
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Rewind timed out (30s)",
+                detail="CLAUDE_REWIND_TIMEOUT",
             )
         except HTTPException:
             raise
         except Exception as exc:
-            logger.exception("Rewind error: %s", exc)
+            logger.error("Rewind failed: type=%s", type(exc).__name__)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Rewind failed: {exc}",
+                detail="CLAUDE_REWIND_FAILED",
             )
 
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Rewind requires claude-agent-sdk",
+        detail="CLAUDE_REWIND_UNSUPPORTED",
     )
 
 
 @router.post("/query/{task_id}/abort", response_model=AbortResponse)
-async def abort_query(task_id: str) -> AbortResponse:
-    """Cancel a running query and kill its CLI process(es).
+async def abort_query(
+    task_id: str,
+    operation: str | None = Header(None, alias=OPERATION_HEADER),
+    signature: str | None = Header(None, alias=SIGNATURE_HEADER),
+) -> AbortResponse:
+    """Request an explicitly-authorized cancellation for a managed query.
 
-    Accepts either the Worker's internal UUID *or* the Foggy platform
-    ``foggy_task_id``.  Snapshots tracked PIDs before any mutation so
-    they survive the asyncio finally-block cleanup.
+    The acknowledgement is intentionally non-terminal: task ownership stays
+    active until the SDK/CLI stream provides actual exit evidence.  This route
+    never escalates an observation problem into a PID signal; emergency PID
+    action is isolated in ``/processes/{pid}/kill`` and requires its own
+    ``MANUAL_PID_KILL`` operation.
     """
-    from ..claude.process_detection import get_pids_for_task, is_cli_process
+    capability = verify_termination_capability(
+        encoded_operation=operation,
+        encoded_signature=signature,
+        expected_kind="REMOTE_CANCEL",
+        route_task_id=task_id,
+    )
 
     # -- Resolve task (by worker task_id or foggy_task_id) --
     result = _resolve_task_entry(task_id)
     if result is None:
-        logger.info("Abort: task '%s' already gone from registry", task_id)
-        return AbortResponse(task_id=task_id, status="cancelled")
-    resolved_id, _ = result
+        operation_summary = capability.public_summary(
+            operation_status="UNCONFIRMED",
+            observed_exit=False,
+            result="TASK_NOT_REGISTERED_PENDING_RECONCILIATION",
+        )
+        logger.warning(
+            "Cancellation requested without live registry: task=%s operation_id=%s origin=%s actor_id=%s reason_code=%s correlation_id=%s; "
+            "leaving terminal outcome to reconciler evidence",
+            task_id,
+            capability.operation_id,
+            capability.origin,
+            capability.actor_id,
+            capability.reason_code,
+            capability.correlation_id,
+        )
+        return AbortResponse(
+            task_id=task_id,
+            status="CANCEL_REQUESTED",
+            operation_id=capability.operation_id,
+            attention_state="TASK_NOT_REGISTERED_PENDING_RECONCILIATION",
+            attention=[{
+                "code": "TASK_NOT_REGISTERED_PENDING_RECONCILIATION",
+                "source": "EXPLICIT_TERMINATION_OPERATION",
+                "recoverable": True,
+            }],
+            available_actions=list(_PENDING_DECISION_ACTIONS),
+            termination_operation=operation_summary,
+        )
 
-    # Snapshot PIDs *before* pop / cancel (finally block would unregister them).
-    pids_to_kill = get_pids_for_task(resolved_id)
-
-    # -- Cancel asyncio task --
-    entry = task_registry.pop(resolved_id, None)
+    resolved_id, entry = result
     if resolved_id != task_id:
-        logger.info("Abort: resolved foggy_task_id '%s' → worker '%s'", task_id, resolved_id)
+        logger.info(
+            "Cancellation operation_id=%s resolved foggy task '%s' to worker task '%s'",
+            capability.operation_id,
+            task_id,
+            resolved_id,
+        )
 
-    atask: asyncio.Task | None = entry.get("asyncio_task") if entry else None
-    if atask is not None and not atask.done():
-        atask.cancel()
+    requested_at = datetime.now(timezone.utc).isoformat()
+    operation_summary = capability.public_summary(
+        operation_status="CANCEL_REQUESTED",
+        observed_exit=False,
+    )
+    operation_summary["requested_at"] = requested_at
+    entry["cancel_requested"] = True
+    entry["cancel_requested_at"] = requested_at
+    entry["cancel_operation_id"] = capability.operation_id
+    entry["execution_state"] = "CANCEL_REQUESTED"
+    entry["attention_state"] = "CANCELLATION_PENDING_CONFIRMATION"
+    entry["termination_operation"] = operation_summary
+    entry["lifecycle_evidence"] = {
+        "source": "EXPLICIT_TERMINATION_OPERATION",
+        "operation_id": capability.operation_id,
+        "origin": capability.origin,
+        "reason_code": capability.reason_code,
+        "observed_at": requested_at,
+    }
 
-    # -- Kill CLI processes (with identity verification to prevent false kills) --
-    killed: list[int] = []
-    skipped: list[int] = []
-    for pid in pids_to_kill:
-        # Verify the PID still belongs to a CLI process before sending SIGTERM.
-        # This prevents false kills when the OS reuses a PID for an unrelated
-        # process after the original CLI has already exited.
-        if not is_cli_process(pid):
-            logger.warning(
-                "Abort: PID %d is no longer a CLI process (exited or PID reused), "
-                "skipping to avoid false kill for task %s", pid, resolved_id,
-            )
-            skipped.append(pid)
-            continue
-        try:
-            os.kill(pid, signal.SIGTERM)
-            killed.append(pid)
-            logger.info("Abort: killed CLI pid=%d for task %s", pid, resolved_id)
-        except ProcessLookupError:
-            logger.info("Abort: pid=%d already exited", pid)
-        except OSError as exc:
-            logger.warning("Abort: failed to kill pid=%d: %s", pid, exc)
+    execution_task: asyncio.Task | None = entry.get("producer_task") or entry.get("asyncio_task")
+    if execution_task is not None and not execution_task.done():
+        # This is the sole managed-task cancellation path: the verified,
+        # one-time capability above is explicit authorization.  Do not pop the
+        # registry or signal tracked PIDs here; actual process exit remains an
+        # independently observed lifecycle transition.
+        execution_task.cancel()
+    else:
+        entry["attention_state"] = "PROCESS_UNVERIFIED"
+        operation_summary["status"] = "UNCONFIRMED"
+        operation_summary["result"] = "ASYNCIO_TASK_ALREADY_DONE_WITHOUT_TERMINAL_EVIDENCE"
+        entry["lifecycle_evidence"] = {
+            "source": "EXPLICIT_TERMINATION_OPERATION",
+            "operation_id": capability.operation_id,
+            "reason": "ASYNCIO_TASK_ALREADY_DONE_WITHOUT_TERMINAL_EVIDENCE",
+            "observed_at": requested_at,
+        }
 
-    if skipped:
-        logger.info("Abort: skipped %d stale/reused PID(s) for task %s: %s",
-                     len(skipped), resolved_id, skipped)
+    await _emit_lifecycle_event(
+        task_id=resolved_id,
+        entry=entry,
+        subtype="termination_requested",
+        data={"operation_id": capability.operation_id, "kind": capability.kind},
+    )
 
-    return AbortResponse(task_id=task_id, status="cancelled", killed_pids=killed)
+    logger.info(
+        "Cancellation accepted: task=%s resolved_task=%s operation_id=%s origin=%s actor_id=%s reason_code=%s correlation_id=%s",
+        task_id,
+        resolved_id,
+        capability.operation_id,
+        capability.origin,
+        capability.actor_id,
+        capability.reason_code,
+        capability.correlation_id,
+    )
+    return AbortResponse(
+        task_id=task_id,
+        status="CANCEL_REQUESTED",
+        operation_id=capability.operation_id,
+        attention_state=entry.get("attention_state"),
+        observed_exit=has_verified_terminal_evidence(entry),
+        attention=_attention_payload(entry),
+        available_actions=_available_actions(entry),
+        lifecycle_state=_lifecycle_state(entry),
+        termination_operation=entry.get("termination_operation"),
+    )
 
 
 def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
@@ -479,13 +711,47 @@ async def subscribe_to_task(
         finally:
             broadcast.unsubscribe(sub_queue)
             if broadcast.closed and not broadcast._subscribers:
-                # Producer finished and no subscribers left — clean up registry.
-                cleaned = task_registry.pop(real_task_id, None)
-                if cleaned:
-                    logger.info("Subscribe cleanup: removed task %s from registry (last subscriber)", real_task_id)
-                for pid in list(permission_pending):
-                    if permission_pending[pid].get("task_id") == real_task_id:
-                        permission_pending.pop(pid, None)
+                # A closed transport stream and a completed producer do not
+                # establish process exit.  Release registry/PID ownership only
+                # after an explicit terminal event was recorded.
+                from ..claude.process_detection import get_pids_for_task, is_cli_process, unregister_pids_for_task
+
+                live_pids = [pid for pid in get_pids_for_task(real_task_id) if is_cli_process(pid)]
+                reg_entry = task_registry.get(real_task_id)
+                producer_task: asyncio.Task | None = (
+                    reg_entry.get("producer_task") if reg_entry else None
+                )
+                producer_done = producer_task is None or producer_task.done()
+                if not has_verified_terminal_evidence(reg_entry):
+                    if reg_entry:
+                        reg_entry["execution_state"] = (
+                            "CANCEL_REQUESTED"
+                            if reg_entry.get("cancel_requested")
+                            else "ACTIVE_TASK_EXECUTION"
+                        )
+                        reg_entry["attention_state"] = "PROCESS_UNVERIFIED"
+                        reg_entry["lifecycle_evidence"] = {
+                            "source": "CLOSED_SSE_WITHOUT_VERIFIED_TERMINAL_EVENT",
+                            "live_pid_count": len(live_pids),
+                            "producer_done": producer_done,
+                            "action": "RETAINED_NO_AUTOMATIC_RELEASE",
+                        }
+                    logger.warning(
+                        "Subscribe cleanup retained task %s without verified terminal evidence "
+                        "(producer_done=%s, tracked_cli_pids=%d)",
+                        real_task_id,
+                        producer_done,
+                        len(live_pids),
+                    )
+                else:
+                    cleaned = task_registry.get(real_task_id)
+                    if cleaned:
+                        unregister_pids_for_task(real_task_id)
+                        task_registry.pop(real_task_id, None)
+                        logger.info("Subscribe cleanup: released task %s after verified terminal event", real_task_id)
+                    for permission_id in list(permission_pending):
+                        if permission_pending[permission_id].get("task_id") == real_task_id:
+                            permission_pending.pop(permission_id, None)
             elif not broadcast.closed and not broadcast._subscribers:
                 # SSE disconnected again but producer still alive.
                 # Mark as disconnected so Java side knows to reconnect again.
@@ -521,7 +787,7 @@ async def get_task_status(task_id: str):
         closed: Whether the event stream has ended
         cli_alive: Whether there are live CLI processes for this task
         has_subscribers: Whether any SSE subscribers are connected
-        source: "registry" (live task) or "persistence" (completed task)
+        source: "registry" (live task) or "persistence" (durably replayable task)
     """
     resolved = _resolve_task_entry(task_id)
 
@@ -530,9 +796,15 @@ async def get_task_status(task_id: str):
         real_task_id, entry = resolved
         broadcast: EventBroadcast | None = entry.get("broadcast")
 
-        # Check if CLI is alive via asyncio task
+        # The original request task may have detached after an SSE disconnect
+        # while a queue producer continues to own the CLI. Never report that
+        # observation as a terminal transition by itself.
         asyncio_task = entry.get("asyncio_task")
-        cli_alive = asyncio_task is not None and not asyncio_task.done() if asyncio_task else False
+        producer_task = entry.get("producer_task")
+        cli_alive = bool(
+            (asyncio_task is not None and not asyncio_task.done())
+            or (producer_task is not None and not producer_task.done())
+        )
 
         return {
             "task_id": real_task_id,
@@ -542,10 +814,28 @@ async def get_task_status(task_id: str):
             "cli_alive": cli_alive,
             "has_subscribers": len(broadcast._subscribers) > 0 if broadcast else False,
             "connected": entry.get("connected", False),
+            "execution_state": entry.get("execution_state", "ACTIVE_TASK_EXECUTION"),
+            "attention_state": entry.get("attention_state"),
+            "attention": _attention_payload(entry),
+            "attention_status": entry.get("attention_state"),
+            "available_actions": _available_actions(entry),
+            "lifecycle_state": _lifecycle_state(entry),
+            "termination_operation": entry.get("termination_operation"),
+            "cancel_requested": bool(entry.get("cancel_requested")),
+            "terminal_observed": has_verified_terminal_evidence(entry),
+            "terminal_status": (
+                entry.get("terminal_status") if has_verified_terminal_evidence(entry) else None
+            ),
+            "terminal_source": (
+                entry.get("terminal_source") if has_verified_terminal_evidence(entry) else None
+            ),
+            "lifecycle_evidence": entry.get("lifecycle_evidence"),
             "source": "registry",
         }
 
-    # Task not in registry — check persistence layer for completed tasks.
+    # Task not in registry — inspect the durable replay store.  Its closed
+    # marker only describes stream transport; terminal status comes solely
+    # from an explicitly marked provider/verified-exit event.
     # Resolve alias (foggy_task_id → worker task_id) since JSONL is stored
     # under worker task_id, not foggy_task_id.
     from ..persistence.factory import get_event_store
@@ -559,14 +849,69 @@ async def get_task_status(task_id: str):
     is_closed = store.is_closed(resolved_persistence_id)
 
     if latest_seq > 0 or is_closed:
+        terminal_evidence = _load_persisted_terminal_evidence(store, resolved_persistence_id)
+        if terminal_evidence is not None:
+            terminal_status = terminal_evidence["terminal_status"]
+            terminal_source = terminal_evidence["terminal_source"]
+            return {
+                "task_id": task_id,
+                "latest_seq": latest_seq,
+                "event_count": latest_seq,  # approximate (seq is 1-based monotonic)
+                "closed": is_closed,
+                # The persistence store does not perform a live PID probe.
+                "cli_alive": None,
+                "has_subscribers": False,
+                "connected": False,
+                "execution_state": "TERMINAL_OBSERVED",
+                "attention_state": None,
+                "attention": [],
+                "attention_status": None,
+                "available_actions": [],
+                "lifecycle_state": terminal_status,
+                "termination_operation": None,
+                "cancel_requested": False,
+                "terminal_observed": True,
+                "terminal_status": terminal_status,
+                "terminal_source": terminal_source,
+                "lifecycle_evidence": {
+                    "source": terminal_source,
+                    "durable": True,
+                    "event_seq": terminal_evidence["event_seq"],
+                },
+                "source": "persistence",
+            }
+
         return {
             "task_id": task_id,
             "latest_seq": latest_seq,
             "event_count": latest_seq,  # approximate (seq is 1-based monotonic)
             "closed": is_closed,
-            "cli_alive": False,
+            # A replay store cannot establish that a managed CLI is no longer
+            # alive.  Keep that observation unknown rather than infer it from
+            # a missing registry entry or a closed SSE stream.
+            "cli_alive": None,
             "has_subscribers": False,
             "connected": False,
+            "execution_state": "ACTIVE_TASK_EXECUTION",
+            "attention_state": "PROCESS_UNVERIFIED",
+            "attention": [{
+                "code": "PROCESS_UNVERIFIED",
+                "source": "EVENT_STORE",
+                "recoverable": True,
+            }],
+            "attention_status": "PROCESS_UNVERIFIED",
+            "available_actions": list(_PENDING_DECISION_ACTIONS),
+            "lifecycle_state": "RUNNING",
+            "termination_operation": None,
+            "cancel_requested": False,
+            "terminal_observed": False,
+            "terminal_status": None,
+            "terminal_source": None,
+            "lifecycle_evidence": {
+                "source": "EVENT_STORE",
+                "closed": is_closed,
+                "reason": "NO_VERIFIED_TERMINAL_EVENT",
+            },
             "source": "persistence",
         }
 

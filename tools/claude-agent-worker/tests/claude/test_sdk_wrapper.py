@@ -1,4 +1,4 @@
-"""Tests for claude/sdk_wrapper.py — EventBroadcast, _build_env, _extract_error_detail.
+"""Tests for claude/sdk_wrapper.py — EventBroadcast, _build_env, lifecycle safety.
 
 The SdkWrapper.run_query() method depends on the Claude SDK at runtime.
 We test the testable components independently:
@@ -7,13 +7,14 @@ We test the testable components independently:
   - SdkWrapper._build_skill_plugins: .agents local plugin discovery
   - SdkWrapper._apply_agents_config: agent teams config extraction
   - SdkWrapper._save_images / _augment_prompt_with_images: image handling
-  - _extract_error_detail: structured error message building
+  - _extract_error_detail: stable, sanitized diagnostic-code mapping
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,12 +24,138 @@ from agent_worker.claude.sdk_wrapper import (
     EventBroadcast,
     SdkWrapper,
     _extract_error_detail,
+    has_verified_terminal_evidence,
 )
 
 
 # ===========================================================================
 # EventBroadcast
 # ===========================================================================
+
+
+class TestSdkWrapperTerminalEvidence:
+    """Provider terminal messages carry explicit lifecycle evidence."""
+
+    @pytest.mark.asyncio
+    async def test_cli_help_result_maps_to_verified_failed_error(self):
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeResultMessage:
+            session_id = None
+            usage = {"input_tokens": 0, "output_tokens": 0}
+            num_turns = 0
+            result = "Unknown command: /help"
+            total_cost_usd = 0.0
+            duration_ms = 0
+
+        async def fake_query(*, prompt, options):
+            yield FakeResultMessage()
+
+        event_store = MagicMock()
+        with (
+            patch("agent_worker.claude.sdk_wrapper._sdk_available", True),
+            patch("agent_worker.claude.sdk_wrapper._use_agent_sdk", False),
+            patch("agent_worker.claude.sdk_wrapper._query_fn", fake_query),
+            patch("agent_worker.claude.sdk_wrapper._options_cls", FakeOptions),
+            patch("agent_worker.claude.sdk_wrapper._ResultMessage", FakeResultMessage),
+            patch("agent_worker.claude.sdk_wrapper._AssistantMessage", None),
+            patch("agent_worker.claude.sdk_wrapper._UserMessage", None),
+            patch("agent_worker.claude.sdk_wrapper._SystemMessage", None),
+            patch("agent_worker.claude.sdk_wrapper._capture_child_pids"),
+            patch(
+                "agent_worker.persistence.factory.get_event_store",
+                return_value=event_store,
+            ),
+        ):
+            events = [
+                event
+                async for event in SdkWrapper().run_query(
+                    task_id="cli-help-terminal-evidence",
+                    prompt="ordinary prompt",
+                    cwd=".",
+                )
+            ]
+
+        error = next(event for event in events if event["type"] == "error")
+        assert error["error"] == "CLAUDE_CLI_HELP_RESPONSE"
+        assert "Unknown command" not in error["error"]
+        assert error["terminal_observed"] is True
+        assert error["terminal_status"] == "FAILED"
+        assert error["terminal_source"] == "PROVIDER_TERMINAL_EVENT"
+
+    def test_terminal_evidence_requires_status_and_verified_source(self):
+        assert not has_verified_terminal_evidence({"terminal_observed": True})
+        assert not has_verified_terminal_evidence({
+            "terminal_observed": True,
+            "terminal_status": "COMPLETED",
+            "terminal_source": "SSE_CLOSED",
+        })
+        assert has_verified_terminal_evidence({
+            "terminal_observed": True,
+            "terminal_status": "COMPLETED",
+            "terminal_source": "PROVIDER_TERMINAL_EVENT",
+        })
+
+    @pytest.mark.asyncio
+    async def test_sdk_lifecycle_log_redacts_request_secrets(self, caplog):
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeResultMessage:
+            session_id = None
+            usage = {"input_tokens": 0, "output_tokens": 0}
+            num_turns = 0
+            result = "done"
+            total_cost_usd = 0.0
+            duration_ms = 0
+
+        async def fake_query(*, prompt, options):
+            yield FakeResultMessage()
+
+        secret_prompt = "customer-prompt-secret-9b8b"
+        secret_cwd = "/private/customer-repository-9b8b"
+        secret_key = "sk-private-key-9b8b"
+        secret_url = "https://private-endpoint-9b8b.example"
+        secret_tool = "private-tool-9b8b"
+        event_store = MagicMock()
+
+        with caplog.at_level(logging.INFO, logger="agent_worker.claude.sdk_wrapper"):
+            with (
+                patch("agent_worker.claude.sdk_wrapper._sdk_available", True),
+                patch("agent_worker.claude.sdk_wrapper._use_agent_sdk", False),
+                patch("agent_worker.claude.sdk_wrapper._query_fn", fake_query),
+                patch("agent_worker.claude.sdk_wrapper._options_cls", FakeOptions),
+                patch("agent_worker.claude.sdk_wrapper._ResultMessage", FakeResultMessage),
+                patch("agent_worker.claude.sdk_wrapper._AssistantMessage", None),
+                patch("agent_worker.claude.sdk_wrapper._UserMessage", None),
+                patch("agent_worker.claude.sdk_wrapper._SystemMessage", None),
+                patch("agent_worker.claude.sdk_wrapper._capture_child_pids"),
+                patch(
+                    "agent_worker.persistence.factory.get_event_store",
+                    return_value=event_store,
+                ),
+            ):
+                events = [
+                    event
+                    async for event in SdkWrapper().run_query(
+                        task_id="sdk-log-redaction",
+                        prompt=secret_prompt,
+                        cwd=secret_cwd,
+                        api_key=secret_key,
+                        base_url=secret_url,
+                        disallowed_tools=[secret_tool],
+                    )
+                ]
+
+        assert any(event["type"] == "result" for event in events)
+        for secret in (secret_prompt, secret_cwd, secret_key, secret_url, secret_tool):
+            assert secret not in caplog.text
+        assert "prompt_chars=" in caplog.text
+        assert "has_auth_material=True" in caplog.text
+        assert "disallowed_tool_count=1" in caplog.text
 
 class TestEventBroadcastBasic:
     """Core put/subscribe/close lifecycle."""
@@ -227,18 +354,37 @@ class TestEventBroadcastPersistence:
         mock_store.mark_closed.assert_called_once_with("t1")
 
     @pytest.mark.asyncio
-    async def test_persistence_failure_does_not_crash(self):
+    async def test_persistence_failure_does_not_crash_or_leak_exception_text(self, caplog):
+        secret = "event-store-secret-9b8b"
         mock_store = MagicMock()
-        mock_store.append.side_effect = Exception("disk full")
+        mock_store.append.side_effect = Exception(secret)
         b = EventBroadcast(task_id="t1", event_store=mock_store)
         q = b.subscribe()
 
         # Should not raise — persistence failure is logged, not propagated
-        await b.put({"type": "e1"})
+        with caplog.at_level(logging.WARNING, logger="agent_worker.claude.sdk_wrapper"):
+            await b.put({"type": "e1"})
 
         # Event still delivered to subscriber
         evt = await q.get()
         assert evt["type"] == "e1"
+        assert "EVENT_STORE_APPEND_FAILED" in caplog.text
+        assert secret not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_close_persistence_failure_does_not_leak_exception_text(self, caplog):
+        secret = "event-store-close-secret-9b8b"
+        mock_store = MagicMock()
+        mock_store.mark_closed.side_effect = Exception(secret)
+        b = EventBroadcast(task_id="t1", event_store=mock_store)
+        q = b.subscribe()
+
+        with caplog.at_level(logging.WARNING, logger="agent_worker.claude.sdk_wrapper"):
+            await b.put(None)
+
+        assert await q.get() is None
+        assert "EVENT_STORE_CLOSE_FAILED" in caplog.text
+        assert secret not in caplog.text
 
 
 class TestEventBroadcastSeqAssignment:
@@ -397,6 +543,19 @@ class TestSaveImages:
         saved = SdkWrapper._save_images(str(tmp_path), images)
         assert saved[0] == ".foggy-attachments/attachment"
 
+    def test_attachment_log_redacts_supplied_filename_and_path(self, tmp_path: Path, caplog):
+        secret_name = "customer-document-secret-9b8b.pdf"
+        data = base64.b64encode(b"data").decode()
+
+        with caplog.at_level(logging.INFO, logger="agent_worker.claude.sdk_wrapper"):
+            SdkWrapper._save_images(str(tmp_path / "private-workspace-9b8b"), [
+                {"name": secret_name, "data": data},
+            ])
+
+        assert secret_name not in caplog.text
+        assert "private-workspace-9b8b" not in caplog.text
+        assert "Attachment saved: byte_count=4" in caplog.text
+
     @pytest.mark.asyncio
     async def test_save_images_async_uses_to_thread(self, tmp_path: Path):
         data = base64.b64encode(b"fake-png-data").decode()
@@ -460,6 +619,17 @@ class TestApplyAgentsConfig:
         # agents should be back in extra_args
         assert "agents" in options.get("extra_args", {})
 
+    def test_invalid_agents_config_log_redacts_raw_config(self, caplog):
+        secret = "agent-config-secret-9b8b"
+        extra_args = {"agents": '{"planner": "' + secret}
+        options = {}
+        with caplog.at_level(logging.WARNING, logger="agent_worker.claude.sdk_wrapper"):
+            with patch("agent_worker.claude.sdk_wrapper._AgentDefinition", object):
+                SdkWrapper._apply_agents_config(extra_args, options)
+
+        assert "CLAUDE_AGENTS_CONFIG_INVALID" in caplog.text
+        assert secret not in caplog.text
+
 
 # ===========================================================================
 # SdkWrapper._build_skill_plugins
@@ -498,19 +668,19 @@ class TestBuildSkillPlugins:
 # ===========================================================================
 
 class TestExtractErrorDetail:
-    """_extract_error_detail builds human-readable error messages."""
+    """_extract_error_detail returns codes without leaking SDK payloads."""
 
     def test_generic_exception(self):
         exc = Exception("Something broke")
         detail = _extract_error_detail(exc, "task-1")
-        assert "[Exception]" in detail
-        assert "Something broke" in detail
+        assert detail == "CLAUDE_SDK_QUERY_FAILED"
+        assert "Something broke" not in detail
 
     def test_command_failed_message(self):
         exc = Exception("Command failed with exit code 1 (exit code: 1)")
         detail = _extract_error_detail(exc, "task-1")
-        assert "exit_code=1" in detail
-        assert "CLI Process Failed" in detail
+        assert detail == "CLAUDE_CLI_PROCESS_FAILED"
+        assert "exit_code" not in detail
 
     def test_chained_exception(self):
         inner = Exception("inner error")
@@ -519,15 +689,15 @@ class TestExtractErrorDetail:
         outer = Exception("outer error")
         outer.__cause__ = inner
         detail = _extract_error_detail(outer, "task-1")
-        assert "exit_code=42" in detail
-        assert "some stderr output" in detail
+        assert detail == "CLAUDE_CLI_PROCESS_FAILED"
+        assert "stderr" not in detail
 
     def test_chained_exception_no_special_attrs(self):
         inner = ValueError("just a value error")
         outer = RuntimeError("wrapping it")
         outer.__cause__ = inner
         detail = _extract_error_detail(outer, "task-1")
-        assert "[RuntimeError]" in detail
+        assert detail == "CLAUDE_SDK_QUERY_FAILED"
 
 
 # ===========================================================================

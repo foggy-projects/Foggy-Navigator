@@ -6,8 +6,10 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.TerminationOperationEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.session.service.TerminationOperationService;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,8 +19,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Optional;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
@@ -26,10 +32,10 @@ import static org.mockito.Mockito.*;
 /**
  * Tests for abort/cancel guard logic in ClaudeTaskService:
  * <ul>
- *   <li>failTask() skips when abortRequested=true</li>
+ *   <li>failTask() treats a verified Worker failure as terminal even with a legacy abort marker</li>
  *   <li>failTask() skips when task already in terminal state</li>
- *   <li>doAbortWorkerTask() sets and clears abortRequested flag</li>
- *   <li>doAbortWorkerTask() skips ABORTED update when already terminal</li>
+ *   <li>doAbortWorkerTask() signs and records a remote-cancel request without fabricating a terminal state</li>
+ *   <li>doAbortWorkerTask() retains cancellation for later reconciliation when dispatch is unconfirmed</li>
  * </ul>
  */
 class ClaudeTaskServiceAbortGuardTest {
@@ -102,24 +108,24 @@ class ClaudeTaskServiceAbortGuardTest {
     class FailTaskGuardTests {
 
         @Test
-        void failTask_skipsWhenAbortRequested() {
+        void failTask_recordsVerifiedFailureWhenLegacyAbortRequested() {
             ClaudeTaskEntity entity = createRunningTask();
             entity.setAbortRequested(true);
-            when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             service.failTask(TASK_ID, "worker-task-1", "claude-session-1", "Task was cancelled");
 
-            // Should NOT update status — cancel thread will handle
-            verify(taskRepository, never()).save(any());
-            // Status should remain RUNNING (not changed to FAILED)
-            org.junit.jupiter.api.Assertions.assertEquals("RUNNING", entity.getStatus());
+            assertEquals("FAILED", entity.getStatus());
+            assertEquals(false, entity.getAbortRequested());
+            verify(taskRepository).save(entity);
         }
 
         @Test
         void failTask_skipsWhenAlreadyAborted() {
             ClaudeTaskEntity entity = createRunningTask();
             entity.setStatus("ABORTED");
-            when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
 
             service.failTask(TASK_ID, "worker-task-1", "claude-session-1", "Task was cancelled");
 
@@ -131,7 +137,7 @@ class ClaudeTaskServiceAbortGuardTest {
         void failTask_skipsWhenAlreadyCompleted() {
             ClaudeTaskEntity entity = createRunningTask();
             entity.setStatus("COMPLETED");
-            when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
 
             service.failTask(TASK_ID, "worker-task-1", "claude-session-1", "some error");
 
@@ -143,13 +149,13 @@ class ClaudeTaskServiceAbortGuardTest {
         void failTask_proceedsNormally_whenNoGuardTriggered() {
             ClaudeTaskEntity entity = createRunningTask();
             entity.setAbortRequested(false);
-            when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
             when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             service.failTask(TASK_ID, "worker-task-1", "claude-session-1", "real error");
 
             org.junit.jupiter.api.Assertions.assertEquals("FAILED", entity.getStatus());
-            org.junit.jupiter.api.Assertions.assertEquals("real error", entity.getErrorMessage());
+            org.junit.jupiter.api.Assertions.assertEquals("CLAUDE_RUNTIME_REMOTE_ERROR", entity.getErrorMessage());
             verify(taskRepository).save(entity);
             verify(publisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
                     TASK_ID.equals(event.getTaskId())
@@ -164,7 +170,7 @@ class ClaudeTaskServiceAbortGuardTest {
             // null = field not set (e.g., legacy task) → treat as false
             ClaudeTaskEntity entity = createRunningTask();
             entity.setAbortRequested(null);
-            when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
             when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             service.failTask(TASK_ID, "worker-task-1", "claude-session-1", "real error");
@@ -179,7 +185,7 @@ class ClaudeTaskServiceAbortGuardTest {
         ClaudeTaskEntity entity = createRunningTask();
         entity.setStatus("FAILED");
         entity.setErrorMessage("temporary stream failure");
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.resetToRunning(TASK_ID);
@@ -201,7 +207,7 @@ class ClaudeTaskServiceAbortGuardTest {
         session.setId(SESSION_ID);
         session.setTenantId("tenant-from-session");
         when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.completeTask(TASK_ID, "worker-task-1", "claude-session-1",
@@ -219,7 +225,7 @@ class ClaudeTaskServiceAbortGuardTest {
         ClaudeTaskEntity entity = createRunningTask();
         entity.setTenantId(null);
         when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.empty());
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(null);
 
@@ -231,83 +237,228 @@ class ClaudeTaskServiceAbortGuardTest {
         verify(publisher, never()).publishEvent(any(TaskStatusChangeEvent.class));
     }
 
+    @Test
+    void manualPidKillPersistsAndSignsFreshProcessIdentity() throws Exception {
+        ClaudeTaskEntity entity = createRunningTask();
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(ClaudeTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        TerminationOperationService terminationOperationService = mock(TerminationOperationService.class);
+        when(terminationOperationService.hasActiveOperationForTask(TASK_ID)).thenReturn(false);
+        TerminationOperationService.CreateCommand[] accepted = new TerminationOperationService.CreateCommand[1];
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            accepted[0] = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to-manual-pid");
+            operation.setSchemaVersion(1);
+            operation.setProviderTaskId(accepted[0].providerTaskId());
+            operation.setWorkerId(accepted[0].workerId());
+            operation.setKind(accepted[0].kind());
+            operation.setOrigin(accepted[0].origin());
+            operation.setActorId(accepted[0].actorId());
+            operation.setActorType(accepted[0].actorType());
+            operation.setAuthorizationDecisionId(accepted[0].authorizationDecisionId());
+            operation.setReasonCode(accepted[0].reasonCode());
+            operation.setCorrelationId(accepted[0].correlationId());
+            operation.setExpectedPid(accepted[0].expectedPid());
+            operation.setExpectedProcessIdentity(accepted[0].expectedProcessIdentity());
+            return operation;
+        });
+        var field = ClaudeTaskService.class.getDeclaredField("terminationOperationService");
+        field.setAccessible(true);
+        field.set(service, terminationOperationService);
+
+        String processIdentity = "claude-cli:321:2026-07-16T03:40:13.655Z";
+        ClaudeTaskService.ManualPidKillRequest request = service.prepareManualPidKill(
+                TASK_ID, WORKER_ID, USER_ID, "TENANT_ADMIN_MANUAL", TENANT_ID, true,
+                321, processIdentity, "worker-token");
+
+        assertEquals(processIdentity, accepted[0].expectedProcessIdentity());
+        assertTrue(accepted[0].authorizationDecisionId().startsWith("authz-v1:tenant_admin_manual:"));
+        assertNotEquals(accepted[0].authorizationDecisionId(), accepted[0].correlationId());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        String payload = new String(Base64.getUrlDecoder().decode(request.capability().encodedOperation()),
+                StandardCharsets.UTF_8);
+        assertTrue(payload.contains("\"expected_process_identity\":\"" + processIdentity + "\""));
+        verify(terminationOperationService).markDispatchStarted("to-manual-pid");
+    }
+
+    @Test
+    void manualPidKillRejectsOrdinaryTaskOwnerDespiteFreshProcessBinding() throws Exception {
+        ClaudeTaskEntity entity = createRunningTask();
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        TerminationOperationService terminationOperationService = mock(TerminationOperationService.class);
+        var field = ClaudeTaskService.class.getDeclaredField("terminationOperationService");
+        field.setAccessible(true);
+        field.set(service, terminationOperationService);
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill(TASK_ID, WORKER_ID, USER_ID, "USER_MANUAL", TENANT_ID, false,
+                        321, "claude-cli:321:2026-07-16T03:40:13.655Z", "worker-token"));
+
+        assertEquals("TERMINATION_TASK_ACCESS_DENIED", error.getMessage());
+        verify(terminationOperationService, never()).accept(any());
+    }
+
+    @Test
+    void manualPidKillRejectsMissingOrWrongPidProcessIdentityBeforeDispatch() {
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill(TASK_ID, WORKER_ID, USER_ID, "TENANT_ADMIN_MANUAL",
+                        TENANT_ID, true, 321, "", "worker-token"));
+        assertEquals("TERMINATION_PROCESS_IDENTITY_REQUIRED", missing.getMessage());
+
+        ClaudeTaskEntity entity = createRunningTask();
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        TerminationOperationService terminationOperationService = mock(TerminationOperationService.class);
+        when(terminationOperationService.hasActiveOperationForTask(TASK_ID)).thenReturn(false);
+        try {
+            var field = ClaudeTaskService.class.getDeclaredField("terminationOperationService");
+            field.setAccessible(true);
+            field.set(service, terminationOperationService);
+        } catch (ReflectiveOperationException error) {
+            throw new AssertionError(error);
+        }
+
+        IllegalArgumentException mismatch = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill(TASK_ID, WORKER_ID, USER_ID, "TENANT_ADMIN_MANUAL",
+                        TENANT_ID, true, 321, "claude-cli:322:2026-07-16T03:40:13.655Z", "worker-token"));
+        assertEquals("TERMINATION_PROCESS_IDENTITY_MISMATCH", mismatch.getMessage());
+        verify(terminationOperationService, never()).accept(any());
+    }
+
+    @Test
+    void manualPidKillResultRequiresObservedExitCorrelatedToOperationTaskAndWorker() {
+        ClaudeTaskEntity entity = createRunningTask();
+        entity.setStatus("CANCEL_REQUESTED");
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(ClaudeTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        TerminationOperationService terminationOperationService = installTerminationOperationService();
+        ClaudeTaskService.ManualPidKillRequest request = new ClaudeTaskService.ManualPidKillRequest(
+                "to-manual-result", TASK_ID, "RUNNING", false, null);
+
+        // A bare true flag is not a correlated Worker observation.
+        service.recordManualPidKillResult(request, Map.of("observed_exit", true));
+
+        // The task, operation, and Worker bindings must all match this request.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "other-task",
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("to-manual-result", "other-task", WORKER_ID)));
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", TASK_ID,
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("other-operation", TASK_ID, WORKER_ID)));
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", TASK_ID,
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("to-manual-result", TASK_ID, "other-worker")));
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", TASK_ID,
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("TO-MANUAL-RESULT", TASK_ID, WORKER_ID)));
+
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(terminationOperationService, times(5)).markAwaitingObservation(
+                "to-manual-result", "TERMINATION_UNCONFIRMED");
+        verify(terminationOperationService, never()).markObservedTerminal(anyString(), anyString());
+
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", TASK_ID,
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("to-manual-result", TASK_ID, WORKER_ID)));
+
+        assertEquals("ABORTED", entity.getStatus());
+        verify(terminationOperationService).markObservedTerminal("to-manual-result", "ABORTED");
+    }
+
     // -----------------------------------------------------------------------
-    // doAbortWorkerTask — abortRequested lifecycle
+    // doAbortWorkerTask — explicit remote termination lifecycle
     // -----------------------------------------------------------------------
 
     @Nested
     class DoAbortWorkerTaskTests {
 
-        @BeforeEach
-        void setUpTxTemplate() {
-            // txTemplate should execute the consumer synchronously
-            doAnswer(inv -> {
-                @SuppressWarnings("unchecked")
-                var consumer = (java.util.function.Consumer<org.springframework.transaction.TransactionStatus>) inv.getArgument(0);
-                consumer.accept(null);
-                return null;
-            }).when(txTemplate).executeWithoutResult(any());
-        }
-
         @Test
-        void doAbortWorkerTask_setsAbortRequestedBeforeWorkerNotification() {
+        void doAbortWorkerTaskSignedAcknowledgementRemainsCancelRequested() {
             ClaudeTaskEntity entity = createRunningTask();
+            entity.setWorkerTaskId("remote-task-1");
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
             when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
             when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(createWorkerEntity());
 
+            TerminationOperationService terminationOperationService = installTerminationOperationService();
+            when(terminationOperationService.hasActiveOperationForTask(TASK_ID)).thenReturn(false);
+            TerminationOperationService.CreateCommand[] accepted = new TerminationOperationService.CreateCommand[1];
+            when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+                accepted[0] = invocation.getArgument(0);
+                return operationFor(accepted[0], "to-remote-cancel");
+            });
+
             var mockClient = mock(com.foggy.navigator.claude.worker.client.ClaudeWorkerClient.class);
             when(workerService.createClient(any())).thenReturn(mockClient);
-            when(mockClient.abortTask("remote-task-1")).thenReturn(reactor.core.publisher.Mono.empty());
+            when(mockClient.terminationSigningSecret()).thenReturn("worker-token");
+            com.foggy.navigator.common.termination.TerminationOperationCapability[] dispatched =
+                    new com.foggy.navigator.common.termination.TerminationOperationCapability[1];
+            when(mockClient.abortTask(eq("remote-task-1"),
+                    any(com.foggy.navigator.common.termination.TerminationOperationCapability.class)))
+                    .thenAnswer(invocation -> {
+                        dispatched[0] = invocation.getArgument(1);
+                        return reactor.core.publisher.Mono.just(java.util.Map.of("status", "CANCEL_REQUESTED"));
+                    });
 
             service.doAbortWorkerTask(TASK_ID, "remote-task-1");
 
-            // Verify: abortRequested was set via repository UPDATE
-            verify(taskRepository).updateAbortRequestedByTaskId(TASK_ID, true);
-            // Verify: worker was notified
-            verify(mockClient).abortTask("remote-task-1");
-            // Verify: stream was cleaned
-            verify(streamRelay).abortStream(TASK_ID);
-            // Verify: final status is ABORTED
-            org.junit.jupiter.api.Assertions.assertEquals("ABORTED", entity.getStatus());
-            // Verify: abortRequested is cleared
-            org.junit.jupiter.api.Assertions.assertEquals(false, entity.getAbortRequested());
+            verify(mockClient).abortTask(eq("remote-task-1"),
+                    any(com.foggy.navigator.common.termination.TerminationOperationCapability.class));
+            verify(terminationOperationService).markDispatchStarted("to-remote-cancel");
+            verify(terminationOperationService).markCancelRequested("to-remote-cancel");
+            verify(streamRelay, never()).abortStream(TASK_ID);
+            verify(taskRepository, never()).updateAbortRequestedByTaskId(any(), anyBoolean());
+            assertEquals("CANCEL_REQUESTED", entity.getStatus());
+            assertEquals(false, entity.getAbortRequested());
+            assertTrue(accepted[0].correlationId().startsWith("remote-cancel:"));
+            String payload = new String(Base64.getUrlDecoder().decode(dispatched[0].encodedOperation()),
+                    StandardCharsets.UTF_8);
+            assertTrue(payload.contains("\"correlation_id\":\"remote-cancel:"));
         }
 
         @Test
-        void doAbortWorkerTask_skipsStatusUpdate_whenAlreadyTerminal() {
-            // Simulate: reactor thread already set FAILED before our txTemplate runs
+        void doAbortWorkerTaskRejectsMismatchedRemoteTaskBeforeOperationDispatch() {
             ClaudeTaskEntity entity = createRunningTask();
-            entity.setStatus("FAILED");
-            when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
-            when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            entity.setWorkerTaskId("remote-task-1");
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
 
-            service.doAbortWorkerTask(TASK_ID, null);
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.doAbortWorkerTask(TASK_ID, "different-remote-task"));
 
-            // abortRequested flag was still set (step 1 always runs)
-            verify(taskRepository).updateAbortRequestedByTaskId(TASK_ID, true);
-            // Status should remain FAILED — not overwritten to ABORTED
-            org.junit.jupiter.api.Assertions.assertEquals("FAILED", entity.getStatus());
-            // abortRequested should be cleared
-            org.junit.jupiter.api.Assertions.assertEquals(false, entity.getAbortRequested());
+            assertEquals("TERMINATION_REMOTE_TASK_MISMATCH", error.getMessage());
+            assertEquals("RUNNING", entity.getStatus());
+            verify(taskRepository, never()).save(any());
         }
 
         @Test
-        void doAbortWorkerTask_handlesWorkerOffline() {
+        void doAbortWorkerTaskKeepsTaskPendingWhenWorkerDispatchIsUnconfirmed() {
             ClaudeTaskEntity entity = createRunningTask();
+            entity.setWorkerTaskId("remote-task-1");
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
             when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
             when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-            when(workerService.getWorkerEntity(WORKER_ID)).thenThrow(new RuntimeException("Worker offline"));
+            when(workerService.getWorkerEntity(WORKER_ID))
+                    .thenThrow(new IllegalStateException("raw remote diagnostic must not change lifecycle"));
 
-            // Should NOT throw — worker notification failure is caught
+            TerminationOperationService terminationOperationService = installTerminationOperationService();
+            when(terminationOperationService.hasActiveOperationForTask(TASK_ID)).thenReturn(false);
+            when(terminationOperationService.accept(any())).thenAnswer(invocation ->
+                    operationFor(invocation.getArgument(0), "to-remote-unconfirmed"));
+
             service.doAbortWorkerTask(TASK_ID, "remote-task-1");
 
-            // abortRequested was still set
-            verify(taskRepository).updateAbortRequestedByTaskId(TASK_ID, true);
-            // Stream still cleaned
-            verify(streamRelay).abortStream(TASK_ID);
-            // Status still updated to ABORTED (worker offline doesn't block local state update)
-            org.junit.jupiter.api.Assertions.assertEquals("ABORTED", entity.getStatus());
+            verify(terminationOperationService).markDispatchStarted("to-remote-unconfirmed");
+            verify(terminationOperationService).markUnconfirmed(eq("to-remote-unconfirmed"), any());
+            verify(streamRelay, never()).abortStream(TASK_ID);
+            assertEquals("CANCEL_REQUESTED", entity.getStatus());
+            assertEquals("TERMINATION_UNCONFIRMED", entity.getErrorMessage());
         }
     }
 
@@ -334,5 +485,53 @@ class ClaudeTaskServiceAbortGuardTest {
         worker.setTenantId(TENANT_ID);
         worker.setStatus("ONLINE");
         return worker;
+    }
+
+    private TerminationOperationService installTerminationOperationService() {
+        TerminationOperationService terminationOperationService = mock(TerminationOperationService.class);
+        try {
+            var field = ClaudeTaskService.class.getDeclaredField("terminationOperationService");
+            field.setAccessible(true);
+            field.set(service, terminationOperationService);
+        } catch (ReflectiveOperationException error) {
+            throw new AssertionError(error);
+        }
+        return terminationOperationService;
+    }
+
+    private TerminationOperationEntity operationFor(TerminationOperationService.CreateCommand command,
+                                                    String operationId) {
+        TerminationOperationEntity operation = new TerminationOperationEntity();
+        operation.setOperationId(operationId);
+        operation.setSchemaVersion(1);
+        operation.setTaskId(command.taskId());
+        operation.setProviderTaskId(command.providerTaskId());
+        operation.setSessionId(command.sessionId());
+        operation.setOwnerUserId(command.ownerUserId());
+        operation.setTenantId(command.tenantId());
+        operation.setProviderType(command.providerType());
+        operation.setWorkerId(command.workerId());
+        operation.setKind(command.kind());
+        operation.setOrigin(command.origin());
+        operation.setActorId(command.actorId());
+        operation.setActorType(command.actorType());
+        operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+        operation.setReasonCode(command.reasonCode());
+        operation.setCorrelationId(command.correlationId());
+        operation.setExpectedPid(command.expectedPid());
+        operation.setExpectedProcessIdentity(command.expectedProcessIdentity());
+        return operation;
+    }
+
+    private Map<String, Object> observedManualPidOperation(String operationId, String taskId, String workerId) {
+        return Map.of(
+                "operation_id", operationId,
+                "task_id", taskId,
+                "worker_id", workerId,
+                "kind", "MANUAL_PID_KILL",
+                "origin", "ADMIN_MANUAL",
+                "status", "OBSERVED_EXIT",
+                "observed_exit", true,
+                "observed_at", "2026-07-16T03:40:13.655Z");
     }
 }

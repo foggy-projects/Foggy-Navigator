@@ -10,8 +10,13 @@ Key fixtures:
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import re
+import time
+import uuid
 from typing import Any, AsyncGenerator
 from unittest.mock import patch
 
@@ -29,7 +34,63 @@ from agent_worker.claude.sdk_wrapper import (
     permission_pending,
     session_store,
 )
+from agent_worker.claude.process_detection import _tracked_pids
 from agent_worker.config import settings
+
+
+TEST_NAVIGATOR_WORKER_ID = "test-navigator-worker-id"
+
+
+def termination_headers(
+    task_id: str,
+    *,
+    kind: str = "REMOTE_CANCEL",
+    origin: str | None = None,
+    expected_pid: int | None = None,
+    expected_process_identity: str | None = None,
+    authorization_decision_id: str | None = "decision-test-1",
+    operation_id: str | None = None,
+    secret: str = "test-worker-secret",
+    signature_secret: str | None = None,
+    expires_in_seconds: int = 60,
+    worker_id: str | None = TEST_NAVIGATOR_WORKER_ID,
+) -> dict[str, str]:
+    """Build the cross-worker signed termination headers for HTTP tests."""
+
+    now = int(time.time())
+    if origin is None:
+        origin = "ADMIN_MANUAL" if kind == "MANUAL_PID_KILL" else "UPSTREAM_USER"
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "operation_id": operation_id or f"op-{uuid.uuid4()}",
+        "task_id": task_id,
+        "worker_id": worker_id,
+        "kind": kind,
+        "origin": origin,
+        "actor_id": "test-actor",
+        "actor_type": "USER" if kind == "REMOTE_CANCEL" else "ADMIN",
+        "authorization_decision_id": authorization_decision_id,
+        "reason_code": "TEST_EXPLICIT_TERMINATION",
+        "correlation_id": f"corr-{uuid.uuid4()}",
+        "issued_at": now,
+        "expires_at": now + expires_in_seconds,
+    }
+    if worker_id is None:
+        payload.pop("worker_id")
+    if expected_pid is not None:
+        payload["expected_pid"] = expected_pid
+    if expected_process_identity is not None:
+        payload["expected_process_identity"] = expected_process_identity
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    signature = base64.urlsafe_b64encode(
+        hmac.new((signature_secret or secret).encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    ).decode("ascii").rstrip("=")
+    return {
+        "Authorization": f"Bearer {secret}",
+        "X-Navigator-Termination-Operation": encoded,
+        "X-Navigator-Termination-Signature": signature,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -123,16 +184,30 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest.fixture(autouse=True)
-def clean_registries():
+def clean_registries(tmp_path):
     """Clear shared global registries before each test."""
-    task_registry.clear()
-    permission_pending.clear()
-    session_store.clear()
-    yield
-    # Also clean up after
-    task_registry.clear()
-    permission_pending.clear()
-    session_store.clear()
+    # Signed termination capabilities are intentionally unusable unless this
+    # stable identity is configured.  Integration tests opt into a fixture
+    # identity; targeted regressions still override it to prove fail-closed
+    # handling for absent/mismatched values.
+    with (
+        patch.object(settings, "navigator_worker_id", TEST_NAVIGATOR_WORKER_ID),
+        # Termination receipts are intentionally separate from event
+        # persistence.  Each test gets an isolated ledger instead of clearing
+        # the Worker default, which also lets requests prove restart-safe
+        # on-disk replay handling.
+        patch.object(settings, "termination_operation_ledger_dir", str(tmp_path / "termination-operations")),
+    ):
+        task_registry.clear()
+        permission_pending.clear()
+        session_store.clear()
+        _tracked_pids.clear()
+        yield
+        # Also clean up after
+        task_registry.clear()
+        permission_pending.clear()
+        session_store.clear()
+        _tracked_pids.clear()
 
 
 @pytest.fixture

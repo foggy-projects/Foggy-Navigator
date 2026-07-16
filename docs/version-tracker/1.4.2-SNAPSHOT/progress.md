@@ -75,7 +75,7 @@
 |---|---|---|---|
 | P0 | 目标、边界、术语、ownership 和代码清单冻结 | in-progress | Owner 决策已落档；当前文档和代码清单同步中 |
 | P1 | Node、lockfile、全仓 clean build 和 CI 基线 | in-progress | 精确 Node/pnpm、根 frozen lockfile、全前端矩阵和 repository CI 已落地；本机矩阵通过，首次全绿 head `9008c554` 与截至本次正式闸门的最新已验证实现 head `9d03bee9` 的 GitHub hosted Java launcher 依赖链/前端/五类 Worker 7 jobs 均 success。main required checks/branch protection 未配置，修复后 nightly 未实跑；见 `EXEC-142-017` |
-| P2 | 外部 Biz Worker/upstream user 边界治理 | in-progress | external gate/readiness、task capability v2、持久化终态门禁、Worker credential v1、pool owner/identity 路由、Gateway strict principal/lease、Biz Provider preselect/prebind 与 best-effort audit 事务隔离已落地；Codex 安全转发、开关组合、OS 隔离、generation/pause、可靠 outbox 与 external execution policy 未完成；见 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013` |
+| P2 | 外部 Biz Worker/upstream user 边界治理 | in-progress | external gate/readiness、task capability v2、持久化终态门禁、Worker credential v1、pool owner/identity 路由、Gateway strict principal/lease、Biz Provider preselect/prebind 与 best-effort audit 事务隔离已落地。GOV-004 已完成 Java/三 Worker 本地非主动终止、签名 operation 和 receipt ledger 自动化，但真实 CLI 五态、目标 DB、告警和多实例仍为 `verification-blocked`；Codex 安全转发、开关组合、OS 隔离、generation/pause、可靠 outbox 与 external execution policy 未完成；见 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-022` |
 | P3 | Session/Task 定向 ownership 治理 | in-progress | 统一 ownership 门面及 Session/Task/Agent/SSE/config/shared/forward/context/model-config 首批路径已落地；租户主体精确匹配，tenantless 主体只允许同 userId + tenant null/blank，并在认证和新建 Session 时规范为空值 null。定向 176 tests、launcher clean 15/15 reactor/2426 tests、hosted CI、隔离 H2 Session 双账号、BUG-003 clean 748 tests 及 BUG-004 clean 753 tests 均通过。两个 BUG 的 dev PC 复测、Task live Provider fixture、共享数据库、L3、全列表 tenant、metadata invariant、Provider taskId 与显式 admin/system 通路未完成；见 `EXEC-142-014`、`EXEC-142-017`、`EXEC-142-018`、`EXEC-142-019`、`EXEC-142-020` |
 | P4 | 低风险孤儿代码和失效文档清理 | not-started | not-collected |
 | P5 | Monitoring、metadata-query、code-review、echo dev-only 独立收口 | in-progress | Monitoring/code-review 已移除，metadata-query 已 completed-local；Echo 已 completed-local/verification-partial，5 个 addon tracked files 与 reactor/launcher 装配退出，test-only fixture 定向 16/16 及 launcher 定向 6/6 tests 通过；hosted CI 已通过，版本正式门禁已执行并拒绝，切片专项浏览器/PS parser/模块级签收未跑 |
@@ -93,6 +93,7 @@
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | in-progress | partial：平台 Open API 默认关闭、三类 Worker external profile、readiness、task capability v2、持久化终态门禁、Worker identity/pool、Gateway strict principal/lease 与 P3 首批 ownership 已落地 | partial-passed-local-and-hosted：P2 launcher/Worker、P3 定向 176 tests、既有 migration 双 MySQL 版本及 Repository CI 7/7 均通过 | partial-passed-isolated：内部登录/Session ownership 错误反馈已验证；真实 external/network/Task 体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-014`、`EXEC-142-016`、`EXEC-142-017`、`EXEC-142-018`；开关组合、Codex 安全转发、OS 隔离、可靠 audit、ownership 全列表/显式系统主体仍未完成 |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | in-progress | partial：显式开关、task function scope/TTL/revoke、持久化 terminal tombstone、Worker credential rotate/revoke、pool owner/identity、Gateway strict principal/lease、DB preselect/prebind 与 audit writer 事务隔离已落地；非 Biz Open API 不签发 Gateway capability | partial-passed-local-and-hosted：launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck；既有 MySQL migration；hosted 7/7 jobs | not-run：ClientApp 双主体、审批恢复、非 loopback 部署和 Worker 错误体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-017`；Codex credential 安全转发、generation/pause、outbox、L3 未完成 |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | in-progress | partial：租户主体 userId+tenantId 精确匹配；tenantless 仅同 userId+tenant null/blank，认证和 Session 新写入规范为 null；Session/Task/Agent/SSE/config/shared/forward 先授权；context 条件 claim/update；Provider sessionId 再授权；model config 与 quota 顺序收紧；LangGraph 审批迁入统一 respond 并绑定认证主体 | partial-passed：P3 定向 176 tests；launcher clean 15/15 reactor、2426 tests；hosted CI；隔离 H2 Session 双账号 live 1 passed；BUG-003 定向 27/clean 748；BUG-004 定向 66/clean 753 | partial-passed-isolated / dev-retest-pending：同 tenant 双账号真实登录与 Session ownership 已验证；tenantless dev PC Session 三入口和 Codex Task create/get/respond/cancel、共享 DB 与完整内部任务主链未运行 | `EXEC-142-014`、`EXEC-142-016`、`EXEC-142-017`、`EXEC-142-018`、`EXEC-142-019`、`EXEC-142-020`；全列表 tenant、SessionMetadata service invariant、model owner/grant、Provider taskId、显式 admin/system 通路仍缺失 |
+| [GOV-004](./workitems/GOV-004-cli-non-termination-and-lifecycle-observability.md) | verification-blocked | implementation-complete-local：Java `TerminationOperation` DB 审计账本、三类 Worker 的 signed capability + durable local receipt ledger、attention 取代自动 abort/kill、严格观察后才推进终态已落地；不改变生产路由或 external enablement | passed-local：Codex SDK replay/operation 100、Codex app-server 30、Claude 16；SDK 全量 207 passed/1 skipped + typecheck、app-server 全量 292 passed/1 skipped + typecheck、Claude 全量 542 passed/11 skipped；Java relevant reactor `BUILD SUCCESS`。隔离 Docker MySQL forward/index/assert/rollback 通过 | blocked：尚无真实隔离 CLI 的自然完成、CLI 异常、显式取消、人工 PID kill、未确认/超时五态运行态矩阵；目标 DB migration/rollback、告警部署/送达和跨实例重放也未验证 | `EXEC-142-022`；[quality](./quality/GOV-004-cli-non-termination-and-lifecycle-observability-implementation-quality.md)、[coverage](./coverage/GOV-004-cli-non-termination-and-lifecycle-observability-coverage-audit.md)、[acceptance](./acceptance/GOV-004-cli-non-termination-and-lifecycle-observability-acceptance.md)、[runbook](./runbooks/GOV-004-cli-non-termination-and-lifecycle-observability-runbook.md)。本地 receipt 只对共享同一持久卷的同一 PhysicalWorker ID 防重放；不得把其当作跨主机共享账本 |
 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | in-progress | baseline + required 候选/nightly workflow implemented；clean-runner Java 外部依赖已用 Navigator-owned wire-contract shim 收口 | passed-local-and-hosted：本机根 Java/frontend/五类 Worker clean 等价矩阵；hosted head `9008c554`、`9d03bee9` 均 7/7 jobs success | partial：隔离 ownership live 与全 mock Playwright 已运行；不覆盖所有真实业务体验 | `EXEC-142-003`、`EXEC-142-006`、`EXEC-142-009`、`EXEC-142-017`、`EXEC-142-018`；main branch protection/required checks 未配置，修复后 nightly 未实跑 |
 | [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | closed | LangGraph SSE 语义去重已排除传输层 event_id | passed：目标用例 1；全套 758；wheel/sdist build | not-applicable：修复事件重复，无新增 UI | `EXEC-142-006` |
 | [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) | closed | 修复 Open SDK 测试语法、JUnit 5 执行器与 WSL 用例宿主依赖 | passed：Open SDK 142；根 reactor 2304 tests、17/17 SUCCESS | not-applicable：仅构建和测试基线 | `EXEC-142-009`；未改运行时 API 或生产门禁 |
@@ -157,6 +158,7 @@
 | EXEC-142-019 | BUG-003 tenantless ownership 回归 | tenantless exact-owner Session/Task 查询；config 只读批次安全过滤；写批次保持全量 fail closed | 用户 dev PC 报告（凭据未落档/未复用）；test-first 定向 Maven；`mvn -B -pl session-module -am clean test` | ready-for-dev-verification | test-first 先因缺少 null-tenant repository 方法失败；实现后定向 27 tests、clean 6/6 reactor/748 tests 均 0 failure/error/skipped。Spring JPA 上下文成功解析新增查询；尚未部署或使用新令牌复测 dev PC 的 configs/latest/SSE，不得标记 closed |
 | EXEC-142-020 | BUG-004 blank-tenant Task ownership 回归 | JWT/API Key tenant 入口规范化；Session 新写入规范化；tenantless Session/Task 查询兼容 NULL/空白并保持 exact userId | 用户 dev PC 报告（凭据未落档/未复用）；test-first 定向 Maven；`mvn -B -pl session-module -am clean test` | ready-for-dev-verification | test-first 3 个预期失败；实现后定向 6/6 reactor、66 tests，clean 6/6 reactor、753 tests，均 0 failure/error/skipped。H2 真实空字符串行同 owner 可读、跨 user 拒绝；未部署、未连接共享 DB、未用新令牌复测 Codex create/get/respond/cancel，不得标记 closed。Codex model config `availableModels` grant 拒绝是独立结果 |
 | EXEC-142-021 | REQ-002 结构化错误诊断与临时分享实现 | Provider 无关错误信封与脱敏；Codex SDK/App Server safe metadata；Task/SSE/chat 兼容；90 天 owner-scoped 快照；默认关闭、7/30 天、只存 hash、可撤销的匿名单快照分享；无脚本公开页面与安全响应头 | Java 定向 Maven；两类 Worker 全量 test/typecheck；`foggy-chat`/Navigator typecheck；chatState Vitest；代码与配置审计 | implementation-complete-verification-partial | Java 6/6 reactor、19 tests 全通过；SDK Worker 176 pass/1 Windows skip，App Server 274 pass/1 skip；前端 typecheck 与 chatState 51 tests 通过。当前 Node 18.19.1 不满足项目 Node 22.23.1 基线，Vite 7 `crypto.hash` 阻断 ErrorBlock 组件与 build；MySQL migration、launcher clean、真实浏览器和重新执行正式 quality/coverage/signoff 未运行；分享配置仍为 false，未启用 external runtime |
+| EXEC-142-022 | GOV-004 CLI 非主动终止、显式 operation 与生命周期可观测性 | Java 持久 `termination_operations` 审计账本；Claude、Codex SDK、Codex app-server 的签名 task/PID termination capability、一次性 durable receipt、attention/observed-exit 语义；自动超时/watchdog/不确定性不得终止受管 CLI | Java/Worker 定向单元与路由契约；Worker 全量 suite/typecheck；隔离 Docker MySQL forward/index/assert/rollback；app-server init/idle-close 无模型请求 smoke；静态安全/配置审计 | implementation-complete / verification-blocked | 定向 replay/operation 矩阵：SDK 100、app-server 30、Claude 16；SDK 全量 207 passed/1 skipped + typecheck、app-server 全量 292 passed/1 skipped + typecheck、Claude 全量 542 passed/11 skipped；Java relevant reactor `BUILD SUCCESS`。隔离 MySQL 仅证明脚本可 forward/rollback；app-server safe init/idle close 使用 `codex-cli 0.144.4` 通过且未发模型请求。Claude CLI 不在当前环境；真实隔离 CLI 五态、目标 DB migration/rollback、告警部署/送达和多实例 replay/route 未完成。不得标记 accepted、生产路由改变或 external enablement |
 
 ## P2 Execution Check-in（`EXEC-142-008`）
 
@@ -375,6 +377,32 @@
 - model config 如需支持 `codex-latest:low`，在对应配置的 `availableModels` 中显式加入该模型并单独复测；删除重建只是配置修复手段，不是 ownership 修复步骤。
 - BUG-004 保持 `ready-for-verification`；本地通过不追溯改变既有正式签收 `rejected`，也不构成 hosted、共享数据库或生产批准。
 
+## GOV-004 CLI Lifecycle Execution Check-in（`EXEC-142-022`）
+
+### Completed Local Scope
+
+1. Java 控制面先以独立持久 operation 记录显式取消或人工 PID 终止的意图、授权和观察结果；`CANCEL_REQUESTED`/Worker ACK 不是 `ABORTED`。终态只在可信 Provider terminal 或与该 task、operation、worker 和进程身份精确关联的实际退出被观察后推进。owner-scoped 查询入口为 `GET /api/v1/tasks/{taskId}/termination-operations`。
+2. Java、Claude、Codex SDK、Codex app-server 已把 timeout、watchdog、PID/线程不匹配、stream 断开、scan error、stall/drain 等自动来源收敛为 attention / pending-decision。它们不再因不确定性主动 `abort`、interrupt、close active runtime 或 kill 受管 CLI；只有 signed `REMOTE_CANCEL` 或 `MANUAL_PID_KILL` 能请求受控终止。
+3. 三个 Worker 路径都有独立、重启后仍有效的一次性 receipt ledger：Codex SDK 使用绝对路径 `CODEX_TERMINATION_OPERATION_LEDGER_DIR`（默认包内 `logs/termination-operations/`）；Claude 使用绝对路径 `AGENT_WORKER_TERMINATION_OPERATION_LEDGER_DIR`（默认 `logs/termination-operations/`）；Codex app-server 固定使用 `${CODEX_APP_SERVER_STATE_DIR}/termination-operations/receipts`（默认 state dir 为包内 `logs/state/`）。receipt 仅保存 schema、worker ID、operation ID、expiry，绝不保存 capability、签名、prompt、token 或 credential。
+4. receipt key 为 `SHA-256(worker_id + NUL + operation_id)`；Worker 在副作用前用独占创建写入并 fsync（POSIX 同步父目录）。同一 key 始终返回 replay，损坏、配置错误、I/O 不可用或 ledger 满时 fail closed。该行为是本地持久防重放围栏，不是可跨主机自动共享的 operation ledger。
+5. `termination_operations` 的 forward/rollback SQL 已随实现登记。forward 使用 `CREATE TABLE termination_operations` 及 task/provider-task/session/owner/worker/status/expiry 索引；rollback 是经导出/留存与显式批准后才允许执行的破坏性 `DROP TABLE`。Worker receipt 没有 SQL rollback：回退代码必须保留目录，旧 Worker 即使忽略 receipt，也意味着 replay 防护被削弱。
+
+### Local Evidence and Boundary
+
+- 定向 replay/operation 自动化：Codex SDK 100、Codex app-server 30、Claude 16，通过。它们覆盖 capability binding、错 task/worker/PID 拒绝、重复 operation、重启后 receipt、损坏/不可用 ledger fail closed、请求 ACK 非终态和观察后终态等关键契约。
+- 隔离 Docker MySQL 已通过 forward、索引/结构断言和 rollback；这只证明脚本在 disposable 容器可执行，未连接目标数据库，也未运行目标 launcher 的 `ddl-auto=validate`。
+- Codex app-server 的安全 init/idle-close smoke 使用 `codex-cli 0.144.4` 通过，未发起模型请求；它不覆盖 active task、异常 CLI、cancel、manual PID 或 timeout 五态。当前环境没有 Claude CLI。
+- Worker 全量结果已补录：SDK `npm test` 207 passed/1 skipped 和 typecheck、app-server `npm test` 292 passed/1 skipped 和 typecheck、Claude `.venv/bin/python -m pytest -q` 542 passed/11 skipped；Java relevant reactor 为 `BUILD SUCCESS`。这些仍是本地自动化，不将其外推为真实 CLI 或目标环境证据。
+
+### Verification Blockers / Next Gate
+
+1. 在明确隔离的真实 CLI 环境执行五态矩阵：自然完成、CLI 自身异常退出、已授权显式取消、已授权人工 PID kill、未确认/超时待决策；每种均核对 status/SSE、attention、operation audit、真实进程结果和未泄露的日志。
+2. 由目标环境 Owner 执行 forward migration、启动 `ddl-auto=validate`、索引/owner query 断言和经留存批准的 rollback 演练；disposable MySQL 证据不能替代此项。
+3. 部署并实际触发 attention、operation dispatch/observation failure、receipt ledger unavailable/full/replay、migration failure 与 stale operation 告警，保存路由/送达证据。
+4. 多实例前必须使同一 stable PhysicalWorker ID 始终指向同一持久 receipt 卷和单一 writer，或为每个物理 Worker 分配独立 ID/路由，或另行验证共享原子 claim 存储。禁止在两个无共享 ledger 的主机/卷上复用同一 ID/token。
+
+因此本 check-in 是 `implementation-complete / verification-blocked`，不是 quality signoff、coverage signoff 或 accepted；`production_routing_changed: no`、`external_enablement: no` 保持不变。完整安全操作条件见 [GOV-004 runbook](./runbooks/GOV-004-cli-non-termination-and-lifecycle-observability-runbook.md)。
+
 ## Testing Progress
 
 | Test lane | 状态 | Evidence / 原因 |
@@ -385,6 +413,7 @@
 | chat-core/chat/widget build | passed | 根 `ci:frontend` / `build:frontend` 已覆盖；chat 测试 105、widget 测试 31 均通过 |
 | Mobile type-check/test/build | passed | mobile type-check、59 个测试与 H5 build 通过；非 H5 目标未运行 |
 | Claude/Codex/Gemini/LangGraph Worker tests/build | passed-local-and-hosted | 独立 clean worktree 五类 Worker install/type/test/build 通过；`EXEC-142-017` 中 hosted Codex SDK/app-server、Gemini、Claude、LangGraph 5 个 Worker jobs 全部 success；nightly 实跑仍未完成 |
+| GOV-004 termination operation / receipt replay | passed-local / verification-blocked | `EXEC-142-022`：SDK 100、app-server 30、Claude 16 定向 operation/replay 测试通过；SDK 207 passed/1 skipped + typecheck、app-server 292 passed/1 skipped + typecheck、Claude 542 passed/11 skipped；isolated Docker MySQL forward/index/assert/rollback 通过；app-server init/idle-close safe smoke 无模型请求通过。真实 CLI 五态、目标 DB、告警与跨实例未完成，不能由本行宣布 accepted |
 | Ownership negative-path tests | partial-passed-isolated | `EXEC-142-014` 的统一门面及 Session/Task/Agent/SSE/config/shared/forward/context/model-config 定向矩阵 176 tests 通过；`EXEC-142-018` 的同 tenant 双账号真实 UI/API/SSE Session live 1 passed；`EXEC-142-019/020` 覆盖 null/blank tenantless exact-owner，BUG-004 定向 66 与 clean 753 tests 通过。Task live Provider、Open API identity/resource、全列表 tenant、Provider L3、共享 DB 与显式 admin/system 矩阵未运行 |
 | task-scoped token 越权测试 | partial-passed-local | v1/错误 claims、跨函数 snapshot、缺 taskId、secret mismatch、撤销、definitive terminal tombstone、late-bind/mismatch 物理重开，以及 strict Worker credential + exact lease/tenant/ClientApp/pool/member/backend/owner/route 均覆盖；pause/generation、跨 task 手工 API 和真实网络未覆盖，见 `EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013` |
 | External Worker switch/readiness contract | passed-local | 三类 Worker 默认开关、严格布尔、external unready/空 Token reason、精确 `/health` 豁免和业务 API 503 契约通过；真实 non-loopback 部署未运行，见 `EXEC-142-008` |
@@ -443,6 +472,18 @@
 | ED-AC-13 全栈测试、类型检查与构建 | partial-passed-local | Java 定向、Worker 全量/typecheck、前端 typecheck/chatState 通过；Node 22 build、launcher clean、migration 未运行 |
 | ED-AC-14 浏览器全链路和敏感信息扫描 | not-run | 需在隔离部署显式开启分享后验证登录态详情、越权、生成/访问/过期/撤销和页面/网络敏感信息；完成前不得签收 REQ-002 |
 
+### GOV-004 Acceptance Criteria Tracking
+
+| Acceptance Criteria | 状态 | Evidence / remaining condition |
+|---|---|---|
+| NT-AC-01 自动 timeout/watchdog/PID/stream/scan/retry 不得直接或间接终止 CLI | passed-local-targeted / live-blocked | 四执行面已改为 attention/pending-decision，定向回归覆盖关键自动路径；真实 CLI timeout、late spawn、断流和异常运行态尚未完成。 |
+| NT-AC-02 只有授权显式 cancel 或受控 manual PID kill | passed-local-targeted / live-blocked | Java operation 账本、signed capability、origin/actor/authz/PID binding、one-use receipt 与 owner query 已实现；真实目标环境授权 HTTP/审计链未验证。 |
+| NT-AC-03 Codex SDK 晚 spawn/PID 不可见只标记 `PROCESS_UNVERIFIED` | passed-local-targeted / live-blocked | watchdog/关联契约已回归；没有真实 Codex SDK CLI 晚 spawn smoke。 |
+| NT-AC-04 timeout 只形成 `TIMEOUT_PENDING_DECISION`，未选择取消则 CLI 继续 | passed-local-targeted / live-blocked | attention 与不自动 abort 已有单元/路由证据；上游 UI/SSE/真实进程保持尚未验证。 |
+| NT-AC-05 生命周期日志/审计可关联且不泄露敏感信息 | partial-passed-local | 安全投影与 receipt 不存 secret 有定向测试/审查；真实日志、告警和 retention/查询体验未验证。 |
+| NT-AC-06 自动化四面矩阵及真实 CLI 五态 | partial-passed-local / blocked | 定向 SDK 100、app-server 30、Claude 16 通过；真实自然退出、CLI 异常、cancel、manual kill、unconfirmed/timeout 五态未运行。 |
+| NT-AC-07 文档、告警、发布/回滚说明 | partial-implemented / blocked | workitem、quality、coverage、acceptance、runbook 已落档；目标 DB migration、告警规则部署/送达和正式运行演练未完成。 |
+
 ## Formal Gate Results
 
 | Gate | 范围 | 结论 | 记录 | 含义 |
@@ -450,6 +491,8 @@
 | Implementation Quality Gate | 已执行治理切片至 `9d03bee9` | ready-with-risks | [quality record](./quality/executed-governance-slices-implementation-quality.md) | 未发现必须先返工的新增实现缺陷；token lifecycle、RX shim、Worker 契约漂移和未完成范围需跟进；只允许进入证据覆盖审计 |
 | Test Coverage Audit | 1.4.2 整个版本、13 个 AC、2 个 BUG | needs-more-tests | [coverage audit](./coverage/1.4.2-coverage-audit.md) | AC-02 至 AC-06、Task live、P4/P6 和体验证据仍有关键缺口，不能进入正向签收 |
 | Version Acceptance | 1.4.2 整个版本 | rejected | [version signoff](./acceptance/version-signoff.md) | 证据足以确认关键标准未满足；已完成切片保留为下一轮基线，不启用 external、不改变生产路由 |
+| GOV-004 Implementation Quality | GOV-004 本地实现 | verification-blocked | [quality record](./quality/GOV-004-cli-non-termination-and-lifecycle-observability-implementation-quality.md) | 实现与定向自动化可审计；本地 Worker receipt ledger 的多实例边界、真实 CLI、目标 DB 和告警不具备签收证据 |
+| GOV-004 Coverage / Acceptance | GOV-004 | verification-blocked | [coverage](./coverage/GOV-004-cli-non-termination-and-lifecycle-observability-coverage-audit.md) / [acceptance](./acceptance/GOV-004-cli-non-termination-and-lifecycle-observability-acceptance.md) | 本 workitem 正式验收为 blocked，不是 accepted；不追溯改写版本级 `rejected` |
 
 ## Acceptance Status
 
@@ -460,6 +503,16 @@
 - acceptance_record: [Version Signoff](./acceptance/version-signoff.md)
 - blocking_items: external-runtime-boundary-incomplete, task-ownership-live-matrix-incomplete, p4-and-p6-scope-incomplete, coverage-audit-needs-more-tests
 - follow_up_required: yes
+
+### GOV-004 Workitem Acceptance Status
+
+- acceptance_status: blocked
+- acceptance_decision: verification-blocked
+- accepted_by: none
+- evidence_record: [GOV-004 acceptance](./acceptance/GOV-004-cli-non-termination-and-lifecycle-observability-acceptance.md)
+- blocking_items: isolated-cli-five-state-matrix-not-run, target-environment-migration-not-run, alert-deployment-and-delivery-not-evidenced, multi-instance-receipt-ledger-boundary-unverified
+- production_routing_changed: no
+- external_enablement: no
 
 ## Final Documentation Validation
 

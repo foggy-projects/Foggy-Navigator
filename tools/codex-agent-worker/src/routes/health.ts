@@ -8,7 +8,7 @@ import {
   CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
   taskRegistry,
 } from '../codex/sdk-wrapper.js'
-import type { HealthResponse } from '../models.js'
+import { isTaskExecutionActive, type HealthResponse } from '../models.js'
 import { resolveCodexSdkRuntimeStatus } from '../runtime-requirements.js'
 import { APP_VERSION } from '../version.js'
 import { resolveExternalModeState } from '../external-mode.js'
@@ -61,7 +61,7 @@ export function resolveNavigatorWorkerCredentialReadiness(
  */
 router.get('/health', (_req: Request, res: Response) => {
   const activeTasks = Array.from(taskRegistry.values())
-    .filter(t => t.status === 'running').length
+    .filter(t => isTaskExecutionActive(t.status)).length
 
   const authJsonExists = fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'))
   const codexAuthMode = resolveCodexAuthMode(config.openaiApiKey || undefined, authJsonExists)

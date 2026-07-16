@@ -71,7 +71,7 @@ test('restart reconciliation does not duplicate an already durable canonical ass
   assert.deepEqual(events.map(event => event.type), ['assistant_text', 'result'])
 })
 
-test('ambiguous, active, or missing turns become explicit recovery-unknown terminal failures', async t => {
+test('ambiguous, active, or missing turns become recovery-unknown pending decisions', async t => {
   const fixture = await seedCommitted(t, 'reconcile-unknown')
   const executor = new ReconcileExecutor({ status: 'unknown', threadId: 'thread-existing' })
   const recoveredStore = new TaskStore({ stateDir: fixture.stateDir, encryptionKey: fixture.config.stateEncryptionKey! })
@@ -79,11 +79,13 @@ test('ambiguous, active, or missing turns become explicit recovery-unknown termi
   await manager.initialize()
 
   const record = manager.get('reconcile-unknown')
-  assert.equal(record?.status, 'terminal')
-  assert.equal(record?.outcome, 'failed')
-  assert.equal(record?.error_code, 'APP_SERVER_RECOVERY_UNKNOWN')
+  assert.equal(record?.status, 'committed')
+  assert.equal(record?.outcome, undefined)
+  assert.equal(record?.error_code, undefined)
+  assert.equal(record?.attention?.at(-1)?.status, 'PROCESS_UNVERIFIED')
+  assert.equal(record?.attention?.at(-1)?.reason_code, 'APP_SERVER_RECOVERY_UNKNOWN')
   assert.equal(executor.executeCalls, 0)
-  assert.equal(manager.getBroadcast('reconcile-unknown').getEventsAfter(0).at(-1)?.subtype, 'APP_SERVER_RECOVERY_UNKNOWN')
+  assert.equal(manager.getBroadcast('reconcile-unknown').getEventsAfter(0).at(-1)?.subtype, 'PROCESS_UNVERIFIED')
 })
 
 test('strict executor proves terminal state from thread/read and extracts assistant result', async t => {
@@ -223,7 +225,7 @@ test('an unproven recovered abort stays pending without interrupting an inspecti
   assert.equal(pool.metrics().retired_total, 0)
 })
 
-test('post-commit child failure reconciles the exact turn instead of publishing a generic failure', async t => {
+test('post-commit child failure remains a pending decision instead of publishing a synthetic terminal result', async t => {
   const stateDir = await tempDirectory('codex-app-live-reconcile-')
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
   const config = testConfig(stateDir)
@@ -238,14 +240,37 @@ test('post-commit child failure reconciles the exact turn instead of publishing 
   const manager = new TaskManager(config, store, executor)
   await manager.initialize()
   await manager.accept('post-commit-crash', { prompt: 'perform one side effect' })
-  await waitUntil(() => manager.get('post-commit-crash')?.status === 'terminal')
+  await waitUntil(() => manager.get('post-commit-crash')?.attention?.some(item => item.reason_code === 'APP_SERVER_RUNTIME_FAILED') === true)
 
-  assert.equal(executor.reconcileCalls, 1)
-  assert.equal(manager.get('post-commit-crash')?.outcome, 'completed')
-  assert.equal(manager.getBroadcast('post-commit-crash').getEventsAfter(0).at(-1)?.result, 'proved after crash')
+  assert.equal(executor.reconcileCalls, 0)
+  assert.equal(manager.get('post-commit-crash')?.status, 'running')
+  assert.equal(manager.get('post-commit-crash')?.outcome, undefined)
+  assert.equal(manager.get('post-commit-crash')?.recovery_required, true)
 })
 
-test('ambiguous interrupt remains abort-pending until thread reconciliation proves a terminal state', async t => {
+test('a pre-turn transport exception is diagnostic-only until an observed outcome is available', async t => {
+  const stateDir = await tempDirectory('codex-app-preturn-unverified-')
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, store, new PreTurnFailureExecutor())
+  await manager.initialize()
+  await manager.accept('preturn-unverified', { prompt: 'do not invent a terminal outcome' })
+  await waitUntil(() => manager.get('preturn-unverified')?.attention?.some(
+    item => item.reason_code === 'APP_SERVER_RUNTIME_FAILED',
+  ) === true)
+
+  const record = manager.get('preturn-unverified')
+  assert.notEqual(record?.status, 'terminal')
+  assert.equal(record?.outcome, undefined)
+  assert.equal(record?.attention?.at(-1)?.status, 'PROCESS_UNVERIFIED')
+  const diagnostic = manager.getBroadcast('preturn-unverified').getEventsAfter(0)
+    .find(event => event.type === 'error')
+  assert.equal(diagnostic?.terminal_observed, undefined)
+  assert.equal(diagnostic?.terminal_status, undefined)
+})
+
+test('ambiguous interrupt remains cancel-requested until thread reconciliation proves a terminal state', async t => {
   const stateDir = await tempDirectory('codex-app-abort-reconcile-')
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
   const config = testConfig(stateDir)
@@ -261,8 +286,8 @@ test('ambiguous interrupt remains abort-pending until thread reconciliation prov
   await waitUntil(() => manager.get('ambiguous-interrupt')?.status === 'running')
   const abort = await manager.abort('ambiguous-interrupt')
 
-  assert.equal(executor.reconcileCalls, 1)
-  assert.equal(abort?.abort_status, 'abort_pending')
+  assert.equal(executor.reconcileCalls, 0)
+  assert.equal(abort?.abort_status, 'cancel_requested')
   assert.equal(manager.get('ambiguous-interrupt')?.status, 'running')
   assert.equal(manager.get('ambiguous-interrupt')?.recovery_required, true)
   assert.ok(manager.get('ambiguous-interrupt')?.abort_requested_at)
@@ -466,6 +491,12 @@ class UncertainFailureExecutor implements TaskExecutor {
   async reconcile(): Promise<ReconciliationResult> {
     this.reconcileCalls++
     return this.reconciliation
+  }
+}
+
+class PreTurnFailureExecutor implements TaskExecutor {
+  async execute(): Promise<ExecutionResult> {
+    throw new Error('transport failed before a terminal observation')
   }
 }
 

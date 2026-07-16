@@ -25,10 +25,19 @@ export interface AppConfig {
   codexBizHomeRoot: string
   /** Navigator gateway base URL used by the built-in business MCP bridge. */
   navigatorWorkerGatewayBaseUrl: string
-  /** Worker identity installed locally for outbound Navigator Gateway calls. */
+  /**
+   * Stable Navigator PhysicalWorker identity used for outbound Gateway calls
+   * and exact target matching of signed termination operations.
+   */
   navigatorWorkerId: string
   /** One-time rotated credential; never forward through the generic Codex process environment. */
   navigatorWorkerCredential: string
+  /**
+   * Durable local receipt directory for one-use termination capabilities.
+   * This is intentionally independent from task/event persistence so a
+   * captured capability remains non-replayable after a Worker restart.
+   */
+  terminationOperationLedgerDir: string
   /**
    * Worker 兜底默认模型（请求未显式指定 model 时使用）。
    *
@@ -364,6 +373,10 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     navigatorWorkerId,
     navigatorWorkerCredential,
+    terminationOperationLedgerDir: parseOptionalAbsolutePath(
+      env.CODEX_TERMINATION_OPERATION_LEDGER_DIR,
+      'CODEX_TERMINATION_OPERATION_LEDGER_DIR',
+    ) || path.resolve(__dirname, '..', 'logs', 'termination-operations'),
     defaultModel: parseDefaultModel(env.CODEX_DEFAULT_MODEL),
     modelAliases: parseModelAliases(env.CODEX_MODEL_ALIASES),
   }

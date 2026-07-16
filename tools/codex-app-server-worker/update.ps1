@@ -358,11 +358,9 @@ try {
         $StopStatus = $LASTEXITCODE
         $VerifyStatus = Invoke-ProcessTree $ProcessTreeHelper @('verify', '--pid', $RunningPid, '--entry', $InstalledEntry, '--output', $UpdateSnapshot)
         if ($StopStatus -ne 0 -or $VerifyStatus -ne 0) {
-            $KillStatus = Invoke-ProcessTree $ProcessTreeHelper @('kill', '--pid', $RunningPid, '--entry', $InstalledEntry, '--output', $UpdateSnapshot)
-            $FinalVerifyStatus = Invoke-ProcessTree $ProcessTreeHelper @('verify', '--pid', $RunningPid, '--entry', $InstalledEntry, '--output', $UpdateSnapshot)
-            $Reason = if ($KillStatus -eq 0 -and $FinalVerifyStatus -eq 0) { 'update_drain_not_proven' } else { 'update_process_residue' }
+            $Reason = if ($VerifyStatus -eq 0) { 'update_drain_not_proven' } else { 'update_drain_pending_operator_decision' }
             Write-FailedStopLatch $FailedStopFile $Reason
-            throw 'Worker drain failed or left verified descendants; current installation was not replaced'
+            throw 'Worker drain was not proven; no Worker process was terminated and the current installation was not replaced. Use an explicit signed termination operation or operator recovery.'
         }
         if ($null -ne (Find-StateEntry $StateDir 'lifecycle.failed')) {
             Write-FailedStopLatch $FailedStopFile 'update_runtime_lifecycle_failure'

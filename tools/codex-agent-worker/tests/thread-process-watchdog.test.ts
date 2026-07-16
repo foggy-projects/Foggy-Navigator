@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { TaskEntry } from '../src/models.ts'
+import type { TaskAttention, TaskEntry } from '../src/models.ts'
 import { CodexThreadProcessWatchdog } from '../src/codex/thread-process-watchdog.ts'
 import {
   acquireCodexThreadReservation,
@@ -23,11 +23,11 @@ function createRunningTask(overrides: Partial<TaskEntry> = {}): TaskEntry {
   }
 }
 
-test('watchdog aborts a task and releases its reservation after a confirmed missing-process window', async () => {
+test('watchdog marks a confirmed missing process PROCESS_UNVERIFIED without aborting or releasing its reservation', async () => {
   const entry = createRunningTask()
   const tasks = new Map([[entry.taskId, entry]])
   let now = 10_000
-  let abortReason = ''
+  const attention: TaskAttention[] = []
   await acquireCodexThreadReservation(entry.threadId!, entry.taskId, {
     listProcesses: async () => [],
   })
@@ -36,16 +36,7 @@ test('watchdog aborts a task and releases its reservation after a confirmed miss
     getReservations: getCodexThreadReservations,
     listProcesses: async () => [],
     now: () => now,
-    abortTask: (taskId, reason) => {
-      const task = tasks.get(taskId)
-      if (!task || task.status !== 'running') return false
-      abortReason = reason
-      task.abortController?.abort(reason)
-      task.status = 'aborted'
-      task.completedAt = now
-      releaseCodexThreadReservationsForTask(taskId)
-      return true
-    },
+    markTaskAttention: (_taskId, value) => attention.push(value),
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,
@@ -54,27 +45,24 @@ test('watchdog aborts a task and releases its reservation after a confirmed miss
   })
 
   const suspected = await watchdog.runOnce()
-  assert.deepEqual(suspected.abortedTasks, [])
+  assert.deepEqual(suspected.unverifiedTasks, [])
   assert.equal(suspected.suspectedMissingTasks, 1)
   assert.equal(getCodexThreadReservations().size, 1)
 
-  now += 4_999
-  await watchdog.runOnce()
-  assert.equal(entry.status, 'running')
-
-  now += 1
+  now += 5_000
   const reconciled = await watchdog.runOnce()
-  assert.deepEqual(reconciled.abortedTasks, ['task-1'])
-  assert.equal(entry.status, 'aborted')
-  assert.equal(entry.abortController?.signal.aborted, true)
-  assert.match(abortReason, /pid=321/)
-  assert.equal(getCodexThreadReservations().size, 0)
+  assert.deepEqual(reconciled.abortedTasks, [])
+  assert.deepEqual(reconciled.unverifiedTasks, ['task-1'])
+  assert.equal(entry.status, 'running')
+  assert.equal(entry.abortController?.signal.aborted, false)
+  assert.equal(getCodexThreadReservations().size, 1)
+  assert.deepEqual(attention.map(item => item.code), ['PROCESS_UNVERIFIED'])
 })
 
-test('watchdog never releases a live task even when it runs longer than the grace window', async () => {
+test('watchdog never changes a live task even when it runs longer than the grace window', async () => {
   const entry = createRunningTask()
   let now = 1_000_000
-  let abortCount = 0
+  let attentionCount = 0
   await acquireCodexThreadReservation(entry.threadId!, entry.taskId, {
     listProcesses: async () => [],
   })
@@ -88,10 +76,7 @@ test('watchdog never releases a live task even when it runs longer than the grac
       started_at: '',
     }],
     now: () => now,
-    abortTask: () => {
-      abortCount += 1
-      return true
-    },
+    markTaskAttention: () => { attentionCount++ },
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,
@@ -104,7 +89,7 @@ test('watchdog never releases a live task even when it runs longer than the grac
   const report = await watchdog.runOnce()
 
   assert.equal(report.liveTasks, 1)
-  assert.equal(abortCount, 0)
+  assert.equal(attentionCount, 0)
   assert.equal(getCodexThreadReservations().size, 1)
 })
 
@@ -120,7 +105,6 @@ test('watchdog discovers a resumed process during startup instead of treating th
       started_at: '',
     }],
     now: () => 10_000,
-    abortTask: () => false,
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,
@@ -133,22 +117,42 @@ test('watchdog discovers a resumed process during startup instead of treating th
   assert.equal(entry.pid, 654)
 })
 
-test('watchdog leaves task and reservation state unchanged when process scanning fails', async () => {
+test('watchdog marks a late task with neither PID nor thread identity as unverified after startup grace', async () => {
+  const entry = createRunningTask({ pid: undefined, threadId: undefined, startedAt: 0 })
+  const attention: TaskAttention[] = []
+  const watchdog = new CodexThreadProcessWatchdog({
+    getTaskEntries: () => [entry],
+    getReservations: getCodexThreadReservations,
+    listProcesses: async () => [],
+    now: () => 10_000,
+    markTaskAttention: (_taskId, value) => attention.push(value),
+    releaseReservationsForTask: releaseCodexThreadReservationsForTask,
+  }, {
+    intervalMs: 1_000,
+    missingGraceMs: 2_000,
+    startupGraceMs: 1_000,
+  })
+
+  const report = await watchdog.runOnce()
+  assert.deepEqual(report.unverifiedTasks, ['task-1'])
+  assert.equal(entry.status, 'running')
+  assert.equal(entry.abortController?.signal.aborted, false)
+  assert.equal(attention[0]?.code, 'PROCESS_UNVERIFIED')
+})
+
+test('watchdog turns a process scan error into recoverable attention and retains task and reservation state', async () => {
   const entry = createRunningTask()
   await acquireCodexThreadReservation(entry.threadId!, entry.taskId, {
     listProcesses: async () => [],
   })
-  let abortCount = 0
+  const attention: TaskAttention[] = []
   const watchdog = new CodexThreadProcessWatchdog({
     getTaskEntries: () => [entry],
     getReservations: getCodexThreadReservations,
     listProcesses: async () => {
       throw new Error('ps unavailable')
     },
-    abortTask: () => {
-      abortCount += 1
-      return true
-    },
+    markTaskAttention: (_taskId, value) => attention.push(value),
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,
@@ -156,9 +160,11 @@ test('watchdog leaves task and reservation state unchanged when process scanning
     startupGraceMs: 0,
   })
 
-  await assert.rejects(watchdog.runOnce(), /ps unavailable/)
+  const report = await watchdog.runOnce()
   assert.equal(entry.status, 'running')
-  assert.equal(abortCount, 0)
+  assert.equal(entry.abortController?.signal.aborted, false)
+  assert.deepEqual(report.unverifiedTasks, ['task-1'])
+  assert.equal(attention[0]?.code, 'PROCESS_UNVERIFIED')
   assert.equal(getCodexThreadReservations().size, 1)
 })
 
@@ -170,7 +176,6 @@ test('watchdog removes an orphan reservation only after a successful process sca
     getTaskEntries: () => [],
     getReservations: getCodexThreadReservations,
     listProcesses: async () => [],
-    abortTask: () => false,
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,
@@ -191,7 +196,6 @@ test('watchdog avoids process enumeration while there are no active tasks or res
       scanCount += 1
       return []
     },
-    abortTask: () => false,
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,
@@ -208,7 +212,6 @@ test('watchdog start and stop are idempotent lifecycle operations', () => {
     getTaskEntries: () => [],
     getReservations: getCodexThreadReservations,
     listProcesses: async () => [],
-    abortTask: () => false,
     releaseReservationsForTask: releaseCodexThreadReservationsForTask,
   }, {
     intervalMs: 1_000,

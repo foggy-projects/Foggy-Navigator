@@ -1,7 +1,11 @@
 import { Router, type Request, type Response } from 'express'
+import path from 'node:path'
 import type { AppConfig } from '../config.js'
 import { isAllowedWorkingPath, resolveAllowedWorkingPath, workerPrivatePaths } from '../path-guards.js'
-import { IdempotencyConflictError } from '../persistence/task-store.js'
+import {
+  IdempotencyConflictError,
+  TaskTerminationOperationPendingError,
+} from '../persistence/task-store.js'
 import { resolveRuntimeReadiness } from '../runtime-capabilities.js'
 import {
   TaskManager,
@@ -19,12 +23,25 @@ import {
 import { validateTaskRequest } from '../validation/task-request.js'
 import type { WorkerEvent } from '../models.js'
 import { GeneratedImageStore } from '../generated-image-store.js'
+import { appServerProcessIdentity } from '../app-server/executor.js'
+import {
+  TerminationOperationReceiptLedger,
+  TerminationOperationValidationError,
+  validateTerminationOperation,
+  type ValidatedTerminationOperation,
+} from '../termination-operation.js'
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 export function createTasksRouter(config: AppConfig, manager: TaskManager): Router {
   const router = Router()
   const generatedImages = new GeneratedImageStore(config)
+  // Kept under the state-store root, which is already private from task
+  // working directories and holds the Writer lease/identity.  Receipts are
+  // independent from event persistence and survive a Worker restart.
+  const terminationReplayLedger = new TerminationOperationReceiptLedger(
+    path.join(config.stateDir, 'termination-operations', 'receipts'),
+  )
 
   router.post('/api/v1/tasks', async (req, res, next) => {
     try {
@@ -115,6 +132,34 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
     res.json(toPublicTask(record))
   })
 
+  router.get('/api/v1/processes', async (_req, res) => {
+    try {
+      const snapshots = await manager.listManagedTaskProcesses()
+      // This endpoint is a fresh task-to-runtime binding snapshot for the
+      // control plane.  Keep the projection deliberately fixed: command
+      // lines, working paths, provider output, and environment data are not
+      // process identity and must never cross this boundary.
+      const processes = snapshots.map(snapshot => ({
+        pid: snapshot.pid,
+        command: 'codex-app-server',
+        process_type: 'codex-app-server',
+        is_orphan: false,
+        foggy_task_id: snapshot.taskId,
+        process_identity: appServerProcessIdentity(snapshot.instanceId),
+      }))
+      res.json({
+        processes,
+        active_task_count: processes.length,
+        total: processes.length,
+      })
+    } catch {
+      // A transient in-memory snapshot failure is not a reason to reconcile,
+      // retire, or signal any task.  Return a stable availability code only.
+      console.warn('[codex-app-server] managed_process_snapshot_unavailable')
+      res.status(503).json({ error: 'APP_SERVER_PROCESS_SNAPSHOT_UNAVAILABLE' })
+    }
+  })
+
   router.get('/api/v1/tasks/:taskId/subscribe', (req, res) => {
     subscribe(manager, req, res)
   })
@@ -179,17 +224,25 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
   router.post('/api/v1/tasks/:taskId/abort', async (req, res, next) => {
     try {
       const taskId = single(req.params.taskId)
-      const aborted = await manager.abort(taskId)
+      const operation = validateTerminationOperation(
+        req,
+        config,
+        taskId,
+        'REMOTE_CANCEL',
+        terminationReplayLedger,
+      )
+      const aborted = await manager.abort(taskId, toOperationSummary(operation))
       if (!aborted) {
         res.status(404).json({ error: 'TASK_NOT_FOUND' })
         return
       }
-      if (aborted.abort_status === 'abort_pending') {
-        res.status(409).json({
-          error: 'ABORT_PENDING',
+      if (aborted.abort_status === 'cancel_requested') {
+        res.status(202).json({
           task_id: taskId,
           status: aborted.record.status,
-          abort_status: aborted.abort_status,
+          lifecycle_status: 'CANCEL_REQUESTED',
+          abort_status: 'cancel_requested',
+          termination_operation: aborted.record.termination_operation,
         })
         return
       }
@@ -209,9 +262,71 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
         abort_status: aborted.abort_status,
       })
     } catch (error) {
+      if (error instanceof TerminationOperationValidationError) {
+        sendTerminationOperationError(res, error)
+        return
+      }
+      if (error instanceof TaskTerminationOperationPendingError) {
+        res.status(409).json({ error: error.code })
+        return
+      }
       next(error)
     }
   })
+
+  const killAuthorizedProcess = async (req: Request, res: Response, next: (error: Error) => void): Promise<void> => {
+    try {
+      const pid = Number(single(req.params.pid))
+      if (!Number.isSafeInteger(pid) || pid <= 0) {
+        res.status(400).json({ error: 'INVALID_PROCESS_ID' })
+        return
+      }
+      const routeTaskId = req.params.taskId === undefined ? undefined : single(req.params.taskId)
+      const operation = validateTerminationOperation(
+        req,
+        config,
+        routeTaskId,
+        'MANUAL_PID_KILL',
+        terminationReplayLedger,
+      )
+      if (operation.expected_pid !== pid) {
+        res.status(409).json({ error: 'TERMINATION_OPERATION_MISMATCH' })
+        return
+      }
+      const result = await manager.manualPidKill(operation.task_id, pid, toOperationSummary(operation))
+      if (!result) {
+        res.status(404).json({ error: 'TASK_NOT_FOUND' })
+        return
+      }
+      const providerTerminalObserved = result.provider_terminal_observed === true
+      const terminalProviderResult = providerTerminalObserved && result.record.status === 'terminal'
+      res.status(result.observed_exit || terminalProviderResult ? 200 : 202).json({
+        task_id: result.record.task_id,
+        status: result.record.status,
+        lifecycle_status: result.observed_exit
+          ? 'ABORTED'
+          : providerTerminalObserved
+            ? String(toPublicTask(result.record).lifecycle_status)
+            : 'CANCEL_REQUESTED',
+        observed_exit: result.observed_exit,
+        ...(providerTerminalObserved ? { provider_terminal_observed: true } : {}),
+        termination_operation: result.record.termination_operation,
+      })
+    } catch (error) {
+      if (error instanceof TerminationOperationValidationError) {
+        sendTerminationOperationError(res, error)
+        return
+      }
+      if (error instanceof TaskTerminationOperationPendingError) {
+        res.status(409).json({ error: error.code })
+        return
+      }
+      next(error as Error)
+    }
+  }
+
+  router.post('/api/v1/tasks/:taskId/processes/:pid/kill', killAuthorizedProcess)
+  router.post('/api/v1/processes/:pid/kill', killAuthorizedProcess)
 
   router.delete('/api/v1/tasks/:taskId', async (req, res, next) => {
     try {
@@ -241,6 +356,41 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
     }
   })
   return router
+}
+
+function toOperationSummary(operation: ValidatedTerminationOperation) {
+  return {
+    operation_id: operation.operation_id,
+    task_id: operation.task_id,
+    worker_id: operation.worker_id,
+    target_worker_id: operation.target_worker_id,
+    kind: operation.kind,
+    origin: operation.origin,
+    actor_id: operation.actor_id,
+    actor_type: operation.actor_type,
+    authorization_decision_id: operation.authorization_decision_id,
+    reason_code: operation.reason_code,
+    correlation_id: operation.correlation_id,
+    issued_at: operation.issued_at,
+    expires_at: operation.expires_at,
+    requested_at: new Date().toISOString(),
+    status: 'CANCEL_REQUESTED' as const,
+    expected_pid: operation.expected_pid,
+    expected_process_identity: operation.expected_process_identity,
+  }
+}
+
+function sendTerminationOperationError(res: Response, error: TerminationOperationValidationError): void {
+  const status = error.code === 'TERMINATION_AUTH_UNCONFIGURED'
+    || error.code === 'TERMINATION_OPERATION_REPLAY_LEDGER_FULL'
+    || error.code === 'TERMINATION_OPERATION_REPLAY_LEDGER_UNAVAILABLE'
+    ? 503
+    : error.code === 'TERMINATION_OPERATION_REPLAYED' || error.code === 'TERMINATION_OPERATION_MISMATCH'
+      ? 409
+      : error.code === 'TERMINATION_OPERATION_SIGNATURE_INVALID'
+        ? 403
+        : 400
+  res.status(status).json({ error: error.code })
 }
 
 function subscribe(manager: TaskManager, req: Request, res: Response): void {

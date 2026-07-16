@@ -100,6 +100,12 @@ test('operations scripts use isolated paths, port 3062, hidden start, and shutdo
   assert.match(stopSh, /shutdown\.success/)
   assert.match(stopPs, /process-tree\.mjs/)
   assert.match(stopSh, /process-tree\.mjs/)
+  assert.doesNotMatch(stopPs, /Invoke-ProcessTree @\('kill'/)
+  assert.doesNotMatch(stopSh, /run_process_tree kill/)
+  assert.doesNotMatch(updatePs, /Invoke-ProcessTree \$ProcessTreeHelper @\('kill'/)
+  assert.doesNotMatch(updateSh, /run_process_tree kill/)
+  assert.match(stopPs, /no Worker process was terminated/)
+  assert.match(stopSh, /no Worker process was terminated/)
   assert.match(processTreeHelper, /taskkill\.exe/)
   assert.match(processTreeHelper, /SIGSTOP/)
   assert.match(processTreeHelper, /SIGCONT/)
@@ -451,7 +457,7 @@ test('Bash SIGTERM preserves the owned lifecycle lock', { skip: process.platform
   }
 })
 
-test('forced stop kills the Worker process tree and refuses a package swap', async () => {
+test('non-proven stop preserves the Worker process tree and refuses a package swap', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex app forced stop #'))
   const installDir = path.join(root, 'install root #1')
   const runDir = path.join(root, 'runtime run #1')
@@ -508,12 +514,14 @@ setInterval(() => {}, 1000)
         env, encoding: 'utf8', timeout: 15_000,
       })
 
-    assert.equal(stopped.status, 2, stopped.stderr || stopped.stdout)
-    await waitForProcessExit(parentPid)
-    await waitForProcessExit(childPid)
-    assert.equal(fs.existsSync(path.join(runDir, 'worker.pid')), false)
-    assert.equal(fs.existsSync(path.join(runDir, 'stop.request')), false)
+    assert.equal(stopped.status, 4, stopped.stderr || stopped.stdout)
+    assert.match(`${stopped.stdout}\n${stopped.stderr}`, /no Worker process was terminated/i)
+    assert.equal(isProcessAlive(parentPid), true)
+    assert.equal(isProcessAlive(childPid), true)
+    assert.equal(fs.existsSync(path.join(runDir, 'worker.pid')), true)
+    assert.equal(fs.existsSync(path.join(runDir, 'stop.request')), true)
     assert.equal(fs.existsSync(path.join(runDir, 'stop.failed')), true)
+    assert.match(fs.readFileSync(path.join(runDir, 'stop.failed'), 'utf8'), /shutdown_not_proven/)
     assert.equal(fs.existsSync(path.join(runDir, 'worker.process-tree.json')), true)
 
     const refusedStart = process.platform === 'win32'
@@ -538,7 +546,7 @@ setInterval(() => {}, 1000)
   }
 })
 
-test('failed self-shutdown cannot masquerade as a graceful stop or orphan its child', async () => {
+test('failed self-shutdown preserves evidence and leaves its child for operator recovery', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex app failed shutdown #'))
   const installDir = path.join(root, 'install root #1')
   const runDir = path.join(root, 'runtime run #1')
@@ -601,11 +609,14 @@ const monitor = setInterval(() => {
         env, encoding: 'utf8', timeout: 15_000,
       })
 
-    assert.equal(stopped.status, 2, stopped.stderr || stopped.stdout)
+    assert.equal(stopped.status, 4, stopped.stderr || stopped.stdout)
+    assert.match(`${stopped.stdout}\n${stopped.stderr}`, /no Worker process was terminated/i)
     await waitForProcessExit(parentPid)
-    await waitForProcessExit(childPid)
+    assert.equal(isProcessAlive(childPid), true)
     assert.equal(fs.existsSync(path.join(runDir, 'stop.failed')), true)
+    assert.match(fs.readFileSync(path.join(runDir, 'stop.failed'), 'utf8'), /shutdown_not_proven/)
     assert.equal(fs.existsSync(path.join(runDir, 'shutdown.success')), false)
+    assert.equal(fs.existsSync(path.join(runDir, 'worker.pid')), true)
     assert.equal(fs.existsSync(path.join(runDir, 'worker.process-tree.json')), true)
     assert.equal(fs.existsSync(path.join(installDir, 'lifecycle.lock')), false)
   } finally {

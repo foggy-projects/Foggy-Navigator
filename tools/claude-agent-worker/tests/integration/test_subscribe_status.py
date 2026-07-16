@@ -164,6 +164,18 @@ class TestTaskStatus:
             "foggy_task_id": "f-live",
             "connected": True,
             "has_external_subscriber": True,
+            "attention_state": "PROCESS_UNVERIFIED",
+            "lifecycle_evidence": {
+                "source": "TEST_OBSERVER",
+                "observed_at": "2026-07-16T00:00:00+00:00",
+            },
+            "termination_operation": {
+                "operation_id": "op-status-1",
+                "worker_id": "test-navigator-worker-id",
+                "kind": "REMOTE_CANCEL",
+                "status": "UNCONFIRMED",
+                "observed_exit": False,
+            },
         }
 
         try:
@@ -176,6 +188,12 @@ class TestTaskStatus:
             assert body["closed"] is False
             assert body["cli_alive"] is True
             assert body["source"] == "registry"
+            assert body["lifecycle_state"] == "RUNNING"
+            assert body["attention_status"] == "PROCESS_UNVERIFIED"
+            assert body["attention"][0]["code"] == "PROCESS_UNVERIFIED"
+            assert body["available_actions"] == ["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"]
+            assert body["termination_operation"]["operation_id"] == "op-status-1"
+            assert body["termination_operation"]["worker_id"] == "test-navigator-worker-id"
         finally:
             running.cancel()
 
@@ -210,6 +228,24 @@ class TestTaskStatus:
         assert body["cli_alive"] is False
         assert body["event_count"] == 2
 
+    async def test_status_rejects_incomplete_terminal_marker(
+        self, client: AsyncClient, make_broadcast,
+    ):
+        """A legacy boolean marker cannot turn a closed stream terminal."""
+        bc = await make_broadcast("t-incomplete", [], closed=True)
+        task_registry["t-incomplete"] = {
+            "broadcast": bc,
+            "asyncio_task": None,
+            "foggy_task_id": None,
+            "terminal_observed": True,
+        }
+
+        resp = await client.get("/api/v1/tasks/t-incomplete/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["terminal_observed"] is False
+        assert body["lifecycle_state"] == "RUNNING"
+
     async def test_status_resolves_foggy_task_id(
         self, client: AsyncClient, make_broadcast,
     ):
@@ -229,10 +265,14 @@ class TestTaskStatus:
     async def test_status_from_persistence(
         self, client: AsyncClient, tmp_path,
     ):
-        """If task not in registry but in persistence store, return persistence data."""
+        """Closed/unmarked durable events remain recoverable, not terminal."""
         store = JsonlEventStore(tmp_path)
         store.append("persist-task", {"seq": 1, "type": "assistant_text"})
-        store.append("persist-task", {"seq": 2, "type": "result"})
+        store.append("persist-task", {
+            "seq": 2,
+            "type": "error",
+            "error": "Task was cancelled",
+        })
         store.mark_closed("persist-task")
 
         # The status endpoint imports get_event_store lazily:
@@ -249,6 +289,47 @@ class TestTaskStatus:
         assert body["latest_seq"] == 2
         assert body["closed"] is True
         assert body["source"] == "persistence"
+        assert body["cli_alive"] is None
+        assert body["terminal_observed"] is False
+        assert body["terminal_status"] is None
+        assert body["terminal_source"] is None
+        assert body["lifecycle_state"] == "RUNNING"
+        assert body["attention_status"] == "PROCESS_UNVERIFIED"
+        assert body["available_actions"] == ["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"]
+
+    async def test_status_from_persistence_uses_verified_terminal_event(
+        self, client: AsyncClient, tmp_path,
+    ):
+        """Explicit provider terminal evidence survives registry cleanup."""
+        store = JsonlEventStore(tmp_path)
+        store.append("persist-terminal", {
+            "seq": 1,
+            "type": "result",
+            "terminal_observed": True,
+            "terminal_status": "COMPLETED",
+            "terminal_source": "PROVIDER_TERMINAL_EVENT",
+        })
+        store.mark_closed("persist-terminal")
+
+        with patch(
+            "agent_worker.persistence.factory.get_event_store",
+            return_value=store,
+        ):
+            resp = await client.get("/api/v1/tasks/persist-terminal/status")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["source"] == "persistence"
+        assert body["cli_alive"] is None
+        assert body["terminal_observed"] is True
+        assert body["terminal_status"] == "COMPLETED"
+        assert body["terminal_source"] == "PROVIDER_TERMINAL_EVENT"
+        assert body["lifecycle_state"] == "COMPLETED"
+        assert body["lifecycle_evidence"] == {
+            "source": "PROVIDER_TERMINAL_EVENT",
+            "durable": True,
+            "event_seq": 1,
+        }
 
     async def test_status_not_found(self, client: AsyncClient):
         """Status for a completely unknown task returns 404."""

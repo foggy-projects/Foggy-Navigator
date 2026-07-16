@@ -233,22 +233,10 @@ if [[ "$success_matches" == true ]] && (( PROCESS_TREE_STATUS == 0 )); then
   exit 0
 fi
 
-run_process_tree kill --pid "$pid" --entry "$ENTRY" --output "$SNAPSHOT_FILE"
-kill_status=$PROCESS_TREE_STATUS
-run_process_tree verify --pid "$pid" --entry "$ENTRY" --output "$SNAPSHOT_FILE"
-verify_status=$PROCESS_TREE_STATUS
 if [[ "$success_matches" == true ]]; then reason=shutdown_success_with_process_residue; else reason=shutdown_not_proven; fi
-write_failed_stop_latch "$reason"
-if ! remove_evidence_file "$STOP_FILE" ||
-   ! remove_evidence_file "$PID_FILE" ||
-   ! remove_evidence_file "$SHUTDOWN_SUCCESS_FILE" ||
-   ! remove_evidence_file "$SHUTDOWN_FAILURE_FILE"; then
-  echo 'Failed to clean non-snapshot shutdown evidence' >&2
+if ! write_failed_stop_latch "$reason"; then
+  echo "Failed to persist shutdown failure latch at $FAILED_STOP_FILE" >&2
   exit 3
 fi
-if (( kill_status != 0 || verify_status != 0 )); then
-  echo 'Worker shutdown left verified process residue; start and update are latched' >&2
-  exit 3
-fi
-echo "Worker shutdown was not proven graceful; verified process tree was cleaned, but evidence remains at $SNAPSHOT_FILE pending explicit latch review" >&2
-exit 2
+echo "Worker shutdown was not proven graceful; no Worker process was terminated. Lifecycle evidence remains at $SNAPSHOT_FILE and $FAILED_STOP_FILE pending an explicit signed termination operation or operator recovery" >&2
+exit 4

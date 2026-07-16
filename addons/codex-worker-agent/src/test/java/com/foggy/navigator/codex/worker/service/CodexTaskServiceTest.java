@@ -18,9 +18,12 @@ import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.entity.TerminationOperationEntity;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
+import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
@@ -31,9 +34,11 @@ import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
+import com.foggy.navigator.session.service.TerminationOperationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -41,6 +46,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +111,8 @@ class CodexTaskServiceTest {
     private CodexWorkerClient workerClient;
     @Mock
     private CodexTaskRuntimeStateService taskRuntimeStateService;
+    @Mock
+    private TerminationOperationService terminationOperationService;
 
     private CodexTaskService service;
 
@@ -772,7 +781,8 @@ class CodexTaskServiceTest {
         when(taskRepository.findByTaskId("task-biz")).thenReturn(Optional.of(biz));
         when(taskRepository.findBySessionId("session-mixed")).thenReturn(List.of(plain, biz));
         when(taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc("user-1",
-                List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT"))).thenReturn(List.of(biz, plain));
+                List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(List.of(biz, plain));
         when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1")).thenReturn(List.of(biz, plain));
         when(taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
                 .thenReturn(List.of(biz, plain));
@@ -850,7 +860,7 @@ class CodexTaskServiceTest {
                 .thenReturn(true);
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
                 "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                List.of("RUNNING", "AWAITING_INPUT")))
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
                 .thenReturn(false);
         // providerStateJson 中存储 codexThreadId（resume 从此恢复）
         SessionEntity sessionWithState = new SessionEntity();
@@ -1512,7 +1522,7 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void abortTaskDelegatesAuthoritativeReconciliationToRelay() {
+    void abortTaskFailsClosedWhenAuditStoreIsUnavailable() {
         CodexTaskEntity entity = createTask(
                 "task-abort", "session-1", "worker-1", "dir-1", "RUNNING",
                 LocalDateTime.of(2026, 4, 2, 10, 0)
@@ -1520,10 +1530,13 @@ class CodexTaskServiceTest {
         entity.setWorkerTaskId("worker-task-1");
 
         when(taskRepository.findByTaskId("task-abort")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         service.abortTask("task-abort");
 
-        verify(streamRelay).abortAndReconcileTask(entity);
-        verify(taskRepository, never()).save(any());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", entity.getErrorMessage());
+        verify(streamRelay, never()).abortAndReconcileTask(any());
+        verifyNoInteractions(workerClient);
     }
 
     @Test
@@ -1553,24 +1566,267 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void abortTaskKeepsRunningWhenRemoteAbortCannotBeConfirmed() {
+    void abortTaskDispatchesSignedOperationButKeepsTaskNonterminalAfterAck() {
         CodexTaskEntity entity = createTask(
                 "task-abort", "session-1", "worker-1", "dir-1", "RUNNING",
                 LocalDateTime.of(2026, 4, 2, 10, 0));
-        entity.setRuntimeType("APP_SERVER");
-        entity.setRuntimeAcceptanceState("COMMITTED");
         entity.setWorkerTaskId("worker-task-1");
         when(taskRepository.findByTaskId("task-abort")).thenReturn(Optional.of(entity));
-        doThrow(new IllegalStateException(
-                "CODEX_RUNTIME_ABORT_UNKNOWN: remote abort was not confirmed"))
-                .when(streamRelay).abortAndReconcileTask(entity);
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        TerminationOperationService.CreateCommand[] accepted = new TerminationOperationService.CreateCommand[1];
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            accepted[0] = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to_test");
+            operation.setSchemaVersion(1);
+            operation.setProviderTaskId(accepted[0].providerTaskId());
+            operation.setWorkerId(accepted[0].workerId());
+            operation.setKind(accepted[0].kind());
+            operation.setOrigin(accepted[0].origin());
+            operation.setActorId(accepted[0].actorId());
+            operation.setActorType(accepted[0].actorType());
+            operation.setAuthorizationDecisionId(accepted[0].authorizationDecisionId());
+            operation.setReasonCode(accepted[0].reasonCode());
+            operation.setCorrelationId(accepted[0].correlationId());
+            return operation;
+        });
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
+                .baseUrl("http://worker.example").authToken("worker-token").build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
+        when(workerClient.abortTask(eq("worker-task-1"), any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of("status", "CANCEL_REQUESTED")));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
 
-        assertThrows(IllegalStateException.class, () -> service.abortTask("task-abort"));
+        service.abortTask("task-abort");
 
-        assertEquals("RUNNING", entity.getStatus());
-        assertEquals("COMMITTED", entity.getRuntimeAcceptanceState());
-        verify(streamRelay).abortAndReconcileTask(entity);
-        verify(taskRepository, never()).save(any());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        assertTrue(accepted[0].correlationId().startsWith("remote-cancel:"));
+        verify(terminationOperationService).markDispatchStarted("to_test");
+        verify(terminationOperationService).markCancelRequested("to_test");
+        ArgumentCaptor<TerminationOperationCapability> capability =
+                ArgumentCaptor.forClass(TerminationOperationCapability.class);
+        verify(workerClient).abortTask(eq("worker-task-1"), capability.capture());
+        assertNotNull(capability.getValue().signature());
+        String payload = new String(Base64.getUrlDecoder().decode(capability.getValue().encodedOperation()),
+                StandardCharsets.UTF_8);
+        assertTrue(payload.contains("\"correlation_id\":\"remote-cancel:"));
+        verify(streamRelay, never()).abortAndReconcileTask(any());
+    }
+
+    @Test
+    void manualPidKillPersistsAndSignsFreshProcessIdentity() {
+        CodexTaskEntity entity = createTask(
+                "task-manual-kill", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 16, 10, 0));
+        entity.setTenantId("tenant-1");
+        entity.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskIdForUpdate("task-manual-kill")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.hasActiveOperationForTask("task-manual-kill")).thenReturn(false);
+        TerminationOperationService.CreateCommand[] accepted = new TerminationOperationService.CreateCommand[1];
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            accepted[0] = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to_manual_pid");
+            operation.setSchemaVersion(1);
+            operation.setProviderTaskId(accepted[0].providerTaskId());
+            operation.setWorkerId(accepted[0].workerId());
+            operation.setKind(accepted[0].kind());
+            operation.setOrigin(accepted[0].origin());
+            operation.setActorId(accepted[0].actorId());
+            operation.setActorType(accepted[0].actorType());
+            operation.setAuthorizationDecisionId(accepted[0].authorizationDecisionId());
+            operation.setReasonCode(accepted[0].reasonCode());
+            operation.setCorrelationId(accepted[0].correlationId());
+            operation.setExpectedPid(accepted[0].expectedPid());
+            operation.setExpectedProcessIdentity(accepted[0].expectedProcessIdentity());
+            return operation;
+        });
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        CodexTaskService.ManualPidKillRequest request = service.prepareManualPidKill(
+                "task-manual-kill", "worker-1", "user-1", "TENANT_ADMIN_MANUAL", "tenant-1", true,
+                321, "codex-cli:321:2026-07-16T03:40:13.655Z", "worker-token");
+
+        assertEquals("codex-cli:321:2026-07-16T03:40:13.655Z", accepted[0].expectedProcessIdentity());
+        assertTrue(accepted[0].authorizationDecisionId().startsWith("authz-v1:tenant_admin_manual:"));
+        assertNotEquals(accepted[0].authorizationDecisionId(), accepted[0].correlationId());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        String encoded = request.capability().encodedOperation();
+        String payload = new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
+        assertTrue(payload.contains("\"expected_process_identity\":\"codex-cli:321:2026-07-16T03:40:13.655Z\""));
+        verify(terminationOperationService).markDispatchStarted("to_manual_pid");
+    }
+
+    @Test
+    void manualPidKillRejectsOrdinaryTaskOwnerDespiteFreshProcessBinding() {
+        CodexTaskEntity entity = createTask(
+                "task-owner-cannot-kill", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 16, 10, 0));
+        entity.setTenantId("tenant-1");
+        entity.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskIdForUpdate("task-owner-cannot-kill")).thenReturn(Optional.of(entity));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill("task-owner-cannot-kill", "worker-1", "user-1",
+                        "USER_MANUAL", "tenant-1", false, 321,
+                        "codex-cli:321:2026-07-16T03:40:13.655Z", "worker-token"));
+
+        assertEquals("TERMINATION_TASK_ACCESS_DENIED", error.getMessage());
+        verify(terminationOperationService, never()).accept(any());
+    }
+
+    @Test
+    void manualPidKillRejectsMissingOrMismatchedProcessIdentityBeforeDispatch() {
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill("task-1", "worker-1", "user-1", "TENANT_ADMIN_MANUAL",
+                        "tenant-1", true, 321, "", "worker-token"));
+        assertEquals("TERMINATION_PROCESS_IDENTITY_REQUIRED", missing.getMessage());
+
+        CodexTaskEntity appServerTask = createTask(
+                "task-app-server", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 16, 10, 0));
+        appServerTask.setTenantId("tenant-1");
+        appServerTask.setWorkerTaskId("worker-task-1");
+        appServerTask.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        appServerTask.setRuntimeInstanceId("instance-1");
+        when(taskRepository.findByTaskIdForUpdate("task-app-server")).thenReturn(Optional.of(appServerTask));
+        when(terminationOperationService.hasActiveOperationForTask("task-app-server")).thenReturn(false);
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        IllegalArgumentException mismatch = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill("task-app-server", "worker-1", "user-1", "TENANT_ADMIN_MANUAL",
+                        "tenant-1", true, 321, "app-server-instance:other-instance", "worker-token"));
+        assertEquals("TERMINATION_PROCESS_IDENTITY_MISMATCH", mismatch.getMessage());
+        verify(terminationOperationService, never()).accept(any());
+    }
+
+    @Test
+    void manualPidKillResultRequiresObservedExitCorrelatedToOperationTaskAndWorker() {
+        CodexTaskEntity entity = createTask(
+                "task-manual-result", "session-1", "worker-1", "dir-1", "CANCEL_REQUESTED",
+                LocalDateTime.of(2026, 7, 16, 10, 0));
+        when(taskRepository.findByTaskIdForUpdate("task-manual-result")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+        CodexTaskService.ManualPidKillRequest request = new CodexTaskService.ManualPidKillRequest(
+                "to-manual-result", "task-manual-result", "RUNNING", null, null);
+
+        // Regression: an ABORTED lifecycle label without observed process exit
+        // must remain pending rather than terminalizing the task.
+        service.recordManualPidKillResult(request, Map.of(
+                "lifecycle_status", "ABORTED",
+                "observed_exit", false));
+
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(terminationOperationService).markAwaitingObservation(
+                "to-manual-result", "TERMINATION_UNCONFIRMED");
+        verify(terminationOperationService, never()).markObservedTerminal(anyString(), anyString());
+
+        // A true flag with no signed-operation evidence is insufficient.
+        service.recordManualPidKillResult(request, Map.of(
+                "lifecycle_status", "CANCEL_REQUESTED",
+                "observed_exit", true));
+
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(terminationOperationService, times(2)).markAwaitingObservation(
+                "to-manual-result", "TERMINATION_UNCONFIRMED");
+
+        // A result for another task cannot settle this task's operation.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "other-task",
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("to-manual-result", "worker-1")));
+
+        // A result for a different signed operation cannot be replayed here.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "task-manual-result",
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("other-operation", "worker-1")));
+
+        // Nor can a valid operation from another physical Worker terminalize it.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "task-manual-result",
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("to-manual-result", "other-worker")));
+
+        // Bindings are exact rather than case-insensitive string comparisons.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "task-manual-result",
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("TO-MANUAL-RESULT", "worker-1")));
+
+        // A top-level task binding is not a substitute for the signed
+        // operation's own task binding.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "task-manual-result",
+                "observed_exit", true,
+                "termination_operation", Map.of(
+                        "operation_id", "to-manual-result",
+                        "worker_id", "worker-1",
+                        "kind", "MANUAL_PID_KILL",
+                        "origin", "ADMIN_MANUAL",
+                        "status", "OBSERVED_EXIT",
+                        "observed_exit", true,
+                        "observed_at", "2026-07-16T03:40:13.655Z")));
+
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(terminationOperationService, times(7)).markAwaitingObservation(
+                "to-manual-result", "TERMINATION_UNCONFIRMED");
+        verify(terminationOperationService, never()).markObservedTerminal(anyString(), anyString());
+
+        // The SDK Worker response carries an explicit observed operation
+        // correlated to the reserved task and Worker.
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "task-manual-result",
+                "observed_exit", true,
+                "termination_operation", observedManualPidOperation("to-manual-result", "worker-1")));
+
+        assertEquals("ABORTED", entity.getStatus());
+        verify(terminationOperationService).markObservedTerminal("to-manual-result", "ABORTED");
+    }
+
+    private Map<String, Object> observedManualPidOperation(String operationId, String workerId) {
+        return Map.of(
+                "operation_id", operationId,
+                "task_id", "task-manual-result",
+                "worker_id", workerId,
+                "kind", "MANUAL_PID_KILL",
+                "origin", "ADMIN_MANUAL",
+                "status", "OBSERVED_EXIT",
+                "observed_exit", true,
+                "observed_at", "2026-07-16T03:40:13.655Z");
+    }
+
+    @Test
+    void manualPidKillResultAcceptsAppServerObservedExitTimestampWhenBindingsMatch() {
+        CodexTaskEntity entity = createTask(
+                "task-app-server-manual-result", "session-1", "worker-1", "dir-1", "CANCEL_REQUESTED",
+                LocalDateTime.of(2026, 7, 16, 10, 0));
+        entity.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        when(taskRepository.findByTaskIdForUpdate("task-app-server-manual-result")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+        CodexTaskService.ManualPidKillRequest request = new CodexTaskService.ManualPidKillRequest(
+                "to-app-server-manual-result", "task-app-server-manual-result", "RUNNING", null, null);
+
+        service.recordManualPidKillResult(request, Map.of(
+                "task_id", "task-app-server-manual-result",
+                "observed_exit", true,
+                "termination_operation", Map.of(
+                        "operation_id", "to-app-server-manual-result",
+                        "task_id", "task-app-server-manual-result",
+                        "worker_id", "worker-1",
+                        "kind", "MANUAL_PID_KILL",
+                        "origin", "ADMIN_MANUAL",
+                        "status", "OBSERVED_EXIT",
+                        "observed_exit_at", "2026-07-16T03:40:13.655Z")));
+
+        assertEquals("ABORTED", entity.getStatus());
+        verify(terminationOperationService).markObservedTerminal("to-app-server-manual-result", "ABORTED");
     }
 
     @Test
@@ -1586,7 +1842,7 @@ class CodexTaskServiceTest {
                 .thenReturn(true);
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
                 "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                List.of("RUNNING", "AWAITING_INPUT")))
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
                 .thenReturn(false);
         SessionEntity existingSession = new SessionEntity();
         existingSession.setId("session-1");
@@ -2149,7 +2405,7 @@ class CodexTaskServiceTest {
                 .thenReturn(true);
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
                 "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                List.of("RUNNING", "AWAITING_INPUT")))
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
                 .thenReturn(true);
 
         IllegalStateException error = assertThrows(IllegalStateException.class,

@@ -1,4 +1,4 @@
-import type { TaskEntry } from '../models.js'
+import { isTaskExecutionActive, type TaskEntry } from '../models.js'
 import {
   findCodexCliProcessForThread,
   listCodexCliProcesses,
@@ -71,7 +71,7 @@ export async function acquireCodexThreadReservation(
     const activeEntry = taskEntries.find(entry => (
       entry.taskId !== taskId
       && entry.threadId === key
-      && entry.status === 'running'
+      && isTaskExecutionActive(entry.status)
     ))
     if (activeEntry) {
       throw new CodexThreadActiveError({

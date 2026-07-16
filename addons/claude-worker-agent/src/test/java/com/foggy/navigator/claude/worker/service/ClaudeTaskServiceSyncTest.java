@@ -286,6 +286,7 @@ class ClaudeTaskServiceSyncTest {
         orphan.setDirectoryId(null);
         when(taskRepository.findByWorkerIdAndUserIdAndDirectoryIdIsNull(WORKER_ID, USER_ID))
                 .thenReturn(List.of(orphan));
+        when(taskRepository.findByTaskIdForUpdate("old-task")).thenReturn(Optional.of(orphan));
 
         WorkingDirectoryEntity dir = createDirectory("dir-sa", "D:/foggy-projects/student-analytics");
         when(directoryRepository.findByWorkerIdAndPathAndUserId(

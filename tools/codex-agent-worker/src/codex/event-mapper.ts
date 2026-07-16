@@ -104,7 +104,9 @@ export function createErrorEvent(
   taskId: string,
   threadId: string | undefined,
   error: string,
-  seq: number
+  seq: number,
+  terminalStatus?: 'FAILED' | 'ABORTED',
+  terminalSource?: string,
 ): WorkerEvent {
   const safeError = safeSdkError(error)
   return {
@@ -112,6 +114,13 @@ export function createErrorEvent(
     task_id: taskId,
     session_id: threadId,
     ...safeError,
+    ...(terminalStatus
+      ? {
+          terminal_observed: true,
+          terminal_status: terminalStatus,
+          terminal_source: terminalSource || 'PROVIDER_TERMINAL_EVENT',
+        }
+      : {}),
     seq,
   }
 }

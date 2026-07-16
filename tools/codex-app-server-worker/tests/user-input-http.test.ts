@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { type AddressInfo } from 'node:net'
@@ -93,12 +94,16 @@ test('HTTP request_user_input is durable, sanitized, once-only and releases the 
   })
   assert.equal(next.status, 202, 'terminal completion releases the native-thread reservation')
   await waitFor(() => Boolean(manager.get('next-turn')?.pending_interaction))
-  const abortStarted = Date.now()
-  const aborted = await fetchJson(`${baseUrl}/api/v1/tasks/next-turn/abort`, { method: 'POST' })
-  assert.equal(aborted.response.status, 200)
-  assert.equal(aborted.body.abort_status, 'aborted')
-  assert.ok(Date.now() - abortStarted < config.abortWaitTimeoutMs)
-  await waitFor(() => manager.get('next-turn')?.status === 'terminal')
+  const aborted = await fetchJson(`${baseUrl}/api/v1/tasks/next-turn/abort`, {
+    method: 'POST', headers: terminationHeaders('next-turn'),
+  })
+  assert.equal(aborted.response.status, 202)
+  assert.equal(aborted.body.abort_status, 'cancel_requested')
+  assert.equal(aborted.body.lifecycle_status, 'CANCEL_REQUESTED')
+  await waitFor(() => manager.get('next-turn')?.attention?.some(
+    item => item.reason_code === 'CANCEL_RECONCILIATION_UNCONFIRMED',
+  ) === true)
+  assert.equal(manager.get('next-turn')?.status, 'running')
   const abortEvents = manager.getBroadcast('next-turn').getEventsAfter(0)
   assert.equal(abortEvents.some(event => event.type === 'user_input_resolved'
     && (event.data as Record<string, unknown>).reason === 'cleared'), true)
@@ -132,8 +137,12 @@ test('distinct concurrent accepts reserve the same native thread atomically', as
   assert.deepEqual(await rejected.json(), { error: 'APP_SERVER_THREAD_ACTIVE' })
   const acceptedTaskId = responses[0]!.status === 202 ? 'thread-race-a' : 'thread-race-b'
   await waitFor(() => Boolean(manager.get(acceptedTaskId)?.pending_interaction))
-  const aborted = await fetchJson(`${baseUrl}/api/v1/tasks/${acceptedTaskId}/abort`, { method: 'POST' })
-  assert.equal(aborted.response.status, 200)
+  const aborted = await fetchJson(`${baseUrl}/api/v1/tasks/${acceptedTaskId}/abort`, {
+    method: 'POST', headers: terminationHeaders(acceptedTaskId),
+  })
+  assert.equal(aborted.response.status, 202)
+  assert.equal(aborted.body.abort_status, 'cancel_requested')
+  assert.equal(aborted.body.lifecycle_status, 'CANCEL_REQUESTED')
 })
 
 test('respond fails closed when the live app-server affinity no longer matches durable state', async t => {
@@ -159,8 +168,9 @@ test('respond fails closed when the live app-server affinity no longer matches d
   })
   assert.equal(response.response.status, 409)
   assert.equal(response.body.error, 'USER_INPUT_RUNTIME_AFFINITY_LOST')
-  assert.equal(manager.get('affinity-input')?.status, 'terminal')
-  assert.equal(manager.get('affinity-input')?.error_code, 'USER_INPUT_CHANNEL_LOST')
+  await waitFor(() => manager.get('affinity-input')?.attention?.some(item => item.reason_code === 'USER_INPUT_CHANNEL_LOST') === true)
+  assert.equal(manager.get('affinity-input')?.status, 'running')
+  assert.equal(manager.get('affinity-input')?.error_code, undefined)
   assert.equal(manager.get('affinity-input')?.pending_interaction, undefined)
   assert.doesNotMatch(await readAllJournals(stateDir), new RegExp(SECRET_ANSWER))
 })
@@ -294,6 +304,31 @@ async function fetchJson(url: string, init: RequestInit = {}) {
 
 function authHeaders(): Record<string, string> {
   return { Authorization: 'Bearer test-worker-token' }
+}
+
+function terminationHeaders(taskId: string): Record<string, string> {
+  const operation = {
+    schema_version: 1,
+    operation_id: `operation-${crypto.randomUUID()}`,
+    task_id: taskId,
+    worker_id: 'test-navigator-worker',
+    kind: 'REMOTE_CANCEL',
+    origin: 'UPSTREAM_USER',
+    actor_id: 'test-user',
+    actor_type: 'USER',
+    authorization_decision_id: 'decision-test',
+    reason_code: 'USER_REQUESTED',
+    correlation_id: `correlation-${crypto.randomUUID()}`,
+    issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  }
+  const encoded = Buffer.from(JSON.stringify(operation)).toString('base64url')
+  return {
+    'X-Navigator-Termination-Operation': encoded,
+    'X-Navigator-Termination-Signature': crypto.createHmac('sha256', 'test-worker-token')
+      .update(encoded)
+      .digest('base64url'),
+  }
 }
 
 async function readAllJournals(stateDir: string): Promise<string> {

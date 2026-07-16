@@ -59,7 +59,12 @@ class JsonlEventStore:
             with self._events_file(task_id).open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
         except OSError as exc:
-            logger.warning("Failed to persist event for task %s: %s", task_id, exc)
+            logger.warning(
+                "Event persistence failed: event_name=EVENT_PERSISTENCE_FAILED "
+                "task_id=%s error_type=%s",
+                task_id,
+                type(exc).__name__,
+            )
 
     def load_events(self, task_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
         """Load events with seq > after_seq from the task's JSONL file."""
@@ -80,11 +85,18 @@ class JsonlEventStore:
                             events.append(evt)
                     except json.JSONDecodeError:
                         logger.warning(
-                            "Corrupt JSONL line %d in %s, skipping",
-                            line_num, events_file,
+                            "Corrupt event record skipped: "
+                            "event_name=EVENT_STORE_CORRUPT_LINE task_id=%s line_number=%d",
+                            task_id,
+                            line_num,
                         )
         except OSError as exc:
-            logger.warning("Failed to load events for task %s: %s", task_id, exc)
+            logger.warning(
+                "Event load failed: event_name=EVENT_LOAD_FAILED "
+                "task_id=%s error_type=%s",
+                task_id,
+                type(exc).__name__,
+            )
         return events
 
     def get_latest_seq(self, task_id: str) -> int:
@@ -121,7 +133,12 @@ class JsonlEventStore:
             task_dir.mkdir(parents=True, exist_ok=True)
             self._closed_marker(task_id).touch()
         except OSError as exc:
-            logger.warning("Failed to mark task %s as closed: %s", task_id, exc)
+            logger.warning(
+                "Event close marker failed: event_name=EVENT_MARK_CLOSED_FAILED "
+                "task_id=%s error_type=%s",
+                task_id,
+                type(exc).__name__,
+            )
 
     def is_closed(self, task_id: str) -> bool:
         """Check if the ``.closed`` marker file exists."""
@@ -135,7 +152,12 @@ class JsonlEventStore:
                 shutil.rmtree(task_dir)
                 logger.debug("Cleaned up event store for task %s", task_id)
             except OSError as exc:
-                logger.warning("Failed to cleanup task %s: %s", task_id, exc)
+                logger.warning(
+                    "Event cleanup failed: event_name=EVENT_CLEANUP_FAILED "
+                    "task_id=%s error_type=%s",
+                    task_id,
+                    type(exc).__name__,
+                )
 
     def register_alias(self, alias_id: str, task_id: str) -> None:
         """Create a mapping from alias_id (e.g. foggy_task_id) to task_id."""
@@ -145,7 +167,13 @@ class JsonlEventStore:
             alias_file.write_text(task_id, encoding="utf-8")
             logger.debug("Registered alias %s -> %s", alias_id, task_id)
         except OSError as exc:
-            logger.warning("Failed to register alias %s -> %s: %s", alias_id, task_id, exc)
+            logger.warning(
+                "Event alias registration failed: "
+                "event_name=EVENT_ALIAS_REGISTER_FAILED alias_id=%s task_id=%s error_type=%s",
+                alias_id,
+                task_id,
+                type(exc).__name__,
+            )
 
     def resolve_alias(self, maybe_alias: str) -> str:
         """If maybe_alias has an alias file, return the real task_id."""

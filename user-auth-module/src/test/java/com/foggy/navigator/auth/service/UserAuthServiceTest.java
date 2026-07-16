@@ -158,6 +158,20 @@ class UserAuthServiceTest {
     }
 
     @Test
+    void testHasRoleRequiresAnExactDelimitedRole() {
+        UserRegisterForm form = new UserRegisterForm();
+        form.setTenantId("tenant-001");
+        form.setUsername("substringroleuser");
+        form.setPassword("password");
+        form.setEmail("substringroleuser@example.com");
+        form.setRoles("NOT_TENANT_ADMIN," + UserRole.DEVELOPER.name());
+        String userId = userAuthService.registerUser(form);
+
+        assertTrue(userAuthService.hasRole(userId, UserRole.DEVELOPER.name()));
+        assertFalse(userAuthService.hasRole(userId, UserRole.TENANT_ADMIN.name()));
+    }
+
+    @Test
     void testBelongsToTenant() {
         String userId = createTestUser("tenantuser", "password");
 

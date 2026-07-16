@@ -1,7 +1,6 @@
 package com.foggy.navigator.claude.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
@@ -23,7 +22,9 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.entity.TerminationOperationEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
@@ -46,6 +47,7 @@ import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.session.service.TerminationOperationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,9 +59,11 @@ import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -70,9 +74,12 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import com.foggy.navigator.common.util.IdGenerator;
 
@@ -116,6 +123,18 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
 
     @Autowired(required = false)
     private SessionEntityRepository sessionEntityRepository;
+
+    /**
+     * Optional while older standalone deployments migrate.  A missing audit
+     * store is deliberately fail-closed for remote termination requests.
+     */
+    @Autowired(required = false)
+    private TerminationOperationService terminationOperationService;
+
+    /** Reserves an operation under a task-row lock before Worker HTTP dispatch. */
+    @Autowired(required = false)
+    @Nullable
+    private PlatformTransactionManager terminationTransactionManager;
 
     private final WorkingDirectoryService workingDirectoryService;
     private final WorkingDirectoryRepository workingDirectoryRepository;
@@ -476,7 +495,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         try {
             resolveAuth(sessionId, workerId, userId, directoryId, null);
         } catch (Exception e) {
-            log.debug("Failed to bind auth for tracked sync task: {}", e.getMessage());
+            log.debug("Failed to bind auth for tracked sync task: errorCode={}, errorType={}",
+                    lifecycleDiagnosticCode(e), exceptionType(e));
         }
 
         return taskId;
@@ -502,7 +522,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                         .build());
             }
         } catch (Exception e) {
-            log.warn("Failed to persist tracked sync messages: sessionId={}, error={}", sessionId, e.getMessage());
+            log.warn("Failed to persist tracked sync messages: sessionId={}, errorCode={}, errorType={}",
+                    sessionId, lifecycleDiagnosticCode(e), exceptionType(e));
         }
     }
 
@@ -627,7 +648,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public String scanAndPopulateCheckpoints(String taskId, List<Map<String, Object>> scannedCheckpoints) {
-        ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId)
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         try {
             String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(scannedCheckpoints);
@@ -646,7 +667,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void addCheckpoint(String taskId, String checkpointId) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             String existing = entity.getCheckpoints();
             java.util.List<Map<String, Object>> list;
             if (existing != null && !existing.isEmpty()) {
@@ -697,9 +718,14 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                               String resultText, BigDecimal costUsd, Long inputTokens,
                               Long outputTokens, Long durationMs, Integer numTurns,
                               String model, Integer ackSeq) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
+            if (TERMINAL_STATES.contains(prev) && !"COMPLETED".equals(prev)) {
+                log.info("completeTask: task {} already in terminal state ({}), skipping", taskId, prev);
+                return;
+            }
             entity.setStatus("COMPLETED");
+            entity.setAbortRequested(false);
             if (workerTaskId != null && !workerTaskId.isBlank()) {
                 entity.setWorkerTaskId(workerTaskId);
             }
@@ -738,6 +764,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
             }
             persistTask(entity);
+            markTerminationObserved(taskId, "COMPLETED");
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
             updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
@@ -750,7 +777,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void updateClaudeSessionId(String taskId, String claudeSessionId) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             if (entity.getClaudeSessionId() == null || !entity.getClaudeSessionId().equals(claudeSessionId)) {
                 entity.setClaudeSessionId(claudeSessionId);
                 persistTask(entity);
@@ -771,7 +798,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     @Transactional
     public void recordWorkerProgress(String taskId, String workerTaskId, String claudeSessionId,
                                       String model, Integer ackSeq, boolean userVisibleOutput) {
-        ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) {
             log.warn("recordWorkerProgress: task not found: {}", taskId);
             return;
@@ -820,7 +847,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void setDedupKey(String taskId, String dedupKey) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             entity.setDedupKey(dedupKey);
             persistTask(entity);
         });
@@ -831,7 +858,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void setSource(String taskId, String source) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             entity.setSource(source);
             persistTask(entity);
         });
@@ -842,7 +869,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void saveTaskResult(String taskId, String resultText) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             entity.setResultText(resultText);
             persistTask(entity);
             log.debug("Saved result text for task {}: length={}", taskId,
@@ -865,20 +892,17 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     @Transactional
     public void failTask(String taskId, String workerTaskId, String claudeSessionId,
                          String errorMessage, Integer ackSeq) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
-            // abort 标记检查：cancel 线程已标记 abortRequested，由 cancel 线程统一落库 ABORTED
-            if (Boolean.TRUE.equals(entity.getAbortRequested())) {
-                log.info("failTask: task {} has abortRequested, skipping (cancel thread will finalize)", taskId);
-                return;
-            }
             // Terminal-state guard：已完成/失败/中止的任务不再更新
             if (TERMINAL_STATES.contains(prev)) {
                 log.info("failTask: task {} already in terminal state ({}), skipping", taskId, prev);
                 return;
             }
             entity.setStatus("FAILED");
-            entity.setErrorMessage(errorMessage);
+            entity.setAbortRequested(false);
+            String errorCode = lifecycleErrorCode(errorMessage);
+            entity.setErrorMessage(errorCode);
             if (workerTaskId != null && !workerTaskId.isBlank()) {
                 entity.setWorkerTaskId(workerTaskId);
             }
@@ -893,9 +917,60 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
             }
             persistTask(entity);
-            log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
+            markTerminationObserved(taskId, "FAILED");
+            log.warn("Task failed: taskId={}, claudeSessionId={}, errorCode={}", taskId, claudeSessionId, errorCode);
             publishStatusChange(entity, prev);
             updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+        });
+    }
+
+    /**
+     * Records an explicit Worker-observed cancellation outcome.  In contrast
+     * to a cancellation ACK, this is terminal evidence, so it can safely
+     * release the task and close any pending interaction state.  It must
+     * never be routed through {@link #failTask(String, String, String, String,
+     * Integer)} merely because the Worker represented the outcome as an
+     * {@code error} SSE event.
+     */
+    @Transactional
+    public void recordWorkerTerminalAbort(String taskId, String workerTaskId,
+                                          String claudeSessionId, Integer ackSeq) {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
+            String previousStatus = entity.getStatus();
+            if (TERMINAL_STATES.contains(previousStatus) && !"ABORTED".equals(previousStatus)) {
+                log.info("recordWorkerTerminalAbort: task {} already in terminal state ({}), skipping",
+                        taskId, previousStatus);
+                return;
+            }
+
+            entity.setStatus("ABORTED");
+            // Clear the outstanding cancellation/pending-input marker now
+            // that a Worker has supplied terminal evidence.
+            entity.setAbortRequested(false);
+            entity.setErrorMessage(null);
+            if (workerTaskId != null && !workerTaskId.isBlank()) {
+                entity.setWorkerTaskId(workerTaskId);
+            }
+            if (claudeSessionId != null && !claudeSessionId.isBlank()) {
+                entity.setClaudeSessionId(claudeSessionId);
+            }
+            LocalDateTime now = LocalDateTime.now();
+            entity.setLastAliveAt(now);
+            entity.setLastOutputAt(now);
+            if (ackSeq != null) {
+                Integer current = entity.getLastAckedSeq();
+                entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
+            }
+            persistTask(entity);
+            // If this task has an in-flight termination operation, settle it
+            // with the same observed ABORTED outcome.  No operation is
+            // required for a provider-originated terminal observation.
+            markTerminationObserved(taskId, "ABORTED");
+            if (!"ABORTED".equals(previousStatus)) {
+                publishStatusChange(entity, previousStatus);
+            }
+            updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+            log.info("Worker observed task abort: taskId={}, claudeSessionId={}", taskId, claudeSessionId);
         });
     }
 
@@ -904,8 +979,13 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void setAwaitingPermission(String taskId) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
+            if (TERMINAL_STATES.contains(prev) || "CANCEL_REQUESTED".equals(prev)) {
+                log.info("Ignoring late permission request for non-resumable Claude task: taskId={}, status={}",
+                        taskId, prev);
+                return;
+            }
             entity.setStatus("AWAITING_PERMISSION");
             LocalDateTime now = LocalDateTime.now();
             entity.setLastAliveAt(now);
@@ -925,7 +1005,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     @Transactional
     public boolean resumeFromPermission(String taskId, String permissionId, String decision,
                                          Map<String, String> answers) {
-        var opt = taskRepository.findByTaskId(taskId);
+        var opt = taskRepository.findByTaskIdForUpdate(taskId);
         if (opt.isEmpty()) {
             log.warn("resumeFromPermission: task not found: taskId={}", taskId);
             return false;
@@ -933,12 +1013,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         ClaudeTaskEntity entity = opt.get();
         String currentStatus = entity.getStatus();
         if (!"AWAITING_PERMISSION".equals(currentStatus)) {
-            log.warn("resumeFromPermission: task status is '{}', expected AWAITING_PERMISSION — "
-                    + "forcing to RUNNING anyway (permission was already relayed to Worker): taskId={}",
+            log.info("resumeFromPermission: retaining task status '{}' instead of resurrecting it: taskId={}",
                     currentStatus, taskId);
-            // 即使状态不是 AWAITING_PERMISSION，也强制恢复为 RUNNING。
-            // 因为 Worker 已经收到了 approve 响应，CLI 会继续执行。
-            // 典型场景：SSE 竞态导致 status 被短暂改为其他值。
+            return false;
         }
         String prev = entity.getStatus();
         entity.setStatus("RUNNING");
@@ -970,157 +1047,478 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     /**
-     * 标记任务已中止
-     * 保留 claudeSessionId 以便用户可以继续该会话，并通知 Worker 中止任务
-     */
-    /**
-     * 中止任务 — 统一入口（Controller 和 A2aAgent 共用）。
-     *
-     * 执行顺序：
-     * 1. 获取 Worker 内部 task ID（精确映射，必须在 abortStream 之前）
-     * 2. 通知 Worker 中止 CLI 进程（SIGTERM）
-     * 3. 清理本地 SSE 流订阅
-     * 4. 更新 DB 状态 → ABORTED
-     */
-    @SuppressWarnings("unchecked")
-    /**
-     * 检查指定 Claude 会话是否有正在运行的任务（并发保护）
+     * Checks active work for the session.  A cancellation request still owns
+     * the session until the Worker reports a terminal observation.
      */
     public boolean hasRunningTask(String claudeSessionId, String workerId) {
-        return taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(claudeSessionId, workerId, "RUNNING");
+        return taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(claudeSessionId, workerId, "RUNNING")
+                || taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(
+                        claudeSessionId, workerId, "CANCEL_REQUESTED");
     }
 
+    /**
+     * Requests an explicitly authorized remote cancellation.  The ACK only
+     * changes the state to CANCEL_REQUESTED; stream ownership and the process
+     * stay intact until a Worker terminal event supplies real evidence.
+     */
     public void abortTask(String taskId) {
-        // Terminal-state guard（Claude 原先缺失，现统一补上）
-        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
-        if (task != null && ("COMPLETED".equals(task.getStatus()) || "FAILED".equals(task.getStatus())
-                || "ABORTED".equals(task.getStatus()))) {
-            log.info("Task {} already in terminal state ({}), skipping abort", taskId, task.getStatus());
+        dispatchAuthorizedAbort(reserveAuthorizedAbort(taskId, null));
+    }
+
+    /** Compatibility entry for A2A after it has resolved a Worker task id. */
+    public void doAbortWorkerTask(String taskId, String remoteTaskId) {
+        dispatchAuthorizedAbort(reserveAuthorizedAbort(taskId, remoteTaskId));
+    }
+
+    private RemoteTerminationReservation reserveAuthorizedAbort(String taskId, String resolvedRemoteTaskId) {
+        return inTerminationTransaction(() -> {
+            ClaudeTaskEntity task = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            if (TERMINAL_STATES.contains(task.getStatus())) {
+                log.info("Ignoring cancellation for terminal Claude task: taskId={}, status={}",
+                        taskId, task.getStatus());
+                return null;
+            }
+
+            String persistedRemoteTaskId = resolveWorkerTaskLookupId(task);
+            if (resolvedRemoteTaskId != null && !resolvedRemoteTaskId.isBlank()
+                    && !resolvedRemoteTaskId.equals(persistedRemoteTaskId)) {
+                throw new IllegalArgumentException("TERMINATION_REMOTE_TASK_MISMATCH");
+            }
+            if (persistedRemoteTaskId == null || persistedRemoteTaskId.isBlank()) {
+                markCancellationAttention(task, "REMOTE_TASK_ID_UNAVAILABLE");
+                return null;
+            }
+            if (terminationOperationService == null) {
+                markCancellationAttention(task, "TERMINATION_AUDIT_UNAVAILABLE");
+                return null;
+            }
+            if (terminationOperationService.hasActiveOperationForTask(task.getTaskId())) {
+                markCancellationAttention(task, "TERMINATION_OPERATION_PENDING");
+                log.info("Retaining existing Claude termination operation: taskId={}", task.getTaskId());
+                return null;
+            }
+
+            String correlationId = "remote-cancel:" + UUID.randomUUID();
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            task.getTaskId(), persistedRemoteTaskId, task.getSessionId(), task.getUserId(),
+                            task.getTenantId(), AGENT_ID, task.getWorkerId(),
+                            "REMOTE_CANCEL", "UPSTREAM_USER", task.getUserId(), "USER",
+                            "user-request:" + UUID.randomUUID(), "USER_CANCEL", correlationId,
+                            null, null, 300));
+
+            String previousStatus = task.getStatus();
+            boolean previousAbortRequested = Boolean.TRUE.equals(task.getAbortRequested());
+            task.setStatus("CANCEL_REQUESTED");
+            task.setAbortRequested(false);
+            task.setErrorMessage(null);
+            persistTask(task);
+            if (!"CANCEL_REQUESTED".equals(previousStatus)) {
+                publishStatusChange(task, previousStatus);
+            }
+            return new RemoteTerminationReservation(task.getTaskId(), persistedRemoteTaskId,
+                    previousStatus, previousAbortRequested, operation);
+        });
+    }
+
+    private void dispatchAuthorizedAbort(RemoteTerminationReservation reservation) {
+        if (reservation == null || terminationOperationService == null) return;
+        ClaudeTaskEntity current = taskRepository.findByTaskId(reservation.taskId()).orElse(null);
+        if (current == null || TERMINAL_STATES.contains(current.getStatus())) return;
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(current.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            TerminationOperationCapability capability = TerminationOperationCapability.issue(
+                    reservation.operation(), client.terminationSigningSecret());
+            Map<String, Object> acknowledgement = client.abortTask(reservation.providerTaskId(), capability)
+                    .block(Duration.ofSeconds(10));
+            if (!isCancellationAcknowledged(acknowledgement)) {
+                throw new TerminationDispatchUnconfirmedException("TERMINATION_ACK_INVALID");
+            }
+            terminationOperationService.markCancelRequested(reservation.operation().getOperationId());
+            log.info("Claude cancellation request accepted by Worker: taskId={}, operationId={}",
+                    reservation.taskId(), reservation.operation().getOperationId());
+        } catch (Exception error) {
+            if (isDefinitiveTerminationRejection(error)) {
+                rejectOperationAndRestoreTask(reservation.taskId(), reservation.operation().getOperationId(),
+                        reservation.previousStatus(), reservation.previousAbortRequested(),
+                        terminationRejectionCode(error));
+                log.warn("Claude cancellation rejected by Worker: taskId={}, operationId={}, type={}",
+                        reservation.taskId(), reservation.operation().getOperationId(), error.getClass().getSimpleName());
+            } else {
+                terminationOperationService.markUnconfirmed(reservation.operation().getOperationId(),
+                        terminationFailureCode(error));
+                markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+                log.warn("Claude cancellation dispatch is unconfirmed: taskId={}, operationId={}, type={}",
+                        reservation.taskId(), reservation.operation().getOperationId(), error.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private record RemoteTerminationReservation(String taskId, String providerTaskId, String previousStatus,
+                                                boolean previousAbortRequested,
+                                                TerminationOperationEntity operation) {
+    }
+
+    /**
+     * Creates the durable, signed authorization for a human PID action.  A
+     * successful signal dispatch is deliberately not an ABORTED transition;
+     * callers must report the Worker observation through
+     * {@link #recordManualPidKillResult(ManualPidKillRequest, Map)}.
+     */
+    public ManualPidKillRequest prepareManualPidKill(String taskId, String expectedWorkerId,
+                                                      String actorId, String actorType,
+                                                      String authorizedTenantId, boolean crossUserAuthorized, int pid,
+                                                      String expectedProcessIdentity, String workerToken) {
+        if (pid < 1) {
+            throw new IllegalArgumentException("TERMINATION_MANUAL_PID_REQUIRED");
+        }
+        if (!StringUtils.hasText(expectedProcessIdentity)) {
+            throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_REQUIRED");
+        }
+        ManualPidKillReservation reservation = reserveManualPidKill(taskId, expectedWorkerId, actorId,
+                actorType, authorizedTenantId, crossUserAuthorized, pid, expectedProcessIdentity);
+
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            return new ManualPidKillRequest(reservation.operation().getOperationId(), reservation.taskId(),
+                    reservation.previousStatus(), reservation.previousAbortRequested(),
+                    TerminationOperationCapability.issue(reservation.operation(), workerToken));
+        } catch (Exception error) {
+            terminationOperationService.markUnconfirmed(reservation.operation().getOperationId(),
+                    terminationFailureCode(error));
+            markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+            if (error instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("TERMINATION_CAPABILITY_ISSUE_FAILED", error);
+        }
+    }
+
+    /**
+     * Commits the task marker and audit record before a nested operation
+     * transition is attempted, so REQUIRES_NEW state changes can see the row.
+     */
+    private ManualPidKillReservation reserveManualPidKill(String taskId, String expectedWorkerId,
+                                                          String actorId, String actorType,
+                                                          String authorizedTenantId, boolean crossUserAuthorized,
+                                                          int pid, String expectedProcessIdentity) {
+        return inTerminationTransaction(() -> {
+            ClaudeTaskEntity task = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            requireManualPidAuthorization(task, expectedWorkerId, actorId, actorType,
+                    authorizedTenantId, crossUserAuthorized);
+            if (TERMINAL_STATES.contains(task.getStatus())) {
+                throw new IllegalStateException("TERMINATION_TASK_ALREADY_TERMINAL");
+            }
+            if (terminationOperationService == null) {
+                markCancellationAttention(task, "TERMINATION_AUDIT_UNAVAILABLE");
+                throw new IllegalStateException("TERMINATION_AUDIT_UNAVAILABLE");
+            }
+            if (terminationOperationService.hasActiveOperationForTask(task.getTaskId())) {
+                markCancellationAttention(task, "TERMINATION_OPERATION_PENDING");
+                throw new IllegalStateException("TERMINATION_OPERATION_PENDING");
+            }
+            requireManualProcessIdentity(pid, expectedProcessIdentity);
+
+            // Claude Worker keeps the Navigator id as foggy_task_id and accepts
+            // it as the signed process binding, even when it also has an internal
+            // workerTaskId alias.
+            String capabilityTaskId = task.getTaskId();
+            String authorizationDecisionId = issueManualAuthorizationDecisionId(actorType);
+            String correlationId = "manual-pid-kill:" + UUID.randomUUID();
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            task.getTaskId(), capabilityTaskId, task.getSessionId(), task.getUserId(),
+                            task.getTenantId(), AGENT_ID, task.getWorkerId(),
+                            "MANUAL_PID_KILL", "ADMIN_MANUAL", actorId,
+                            firstNonBlank(actorType, "MANUAL_OPERATOR"),
+                            authorizationDecisionId, "MANUAL_PID_KILL", correlationId, pid,
+                            expectedProcessIdentity,
+                            300));
+
+            String previousStatus = task.getStatus();
+            boolean previousAbortRequested = Boolean.TRUE.equals(task.getAbortRequested());
+            task.setStatus("CANCEL_REQUESTED");
+            task.setAbortRequested(false);
+            task.setErrorMessage(null);
+            persistTask(task);
+            if (!"CANCEL_REQUESTED".equals(previousStatus)) {
+                publishStatusChange(task, previousStatus);
+            }
+            return new ManualPidKillReservation(task.getTaskId(), previousStatus, previousAbortRequested, operation);
+        });
+    }
+
+    /**
+     * This value is minted after the authenticated administrator and tenant
+     * checks.  It is an audit decision key, not caller-controlled transport
+     * metadata, and is intentionally distinct from correlationId.
+     */
+    private static String issueManualAuthorizationDecisionId(String actorType) {
+        return "authz-v1:" + actorType.toLowerCase(Locale.ROOT) + ":" + UUID.randomUUID();
+    }
+
+    private record ManualPidKillReservation(String taskId, String previousStatus,
+                                            boolean previousAbortRequested,
+                                            TerminationOperationEntity operation) {
+    }
+
+    /**
+     * A PID must be coupled to the Worker-provided start-time identity before
+     * it can be signed.  This rejects stale or synthetically reconstructed
+     * identities before the capability reaches the Worker-side PID reuse
+     * check.
+     */
+    private void requireManualProcessIdentity(int pid, String processIdentity) {
+        if (!StringUtils.hasText(processIdentity) || processIdentity.length() > 160) {
+            throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_REQUIRED");
+        }
+        String expectedPrefix = "claude-cli:" + pid + ":";
+        if (!processIdentity.startsWith(expectedPrefix)
+                || processIdentity.length() == expectedPrefix.length()) {
+            throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_MISMATCH");
+        }
+    }
+
+    /** Records only verified Worker exit as terminal for an explicit manual operation. */
+    @Transactional
+    public void recordManualPidKillResult(ManualPidKillRequest request, Map<String, Object> result) {
+        if (request == null || request.operationId() == null || request.taskId() == null) return;
+        ClaudeTaskEntity task = taskRepository.findByTaskIdForUpdate(request.taskId()).orElse(null);
+        if (task == null || terminationOperationService == null) return;
+        if (manualPidExitObserved(request, task, result)) {
+            String previousStatus = task.getStatus();
+            if (!TERMINAL_STATES.contains(previousStatus)) {
+                task.setStatus("ABORTED");
+                task.setAbortRequested(false);
+                task.setErrorMessage(null);
+                task.setLastAliveAt(LocalDateTime.now());
+                persistTask(task);
+                publishStatusChange(task, previousStatus);
+                updateSessionInteractionState(task.getSessionId(), "AWAITING_REPLY");
+            }
+            terminationOperationService.markObservedTerminal(request.operationId(), "ABORTED");
             return;
         }
-
-        String remoteId = resolveWorkerTaskLookupId(task);
-        doAbortWorkerTask(taskId, remoteId);
-        doPostAbort(taskId);
+        terminationOperationService.markAwaitingObservation(request.operationId(), "TERMINATION_UNCONFIRMED");
+        if (!TERMINAL_STATES.contains(task.getStatus())) {
+            markCancellationAttention(task, "TERMINATION_UNCONFIRMED");
+        }
     }
 
-    /**
-     * 远端中止 + 流清理 + 状态落库 + 事件发布。
-     * <p>
-     * 由 {@code ClaudeWorkerInnerA2aAgent.abortWorkerTask()} 和 {@code abortTask()} 复用。
-     * 不包含 Provider 专属后置钩子。
-     *
-     * @param taskId       平台侧 taskId
-     * @param remoteTaskId 已解析的远端 Worker 任务标识（可能为 null）
-     */
-    public void doAbortWorkerTask(String taskId, String remoteTaskId) {
-        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
-
-        // 1. 先置 abortRequested 标记（轻量 UPDATE，独立事务，先 commit）
-        //    Worker 收到 abort 后会立即回复 SSE error 事件，reactor 线程的 failTask()
-        //    检查此标记 → 跳过 DB 更新，从根本上避免两个事务并发 UPDATE 同一行的死锁。
-        //    Worker 离线时标记留存，Reconciler 可据此在 Worker 重连后重试 abort。
-        txTemplate.executeWithoutResult(status ->
-                taskRepository.updateAbortRequestedByTaskId(taskId, true));
-
-        // 2. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
-        try {
-            if (task != null) {
-                ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-                ClaudeWorkerClient client = workerService.createClient(worker);
-
-                if (remoteTaskId != null && !remoteTaskId.isBlank()) {
-                    client.abortTask(remoteTaskId).block(Duration.ofSeconds(5));
-                    log.info("Worker abort sent: taskId={}, remoteTaskId={}", taskId, remoteTaskId);
-                } else if ("A2A".equals(task.getSource())) {
-                    // A2A fallback：异步任务没有 SSE 流，通过进程列表匹配 PID → SIGTERM
-                    killCliByTaskId(client, taskId);
-                } else {
-                    log.warn("Cannot abort task {}: no remoteTaskId and not A2A", taskId);
-                }
+    /** Keeps a manually requested task pending when Worker dispatch cannot be confirmed. */
+    @Transactional
+    public void markManualPidKillUnconfirmed(ManualPidKillRequest request, Exception error) {
+        if (request == null || request.operationId() == null || terminationOperationService == null) return;
+        terminationOperationService.markUnconfirmed(request.operationId(), terminationFailureCode(error));
+        taskRepository.findByTaskIdForUpdate(request.taskId()).ifPresent(task -> {
+            if (!TERMINAL_STATES.contains(task.getStatus())) {
+                markCancellationAttention(task, "TERMINATION_UNCONFIRMED");
             }
-        } catch (Exception e) {
-            log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
-        }
-
-        // 3. 清理本地 SSE 流订阅（停止重连、dispose Flux、清除映射）
-        streamRelay.abortStream(taskId);
-
-        // 4. 更新 DB 状态 → ABORTED + 清除标记（单独事务）
-        txTemplate.executeWithoutResult(status -> {
-            taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-                String prev = entity.getStatus();
-                if (TERMINAL_STATES.contains(prev)) {
-                    // reactor 线程可能已抢先设为 FAILED（极端情况：标记 commit 和 Worker
-                    // 通知之间的微小窗口内 Worker 已经自行失败）
-                    log.info("Task {} already in terminal state ({}), clearing abortRequested only", taskId, prev);
-                    entity.setAbortRequested(false);
-                    taskRepository.save(entity);
-                    return;
-                }
-                entity.setStatus("ABORTED");
-                entity.setAbortRequested(false);
-                persistTask(entity);
-                log.info("Task aborted: taskId={}", taskId);
-                publishStatusChange(entity, prev);
-            });
         });
     }
 
     /**
-     * Claude 专属 abort 后置钩子：更新 session interaction state + 异步扫描 checkpoints。
-     * <p>
-     * 由 {@code ClaudeWorkerInnerA2aAgent.onPostAbort()} 和 {@code abortTask()} 复用。
-     *
-     * @param taskId 平台侧 taskId
+     * A concrete 4xx Worker refusal means the signed action did not happen;
+     * restore the pre-request marker. Network uncertainty stays pending so it
+     * can be reconciled without fabricating a terminal outcome.
+     */
+    public void markManualPidKillDispatchFailure(ManualPidKillRequest request, Exception error) {
+        if (request == null || request.operationId() == null || terminationOperationService == null) return;
+        if (!isDefinitiveTerminationRejection(error)) {
+            markManualPidKillUnconfirmed(request, error);
+            return;
+        }
+        rejectOperationAndRestoreTask(request.taskId(), request.operationId(), request.previousStatus(),
+                request.previousAbortRequested(), terminationRejectionCode(error));
+    }
+
+    private void requireManualPidAuthorization(ClaudeTaskEntity task, String expectedWorkerId,
+                                               String actorId, String actorType, String authorizedTenantId,
+                                               boolean crossUserAuthorized) {
+        if (expectedWorkerId == null || !expectedWorkerId.equals(task.getWorkerId())) {
+            throw new IllegalArgumentException("TERMINATION_WORKER_TASK_MISMATCH");
+        }
+        // Ownership permits diagnostics, not process signalling.  The trusted
+        // admin endpoints supply this internal actor type only after their
+        // role/principal gate succeeds.
+        boolean trustedManualAdministrator = ("TENANT_ADMIN_MANUAL".equals(actorType)
+                || "UPSTREAM_ADMIN_MANUAL".equals(actorType))
+                && actorId != null && !actorId.isBlank()
+                && crossUserAuthorized && authorizedTenantId != null
+                && authorizedTenantId.equals(task.getTenantId());
+        if (!trustedManualAdministrator) {
+            throw new IllegalArgumentException("TERMINATION_TASK_ACCESS_DENIED");
+        }
+    }
+
+    private boolean manualPidExitObserved(ManualPidKillRequest request, ClaudeTaskEntity task,
+                                          Map<String, Object> result) {
+        if (request == null || task == null || result == null || !booleanTrue(result.get("observed_exit"))) {
+            return false;
+        }
+        // A successful signal is not a terminal outcome. The authenticated
+        // Worker response must correlate the observed exit to this signed
+        // operation, task, and physical Worker.
+        if (!hasValue(result.get("task_id"), request.taskId())) return false;
+        Object operationValue = result.get("termination_operation");
+        if (!(operationValue instanceof Map<?, ?> operation)) return false;
+        return hasValue(operation.get("operation_id"), request.operationId())
+                && hasValue(operation.get("task_id"), request.taskId())
+                && hasValue(operation.get("worker_id"), task.getWorkerId())
+                && hasValue(operation.get("kind"), "MANUAL_PID_KILL")
+                && hasValue(operation.get("origin"), "ADMIN_MANUAL")
+                && hasValue(operation.get("status"), "OBSERVED_EXIT")
+                && booleanTrue(operation.get("observed_exit"))
+                && hasText(operation.get("observed_at"));
+    }
+
+    private boolean booleanTrue(Object value) {
+        return Boolean.TRUE.equals(value);
+    }
+
+    private boolean hasValue(Object value, String expected) {
+        return value instanceof String actual && expected.equals(actual);
+    }
+
+    private boolean hasText(Object value) {
+        return value instanceof String text && !text.isBlank();
+    }
+
+    public record ManualPidKillRequest(String operationId, String taskId, String previousStatus,
+                                       boolean previousAbortRequested,
+                                       TerminationOperationCapability capability) {
+    }
+
+    private boolean isCancellationAcknowledged(Map<String, Object> acknowledgement) {
+        if (acknowledgement == null) return false;
+        return hasCancellationRequestedValue(acknowledgement.get("status"))
+                || hasCancellationRequestedValue(acknowledgement.get("abort_status"))
+                || hasCancellationRequestedValue(acknowledgement.get("lifecycle_state"))
+                || hasCancellationRequestedValue(acknowledgement.get("lifecycle_status"));
+    }
+
+    private boolean hasCancellationRequestedValue(Object value) {
+        return value != null && "cancel_requested".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    private boolean isDefinitiveTerminationRejection(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof WebClientResponseException responseException) {
+                int status = responseException.getStatusCode().value();
+                return status >= 400 && status < 500 && status != 408 && status != 429;
+            }
+        }
+        return false;
+    }
+
+    private void restoreRejectedCancellation(ClaudeTaskEntity task, String previousStatus,
+                                             boolean previousAbortRequested) {
+        if (task == null || TERMINAL_STATES.contains(task.getStatus())
+                || !"CANCEL_REQUESTED".equals(task.getStatus())
+                || previousStatus == null || "CANCEL_REQUESTED".equals(previousStatus)) {
+            return;
+        }
+        task.setStatus(previousStatus);
+        task.setAbortRequested(previousAbortRequested);
+        task.setErrorMessage("TERMINATION_REJECTED");
+        persistTask(task);
+        publishStatusChange(task, "CANCEL_REQUESTED");
+    }
+
+    /**
+     * Keep the task lock while the operation becomes REJECTED.  A fresh retry
+     * therefore cannot reserve a new operation in the gap before this method
+     * restores the old task marker.
+     */
+    private void rejectOperationAndRestoreTask(String taskId, String operationId, String previousStatus,
+                                                boolean previousAbortRequested, String rejectionCode) {
+        inTerminationTransaction(() -> {
+            var task = taskRepository.findByTaskIdForUpdate(taskId);
+            terminationOperationService.markRejected(operationId, rejectionCode);
+            task.ifPresent(entity ->
+                    restoreRejectedCancellation(entity, previousStatus, previousAbortRequested));
+            return null;
+        });
+    }
+
+    private void markCancellationAttention(String taskId, String attentionCode) {
+        inTerminationTransaction(() -> {
+            taskRepository.findByTaskIdForUpdate(taskId).ifPresent(task ->
+                    markCancellationAttention(task, attentionCode));
+            return null;
+        });
+    }
+
+    private <T> T inTerminationTransaction(Supplier<T> action) {
+        if (terminationTransactionManager == null) {
+            return action.get();
+        }
+        TransactionTemplate transaction = new TransactionTemplate(terminationTransactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return transaction.execute(status -> action.get());
+    }
+
+    private String terminationRejectionCode(Exception error) {
+        String suffix = error == null ? "UNKNOWN" : error.getClass().getSimpleName();
+        String code = "TERMINATION_REJECTED_" + suffix;
+        return code.substring(0, Math.min(code.length(), 160));
+    }
+
+    private static final class TerminationDispatchUnconfirmedException extends IllegalStateException {
+        private TerminationDispatchUnconfirmedException(String message) {
+            super(message);
+        }
+    }
+
+    /** A non-terminal, recoverable attention marker for uncertainty paths. */
+    @Transactional
+    public void markLifecycleAttention(String taskId, String attentionCode) {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
+            if (TERMINAL_STATES.contains(entity.getStatus())) {
+                return;
+            }
+            entity.setErrorMessage(attentionCode);
+            persistTask(entity);
+        });
+    }
+
+    private void markCancellationAttention(ClaudeTaskEntity task, String attentionCode) {
+        String previousStatus = task.getStatus();
+        if (!TERMINAL_STATES.contains(previousStatus)) {
+            task.setStatus("CANCEL_REQUESTED");
+        }
+        task.setAbortRequested(false);
+        task.setErrorMessage(attentionCode);
+        persistTask(task);
+        if (!previousStatus.equals(task.getStatus())) {
+            publishStatusChange(task, previousStatus);
+        }
+    }
+
+    private String terminationFailureCode(Exception error) {
+        String suffix = error == null ? "UNKNOWN" : error.getClass().getSimpleName();
+        String code = "TERMINATION_DISPATCH_" + suffix;
+        return code.substring(0, Math.min(code.length(), 160));
+    }
+
+    private void markTerminationObserved(String taskId, String outcome) {
+        if (terminationOperationService != null) {
+            terminationOperationService.markObservedTerminalForTask(taskId, outcome);
+        }
+    }
+
+    /**
+     * Legacy A2A hook.  Cancellation acknowledgement is deliberately not a
+     * terminal transition, so this hook only preserves the pending-decision
+     * marker and performs no stream disposal or session ownership release.
      */
     public void doPostAbort(String taskId) {
-        // 更新 session interaction state → AWAITING_REPLY
-        taskRepository.findByTaskId(taskId).ifPresent(entity ->
-                updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY")
-        );
-
-        // 异步扫描 JSONL 补齐 checkpoints（中止的任务也可能已有有效 checkpoint）
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-            String claudeSessionId = entity.getClaudeSessionId();
-            if (claudeSessionId != null && !claudeSessionId.isEmpty()) {
-                streamRelay.autoScanCheckpoints(taskId, claudeSessionId);
-            }
-        });
-    }
-
-    /**
-     * A2A 任务 abort fallback：通过 Worker 进程列表匹配 foggy_task_id 找到 PID → SIGTERM
-     * <p>
-     * A2A 异步任务不走 SSE 流，没有 workerTaskId 映射。
-     * 需要通过 Worker API 列出所有 CLI 进程，按 foggy_task_id 匹配后杀进程。
-     */
-    @SuppressWarnings("unchecked")
-    private void killCliByTaskId(ClaudeWorkerClient client, String taskId) {
-        try {
-            Map<String, Object> processInfo = client.listCliProcesses()
-                    .block(Duration.ofSeconds(5));
-            if (processInfo == null) return;
-
-            Object processesList = processInfo.get("processes");
-            if (!(processesList instanceof java.util.List<?> processes)) return;
-
-            for (Object item : processes) {
-                if (!(item instanceof Map<?, ?> proc)) continue;
-                if (taskId.equals(proc.get("foggy_task_id"))) {
-                    Object pidObj = proc.get("pid");
-                    if (pidObj instanceof Number) {
-                        int pid = ((Number) pidObj).intValue();
-                        client.killCliProcess(pid, false).block(Duration.ofSeconds(5));
-                        log.info("A2A abort fallback: killed CLI pid={} for taskId={}", pid, taskId);
-                    }
-                    return;
-                }
-            }
-            log.debug("A2A abort fallback: no CLI process found for taskId={}", taskId);
-        } catch (Exception e) {
-            log.warn("A2A abort fallback failed for taskId={}: {}", taskId, e.getMessage());
-        }
+        markLifecycleAttention(taskId, "CANCEL_REQUESTED");
     }
 
     /**
@@ -1128,12 +1526,16 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void deleteTask(String userId, String taskId) {
-        ClaudeTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!userId.equals(entity.getUserId())) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
 
-        // 只允许删除已完成/失败/中止的任务，不能删除运行中的任务
-        if ("RUNNING".equals(entity.getStatus())) {
-            throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
+        // A requested cancellation still owns its Worker process and audit
+        // trail.  Only definitive Worker-observed terminal states are deletable.
+        if (!TERMINAL_STATES.contains(entity.getStatus())) {
+            throw new IllegalStateException("Cannot delete a non-terminal task. Please wait for Worker observation.");
         }
 
         taskRepository.delete(entity);
@@ -1247,16 +1649,27 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     private int backfillDirectoryIds(String workerId, String userId) {
         List<ClaudeTaskEntity> orphans = taskRepository.findByWorkerIdAndUserIdAndDirectoryIdIsNull(workerId, userId);
         int fixed = 0;
-        for (ClaudeTaskEntity task : orphans) {
+        for (ClaudeTaskEntity orphan : orphans) {
+            // The scan result is deliberately treated as an identifier list.
+            // Reload each row under a write lock before saving so this low
+            // priority metadata backfill can never overwrite a concurrent
+            // Worker terminal/cancellation transition with a stale entity.
+            ClaudeTaskEntity task = taskRepository.findByTaskIdForUpdate(orphan.getTaskId()).orElse(null);
+            if (task == null || task.getDirectoryId() != null) {
+                continue;
+            }
             String cwd = task.getCwd();
-            if (cwd == null || cwd.isEmpty()) continue;
+            if (cwd == null || cwd.isEmpty()) {
+                continue;
+            }
 
             var dirOpt = resolveDirectoryForCwd(workerId, userId, cwd);
-            if (dirOpt.isPresent()) {
-                task.setDirectoryId(dirOpt.get().getDirectoryId());
-                persistTask(task);
-                fixed++;
+            if (dirOpt.isEmpty()) {
+                continue;
             }
+            task.setDirectoryId(dirOpt.get().getDirectoryId());
+            persistTask(task);
+            fixed++;
         }
         return fixed;
     }
@@ -1657,66 +2070,41 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void touchAlive(String taskId) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
             entity.setLastAliveAt(LocalDateTime.now());
             persistTask(entity);
         });
     }
 
     /**
-     * Reconciler 专用：CLI 已确认退出时，将任务标记为 COMPLETED。
-     * Rule 1: CLI alive = task alive → CLI 退出 = 任务完成。
-     * 仅对仍处于活跃状态（RUNNING / AWAITING_PERMISSION）的任务生效，幂等安全。
+     * Compatibility entry retained for callers that previously inferred a
+     * terminal result from a missing process.  Process observation without a
+     * Provider terminal event is now uncertainty, never completion.
      */
     @Transactional
     public void reconcilerCompleteTask(String taskId, String reason) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-            String status = entity.getStatus();
-            if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
-                completeWithReason(entity, reason);
-            }
-        });
+        markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
+        log.info("Reconciler retained active Claude task pending terminal evidence: taskId={}, reason={}",
+                taskId, reason);
     }
 
     /**
      * SSE 流断开时调用（未收到 result/error 事件，且重连已失败）。
      *
-     * 简化原则（Rule 1: CLI alive = task alive）：
-     * - CLI 仍存活 → defer to Reconciler（不标记任何终态）
-     * - CLI 已死 → 标记 COMPLETED（CLI 退出 = 任务完成）
-     * - AWAITING_PERMISSION → defer to Reconciler（CLI 通常仍存活等待用户输入）
+     * A disconnected stream does not identify why the CLI exited.  It is
+     * therefore always an attention marker until a Worker terminal event is
+     * durably observed.
      */
     @Transactional
     public void handleStreamDisconnect(String taskId, String sessionId, String reason) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-            String status = entity.getStatus();
-            if ("AWAITING_PERMISSION".equals(status)) {
-                log.info("SSE stream ended while task awaiting permission — deferring to Reconciler: taskId={}", taskId);
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
+            if (TERMINAL_STATES.contains(entity.getStatus())) {
                 return;
             }
-            if ("RUNNING".equals(status)) {
-                if (isCliProcessAlive(entity)) {
-                    log.info("CLI process still alive — deferring to Reconciler: taskId={}", taskId);
-                    return;
-                }
-
-                // CLI dead + stream disconnected → mark COMPLETED (Rule 1: CLI exited = task done)
-                String prev = entity.getStatus();
-                entity.setStatus("COMPLETED");
-                entity.setErrorMessage(reason);
-                persistTask(entity);
-                log.info("Task stream ended, CLI exited — marking COMPLETED: taskId={}, reason={}", taskId, reason);
-                publishStatusChange(entity, prev);
-                updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
-
-                eventPublisher.publishEvent(TaskCompletionEvent.builder()
-                        .externalTaskId(taskId)
-                        .parentSessionId(sessionId)
-                        .targetAgentId(AGENT_ID)
-                        .status("COMPLETED")
-                        .resultSummary(reason)
-                        .build());
-            }
+            entity.setErrorMessage("PROCESS_UNVERIFIED");
+            persistTask(entity);
+            log.info("Task stream ended without terminal evidence; retained pending decision: taskId={}, reason={}",
+                    taskId, reason);
         });
     }
 
@@ -1725,7 +2113,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void resetToRunning(String taskId) {
-        ClaudeTaskEntity entity = getTaskEntity(taskId);
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!"FAILED".equals(entity.getStatus())) {
             throw new IllegalStateException("Only FAILED tasks can be reconnected, current status: " + entity.getStatus());
         }
@@ -1751,9 +2140,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      *
      * @param taskId 任务 ID
      */
-    @Transactional
     public void resyncTask(String taskId) {
-        ClaudeTaskEntity entity = getTaskEntity(taskId);
+        ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
 
         // 1. 检查：只有 FAILED 状态才能重新同步
         if (!"FAILED".equals(entity.getStatus())) {
@@ -1771,57 +2160,79 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 cliAlive = (Boolean) status.get("cli_alive");
             }
         } catch (Exception e) {
-            log.warn("Failed to query Worker status for resync task {}: {}", taskId, e.getMessage());
+            log.warn("Failed to query Worker status for resync task {}: errorCode={}, errorType={}", taskId,
+                    lifecycleDiagnosticCode(e), exceptionType(e));
         }
 
         if (Boolean.FALSE.equals(cliAlive)) {
             throw new IllegalStateException("CLI is already dead, cannot resync task: " + taskId);
         }
 
-        // 3. 恢复任务状态
-        String prev = entity.getStatus();
-        entity.setStatus("RUNNING");
-        entity.setErrorMessage(null);
-        persistTask(entity);
-        log.info("Task resynced: taskId={}, workerId={}", taskId, entity.getWorkerId());
-        publishStatusChange(entity, prev);
+        // Re-load after remote I/O. A cancellation or terminal event that won
+        // while status was queried must never be overwritten by this manual
+        // recovery path.
+        ResyncTaskBinding binding = inTerminationTransaction(() -> {
+            ClaudeTaskEntity current = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            if (!"FAILED".equals(current.getStatus())) {
+                throw new IllegalStateException("TASK_STATE_CHANGED_DURING_RESYNC");
+            }
+            String previousStatus = current.getStatus();
+            current.setStatus("RUNNING");
+            current.setErrorMessage(null);
+            persistTask(current);
+            publishStatusChange(current, previousStatus);
+            return new ResyncTaskBinding(current.getSessionId(), current.getWorkerId());
+        });
+        log.info("Task resynced: taskId={}, workerId={}", taskId, binding.workerId());
 
         // 4. 触发重连拉取新事件（复用现有消息对齐机制）
-        streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+        streamRelay.reconnectTask(taskId, binding.sessionId(), binding.workerId());
 
         // 5. 发布恢复通知到会话
         eventPublisher.publishEvent(
-                AgentMessage.of(entity.getSessionId(), AGENT_ID, MessageType.STATE_SYNC,
+                AgentMessage.of(binding.sessionId(), AGENT_ID, MessageType.STATE_SYNC,
                         Map.of("content", "Task resynced", "subtype", "resynced", "taskId", taskId)));
     }
 
-    /**
-     * 检查 Worker 上的 CLI 进程是否仍然存活。
-     * 通过 Worker API 列出进程，匹配 foggy_task_id。
-     * 异常时返回 false（保守策略：无法确认存活则允许标记失败）。
-     */
-    @SuppressWarnings("unchecked")
-    private boolean isCliProcessAlive(ClaudeTaskEntity task) {
-        try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            Map<String, Object> processInfo = client.listCliProcesses()
-                    .block(java.time.Duration.ofSeconds(5));
-            if (processInfo == null) return false;
+    private record ResyncTaskBinding(String sessionId, String workerId) {
+    }
 
-            // Worker returns { "processes": [ { "foggy_task_id": "...", ... }, ... ] }
-            Object processesList = processInfo.get("processes");
-            if (processesList instanceof java.util.List<?> processes) {
-                return processes.stream()
-                        .filter(p -> p instanceof Map)
-                        .map(p -> (Map<String, Object>) p)
-                        .anyMatch(p -> task.getTaskId().equals(p.get("foggy_task_id")));
+    /**
+     * Keep Worker transport diagnostics operationally useful without leaking
+     * remote response bodies, CLI stderr, URLs, or credential-adjacent text
+     * into lifecycle logs or the resync DTO returned to callers.
+     */
+    private static String lifecycleDiagnosticCode(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof WebClientResponseException response) {
+                return "CLAUDE_WORKER_HTTP_" + response.getStatusCode().value();
             }
-            return false;
-        } catch (Exception e) {
-            log.warn("Failed to check CLI process alive for task {}: {}", task.getTaskId(), e.getMessage());
-            return false;
+            String message = current.getMessage();
+            if (message != null && message.matches("[A-Z][A-Z0-9_]{0,127}")) {
+                return message;
+            }
+            current = current.getCause();
         }
+        return "CLAUDE_WORKER_UNREACHABLE";
+    }
+
+    /**
+     * Terminal errors cross the Worker boundary and may originate in remote
+     * CLI output.  Persist only a stable, bounded diagnostic code so task
+     * history and lifecycle events cannot retain raw command arguments,
+     * stderr, URLs, or credential-adjacent text.
+     */
+    private static String lifecycleErrorCode(String error) {
+        if (error != null && error.matches("[A-Z][A-Z0-9_]{0,127}")) {
+            return error;
+        }
+        return "CLAUDE_RUNTIME_REMOTE_ERROR";
+    }
+
+    private static String exceptionType(Throwable error) {
+        return error == null ? "UnknownException" : error.getClass().getSimpleName();
     }
 
     // ==================== Resync 任务重新同步 ====================
@@ -1854,9 +2265,11 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             client = workerService.createClient(worker);
             client.healthCheck().block(Duration.ofSeconds(5));
         } catch (Exception e) {
-            log.warn("Resync: Worker unreachable for task {}: {}", taskId, e.getMessage());
+            String diagnosticCode = lifecycleDiagnosticCode(e);
+            log.warn("Resync: Worker unreachable for task {}: errorCode={}, errorType={}", taskId,
+                    diagnosticCode, exceptionType(e));
             result.setAction("WORKER_UNREACHABLE");
-            result.setCliStatus(CliStatus.unreachable(e.getMessage()));
+            result.setCliStatus(CliStatus.unreachable(diagnosticCode));
             result.setTaskStatusAfter(entity.getStatus());
             return result;
         }
@@ -1872,7 +2285,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             try {
                 streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
             } catch (Exception e) {
-                log.warn("Resync: SSE reconnect failed for task {}: {}", taskId, e.getMessage());
+                log.warn("Resync: SSE reconnect failed for task {}: errorCode={}, errorType={}", taskId,
+                        lifecycleDiagnosticCode(e), exceptionType(e));
             }
             result.setAction("RECONNECTED");
             result.setTaskStatusAfter("RUNNING");
@@ -1918,7 +2332,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 // 有记录但 cli_alive 不确定，继续层2
             }
         } catch (Exception e) {
-            log.debug("Resync: Layer1 task_status check failed for task {}: {}", taskId, e.getMessage());
+            log.debug("Resync: Layer1 task_status check failed for task {}: errorCode={}, errorType={}", taskId,
+                    lifecycleDiagnosticCode(e), exceptionType(e));
         }
 
         // 层2: 进程列表匹配
@@ -1940,7 +2355,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 }
             }
         } catch (Exception e) {
-            log.debug("Resync: Layer2 process_list check failed for task {}: {}", taskId, e.getMessage());
+            log.debug("Resync: Layer2 process_list check failed for task {}: errorCode={}, errorType={}", taskId,
+                    lifecycleDiagnosticCode(e), exceptionType(e));
         }
 
         // 层3: 兜底 — 都无法确认存活
@@ -1971,7 +2387,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         try {
             workerMessages = client.getSessionMessages(claudeSessionId).block(Duration.ofSeconds(15));
         } catch (Exception e) {
-            log.warn("Resync: Failed to get Worker messages for session {}: {}", claudeSessionId, e.getMessage());
+            log.warn("Resync: Failed to get Worker messages for session {}: errorCode={}, errorType={}", claudeSessionId,
+                    lifecycleDiagnosticCode(e), exceptionType(e));
             result.setAction("NO_SESSION_DATA");
             result.setTaskStatusAfter(task.getStatus());
             return;
@@ -2001,9 +2418,10 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             report.setPlatformAfter(report.getPlatformBefore());
             report.setMissingPreview(List.of());
             result.setMessageSync(report);
-            // 即使消息已对齐，仍将 FAILED 任务标记为 COMPLETED
-            txTemplate.executeWithoutResult(status -> markAsCompletedFromSync(task));
-            result.setTaskStatusAfter("COMPLETED");
+            // A missing CLI plus replayed history is not Provider terminal
+            // evidence. Preserve the existing state rather than fabricating a
+            // COMPLETED transition from a diagnostic resync.
+            result.setTaskStatusAfter(task.getStatus());
             return;
         }
 
@@ -2020,10 +2438,10 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 .collect(Collectors.toList());
         report.setMissingPreview(preview);
 
-        // 导入缺失消息 + 标记完成 — 在同一个事务内，保证原子性
+        // Import replayed history only. It may improve observability, but it
+        // cannot settle the task lifecycle without a terminal Worker event.
         txTemplate.executeWithoutResult(status -> {
             importMessages(sessionId, missing);
-            markAsCompletedFromSync(task);
         });
         report.setImported(missing.size());
 
@@ -2033,7 +2451,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
 
         result.setAction("MESSAGES_SYNCED");
         result.setMessageSync(report);
-        result.setTaskStatusAfter("COMPLETED");
+        result.setTaskStatusAfter(task.getStatus());
         log.info("Resync: Synced {} messages for task {}", missing.size(), taskId);
     }
 
@@ -2111,19 +2529,6 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         }
     }
 
-    /**
-     * 将 FAILED 任务标记为 COMPLETED（策略 B 同步后）。
-     */
-    private void markAsCompletedFromSync(ClaudeTaskEntity task) {
-        String prev = task.getStatus();
-        task.setStatus("COMPLETED");
-        task.setErrorMessage(null);
-        persistTask(task);
-        log.info("Resync: Task marked as COMPLETED from sync: taskId={}", task.getTaskId());
-        publishStatusChange(task, prev);
-        updateSessionInteractionState(task.getSessionId(), "AWAITING_REPLY");
-    }
-
     private MessageCount countMessages(List<Message> messages) {
         int user = (int) messages.stream().filter(m -> m.getRole() == MessageRole.USER).count();
         int assistant = (int) messages.stream().filter(m -> m.getRole() == MessageRole.ASSISTANT).count();
@@ -2137,45 +2542,6 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     // ==================== End Resync ====================
-
-    /**
-     * 标记任务为 COMPLETED（CLI 已退出，任务完成）。
-     *
-     * Rule 1: CLI alive = task alive → CLI 退出 = 任务完成。
-     * 不再自动 abort Worker（Rule 2: 只有用户能杀 CLI）。
-     * 保留本地 SSE 流清理（释放 Java 侧资源）。
-     */
-    private void completeWithReason(ClaudeTaskEntity entity, String reason) {
-        String prev = entity.getStatus();
-        entity.setStatus("COMPLETED");
-        entity.setErrorMessage(reason);
-        persistTask(entity);
-        log.info("Task completed (CLI exited): taskId={}, createdAt={}, reason={}",
-                entity.getTaskId(), entity.getCreatedAt(), reason);
-        publishStatusChange(entity, prev);
-        updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
-
-        String taskId = entity.getTaskId();
-
-        // 推送信息消息到会话（非错误，仅通知）
-        publishSessionError(entity.getSessionId(), taskId, reason, false);
-
-        // 清理本地 SSE 流订阅（释放 Java 侧资源，不影响 CLI）
-        try {
-            streamRelay.abortStream(taskId);
-        } catch (Exception e) {
-            log.warn("Failed to abort local stream on completion: taskId={}", taskId, e.getMessage());
-        }
-
-        // 发布跨 Agent 任务完成事件
-        eventPublisher.publishEvent(TaskCompletionEvent.builder()
-                .externalTaskId(taskId)
-                .parentSessionId(entity.getSessionId())
-                .targetAgentId(AGENT_ID)
-                .status("COMPLETED")
-                .resultSummary(reason)
-                .build());
-    }
 
     /**
      * 截断会话消息：删除第 N 个 USER 消息及之后的所有消息（用于回退场景）
@@ -2810,7 +3176,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     @Override
     public List<DispatchTaskDTO> listActiveDispatchTasks(String userId) {
         return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
+                userId, List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT", "CANCEL_REQUESTED")).stream()
                 .map(this::toDispatchDTO)
                 .toList();
     }
@@ -2842,6 +3208,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!task.getUserId().equals(userId)) throw new IllegalArgumentException("Task not found: " + taskId);
+        if (!"AWAITING_PERMISSION".equals(task.getStatus())) {
+            throw new IllegalStateException("TASK_NOT_AWAITING_PERMISSION");
+        }
 
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
         ClaudeWorkerClient client = workerService.createClient(worker);
@@ -2855,11 +3224,26 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 (String) response.get("planAction")
         ).block(java.time.Duration.ofSeconds(10));
 
-        // 回到 RUNNING 状态
-        if ("AWAITING_PERMISSION".equals(task.getStatus())) {
-            task.setStatus("RUNNING");
-            persistTask(task);
-        }
+        // The Worker call is intentionally outside the task transaction.
+        // Re-read under the lock so a concurrent cancellation/terminal event
+        // cannot be overwritten by this stale pre-dispatch entity.
+        inTerminationTransaction(() -> {
+            taskRepository.findByTaskIdForUpdate(taskId).ifPresent(current -> {
+                if (!userId.equals(current.getUserId()) || !"AWAITING_PERMISSION".equals(current.getStatus())) {
+                    return;
+                }
+                String previousStatus = current.getStatus();
+                current.setStatus("RUNNING");
+                current.setErrorMessage(null);
+                LocalDateTime now = LocalDateTime.now();
+                current.setLastAliveAt(now);
+                current.setLastOutputAt(now);
+                persistTask(current);
+                publishStatusChange(current, previousStatus);
+                updateSessionInteractionState(current.getSessionId(), "PROCESSING");
+            });
+            return null;
+        });
     }
 
     @Override

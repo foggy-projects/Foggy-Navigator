@@ -1,8 +1,7 @@
 package com.foggy.navigator.codex.worker.controller;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -13,10 +12,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Objects;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @RestController
 @RequestMapping("/api/v1/codex-workers")
@@ -25,10 +22,9 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class CodexWorkerController {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
+    private final CodexTaskService taskService;
 
     @GetMapping("/{workerId}/processes")
     public RX<Map<String, Object>> listCliProcesses(@PathVariable String workerId) {
@@ -44,12 +40,15 @@ public class CodexWorkerController {
         try {
             return RX.ok(client.listCliProcesses().block(Duration.ofSeconds(10)));
         } catch (Exception e) {
-            log.warn("Failed to list Codex CLI processes for worker {}: {}", workerId, e.getMessage());
-            return RX.failA("获取 Codex CLI 进程失败: " + e.getMessage());
+            String code = safeWorkerErrorCode(e);
+            log.warn("Failed to list Codex CLI processes for worker {}: code={}, type={}",
+                    workerId, code, e.getClass().getSimpleName());
+            return RX.failA("获取 Codex CLI 进程失败: " + code);
         }
     }
 
     @PostMapping("/{workerId}/processes/{pid}/kill")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<Map<String, Object>> killCliProcess(
             @PathVariable String workerId,
             @PathVariable int pid,
@@ -63,37 +62,94 @@ public class CodexWorkerController {
         }
 
         boolean force = body != null && Boolean.TRUE.equals(body.get("force"));
+        String taskId = requestTaskId(body);
+        if (taskId == null) {
+            return RX.failA("显式 PID 终止必须提供 taskId");
+        }
         var client = clientFactory.getOrCreate(workerId, codexConfig.getBaseUrl(), codexConfig.getAuthToken());
+        CodexTaskService.ManualPidKillRequest operation = null;
         try {
-            return RX.ok(client.killCliProcess(pid, force).block(Duration.ofSeconds(10)));
+            Map<String, Object> snapshot = client.listCliProcesses().block(Duration.ofSeconds(5));
+            String processIdentity = processIdentityForPidTask(snapshot, pid, taskId);
+            if (processIdentity == null) {
+                return RX.failA("无法确认 Codex CLI PID 与任务绑定，已拒绝终止操作");
+            }
+            // PID termination is an administrator-only, audited operation.  The
+            // method-level role gate above is intentionally stronger than the
+            // ordinary Worker ownership check used for diagnostic reads.
+            operation = taskService.prepareManualPidKill(taskId, workerId, userId, "TENANT_ADMIN_MANUAL",
+                    UserContext.getCurrentTenantId(), true, pid, processIdentity,
+                    client.terminationSigningSecret());
+            Map<String, Object> workerResult = client.killCliProcess(pid, force, operation.capability())
+                    .block(Duration.ofSeconds(10));
+            Map<String, Object> result = workerResult == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(workerResult);
+            taskService.recordManualPidKillResult(operation, result);
+            result.put("termination_operation_id", operation.operationId());
+            return RX.ok(result);
         } catch (Exception e) {
-            String detail = extractWorkerErrorDetail(e);
-            log.warn("Failed to kill Codex CLI process {} for worker {}: {}", pid, workerId, detail);
-            return RX.failA("终止 Codex CLI 进程失败: " + detail);
+            if (operation != null) {
+                taskService.markManualPidKillDispatchFailure(operation, e);
+            }
+            String code = safeWorkerErrorCode(e);
+            log.warn("Failed to kill Codex CLI process {} for worker {}: code={}, type={}",
+                    pid, workerId, code, e.getClass().getSimpleName());
+            return RX.failA("终止 Codex CLI 进程失败: " + code);
         }
     }
 
-    private String extractWorkerErrorDetail(Exception error) {
-        if (error instanceof WebClientResponseException responseException) {
-            String body = responseException.getResponseBodyAsString();
-            if (body != null && !body.isBlank()) {
-                try {
-                    Map<String, Object> payload = OBJECT_MAPPER.readValue(body, new TypeReference<>() {});
-                    String detail = Stream.of(payload.get("message"), payload.get("error"))
-                            .filter(Objects::nonNull)
-                            .map(Object::toString)
-                            .filter(text -> !text.isBlank())
-                            .distinct()
-                            .collect(Collectors.joining(" | "));
-                    if (!detail.isBlank()) {
-                        return detail;
-                    }
-                } catch (Exception ignored) {
-                    return body;
+    private String requestTaskId(Map<String, Object> body) {
+        if (body == null || body.get("taskId") == null) return null;
+        String taskId = String.valueOf(body.get("taskId")).trim();
+        return taskId.isEmpty() ? null : taskId;
+    }
+
+    /**
+     * Returns the opaque, Worker-issued identity for the exact task/PID
+     * snapshot.  PID alone is never sufficient because operating systems can
+     * recycle it between the control-plane preflight and Worker dispatch.
+     */
+    static String processIdentityForPidTask(Map<String, Object> snapshot, int pid, String taskId) {
+        if (snapshot == null || taskId == null) return null;
+        Object processValue = snapshot.get("processes");
+        if (!(processValue instanceof Iterable<?> processes)) return null;
+        for (Object processValueItem : processes) {
+            if (!(processValueItem instanceof Map<?, ?> rawProcess)) continue;
+            Object pidValue = rawProcess.get("pid");
+            Object boundTaskId = rawProcess.get("foggy_task_id");
+            if (pidMatches(pidValue, pid) && taskId.equals(String.valueOf(boundTaskId))) {
+                Object identity = rawProcess.get("process_identity");
+                if (identity instanceof String value && isSafeProcessIdentity(value)) {
+                    return value;
                 }
-                return body;
             }
         }
-        return error.getMessage();
+        return null;
+    }
+
+    private static boolean pidMatches(Object value, int expectedPid) {
+        if (value instanceof Number number) return number.intValue() == expectedPid;
+        try {
+            return Integer.parseInt(String.valueOf(value)) == expectedPid;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isSafeProcessIdentity(String value) {
+        return value.length() <= 160
+                && value.matches("[A-Za-z0-9][A-Za-z0-9._:+-]{0,159}");
+    }
+
+    /**
+     * A Worker response body may include provider diagnostics, command text,
+     * or credentials.  The control-plane UI and lifecycle logs expose only a
+     * stable code; full details remain inside the Worker-side protected logs.
+     */
+    private String safeWorkerErrorCode(Exception error) {
+        if (error instanceof WebClientResponseException responseException) {
+            return "CODEX_WORKER_HTTP_" + responseException.getStatusCode().value();
+        }
+        return "CODEX_WORKER_REQUEST_UNCONFIRMED";
     }
 }

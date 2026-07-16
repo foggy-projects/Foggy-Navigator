@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,10 +15,12 @@ from agent_worker.routes.processes import (
     _find_related_processes,
     _get_process_details,
     _parse_resume_session_id,
+    _record_manual_kill_observation,
     _read_foggy_env,
 )
 from agent_worker.claude.process_detection import _tracked_pids
 from agent_worker.claude.sdk_wrapper import task_registry
+from agent_worker.termination import TerminationCapability
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +279,7 @@ class TestGetProcessDetails:
         assert len(result) == 1
         assert result[0].pid == 1234
         assert result[0].memory_mb == 256.5
+        assert result[0].process_identity == "claude-cli:1234:2026-01-01T00:00:00"
 
     def test_orphan_status_when_no_active_tasks(self):
         """is_orphan should be True when task_registry is empty."""
@@ -435,3 +439,46 @@ class TestEnrichProcessesCrossTask:
         assert procs[0].is_orphan is False
         assert procs[1].is_orphan is True
         assert procs[1].claude_session_id is None
+
+
+# ---------------------------------------------------------------------------
+# Manual PID kill lifecycle diagnostics
+# ---------------------------------------------------------------------------
+
+class TestManualPidKillLifecycleDiagnostics:
+    """Observability failures retain a stable code without raw traces."""
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_event_emit_failure_redacts_exception_text(self, caplog):
+        secret = "manual-kill-event-secret-9b8b"
+        broadcast = MagicMock()
+        broadcast.closed = False
+        broadcast.put = AsyncMock(side_effect=RuntimeError(secret))
+        capability = TerminationCapability(
+            operation_id="operation-1",
+            task_id="task-1",
+            worker_id="worker-1",
+            kind="MANUAL_PID_KILL",
+            origin="ADMIN_MANUAL",
+            actor_id="admin-1",
+            actor_type="USER",
+            authorization_decision_id="decision-1",
+            reason_code="SUPPORT_REQUEST",
+            correlation_id="correlation-1",
+            expected_pid=4242,
+            expected_process_identity="claude-cli:4242:2026-07-16T00:00:00Z",
+            issued_at=0,
+            expires_at=1,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="agent_worker.routes.processes"):
+            await _record_manual_kill_observation(
+                entry={"broadcast": broadcast},
+                capability=capability,
+                pid=4242,
+                operation_summary={"observed_at": "2026-07-16T00:00:00Z"},
+                result="SIGNAL_DISPATCHED_EXIT_UNCONFIRMED",
+            )
+
+        assert "MANUAL_PID_KILL_EVENT_EMIT_FAILED" in caplog.text
+        assert secret not in caplog.text

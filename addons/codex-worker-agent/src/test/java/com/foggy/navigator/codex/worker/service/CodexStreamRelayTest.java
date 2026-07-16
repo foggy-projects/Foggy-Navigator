@@ -436,7 +436,8 @@ class CodexStreamRelayTest {
     @ValueSource(strings = {"ACCEPTING", "ACCEPTED"})
     void applicationReadyRecoveryRecreatesMissingWorkerTaskIdWithEncryptedEnvelope(String state) {
         CodexTaskEntity entity = stubAppServerTask(state);
-        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT"))).thenReturn(List.of(entity));
+        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(List.of(entity));
         Map<String, Object> request = Map.of("prompt", "hello");
         when(taskRuntimeStateService.loadPreparedRequest("local-task-1")).thenReturn(request);
         when(client.createTask("local-task-1", request)).thenReturn(Mono.just(acceptance("local-task-1")));
@@ -457,7 +458,8 @@ class CodexStreamRelayTest {
     @Test
     void applicationReadyFailsPreparedTaskThatNeverStartedRemoteAcceptance() {
         CodexTaskEntity entity = stubAppServerTask("PREPARED");
-        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT"))).thenReturn(List.of(entity));
+        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(List.of(entity));
         when(taskService.failTaskIfAcceptanceNotStarted(
                 "local-task-1", "CODEX_RUNTIME_NOT_ACCEPTED")).thenReturn(true);
 
@@ -470,71 +472,26 @@ class CodexStreamRelayTest {
     }
 
     @Test
-    void abortRecoversUnknownAcceptanceBeforeConfirmingLocalAbort() {
+    void abortRemoteTaskRejectsImplicitTerminationWithoutCapability() {
         CodexTaskEntity entity = stubAppServerTask("UNKNOWN");
-        Map<String, Object> request = Map.of("prompt", "hello");
-        when(taskRuntimeStateService.loadPreparedRequest("local-task-1")).thenReturn(request);
-        when(client.createTask("local-task-1", request))
-                .thenReturn(Mono.just(acceptance("local-task-1")));
-        when(client.abortTask("local-task-1")).thenReturn(Mono.just(Map.of(
-                "task_id", "local-task-1", "status", "terminal", "outcome", "aborted")));
-        when(client.getTaskStatus("local-task-1")).thenReturn(Mono.just(Map.of(
-                "task_id", "local-task-1", "status", "terminal", "outcome", "aborted")));
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> relay.abortRemoteTask(entity));
 
-        var resolution = relay.abortRemoteTask(entity);
-
-        assertEquals("aborted", resolution.outcome());
-        verify(client).createTask("local-task-1", request);
-        verify(taskRuntimeStateService).recordAccepted("local-task-1", "local-task-1");
-        verify(client).abortTask("local-task-1");
-        verify(client).getTaskStatus("local-task-1");
+        assertTrue(error.getMessage().contains("TERMINATION_CAPABILITY_REQUIRED"));
+        verifyNoInteractions(client);
     }
 
     @Test
-    void unconfirmedAppServerAbortDoesNotReturnSuccess() {
+    void abortAndReconcileTaskOnlyMarksAttentionAndRetainsRemoteOwnership() {
         CodexTaskEntity entity = stubAppServerTask("ACCEPTED");
         entity.setWorkerTaskId("worker-task-9");
-        when(client.abortTask("worker-task-9"))
-                .thenReturn(Mono.error(new RuntimeException("connection reset")));
 
-        assertThrows(IllegalStateException.class, () -> relay.abortRemoteTask(entity));
-    }
+        relay.abortAndReconcileTask(entity);
 
-    @Test
-    void appServerAbortDoesNotConfirmWhileRemoteTaskIsStillRunning() {
-        CodexTaskEntity entity = stubAppServerTask("ACCEPTED");
-        entity.setWorkerTaskId("worker-task-9");
-        when(client.abortTask("worker-task-9")).thenReturn(Mono.just(Map.of(
-                "task_id", "worker-task-9", "status", "accepted")));
-        when(client.getTaskStatus("worker-task-9")).thenReturn(Mono.just(Map.of(
-                "task_id", "worker-task-9", "status", "running")));
-
-        IllegalStateException error = assertThrows(
-                IllegalStateException.class, () -> relay.abortRemoteTask(entity));
-
-        assertTrue(error.getMessage().startsWith("CODEX_RUNTIME_ABORT_UNKNOWN"));
-        verify(client, times(5)).getTaskStatus("worker-task-9");
+        verify(taskService).markLifecycleAttention("local-task-1",
+                "TERMINATION_REQUIRES_EXPLICIT_OPERATION");
+        verifyNoInteractions(client);
         verify(taskService, never()).reconcileAbortedTask(any(), any(), any());
-    }
-
-    @Test
-    void appServerAbortReturnsRemoteCompletedOutcomeInsteadOfAborted() {
-        CodexTaskEntity entity = stubAppServerTask("COMMITTED");
-        entity.setWorkerTaskId("worker-task-9");
-        when(client.abortTask("worker-task-9")).thenReturn(Mono.just(Map.of(
-                "task_id", "worker-task-9", "status", "accepted")));
-        when(client.getTaskStatus("worker-task-9")).thenReturn(Mono.just(Map.of(
-                "task_id", "worker-task-9",
-                "status", "terminal",
-                "outcome", "completed",
-                "thread_id", "thread-9",
-                "model", "gpt-5.6-sol")));
-
-        var resolution = relay.abortRemoteTask(entity);
-
-        assertEquals("completed", resolution.outcome());
-        assertEquals("thread-9", resolution.codexThreadId());
-        assertEquals("gpt-5.6-sol", resolution.model());
     }
 
     @Test
@@ -791,7 +748,7 @@ class CodexStreamRelayTest {
                   "session_id":"thread-1",
                   "stream_id":"item-1",
                   "seq":1,
-                  "content":"This session was recorded with a different model."
+                  "content":"This session was recorded with a different model; token=super-secret-value"
                 }
                 """;
         String resultJson = """
@@ -819,6 +776,9 @@ class CodexStreamRelayTest {
         verify(sessionEventListener, times(2)).handleMessageDurably(messages.capture());
         assertEquals(List.of(MessageType.STATE_SYNC, MessageType.SESSION_END),
                 messages.getAllValues().stream().map(AgentMessage::getType).toList());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> warningPayload = (Map<String, Object>) messages.getAllValues().get(0).getPayload();
+        assertEquals("This session was recorded with a different model; [credential]", warningPayload.get("content"));
         verify(taskService, never()).failTask(any(), any(), any(), any());
         verify(taskService).completeTask("local-task-1", "worker-task-1", "thread-1",
                 "received", null, null, null, null, null, "gpt-5.6-sol", 2);
@@ -1257,7 +1217,11 @@ class CodexStreamRelayTest {
                 "task_id", "worker-task-1",
                 "session_id", "thread-1",
                 "seq", 1,
-                "error", failure));
+                "error", failure,
+                "terminal_observed", true,
+                "terminal_status", "FAILED"));
+        when(taskService.attachDiagnostic(eq("local-task-1"), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
         doThrow(new IllegalStateException("mysql unavailable"))
                 .when(taskService).failTask("local-task-1", "worker-task-1", "thread-1", failure, 1);
 
@@ -1274,6 +1238,61 @@ class CodexStreamRelayTest {
         verify(taskService, never()).recordWorkerProgress(
                 eq("local-task-1"), any(), any(), any(), eq(1), anyBoolean(), anyBoolean());
         assertEquals(null, acknowledgedSequences().get("local-task-1"));
+    }
+
+    @Test
+    void unverifiedErrorOnlyMarksAttentionAndKeepsCancellationPending() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("CANCEL_REQUESTED");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(taskService.attachDiagnostic(eq("local-task-1"), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "error",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "error", "CODEX_WORKER_REMOTE_ERROR"));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicInteger(0));
+
+        verify(taskService).markLifecycleAttention("local-task-1", "PROCESS_UNVERIFIED");
+        verify(taskService, never()).failTask(any(), any(), any(), any());
+        verify(taskService, never()).reconcileAbortedTask(any(), any(), any());
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
+    }
+
+    @Test
+    void verifiedAbortedErrorTransitionsThroughAbortReconciliation() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("CANCEL_REQUESTED");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(taskService.attachDiagnostic(eq("local-task-1"), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "error",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "error", "TASK_ABORTED",
+                "terminal_observed", true,
+                "terminal_status", "ABORTED"));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicInteger(0));
+
+        verify(taskService).reconcileAbortedTask("local-task-1", "worker-task-1", "thread-1");
+        verify(taskService, never()).failTask(any(), any(), any(), any());
     }
 
     @Test

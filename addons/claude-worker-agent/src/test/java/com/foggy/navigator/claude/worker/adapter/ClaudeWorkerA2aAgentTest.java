@@ -594,10 +594,25 @@ class ClaudeWorkerA2aAgentTest {
 
         @Test
         void cancelTask_delegatesToService() {
+            when(taskService.getTask("user-1", "task-1")).thenReturn(defaultTaskDTO());
             A2aAgent agent = pipelineWithoutContextStore();
             agent.cancelTask("task-1");
 
             verify(taskService).abortTask("task-1");
+        }
+
+        @Test
+        void cancelTask_rejectsTaskOutsideA2aOwnerScope() {
+            when(taskService.getTask("user-1", "other-user-task"))
+                    .thenThrow(new IllegalArgumentException("not found"));
+
+            A2aAgent agent = pipelineWithoutContextStore();
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> agent.cancelTask("other-user-task"));
+
+            assertEquals("TERMINATION_TASK_ACCESS_DENIED", error.getMessage());
+            verify(taskService, never()).abortTask(anyString());
         }
 
         @Test

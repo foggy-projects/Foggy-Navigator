@@ -7,6 +7,7 @@ import type {
   TaskOutcome,
   TaskPhase,
   TaskRequest,
+  TerminationOperationSummary,
 } from '../models.js'
 import { readJsonlAndRepair, syncParentDirectory } from './jsonl-durability.js'
 
@@ -29,6 +30,23 @@ export class TaskStateConflictError extends Error {
   constructor(taskId: string, from: TaskPhase, to: TaskPhase) {
     super(`Invalid task state transition for ${taskId}: ${from} -> ${to}`)
     this.name = 'TaskStateConflictError'
+  }
+}
+
+/**
+ * A task can have one durable, in-flight termination operation at a time.
+ * Accepting a second operation would make a later terminal observation
+ * ambiguous: the Worker could incorrectly attribute it to the newer command.
+ */
+export class TaskTerminationOperationPendingError extends Error {
+  readonly code = 'TERMINATION_OPERATION_PENDING'
+
+  constructor(
+    readonly taskId: string,
+    readonly operationId: string,
+  ) {
+    super(`Task already has an in-flight termination operation: ${taskId}`)
+    this.name = 'TaskTerminationOperationPendingError'
   }
 }
 
@@ -150,6 +168,8 @@ export class TaskStore {
         updated_at: timestamp,
         terminal_at: current.terminal_at || timestamp,
         abort_requested_at: current.abort_requested_at,
+        attention: current.attention,
+        termination_operation: current.termination_operation,
         tombstoned_at: timestamp,
       }) as StoredTaskRecord
       await this.replaceJournal(tombstone)
@@ -160,7 +180,8 @@ export class TaskStore {
 
   async patch(taskId: string, patch: Partial<Pick<StoredTaskRecord,
     'thread_id' | 'turn_id' | 'app_server_instance_id' | 'app_server_lane_key' | 'model' | 'reasoning_effort'
-    | 'recovery_required' | 'abort_requested_at' | 'pending_interaction' | 'last_interaction'>>): Promise<StoredTaskRecord> {
+    | 'recovery_required' | 'abort_requested_at' | 'pending_interaction' | 'last_interaction'
+    | 'attention' | 'termination_operation'>>): Promise<StoredTaskRecord> {
     return this.withLock(taskId, async () => {
       const current = this.required(taskId)
       const next = compact({ ...current, ...patch, updated_at: this.now().toISOString() }) as StoredTaskRecord
@@ -169,14 +190,33 @@ export class TaskStore {
     })
   }
 
-  async requestAbort(taskId: string): Promise<StoredTaskRecord> {
+  async requestAbort(taskId: string, operation?: TerminationOperationSummary): Promise<StoredTaskRecord> {
     return this.withLock(taskId, async () => {
       const current = this.required(taskId)
-      if (current.status === 'terminal' || current.abort_requested_at) return clone(current)
+      if (current.status === 'terminal') return clone(current)
+      if (current.abort_requested_at) {
+        const existingOperation = current.termination_operation
+        if (!operation || existingOperation?.operation_id === operation.operation_id) return clone(current)
+        if (existingOperation) {
+          throw new TaskTerminationOperationPendingError(taskId, existingOperation.operation_id)
+        }
+        // A pre-GOV recovery path can have requested cancellation without a
+        // signed operation.  It is safe to attach the first signed operation;
+        // all later operations are rejected by the branch above.
+        const timestamp = this.now().toISOString()
+        const next = compact({
+          ...current,
+          termination_operation: operation,
+          updated_at: timestamp,
+        }) as StoredTaskRecord
+        await this.append(next)
+        return clone(next)
+      }
       const timestamp = this.now().toISOString()
       const next = compact({
         ...current,
         abort_requested_at: timestamp,
+        termination_operation: operation,
         updated_at: timestamp,
       }) as StoredTaskRecord
       await this.append(next)
@@ -189,7 +229,8 @@ export class TaskStore {
     status: TaskPhase,
     patch: Partial<Pick<StoredTaskRecord,
       'thread_id' | 'turn_id' | 'app_server_instance_id' | 'app_server_lane_key' | 'model' | 'reasoning_effort'
-      | 'error_code' | 'recovery_required' | 'pending_interaction' | 'last_interaction'>> & {
+      | 'error_code' | 'recovery_required' | 'pending_interaction' | 'last_interaction'
+      | 'attention' | 'termination_operation'>> & {
         outcome?: TaskOutcome
       } = {}
   ): Promise<StoredTaskRecord> {
@@ -379,6 +420,8 @@ function terminalPatchConflicts(
     'reasoning_effort',
     'recovery_required',
     'abort_requested_at',
+    'attention',
+    'termination_operation',
     'pending_interaction',
     'last_interaction',
   ]

@@ -397,7 +397,7 @@ test('persistent runtime reports thread IDs loaded in its own app-server memory'
   await instance.close()
 })
 
-test('turn progress watchdog interrupts and retires a live process that stops emitting events', async () => {
+test('turn progress watchdog marks a stalled live process without interrupting or closing it', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, false, undefined, 'running-after-start')
 
@@ -420,11 +420,11 @@ test('turn progress watchdog interrupts and retires a live process that stops em
     assert.equal(error.reason, 'stalled')
     return true
   })
-  assert.equal(received.some(message => message.method === 'turn/interrupt'), true)
-  assert.equal(process.killed, true)
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
+  assert.equal(process.killed, false)
 })
 
-test('disabled image generation fails closed before base64 reaches the notification consumer', async () => {
+test('disabled image generation marks the turn without interrupting a live process', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, false, undefined, 'unexpected-image-generation')
   const forwarded: JsonMessage[] = []
@@ -451,8 +451,8 @@ test('disabled image generation fails closed before base64 reaches the notificat
   })
 
   assert.equal(forwarded.some(notification => JSON.stringify(notification).includes('BASE64_IMAGE')), false)
-  assert.equal(received.some(message => message.method === 'turn/interrupt'), true)
-  assert.equal(process.killed, true)
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
+  assert.equal(process.killed, false)
 })
 
 test('turn progress notifications reset the watchdog until completion', async () => {
@@ -475,7 +475,7 @@ test('turn progress notifications reset the watchdog until completion', async ()
   assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
 })
 
-test('token usage noise does not keep a stalled turn alive', async () => {
+test('token usage noise does not prevent a pending-decision stall marker', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, false, undefined, 'noise-before-stall')
 
@@ -497,8 +497,8 @@ test('token usage noise does not keep a stalled turn alive', async () => {
     assert.equal(error.code, 'APP_SERVER_TURN_STALLED')
     return true
   })
-  assert.equal(received.some(message => message.method === 'turn/interrupt'), true)
-  assert.equal(process.killed, true)
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
+  assert.equal(process.killed, false)
 })
 
 test('runtime enables and answers only the pinned request_user_input server request', async () => {
@@ -589,7 +589,7 @@ test('serverRequest/resolved clears an in-flight request without sending a stale
   assert.equal(received.some(message => message.id === 'server-input-1' && (message.result || message.error)), false)
 })
 
-test('turn-started callback failure retires and closes a still-running instance before rejection', async () => {
+test('turn-started callback failure preserves an unverified live instance for explicit action', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, false, undefined, 'running-after-start')
   const instance = await AppServerRuntimeInstance.start({
@@ -619,10 +619,11 @@ test('turn-started callback failure retires and closes a still-running instance 
     return true
   })
 
-  assert.equal(instance.isHealthy(), false)
+  assert.equal(instance.isHealthy(), true)
   assert.equal(instance.isActive(), false)
-  assert.equal(process.killed, true, 'runTurn must await child close before rejecting')
-  assert.equal(fatalCount, 1)
+  assert.equal(instance.requiresAttention(), true)
+  assert.equal(process.killed, false, 'observer failure must not implicitly terminate the provider')
+  assert.equal(fatalCount, 0)
   assert.equal(received.filter(message => message.method === 'turn/start').length, 1)
   await assert.rejects(instance.runTurn({
     taskId: 'must-not-reuse',
@@ -632,7 +633,9 @@ test('turn-started callback failure retires and closes a still-running instance 
     input: 'inspect',
     signal: new AbortController().signal,
     onNotification: () => undefined,
-  }), /unavailable/)
+  }), error => error instanceof AppServerRuntimeError && error.code === 'APP_SERVER_PROCESS_UNVERIFIED')
+  await instance.forceTerminateForAuthorizedOperation(100)
+  assert.equal(process.killed, true, 'only the explicit authorized termination path may close it')
 })
 
 test('persistent runtime interrupts the exact thread and turn requested by recovery', async () => {
@@ -652,7 +655,7 @@ test('persistent runtime interrupts the exact thread and turn requested by recov
   instance.close()
 })
 
-test('throwing notification and fatal observers are isolated and retire the instance', async () => {
+test('throwing notification and fatal observers are isolated without retiring a live instance', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, true)
   const instance = await AppServerRuntimeInstance.start({
@@ -673,8 +676,14 @@ test('throwing notification and fatal observers are isolated and retire the inst
     onNotification: () => { throw new Error('consumer failed') },
   }), /notification handler failed/)
   assert.equal(instance.isHealthy(), false)
+  assert.equal(instance.requiresAttention(), true)
   assert.equal(observedFatal, 1)
-  instance.close()
+  assert.equal(process.killed, false)
+  await assert.rejects(instance.forceTerminateForAuthorizedOperation(100), error => (
+    error instanceof AppServerRuntimeError
+      && error.code === 'APP_SERVER_PROVIDER_TERMINAL_OBSERVED'
+  ))
+  assert.equal(process.killed, false, 'provider terminal evidence fences a late manual PID signal')
 })
 
 test('child lifecycle notifications never trigger a supplemental metadata request', async () => {
@@ -720,6 +729,86 @@ test('runtime close escalates to SIGKILL when the child ignores graceful shutdow
     requestTimeoutMs: 1_000,
   })
   await instance.close(20)
+  assert.deepEqual(process.signals, ['SIGTERM', 'SIGKILL'])
+})
+
+test('authorized PID termination does not claim exit when a child ignores both signals', async () => {
+  const process = new NeverExitProcess([], () => true)
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+
+  const observedExit = await instance.forceTerminateForAuthorizedOperation(100, 5)
+
+  assert.equal(observedExit, false)
+  assert.deepEqual(process.signals, ['SIGTERM', 'SIGKILL'])
+})
+
+test('authorized PID termination settles an active turn after observing child exit', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'running-after-start')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  const running = instance.runTurn({
+    taskId: 'authorized-active-exit',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'wait',
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+  })
+  for (let index = 0; index < 50 && !received.some(message => message.method === 'turn/start'); index++) {
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+  assert.equal(received.some(message => message.method === 'turn/start'), true)
+
+  assert.equal(await instance.forceTerminateForAuthorizedOperation(100, 25), true)
+  await assert.rejects(running, error => (
+    error instanceof AppServerRuntimeError
+    && error.code === 'APP_SERVER_AUTHORIZED_PROCESS_EXIT'
+    && error.reason === 'aborted'
+  ))
+  assert.equal(instance.isActive(), false)
+  assert.equal(instance.requiresAttention(), false)
+  assert.equal(process.killed, true)
+})
+
+test('unconfirmed authorized PID termination settles an active turn into attention', async () => {
+  const received: JsonMessage[] = []
+  const process = new NeverExitProcess(received, () => true, false, undefined, 'running-after-start')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  const running = instance.runTurn({
+    taskId: 'authorized-active-unconfirmed',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'wait',
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+  })
+  for (let index = 0; index < 50 && !received.some(message => message.method === 'turn/start'); index++) {
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+  assert.equal(received.some(message => message.method === 'turn/start'), true)
+
+  assert.equal(await instance.forceTerminateForAuthorizedOperation(100, 5), false)
+  await assert.rejects(running, error => (
+    error instanceof AppServerRuntimeError
+    && error.code === 'APP_SERVER_MANUAL_TERMINATION_UNCONFIRMED'
+    && error.turnMayHaveStarted === true
+  ))
+  assert.equal(instance.isActive(), false)
+  assert.equal(instance.requiresAttention(), true)
   assert.deepEqual(process.signals, ['SIGTERM', 'SIGKILL'])
 })
 
@@ -838,7 +927,7 @@ test('final process-tree extension failure remains fatal after stale-snapshot cl
   assert.doesNotMatch(evidenceText, /stubborn-app-server|setInterval|Bearer|token/i)
 })
 
-test('aborted turn does not return to its lease owner before descendant cleanup', async t => {
+test('an explicit interrupt without terminal confirmation keeps the process tree pending decision', async t => {
   const fixture = await createStubbornProcessTreeFixture(t, 'turn')
   const instance = await AppServerRuntimeInstance.start({
     env: {},
@@ -864,12 +953,14 @@ test('aborted turn does not return to its lease owner before descendant cleanup'
 
   await assert.rejects(running)
 
-  assert.equal(isProcessAlive(descendantPid), false, 'runtime rejection is the lease/lock release boundary')
-  assert.equal(instance.isHealthy(), false)
+  assert.equal(isProcessAlive(descendantPid), true, 'an abort acknowledgement is not proof of provider exit')
+  assert.equal(instance.requiresAttention(), true)
+  await instance.forceTerminateForAuthorizedOperation(instance.pid!)
+  assert.equal(isProcessAlive(descendantPid), false, 'an explicit authorized PID kill may terminate the tree')
 })
 
 for (const behavior of ['error', 'timeout'] as const) {
-  test(`interrupt ${behavior} retires the instance instead of confirming a still-running turn`, async () => {
+  test(`interrupt ${behavior} leaves the instance pending decision instead of closing it`, async () => {
     const received: JsonMessage[] = []
     const process = new FakeProcess(received, () => true, false, undefined, behavior)
     const instance = await AppServerRuntimeInstance.start({
@@ -893,11 +984,14 @@ for (const behavior of ['error', 'timeout'] as const) {
     controller.abort()
     await assert.rejects(running)
     assert.equal(instance.isHealthy(), false)
+    assert.equal(instance.requiresAttention(), true)
+    assert.equal(process.killed, false)
+    await instance.forceTerminateForAuthorizedOperation(100)
     assert.equal(process.killed, true)
   })
 }
 
-test('abort force-retires an instance whose turn/start request never returns', async () => {
+test('abort does not force-retire an instance whose turn/start request never returns', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, false, undefined, 'turn-start-hang')
   const instance = await AppServerRuntimeInstance.start({
@@ -924,7 +1018,9 @@ test('abort force-retires an instance whose turn/start request never returns', a
   controller.abort()
   await assert.rejects(running)
   assert.ok(Date.now() - startedAt < 1_000)
-  assert.equal(instance.isHealthy(), false)
+  assert.equal(instance.requiresAttention(), true)
+  assert.equal(process.killed, false)
+  await instance.forceTerminateForAuthorizedOperation(100)
   assert.equal(process.killed, true)
 })
 
@@ -1030,6 +1126,41 @@ test('turn/start response and same-batch notifications replay only after turn co
   ])
 })
 
+test('a same-batch provider terminal fences a concurrent authorized PID signal', async () => {
+  const process = new FakeProcess([], () => true, false, undefined, 'same-batch-events')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  let manualTermination: Promise<boolean> | undefined
+
+  const result = await instance.runTurn({
+    taskId: 'same-batch-manual-fence',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'complete naturally',
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    onTurnStarted: () => {
+      // The same stdout batch has already delivered turn/completed, but it is
+      // still pending normal notification replay.  A signed manual PID route
+      // can interleave here only if the runtime fails to install the fence.
+      manualTermination = instance.forceTerminateForAuthorizedOperation(100)
+      void manualTermination.catch(() => undefined)
+    },
+  })
+
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(instance.hasProviderTerminalObserved(), true)
+  await assert.rejects(manualTermination, error => (
+    error instanceof AppServerRuntimeError
+    && error.code === 'APP_SERVER_PROVIDER_TERMINAL_OBSERVED'
+  ))
+  assert.equal(process.killed, false)
+})
+
 test('local image mode persists image bytes and emits metadata without base64', async t => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-generated-image-'))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
@@ -1088,6 +1219,16 @@ class StubbornProcess extends FakeProcess {
     this.killed = true
     this.signals.push(signal)
     if (signal === 'SIGKILL') queueMicrotask(() => this.emit('exit', null, signal))
+    return true
+  }
+}
+
+class NeverExitProcess extends FakeProcess {
+  readonly signals: Array<NodeJS.Signals | number> = []
+
+  override kill(signal: NodeJS.Signals | number = 'SIGTERM'): boolean {
+    this.killed = true
+    this.signals.push(signal)
     return true
   }
 }

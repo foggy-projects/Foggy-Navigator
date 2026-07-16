@@ -9,6 +9,7 @@ Tests focus on:
 
 from __future__ import annotations
 
+import logging
 import os
 from unittest.mock import MagicMock, patch
 
@@ -297,18 +298,29 @@ class TestWindowsDetector:
         detector = WindowsDetector()
         assert detector.get_details(set()) == []
 
-    def test_get_details_fallback_on_error(self):
+    def test_get_details_fallback_on_error(self, caplog):
         import subprocess
 
         detector = WindowsDetector()
+        secret = "PROCESS_DETAILS_SENTINEL_token=private"
 
-        with patch("subprocess.check_output", side_effect=subprocess.SubprocessError("err")):
-            details = detector.get_details({1234, 5678})
+        with caplog.at_level(
+            logging.WARNING,
+            logger="agent_worker.claude.process_detection",
+        ):
+            with patch(
+                "subprocess.check_output",
+                side_effect=subprocess.SubprocessError(secret),
+            ):
+                details = detector.get_details({1234, 5678})
 
         # Should return basic ProcessInfo for each PID
         assert len(details) == 2
         pids = {d.pid for d in details}
         assert pids == {1234, 5678}
+        assert secret not in caplog.text
+        assert "event_name=PROCESS_DETAILS_POWERSHELL_FAILED" in caplog.text
+        assert "error_type=SubprocessError" in caplog.text
 
 
 # ---------------------------------------------------------------------------

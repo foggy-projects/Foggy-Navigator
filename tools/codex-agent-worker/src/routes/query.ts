@@ -12,12 +12,13 @@ import {
   taskBroadcasts,
   taskRegistry,
   cleanupOldTasks,
+  getTaskStatus,
   getRunningTaskCount,
   UnsupportedCodexModelError,
   UNSUPPORTED_CODEX_MODEL,
 } from '../codex/sdk-wrapper.js'
 import { isNavigatorBusinessMcpEnabled } from '../business-mcp/navigator-business-mcp-server.js'
-import type { WorkerEvent } from '../models.js'
+import { isTaskTerminal, type WorkerEvent } from '../models.js'
 import { safeSdkError } from '../diagnostics.js'
 
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000
@@ -229,7 +230,14 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       businessRuntimeContext: body.business_runtime_context,
       additionalDirectories: body.additional_directories,
     }
-  ).finally(() => threadReservation?.release())
+  ).finally(() => {
+    const entry = getTaskStatus(taskId)
+    // A CANCEL_REQUESTED task can still own a live CLI process.  Keep the
+    // reservation until an observed terminal state releases it centrally.
+    if (!entry || isTaskTerminal(entry.status)) {
+      threadReservation?.release()
+    }
+  })
 
   // Wait a tick for broadcast to be registered
   await new Promise(resolve => setTimeout(resolve, 10))
@@ -286,7 +294,10 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
 
   // Wait for query to complete, then close SSE
   queryPromise.finally(() => {
-    closeStream()
+    const entry = getTaskStatus(taskId)
+    if (!entry || isTaskTerminal(entry.status)) {
+      closeStream()
+    }
   })
 })
 

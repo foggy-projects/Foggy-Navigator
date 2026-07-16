@@ -370,6 +370,88 @@ test('running update drains with runtime identity evidence and fails closed when
   }
 })
 
+test('running update preserves an unproven Worker tree for explicit operator recovery', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex unproven drain update #'))
+  const installDir = path.join(root, 'current install')
+  const candidateDir = path.join(root, 'package', 'codex-app-server-worker')
+  const bootstrapDir = path.join(root, 'bootstrap')
+  const fakeBin = path.join(root, 'fake npm')
+  const runDir = path.join(root, 'run')
+  const logDir = path.join(root, 'logs')
+  const stateDir = path.join(root, 'state')
+  const childPidFile = path.join(root, 'worker-child.pid')
+  let worker: ChildProcess | undefined
+  let childPid: number | undefined
+  try {
+    const port = await reserveLoopbackPort()
+    prepareCandidate(candidateDir)
+    prepareCurrentInstall(installDir)
+    prepareFakeNpm(fakeBin)
+    const updaterName = prepareBootstrapUpdater(bootstrapDir)
+    fs.writeFileSync(path.join(installDir, 'dist', 'index.js'), stubbornWorkerSource())
+    fs.writeFileSync(path.join(installDir, '.env'), [
+      `CODEX_APP_SERVER_RUN_DIR='${runDir}'`,
+      `CODEX_APP_SERVER_LOG_DIR='${logDir}'`,
+      `CODEX_APP_SERVER_STATE_DIR='${stateDir}'`,
+      'CODEX_APP_SERVER_WORKER_HOST=127.0.0.1',
+      `CODEX_APP_SERVER_WORKER_PORT=${port}`,
+      '',
+    ].join('\n'))
+    fs.mkdirSync(runDir, { recursive: true })
+    worker = spawn(process.execPath, [path.join(installDir, 'dist', 'index.js')], {
+      env: {
+        ...process.env,
+        CAW_CHILD_PID_FILE: childPidFile,
+        CODEX_APP_SERVER_RUN_DIR: runDir,
+        CODEX_APP_SERVER_LOG_DIR: logDir,
+        CODEX_APP_SERVER_STATE_DIR: stateDir,
+        CODEX_APP_SERVER_WORKER_HOST: '127.0.0.1',
+        CODEX_APP_SERVER_WORKER_PORT: String(port),
+      },
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    await waitForHealth(port)
+    assert.ok(worker.pid)
+    childPid = Number(await waitForFile(childPidFile))
+    assert.ok(Number.isInteger(childPid) && childPid > 0)
+    fs.writeFileSync(path.join(runDir, 'worker.pid'), String(worker.pid))
+    captureLifecycleSnapshot(installDir, runDir, worker.pid)
+
+    const updaterEnv = cleanLifecycleEnvironment(fakeBin)
+    updaterEnv.CAW_TEST_DOTENV_SOURCE = path.resolve('node_modules', 'dotenv')
+    updaterEnv.CODEX_APP_SERVER_SHUTDOWN_TIMEOUT_MS = '0'
+    const result = process.platform === 'win32'
+      ? spawnSync('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(bootstrapDir, updaterName),
+        '-Package', path.dirname(candidateDir), '-InstallDir', installDir,
+      ], { env: updaterEnv, encoding: 'utf8', timeout: 90_000 })
+      : spawnSync('bash', [
+        path.join(bootstrapDir, updaterName), '--package', path.dirname(candidateDir), '--install-dir', installDir,
+      ], { env: updaterEnv, encoding: 'utf8', timeout: 90_000 })
+
+    assert.equal(result.error, undefined, formatSpawnFailure(result))
+    assert.notEqual(result.status, 0)
+    assert.match(`${result.stdout}\n${result.stderr}`, /drain was not proven; no Worker process was terminated/i)
+    assert.equal(isProcessAlive(worker.pid), true)
+    assert.equal(isProcessAlive(childPid), true)
+    assert.equal(fs.readFileSync(path.join(installDir, 'VERSION'), 'utf8').trim(), '0.1.1-current')
+    assert.equal(Number(fs.readFileSync(path.join(runDir, 'worker.pid'), 'utf8')), worker.pid)
+    assert.equal(fs.existsSync(path.join(runDir, 'stop.request')), true)
+    assert.match(fs.readFileSync(path.join(runDir, 'stop.failed'), 'utf8'), /shutdown_not_proven/)
+    assert.equal(fs.existsSync(path.join(runDir, 'worker.process-tree.json')), true)
+    assert.equal(fs.existsSync(path.join(runDir, 'update.process-tree.json')), true)
+    assert.equal(fs.existsSync(path.join(installDir, 'update.in-progress')), false)
+    assert.equal(fs.existsSync(path.join(installDir, 'lifecycle.lock')), false)
+    assert.equal(findStageDirectories(root).length, 0)
+  } finally {
+    for (const pid of [childPid, worker?.pid, readPidFile(path.join(runDir, 'worker.pid'))]) {
+      await forceTerminateAndWait(pid)
+    }
+    removeTemporaryTree(root)
+  }
+})
+
 test('candidate startup failure preserves candidate and backup without restarting the old package', () =>
   runCandidateStartupRollbackScenario(false))
 
@@ -1120,6 +1202,27 @@ server.listen(Number(process.env.CODEX_APP_SERVER_WORKER_PORT), process.env.CODE
   fs.renameSync(temporary, successFile)
   server.close(() => process.exit(0))
 }, 20)
+`
+}
+
+function stubbornWorkerSource(): string {
+  return `
+const { spawn } = require('node:child_process')
+const fs = require('node:fs')
+const http = require('node:http')
+const path = require('node:path')
+fs.mkdirSync(process.env.CODEX_APP_SERVER_STATE_DIR, { recursive: true })
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+  stdio: 'ignore',
+  windowsHide: true,
+})
+fs.writeFileSync(process.env.CAW_CHILD_PID_FILE, String(child.pid))
+const server = http.createServer((request, response) => {
+  response.setHeader('content-type', 'application/json')
+  response.end(JSON.stringify({ ready: request.url === '/health' }))
+})
+server.listen(Number(process.env.CODEX_APP_SERVER_WORKER_PORT), process.env.CODEX_APP_SERVER_WORKER_HOST)
+setInterval(() => {}, 1000)
 `
 }
 

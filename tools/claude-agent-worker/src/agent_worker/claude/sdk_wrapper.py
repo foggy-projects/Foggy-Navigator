@@ -186,10 +186,74 @@ the ``/respond`` endpoint to deliver the decision.
 PERMISSION_TIMEOUT_SECONDS = 300  # 5 minutes (regular tool permissions)
 INTERACTIVE_TIMEOUT_SECONDS = 1800  # 30 minutes (plan review & user questions)
 
-# Grace period before killing CLI after SSE consumer disconnects.
-# Default 1 hour — Java backend restart / network recovery may take time,
-# and idle CLI processes are lightweight.  Configurable via env var.
+# Reconnect-observation grace after an SSE consumer disconnects.  The watcher
+# never kills a managed CLI; it retains the active task for an explicit later
+# decision.  The window is configurable for backend/network recovery.
 DISCONNECT_GRACE_SECONDS = int(os.environ.get("DISCONNECT_GRACE_SECONDS", "3600"))
+
+_TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "ABORTED"})
+_VERIFIED_TERMINAL_SOURCES = frozenset({
+    "PROVIDER_TERMINAL_EVENT",
+    "VERIFIED_MANAGED_PROCESS_EXIT",
+})
+
+
+def has_verified_terminal_evidence(entry: dict[str, Any] | None) -> bool:
+    """Return true only for the additive, explicit terminal contract.
+
+    A completed asyncio producer, closed SSE broadcast, or empty tracked-PID
+    set may all occur after a detachment.  They are observations, not a task
+    terminal decision.  Registry cleanup therefore requires the same explicit
+    status/source pair that the Java relay and durable event store consume.
+    """
+
+    if not entry or entry.get("terminal_observed") is not True:
+        return False
+    terminal_status = entry.get("terminal_status") or entry.get("terminal_lifecycle_state")
+    terminal_source = entry.get("terminal_source")
+    return (
+        isinstance(terminal_status, str)
+        and terminal_status in _TERMINAL_STATUSES
+        and isinstance(terminal_source, str)
+        and terminal_source in _VERIFIED_TERMINAL_SOURCES
+    )
+
+
+def _record_terminal_event(task_id: str, event: dict[str, Any]) -> None:
+    """Persist in-memory terminal evidence after emitting a verified event."""
+
+    if event.get("terminal_observed") is not True:
+        return
+    terminal_status = event.get("terminal_status")
+    terminal_source = event.get("terminal_source")
+    if (
+        not isinstance(terminal_status, str)
+        or terminal_status not in _TERMINAL_STATUSES
+        or not isinstance(terminal_source, str)
+        or terminal_source not in _VERIFIED_TERMINAL_SOURCES
+    ):
+        logger.warning(
+            "Ignoring malformed terminal event evidence: task=%s status_type=%s source_type=%s",
+            task_id,
+            type(terminal_status).__name__,
+            type(terminal_source).__name__,
+        )
+        return
+
+    entry = task_registry.get(task_id)
+    if entry is None:
+        return
+    entry["terminal_observed"] = True
+    entry["terminal_status"] = terminal_status
+    entry["terminal_lifecycle_state"] = terminal_status
+    entry["terminal_source"] = terminal_source
+    entry["execution_state"] = "TERMINAL_OBSERVED"
+    entry["attention_state"] = None
+    entry["lifecycle_evidence"] = {
+        "source": terminal_source,
+        "event_type": event.get("type"),
+        "event_seq": event.get("seq"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -201,96 +265,84 @@ async def _grace_period_watcher(
     producer_task: asyncio.Task,
     grace_seconds: int,
 ) -> None:
-    """Background task: keeps CLI alive while waiting for SSE subscriber reconnection.
+    """Observe a detached task without ever terminating it automatically.
 
-    Spawned as an independent ``asyncio.Task`` when the original SSE consumer
-    disconnects but the CLI process is still alive.  This avoids the problem
-    where ``await asyncio.sleep()`` inside a cancelled generator's ``finally``
-    block raises ``CancelledError`` immediately, defeating the grace period.
-
-    Lifecycle:
-      1. Polls ``task_registry[task_id]["connected"]`` every 30s.
-      2. If a new subscriber reconnects (via ``/subscribe``), exits cleanly
-         — the new subscriber's generator now owns the task lifecycle.
-      3. If ``producer_task`` finishes on its own (CLI exited), exits cleanly.
-      4. If grace period expires with no reconnection, cancels ``producer_task``
-         and cleans up the registry entry.
+    An SSE disconnect is an observability condition, not authority to cancel a
+    managed CLI.  After the reconnect grace window we retain the task as
+    ``SSE_RECONNECT_EXPIRED_PENDING_DECISION`` and continue waiting for actual
+    producer/process exit evidence.  Only a separately authorized operation
+    may request cancellation.
     """
     check_interval = 30
-    grace_remaining = grace_seconds
+    grace_elapsed = 0
 
     try:
-        while grace_remaining > 0 and not producer_task.done():
-            await asyncio.sleep(min(check_interval, grace_remaining))
-            grace_remaining -= check_interval
-
+        while True:
             entry = task_registry.get(task_id)
             if entry is None:
-                # Registry entry was removed externally (e.g. abort) — stop watching
-                logger.info(
-                    "Grace watcher: task %s registry entry gone, stopping", task_id
-                )
+                logger.info("Lifecycle watcher: task %s registry entry gone, stopping", task_id)
+                return
+
+            if producer_task.done():
+                from .process_detection import get_pids_for_task, is_cli_process, unregister_pids_for_task
+
+                live_pids = [pid for pid in get_pids_for_task(task_id) if is_cli_process(pid)]
+                if not has_verified_terminal_evidence(entry):
+                    entry["execution_state"] = "ACTIVE_TASK_EXECUTION"
+                    entry["attention_state"] = "PROCESS_UNVERIFIED"
+                    entry["lifecycle_evidence"] = {
+                        "source": "SDK_PRODUCER_COMPLETION_UNVERIFIED",
+                        "reason": "PRODUCER_DONE_WITHOUT_EXPLICIT_TERMINAL_EVENT",
+                        "live_pid_count": len(live_pids),
+                    }
+                    logger.warning(
+                        "Lifecycle watcher: task %s SDK producer finished without terminal evidence; "
+                        "%d tracked CLI PID(s) remain or may have detached, retaining task",
+                        task_id,
+                        len(live_pids),
+                    )
+                    await asyncio.sleep(check_interval)
+                    continue
+
+                # The terminal event was independently recorded while the
+                # producer was active.  Producer/PID observations are only
+                # cleanup corroboration; they never create terminal evidence.
+                unregister_pids_for_task(task_id)
+                task_registry.pop(task_id, None)
+                for permission_id in list(permission_pending):
+                    if permission_pending[permission_id].get("task_id") == task_id:
+                        permission_pending.pop(permission_id, None)
+                logger.info("Lifecycle watcher: task %s released after verified terminal event", task_id)
                 return
 
             if entry.get("connected"):
-                # A new subscriber reconnected via /subscribe — exit cleanly
-                logger.info(
-                    "Grace watcher: task %s reconnected during grace period! "
-                    "CLI kept alive.",
-                    task_id,
-                )
+                logger.info("Lifecycle watcher: task %s reconnected; observer handoff complete", task_id)
                 return
 
-        # Grace period expired or producer finished
-        if not producer_task.done():
-            # Rule 2: Only user can kill CLI — do NOT cancel producer_task.
-            # Just clean up registry to release memory; CLI continues running.
-            logger.warning(
-                "Grace watcher: task %s grace period expired with no reconnection. "
-                "Cleaning up registry only — CLI continues running (Rule 2).",
-                task_id,
-            )
-            entry = task_registry.get(task_id)
-            if entry:
-                entry["orphaned"] = True  # Mark for status endpoint reporting
-        else:
-            logger.info(
-                "Grace watcher: task %s producer finished during grace period",
-                task_id,
-            )
+            await asyncio.sleep(check_interval)
+            grace_elapsed += check_interval
+            if grace_elapsed >= grace_seconds and entry.get("attention_state") != "SSE_RECONNECT_EXPIRED_PENDING_DECISION":
+                entry["execution_state"] = "ACTIVE_TASK_EXECUTION"
+                entry["attention_state"] = "SSE_RECONNECT_EXPIRED_PENDING_DECISION"
+                entry["lifecycle_evidence"] = {
+                    "source": "SSE_DISCONNECT_WATCHER",
+                    "grace_seconds": grace_seconds,
+                    "action": "RETAINED_NO_AUTOMATIC_TERMINATION",
+                }
+                logger.warning(
+                    "Lifecycle watcher: task %s reconnect grace expired; retained active task pending explicit decision",
+                    task_id,
+                )
 
     except asyncio.CancelledError:
-        logger.info("Grace watcher: task %s watcher cancelled", task_id)
+        logger.info("Lifecycle watcher: task %s watcher cancelled", task_id)
     except Exception as exc:
-        logger.warning("Grace watcher: task %s unexpected error: %s", task_id, exc)
-    finally:
-        # Cleanup — but only if no subscriber took over
+        logger.warning("Lifecycle watcher: task %s unexpected error type=%s", task_id, type(exc).__name__)
         entry = task_registry.get(task_id)
-        if entry and not entry.get("has_external_subscriber"):
-            task_registry.pop(task_id, None)
-            # Clean up any pending permissions for this task
-            for pid in list(permission_pending):
-                if permission_pending[pid].get("task_id") == task_id:
-                    permission_pending.pop(pid, None)
-            logger.info(
-                "Grace watcher: task %s cleaned up registry (no subscriber took over)",
-                task_id,
-            )
-            # Log surviving CLI processes for diagnostics
-            try:
-                surviving = _find_sdk_cli_pids()
-                if surviving:
-                    logger.info(
-                        "Grace watcher: task %s ended — %d CLI process(es) still alive: %s",
-                        task_id, len(surviving), surviving,
-                    )
-            except Exception:
-                pass
-        elif entry and entry.get("has_external_subscriber"):
-            logger.info(
-                "Grace watcher: task %s subscriber active, skipping cleanup",
-                task_id,
-            )
+        if entry and not has_verified_terminal_evidence(entry):
+            entry["execution_state"] = "ACTIVE_TASK_EXECUTION"
+            entry["attention_state"] = "LIFECYCLE_WATCHER_FAILED_PENDING_DECISION"
+            entry["lifecycle_evidence"] = {"source": "SSE_DISCONNECT_WATCHER", "action": "RETAINED"}
 
 
 # ---------------------------------------------------------------------------
@@ -357,10 +409,12 @@ class EventBroadcast:
             return
         try:
             await asyncio.to_thread(self._event_store.append, self._task_id, item)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Event persistence failed for task %s seq %d",
-                self._task_id, self._seq_counter, exc_info=True,
+                "Event persistence failed: task_id=%s seq=%d error_code=EVENT_STORE_APPEND_FAILED error_type=%s",
+                self._task_id,
+                self._seq_counter,
+                type(exc).__name__,
             )
 
     async def _mark_closed(self) -> None:
@@ -369,10 +423,11 @@ class EventBroadcast:
             return
         try:
             await asyncio.to_thread(self._event_store.mark_closed, self._task_id)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to mark task %s as closed in event store",
-                self._task_id, exc_info=True,
+                "Event-store close failed: task_id=%s error_code=EVENT_STORE_CLOSE_FAILED error_type=%s",
+                self._task_id,
+                type(exc).__name__,
             )
 
     async def put(self, item: dict[str, Any] | None) -> None:
@@ -406,115 +461,47 @@ class EventBroadcast:
 # ---------------------------------------------------------------------------
 
 def _extract_error_detail(exc: Exception, task_id: str) -> str:
-    """Build a detailed error message from an SDK exception.
+    """Return a stable diagnostic code without exposing SDK/process payloads.
 
-    Inspects known SDK exception types (``ProcessError``,
-    ``CLINotFoundError``, ``CLIJSONDecodeError``) to extract structured
-    information (exit code, stderr, malformed output) that would otherwise
-    be buried in the generic ``str(exc)`` representation.
-
-    NOTE: The SDK sometimes wraps ProcessError in a generic Exception,
-    losing the structured attributes. We parse the string message as
-    a fallback to extract exit code information.
+    The SDK exception text can contain prompts, file paths, environment values,
+    or CLI stderr.  That data must not cross the Worker boundary or be written
+    into lifecycle logs.  The code remains useful to an operator while the
+    concrete diagnosis stays in the source system that owns the process.
     """
 
     exc_type = type(exc).__name__
-    exc_str = str(exc)
+    exit_code = getattr(exc, "exit_code", None)
+    code = "CLAUDE_SDK_QUERY_FAILED"
 
-    # -- ProcessError: CLI process exited with non-zero code ----------------
     if _ProcessError is not None and isinstance(exc, _ProcessError):
-        exit_code = getattr(exc, "exit_code", None)
-        stderr = getattr(exc, "stderr", None)
+        code = "CLAUDE_CLI_PROCESS_FAILED"
+    elif _CLINotFoundError is not None and isinstance(exc, _CLINotFoundError):
+        code = "CLAUDE_SDK_CLI_NOT_FOUND"
+    elif _CLIJSONDecodeError is not None and isinstance(exc, _CLIJSONDecodeError):
+        code = "CLAUDE_SDK_OUTPUT_INVALID"
+    elif _CLIConnectionError is not None and isinstance(exc, _CLIConnectionError):
+        code = "CLAUDE_SDK_CONNECTION_UNCONFIRMED"
+    elif "Command failed with exit code" in str(exc):
+        # Inspect only to classify a known SDK wrapper shape; do not retain or
+        # log its contents.
+        code = "CLAUDE_CLI_PROCESS_FAILED"
+    else:
+        chained = exc.__cause__ or exc.__context__
+        if chained is not None and (
+            getattr(chained, "exit_code", None) is not None
+            or getattr(chained, "stderr", None) is not None
+        ):
+            code = "CLAUDE_CLI_PROCESS_FAILED"
+            exit_code = getattr(chained, "exit_code", None)
 
-        parts = [f"[{exc_type}] Claude CLI process failed"]
-        if exit_code is not None:
-            parts.append(f"exit_code={exit_code}")
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
-        else:
-            parts.append("(no stderr captured)")
-
-        detail = " | ".join(parts[:2])
-        if stderr:
-            detail += f"\n{parts[2]}"
-        else:
-            detail += f" | {parts[2]}"
-
-        logger.error(
-            "Task %s ProcessError: exit_code=%s, stderr=%s",
-            task_id, exit_code, stderr[:500] if stderr else None,
-        )
-        return detail
-
-    # -- CLINotFoundError: claude binary not on PATH ------------------------
-    if _CLINotFoundError is not None and isinstance(exc, _CLINotFoundError):
-        logger.error("Task %s CLINotFoundError: %s", task_id, exc)
-        return (
-            f"[{exc_type}] Claude Code CLI not found. "
-            "Ensure 'claude' is installed and available on the system PATH."
-        )
-
-    # -- CLIJSONDecodeError: malformed CLI output ---------------------------
-    if _CLIJSONDecodeError is not None and isinstance(exc, _CLIJSONDecodeError):
-        line = getattr(exc, "line", "")
-        original = getattr(exc, "original_error", None)
-        logger.error(
-            "Task %s CLIJSONDecodeError: line=%s, original=%s",
-            task_id, line[:200] if line else None, original,
-        )
-        return (
-            f"[{exc_type}] Failed to parse CLI output. "
-            f"Malformed line: {line[:200]}"
-        )
-
-    # -- CLIConnectionError: generic connection failure ---------------------
-    if _CLIConnectionError is not None and isinstance(exc, _CLIConnectionError):
-        logger.error("Task %s CLIConnectionError: %s", task_id, exc)
-        return f"[{exc_type}] {exc}"
-
-    # -- Generic Exception with ProcessError-like message -------------------
-    # The SDK sometimes raises Exception("Command failed...") instead of
-    # ProcessError, so we parse the message string to extract exit code.
-    if "Command failed with exit code" in exc_str:
-        import re
-        # Extract exit code from message like "Command failed with exit code 1 (exit code: 1)"
-        match = re.search(r"exit code[:\s]+(\d+)", exc_str)
-        exit_code_str = match.group(1) if match else "unknown"
-
-        detail = (
-            f"[CLI Process Failed] Claude Code CLI terminated with exit_code={exit_code_str}\n"
-            f"Note: The SDK wrapped this error, stderr details are not available.\n"
-            f"Original error: {exc_str}"
-        )
-        logger.error("Task %s CLI process failed: exit_code=%s, raw_message=%s",
-                    task_id, exit_code_str, exc_str)
-        return detail
-
-    # -- Fallback: unknown exception ----------------------------------------
-    # Try to extract details from chained exceptions (__cause__ / __context__)
-    chained = exc.__cause__ or exc.__context__
-    if chained is not None:
-        chained_type = type(chained).__name__
-        chained_exit_code = getattr(chained, "exit_code", None)
-        chained_stderr = getattr(chained, "stderr", None)
-        if chained_exit_code is not None or chained_stderr:
-            logger.error(
-                "Task %s %s (wrapping %s): exit_code=%s, stderr=%s",
-                task_id, exc_type, chained_type,
-                chained_exit_code,
-                chained_stderr[:500] if chained_stderr else None,
-            )
-            parts = [f"[{exc_type} wrapping {chained_type}]"]
-            if chained_exit_code is not None:
-                parts.append(f"exit_code={chained_exit_code}")
-            if chained_stderr:
-                return " | ".join(parts) + f"\nstderr:\n{chained_stderr}"
-            else:
-                parts.append("(no stderr captured)")
-                return " | ".join(parts)
-
-    logger.exception("Task %s unexpected error (%s)", task_id, exc_type)
-    return f"[{exc_type}] {exc}"
+    logger.error(
+        "Task %s SDK query failed: code=%s type=%s exit_code=%s",
+        task_id,
+        code,
+        exc_type,
+        exit_code if isinstance(exit_code, int) else None,
+    )
+    return code
 
 
 # ---------------------------------------------------------------------------
@@ -646,9 +633,12 @@ class SdkWrapper:
                 env = options_kwargs.get("env")
                 if isinstance(env, dict):
                     env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
-                logger.info("Agent Teams configured: %s", list(agents.keys()))
+                logger.info("Agent Teams configured: agent_count=%d", len(agents))
             except (json.JSONDecodeError, TypeError, KeyError) as exc:
-                logger.warning("Failed to parse agents config, using extra_args fallback: %s", exc)
+                logger.warning(
+                    "Agent Teams config fallback: error_code=CLAUDE_AGENTS_CONFIG_INVALID error_type=%s",
+                    type(exc).__name__,
+                )
                 extra_args["agents"] = agents_value
         else:
             # Old SDK or no AgentDefinition — keep in extra_args
@@ -699,13 +689,16 @@ class SdkWrapper:
 
             # Size check on base64 payload (decoded ~= len*3/4)
             if len(data_b64) > max_file_bytes * 4 // 3:
-                logger.warning("Attachment %s exceeds size limit (%d bytes b64), skipping", name, len(data_b64))
+                logger.warning(
+                    "Attachment skipped: error_code=ATTACHMENT_SIZE_LIMIT_EXCEEDED payload_chars=%d",
+                    len(data_b64),
+                )
                 continue
 
             file_path = attach_dir / name
             file_path.write_bytes(base64.b64decode(data_b64))
             saved.append(f".foggy-attachments/{name}")
-            logger.info("Saved attachment: %s (%d bytes)", file_path, file_path.stat().st_size)
+            logger.info("Attachment saved: byte_count=%d", file_path.stat().st_size)
 
         return saved
 
@@ -756,14 +749,16 @@ class SdkWrapper:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
-        The generator registers itself in :data:`task_registry` on entry and
-        removes itself on exit so that other endpoints (health, abort) can
-        inspect and cancel running tasks.
+        The generator registers itself in :data:`task_registry` on entry.  It
+        releases that ownership only after a provider terminal stream event or
+        verified managed-process exit; an SSE disconnect or uncertain local
+        observation remains queryable for an explicit upstream decision.
 
         Timeout strategy:
         - **Hard timeout**: absolute max duration (default 4h, configurable)
+          emits ``TIMEOUT_PENDING_DECISION`` and leaves the CLI running
         - **Heartbeat timeout**: if no SDK event arrives within N seconds
-          (default 10min), the task is considered hung and cancelled
+          (default 10min), emits the same recoverable attention only
         """
 
         if not _sdk_available:
@@ -784,7 +779,11 @@ class SdkWrapper:
                     prompt = self._augment_prompt_with_images(prompt, saved_paths)
                     logger.info("Task %s: saved %d image(s), prompt augmented", task_id, len(saved_paths))
             except Exception as exc:
-                logger.warning("Task %s: failed to save images: %s", task_id, exc)
+                logger.warning(
+                    "Task %s: image save failed: error_code=CLAUDE_IMAGE_SAVE_FAILED error_type=%s",
+                    task_id,
+                    type(exc).__name__,
+                )
 
         # Escape prompts starting with "/" to prevent the CLI from
         # interpreting them as slash commands (e.g. "/help", "/clear").
@@ -802,6 +801,10 @@ class SdkWrapper:
             "asyncio_task": asyncio.current_task(),
             "foggy_task_id": foggy_task_id,
             "foggy_session_id": foggy_session_id,
+            "execution_state": "ACTIVE_TASK_EXECUTION",
+            "attention_state": None,
+            "terminal_observed": False,
+            "lifecycle_evidence": {"source": "TASK_REGISTERED"},
         }
 
         current_session_id: str | None = session_id
@@ -857,37 +860,37 @@ class SdkWrapper:
             elif extra_args:
                 options_kwargs["extra_args"] = extra_args
 
-            # Determine auth mode for logging
+            # Determine only presence/mode for lifecycle diagnostics.  Never
+            # include prompt, credential, endpoint, path, or tool values.
             eff_key = api_key or settings.anthropic_api_key
             eff_token = auth_token or settings.anthropic_auth_token
             eff_url = base_url or settings.anthropic_base_url
             if eff_key:
                 auth_mode = "API_KEY"
-                auth_hint = eff_key[:8] + "..." + eff_key[-4:] if len(eff_key) > 12 else "***"
             elif eff_token:
                 auth_mode = "CUSTOM_ENDPOINT"
-                auth_hint = eff_token[:8] + "..." + eff_token[-4:] if len(eff_token) > 12 else "***"
             else:
                 auth_mode = "SUBSCRIPTION"
-                auth_hint = "(claude login)"
+            configured_agents = options_kwargs.get("agents")
+            agent_count = len(configured_agents) if isinstance(configured_agents, dict) else 0
 
             logger.info(
-                "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
-                "auth_mode=%s, auth_hint=%s, base_url=%s, "
-                "agents=%s, has_env=%s, disallowed_tools=%s, "
+                "Task %s SDK call: prompt_chars=%d, has_cwd=%s, session_id=%s, has_model=%s, "
+                "auth_mode=%s, has_auth_material=%s, has_base_url=%s, "
+                "agent_count=%d, has_env=%s, disallowed_tool_count=%d, "
                 "hard_timeout=%ss, heartbeat_timeout=%ss, "
                 "foggy_task_id=%s, foggy_session_id=%s",
                 task_id,
-                repr(prompt[:80]) if prompt else None,
-                cwd,
+                len(prompt),
+                bool(cwd),
                 session_id,
-                model,
+                bool(model),
                 auth_mode,
-                auth_hint,
-                eff_url or "(default)",
-                list(options_kwargs["agents"].keys()) if "agents" in options_kwargs else "disabled",
+                bool(eff_key or eff_token),
+                bool(eff_url),
+                agent_count,
                 bool(env),
-                disallowed_tools or "(none)",
+                len(disallowed_tools or []),
                 hard_timeout,
                 heartbeat_timeout,
                 foggy_task_id or "(none)",
@@ -923,12 +926,12 @@ class SdkWrapper:
             task_registry[task_id]["connected"] = True
             task_registry[task_id]["has_external_subscriber"] = False
 
-            use_queue = (
+            use_interactive_control = (
                 _use_agent_sdk
                 and _PermissionResultAllow is not None
             )
 
-            if use_queue:
+            if use_interactive_control:
                 # Track effective permission mode — may change after plan review
                 effective_permission_mode = permission_mode or "bypassPermissions"
 
@@ -1050,17 +1053,26 @@ class SdkWrapper:
                         # AskUserQuestion: return PermissionResultAllow with answers in updated_input
                         if entry.get("is_question"):
                             answers = entry.get("answers") or {}
+                            questions = entry.get("questions") or []
+                            answer_count = len(answers) if isinstance(answers, dict) else 0
+                            question_count = len(questions) if isinstance(questions, list) else 0
                             logger.info(
-                                "Task %s question answered: pid=%s, answers=%s",
-                                task_id, pid, answers,
+                                "Task %s question answered: pid=%s question_count=%d answer_count=%d",
+                                task_id,
+                                pid,
+                                question_count,
+                                answer_count,
                             )
                             updated = {
-                                "questions": entry.get("questions") or [],
+                                "questions": questions,
                                 "answers": answers,
                             }
                             logger.info(
-                                "Task %s returning updated_input to SDK: %s",
-                                task_id, updated,
+                                "Task %s returning updated_input to SDK: pid=%s question_count=%d answer_count=%d",
+                                task_id,
+                                pid,
+                                question_count,
+                                answer_count,
                             )
                             return _PermissionResultAllow(
                                 updated_input=updated,
@@ -1130,10 +1142,10 @@ class SdkWrapper:
                 # instant while ExitPlanMode / AskUserQuestion are blocked.
                 options_kwargs["permission_mode"] = "default"
 
-                # Capture CLI stderr so we can diagnose startup/runtime
-                # issues that are invisible without it.
+                # Do not expose raw CLI stderr in lifecycle logs.  It may
+                # contain prompt content, filesystem paths, or credentials.
                 def _stderr_handler(line: str, _tid: str = task_id) -> None:
-                    logger.info("Task %s CLI stderr: %s", _tid, line.rstrip())
+                    logger.info("Task %s CLI stderr received: chars=%d", _tid, len(line.rstrip()))
                 options_kwargs["stderr"] = _stderr_handler
             else:
                 # No can_use_tool — set permission_mode directly on CLI
@@ -1141,9 +1153,9 @@ class SdkWrapper:
                     options_kwargs["permission_mode"] = permission_mode
 
             logger.info(
-                "Task %s SDK options: use_queue=%s, permission_mode=%s, "
+                "Task %s SDK options: interactive_control=%s, permission_mode=%s, "
                 "has_can_use_tool=%s",
-                task_id, use_queue,
+                task_id, use_interactive_control,
                 options_kwargs.get("permission_mode", "(not set)"),
                 "can_use_tool" in options_kwargs,
             )
@@ -1258,16 +1270,16 @@ class SdkWrapper:
                     )
                     if _is_cli_error:
                         logger.warning(
-                            "Task %s: CLI returned help/error text instead of LLM response: %s",
-                            task_id, result_text[:200],
+                            "Task %s: CLI returned help/error response; code=CLAUDE_CLI_HELP_RESPONSE",
+                            task_id,
                         )
                         events.append(event_mapper.map_error(
                             task_id=task_id,
-                            error=(
-                                f"CLI 未执行任务，返回了帮助文本: \"{result_text[:120]}\"\n"
-                                "可能原因: 提示词以 / 开头被 CLI 误解为斜杠命令。请重试。"
-                            ),
+                            error="CLAUDE_CLI_HELP_RESPONSE",
                             session_id=current_session_id,
+                            terminal_observed=True,
+                            terminal_status="FAILED",
+                            terminal_source="PROVIDER_TERMINAL_EVENT",
                         ))
                     else:
                         events.append(event_mapper.map_result(
@@ -1321,10 +1333,16 @@ class SdkWrapper:
 
                 return events
 
-            # -- Main iteration: Queue-based (interactive) or direct ----------
-
-            if use_queue:
-                # can_use_tool requires streaming mode (AsyncIterable prompt).
+            # -- Main iteration: independent producer and broadcast ------------
+            #
+            # Every SDK flavor runs in its own producer task.  The SSE consumer
+            # may disconnect without propagating cancellation into the managed
+            # CLI; lifecycle observation continues through the broadcast and
+            # registry until actual exit is observed.
+            use_broadcast_producer = True
+            if use_broadcast_producer:
+                # Interactive can_use_tool requires streaming mode
+                # (AsyncIterable prompt).
                 # IMPORTANT: The SDK's stream_input() calls end_input() (closes
                 # stdin) when the async iterable exhausts. But the control
                 # protocol (can_use_tool responses) is sent via stdin. If stdin
@@ -1343,11 +1361,15 @@ class SdkWrapper:
                     # Block here to keep stdin open for control protocol
                     await stream_done_event.wait()
 
-                streaming_prompt = _wrap_prompt_as_stream(prompt)
+                query_prompt: Any = (
+                    _wrap_prompt_as_stream(prompt)
+                    if use_interactive_control
+                    else prompt
+                )
 
                 # Producer task: iterate SDK query() and push events into Queue
                 #
-                # NOTE: producer_task.cancel() causes CancelledError inside
+                # NOTE: cancelling the producer task causes CancelledError inside
                 # ``async for``.  The generator cleanup triggers
                 # ``athrow(GeneratorExit)`` → SDK ``query.close()`` →
                 # anyio ``_tg.__aexit__``.  Because the athrow runs in a
@@ -1363,7 +1385,7 @@ class SdkWrapper:
                     try:
                         logger.info("Task %s producer: starting SDK iteration", task_id)
                         _capture_child_pids(task_id)  # snapshot before first message
-                        async for message in _query_fn(prompt=streaming_prompt, options=options):
+                        async for message in _query_fn(prompt=query_prompt, options=options):
                             _msg_count += 1
                             if _msg_count == 1:
                                 _capture_child_pids(task_id)  # capture after first message
@@ -1377,6 +1399,7 @@ class SdkWrapper:
                             )
                             for evt in _process_message(message):
                                 await broadcast.put(evt)
+                                _record_terminal_event(task_id, evt)
                             # When ResultMessage arrives the query is complete.
                             # Release the prompt stream so stdin closes and the
                             # CLI can exit cleanly (otherwise it waits for more
@@ -1396,7 +1419,7 @@ class SdkWrapper:
                         logger.info("Task %s producer: cancelled after %d msgs", task_id, _msg_count)
                         await broadcast.put(event_mapper.map_error(
                             task_id=task_id,
-                            error="Task was cancelled",
+                            error="CLAUDE_CANCEL_REQUESTED",
                             session_id=current_session_id,
                         ))
                     except RuntimeError as exc:
@@ -1407,7 +1430,12 @@ class SdkWrapper:
                                 "during SDK generator cleanup", task_id,
                             )
                         else:
-                            logger.error("Task %s producer RuntimeError after %d msgs: %s", task_id, _msg_count, exc)
+                            logger.error(
+                                "Task %s producer RuntimeError after %d msgs: type=%s",
+                                task_id,
+                                _msg_count,
+                                type(exc).__name__,
+                            )
                             error_detail = _extract_error_detail(exc, task_id)
                             await broadcast.put(event_mapper.map_error(
                                 task_id=task_id,
@@ -1415,7 +1443,12 @@ class SdkWrapper:
                                 session_id=current_session_id,
                             ))
                     except Exception as exc:
-                        logger.error("Task %s producer %s after %d msgs: %s", task_id, type(exc).__name__, _msg_count, exc)
+                        logger.error(
+                            "Task %s producer failed after %d msgs: type=%s",
+                            task_id,
+                            _msg_count,
+                            type(exc).__name__,
+                        )
                         error_detail = _extract_error_detail(exc, task_id)
                         await broadcast.put(event_mapper.map_error(
                             task_id=task_id,
@@ -1428,6 +1461,7 @@ class SdkWrapper:
                         await broadcast.put(None)  # Sentinel: stream is done
 
                 producer_task = asyncio.create_task(_producer())
+                task_registry[task_id]["producer_task"] = producer_task
 
                 try:
                     # Use shorter polling interval so we can emit "waiting" hints
@@ -1439,6 +1473,16 @@ class SdkWrapper:
                         if now - started_at > hard_timeout and not _warned_hard_timeout:
                             # Advisory warning only — do NOT cancel CLI (Rule 2: only user can kill CLI)
                             _warned_hard_timeout = True
+                            task_entry = task_registry.get(task_id)
+                            observed_at = datetime.now(timezone.utc).isoformat()
+                            if task_entry:
+                                task_entry["attention_state"] = "TIMEOUT_PENDING_DECISION"
+                                task_entry["lifecycle_evidence"] = {
+                                    "source": "HARD_TIMEOUT_WATCHDOG",
+                                    "action": "ADVISORY_ONLY",
+                                    "timeout_seconds": hard_timeout,
+                                    "observed_at": observed_at,
+                                }
                             logger.warning("Task %s exceeded hard timeout (%ss) — advisory only, CLI continues",
                                            task_id, hard_timeout)
                             yield event_mapper.map_system(
@@ -1447,6 +1491,15 @@ class SdkWrapper:
                                 data={"elapsed_seconds": int(now - started_at),
                                       "timeout_seconds": hard_timeout},
                                 session_id=current_session_id,
+                                attention=[{
+                                    "code": "TIMEOUT_PENDING_DECISION",
+                                    "source": "HARD_TIMEOUT_WATCHDOG",
+                                    "observed_at": observed_at,
+                                    "recoverable": True,
+                                }],
+                                attention_status="TIMEOUT_PENDING_DECISION",
+                                available_actions=["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"],
+                                lifecycle_state="RUNNING",
                             )
 
                         try:
@@ -1469,6 +1522,16 @@ class SdkWrapper:
                             silence_elapsed += poll_interval
                             if silence_elapsed >= heartbeat_timeout:
                                 # Advisory warning only — do NOT cancel CLI (Rule 2: only user can kill CLI)
+                                task_entry = task_registry.get(task_id)
+                                observed_at = datetime.now(timezone.utc).isoformat()
+                                if task_entry:
+                                    task_entry["attention_state"] = "TIMEOUT_PENDING_DECISION"
+                                    task_entry["lifecycle_evidence"] = {
+                                        "source": "HEARTBEAT_WATCHDOG",
+                                        "action": "ADVISORY_ONLY",
+                                        "silence_seconds": silence_elapsed,
+                                        "observed_at": observed_at,
+                                    }
                                 logger.warning("Task %s no events for %ss (heartbeat threshold) — advisory only, CLI continues",
                                                task_id, heartbeat_timeout)
                                 yield event_mapper.map_system(
@@ -1477,6 +1540,15 @@ class SdkWrapper:
                                     data={"silence_seconds": silence_elapsed,
                                           "threshold_seconds": heartbeat_timeout},
                                     session_id=current_session_id,
+                                    attention=[{
+                                        "code": "TIMEOUT_PENDING_DECISION",
+                                        "source": "HEARTBEAT_WATCHDOG",
+                                        "observed_at": observed_at,
+                                        "recoverable": True,
+                                    }],
+                                    attention_status="TIMEOUT_PENDING_DECISION",
+                                    available_actions=["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"],
+                                    lifecycle_state="RUNNING",
                                 )
                                 silence_elapsed = 0  # Reset — will warn again after another full interval
                                 continue
@@ -1501,10 +1573,8 @@ class SdkWrapper:
                     # Unsubscribe *this* consumer from the broadcast.
                     broadcast.unsubscribe(queue)
 
-                    if producer_task.done() or broadcast.closed:
+                    if producer_task.done():
                         # Producer already finished — normal exit, no grace period needed.
-                        if not producer_task.done():
-                            producer_task.cancel()
                         try:
                             await producer_task
                         except (asyncio.CancelledError, RuntimeError, Exception):
@@ -1524,6 +1594,14 @@ class SdkWrapper:
                         if task_registry_entry:
                             task_registry_entry["connected"] = False
                             task_registry_entry["grace_period_active"] = True
+                            task_registry_entry["sse_disconnected"] = True
+                            task_registry_entry["execution_state"] = "ACTIVE_TASK_EXECUTION"
+                            task_registry_entry["attention_state"] = "SSE_DISCONNECTED_PENDING_RECONNECTION"
+                            task_registry_entry["lifecycle_evidence"] = {
+                                "source": "SSE_CONSUMER_DISCONNECT",
+                                "action": "RETAINED_NO_AUTOMATIC_TERMINATION",
+                            }
+                            task_registry_entry["lifecycle_watcher_active"] = True
 
                         asyncio.create_task(
                             _grace_period_watcher(
@@ -1531,55 +1609,6 @@ class SdkWrapper:
                             ),
                             name=f"grace-period-{task_id[:8]}",
                         )
-
-            else:
-                # Direct iteration (no can_use_tool callback needed)
-                _capture_child_pids(task_id)  # snapshot before first message
-                _direct_msg_count = 0
-                _direct_warned_hard_timeout = False
-                _direct_warned_heartbeat = False
-                _direct_last_pid_capture = asyncio.get_event_loop().time()
-                _DIRECT_PID_CAPTURE_INTERVAL = 60  # re-scan for Agent Teams sub-CLIs
-                async for message in _query_fn(prompt=prompt, options=options):
-                    _direct_msg_count += 1
-                    if _direct_msg_count == 1:
-                        _capture_child_pids(task_id)  # capture after first message
-                    elif (asyncio.get_event_loop().time() - _direct_last_pid_capture) >= _DIRECT_PID_CAPTURE_INTERVAL:
-                        _capture_child_pids(task_id)  # periodic re-scan for late-spawned sub-CLIs
-                        _direct_last_pid_capture = asyncio.get_event_loop().time()
-                    now = asyncio.get_event_loop().time()
-
-                    if now - started_at > hard_timeout and not _direct_warned_hard_timeout:
-                        # Advisory warning only — do NOT kill CLI (Rule 2)
-                        _direct_warned_hard_timeout = True
-                        logger.warning("Task %s exceeded hard timeout (%ss) — advisory only, CLI continues",
-                                       task_id, hard_timeout)
-                        yield event_mapper.map_system(
-                            task_id=task_id,
-                            subtype="hard_timeout_warning",
-                            data={"elapsed_seconds": int(now - started_at),
-                                  "timeout_seconds": hard_timeout},
-                            session_id=current_session_id,
-                        )
-
-                    if now - last_event_at > heartbeat_timeout and not _direct_warned_heartbeat:
-                        # Advisory warning only — do NOT kill CLI (Rule 2)
-                        _direct_warned_heartbeat = True
-                        logger.warning("Task %s no events for %ss (heartbeat threshold) — advisory only, CLI continues",
-                                       task_id, heartbeat_timeout)
-                        yield event_mapper.map_system(
-                            task_id=task_id,
-                            subtype="heartbeat_warning",
-                            data={"silence_seconds": int(now - last_event_at),
-                                  "threshold_seconds": heartbeat_timeout},
-                            session_id=current_session_id,
-                        )
-
-                    last_event_at = now
-                    _direct_warned_heartbeat = False  # Reset on each real event
-
-                    for evt in _process_message(message):
-                        yield evt
 
         except asyncio.CancelledError:
             # If grace period is active, the CancelledError is from SSE disconnect
@@ -1591,11 +1620,20 @@ class SdkWrapper:
                     "suppressing error event (grace watcher handles lifecycle)",
                     task_id,
                 )
+            elif _grace_entry and not _grace_entry.get("cancel_requested"):
+                _grace_entry["sse_disconnected"] = True
+                _grace_entry["execution_state"] = "ACTIVE_TASK_EXECUTION"
+                _grace_entry["attention_state"] = "SSE_DISCONNECTED_PENDING_RECONNECTION"
+                _grace_entry["lifecycle_evidence"] = {
+                    "source": "SSE_CONSUMER_DISCONNECT",
+                    "action": "RETAINED_NO_AUTOMATIC_TERMINATION",
+                }
+                logger.info("Task %s SSE consumer disconnected; suppressing terminal error", task_id)
             else:
                 logger.info("Task %s was cancelled", task_id)
                 yield event_mapper.map_error(
                     task_id=task_id,
-                    error="Task was cancelled",
+                    error="CLAUDE_CANCEL_REQUESTED",
                     session_id=current_session_id,
                 )
 
@@ -1608,43 +1646,55 @@ class SdkWrapper:
             )
 
         finally:
-            # Unregister tracked PIDs for this task (Layer 1 cleanup).
-            # Safe to do even during grace period — process enrichment
-            # falls back to environment variable reading (Layer 2).
-            from .process_detection import unregister_pids_for_task
-            unregister_pids_for_task(task_id)
-
+            from .process_detection import get_pids_for_task, is_cli_process, unregister_pids_for_task
             entry = task_registry.get(task_id)
             if entry and entry.get("grace_period_active"):
-                # Grace period watcher is running as an independent asyncio.Task.
-                # It will handle registry cleanup when it finishes.
                 logger.info(
                     "Task %s exiting generator — grace period watcher active, "
-                    "deferring cleanup",
+                    "retaining task and PID ownership pending observed exit",
                     task_id,
                 )
             elif entry and entry.get("has_external_subscriber"):
-                # A subscriber reconnected via /subscribe — it owns the lifecycle.
                 logger.info(
                     "Task %s exiting original generator — reconnected subscriber "
-                    "active, skipping cleanup",
+                    "active, retaining task ownership",
                     task_id,
                 )
-            else:
-                task_registry.pop(task_id, None)
-                # Clean up any pending permissions for this task
-                for pid in list(permission_pending):
-                    if permission_pending[pid].get("task_id") == task_id:
-                        permission_pending.pop(pid, None)
-                # Log surviving CLI processes for diagnostics.  Active abort
-                # kills processes via abort_query(); any survivors here are
-                # true orphans manageable via the UI process list.
-                try:
-                    surviving = _find_sdk_cli_pids()
-                    if surviving:
-                        logger.info(
-                            "Task %s ended — %d CLI process(es) still alive: %s",
-                            task_id, len(surviving), surviving,
+            elif entry:
+                live_pids = [pid for pid in get_pids_for_task(task_id) if is_cli_process(pid)]
+                if not has_verified_terminal_evidence(entry):
+                    entry["execution_state"] = (
+                        "CANCEL_REQUESTED" if entry.get("cancel_requested") else "ACTIVE_TASK_EXECUTION"
+                    )
+                    entry["attention_state"] = "PROCESS_UNVERIFIED"
+                    entry["lifecycle_evidence"] = {
+                        "source": "GENERATOR_FINALIZATION_UNVERIFIED",
+                        "action": "RETAINED_NO_AUTOMATIC_RELEASE",
+                        "live_pid_count": len(live_pids),
+                        "sse_disconnected": bool(entry.get("sse_disconnected")),
+                        "producer_done": bool(
+                            entry.get("producer_task") and entry["producer_task"].done()
+                        ),
+                    }
+                    producer_task = entry.get("producer_task")
+                    if (
+                        producer_task is not None
+                        and not producer_task.done()
+                        and not entry.get("lifecycle_watcher_active")
+                    ):
+                        entry["lifecycle_watcher_active"] = True
+                        asyncio.create_task(
+                            _grace_period_watcher(task_id, producer_task, 0),
+                            name=f"lifecycle-observer-{task_id[:8]}",
                         )
-                except Exception:
-                    pass
+                    logger.warning(
+                        "Task %s generator ended without verified terminal evidence; retaining lifecycle ownership",
+                        task_id,
+                    )
+                else:
+                    unregister_pids_for_task(task_id)
+                    task_registry.pop(task_id, None)
+                    for permission_id in list(permission_pending):
+                        if permission_pending[permission_id].get("task_id") == task_id:
+                            permission_pending.pop(permission_id, None)
+                    logger.info("Task %s released registry after verified terminal event", task_id)

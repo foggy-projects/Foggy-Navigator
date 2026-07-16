@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.spi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
+import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
@@ -25,10 +27,13 @@ import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -103,6 +108,7 @@ class ClaudeWorkerFacadeImplTest {
         assertEquals(22L, result.get("outputTokens"));
         assertEquals(2, result.get("numTurns"));
         assertEquals(new BigDecimal("0.12"), result.get("costUsd"));
+        assertEquals(true, result.get("resultObserved"));
         assertNull(result.get("error"));
     }
 
@@ -141,6 +147,151 @@ class ClaudeWorkerFacadeImplTest {
                 2,
                 "sonnet"
         );
+    }
+
+    @Test
+    void syncQueryTrackedTransportFailureLeavesTaskPending() {
+        mockWorker("worker-1", "user-1");
+        when(taskService.createTrackedSyncTask("user-1", "worker-1", "session-1",
+                "check repo", "D:/repo", null, "claude-session-0"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("claude-session-0"),
+                eq("sonnet"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq("bypassPermissions"), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.error(new IllegalStateException("connection lost after dispatch")));
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo",
+                "claude-session-0", 2, "sonnet", "session-1", null);
+
+        assertEquals("local-task-1", result.get("taskId"));
+        assertEquals("TRANSPORT", result.get("errorSource"));
+        assertEquals("CLAUDE_SYNC_QUERY_UNCONFIRMED", result.get("error"));
+        assertEquals("CLAUDE_SYNC_QUERY_FAILED", result.get("diagnosticCode"));
+        assertEquals(false, result.get("terminalObserved"));
+        assertEquals("RUNNING", result.get("status"));
+        assertEquals("TRACKED_SYNC_UNCONFIRMED", result.get("attentionStatus"));
+        verify(taskService).markLifecycleAttention("local-task-1", "TRACKED_SYNC_UNCONFIRMED");
+        verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+        ArgumentCaptor<String> persistedText = ArgumentCaptor.forClass(String.class);
+        verify(taskService).persistTrackedSyncMessages(eq("session-1"), eq("check repo"), persistedText.capture());
+        assertFalse(persistedText.getValue().contains("connection lost after dispatch"));
+    }
+
+    @Test
+    void syncQueryTrackedBareWorkerErrorLeavesTaskPending() {
+        mockWorker("worker-1", "user-1");
+        when(taskService.createTrackedSyncTask("user-1", "worker-1", "session-1",
+                "check repo", "D:/repo", null, "claude-session-0"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("claude-session-0"),
+                eq("sonnet"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq("bypassPermissions"), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(sse("""
+                        {"type":"error","task_id":"worker-task-9","session_id":"claude-session-1","error":"stream interrupted"}
+                        """)));
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo",
+                "claude-session-0", 2, "sonnet", "session-1", null);
+
+        assertEquals("WORKER_UNCONFIRMED", result.get("errorSource"));
+        assertEquals("CLAUDE_SYNC_QUERY_UNCONFIRMED", result.get("error"));
+        assertEquals(false, result.get("terminalObserved"));
+        assertEquals("RUNNING", result.get("status"));
+        verify(taskService).markLifecycleAttention("local-task-1", "TRACKED_SYNC_UNCONFIRMED");
+        verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+        ArgumentCaptor<String> persistedText = ArgumentCaptor.forClass(String.class);
+        verify(taskService).persistTrackedSyncMessages(eq("session-1"), eq("check repo"), persistedText.capture());
+        assertFalse(persistedText.getValue().contains("stream interrupted"));
+    }
+
+    @Test
+    void syncQueryTrackedVerifiedWorkerFailurePreservesTerminalFailure() {
+        mockWorker("worker-1", "user-1");
+        when(taskService.createTrackedSyncTask("user-1", "worker-1", "session-1",
+                "check repo", "D:/repo", null, "claude-session-0"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("claude-session-0"),
+                eq("sonnet"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq("bypassPermissions"), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(sse("""
+                        {"type":"error","task_id":"worker-task-9","session_id":"claude-session-1","error":"provider failed","terminal_observed":true,"terminal_status":"FAILED"}
+                        """)));
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo",
+                "claude-session-0", 2, "sonnet", "session-1", null);
+
+        assertEquals("WORKER_TERMINAL", result.get("errorSource"));
+        assertEquals("CLAUDE_RUNTIME_REMOTE_ERROR", result.get("error"));
+        assertEquals(true, result.get("terminalObserved"));
+        assertEquals("FAILED", result.get("terminalStatus"));
+        verify(taskService).failTask("local-task-1", "worker-task-9", "claude-session-1",
+                "CLAUDE_RUNTIME_REMOTE_ERROR");
+        verify(taskService, never()).markLifecycleAttention("local-task-1", "TRACKED_SYNC_UNCONFIRMED");
+    }
+
+    @Test
+    void syncQueryTrackedTextOnlyStreamRemainsPendingUntilResultEvidenceArrives() {
+        mockWorker("worker-1", "user-1");
+        when(taskService.createTrackedSyncTask("user-1", "worker-1", "session-1",
+                "check repo", "D:/repo", null, "claude-session-0"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("claude-session-0"),
+                eq("sonnet"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq("bypassPermissions"), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(sse("""
+                        {"type":"assistant_text","task_id":"worker-task-9","session_id":"claude-session-1","content":"Partial reply"}
+                        """)));
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo",
+                "claude-session-0", 2, "sonnet", "session-1", null);
+
+        assertEquals(false, result.get("resultObserved"));
+        assertEquals("CLAUDE_SYNC_QUERY_UNCONFIRMED", result.get("error"));
+        assertEquals("RUNNING", result.get("status"));
+        verify(taskService).markLifecycleAttention("local-task-1", "TRACKED_SYNC_UNCONFIRMED");
+        verify(taskService, never()).completeTask(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void syncQueryTrackedVerifiedAbortDoesNotMapToFailure() {
+        mockWorker("worker-1", "user-1");
+        when(taskService.createTrackedSyncTask("user-1", "worker-1", "session-1",
+                "check repo", "D:/repo", null, "claude-session-0"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("claude-session-0"),
+                eq("sonnet"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq("bypassPermissions"), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(sse("""
+                        {"type":"error","task_id":"worker-task-9","session_id":"claude-session-1","error":"Task was cancelled","terminal_observed":true,"terminal_status":"ABORTED"}
+                        """)));
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo",
+                "claude-session-0", 2, "sonnet", "session-1", null);
+
+        assertEquals("ABORTED", result.get("terminalStatus"));
+        verify(taskService).recordWorkerTerminalAbort("local-task-1", "worker-task-9",
+                "claude-session-1", null);
+        verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+    }
+
+    @Test
+    void abortTaskReturnsActualTerminalStatusWhenCancellationIsAlreadyTerminal() {
+        ClaudeTaskEntity task = new ClaudeTaskEntity();
+        task.setTaskId("task-1");
+        task.setUserId("user-1");
+        task.setStatus("COMPLETED");
+        when(taskService.getTaskEntity("task-1")).thenReturn(task);
+
+        Map<String, Object> result = facade.abortTask("user-1", "task-1");
+
+        assertEquals("task-1", result.get("taskId"));
+        assertEquals("COMPLETED", result.get("status"));
+        verify(taskService).abortTask("task-1");
     }
 
     @Test

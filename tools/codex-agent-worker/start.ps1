@@ -124,18 +124,19 @@ Write-Host "  Config: $ResolvedDotEnvPath" -ForegroundColor Cyan
 Write-Host "  Port: $PORT" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
-# 杀掉已有进程
-Write-Host "`n[1/4] Checking existing processes on port $PORT..." -ForegroundColor Yellow
-$existingPids = netstat -ano | Select-String ":$PORT\s" | ForEach-Object {
-    ($_ -split "\s+")[-1]
-} | Where-Object { $_ -ne "0" } | Sort-Object -Unique
-
-if ($existingPids) {
-    foreach ($procId in $existingPids) {
-        Write-Host "  Killing existing process PID=$procId" -ForegroundColor Yellow
-        try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch {}
-    }
-    Start-Sleep -Seconds 2
+# Existing Worker safety gate. Run stop.ps1 in a child PowerShell because its
+# explicit exit codes are part of the no-replacement contract.
+Write-Host "`n[1/4] Verifying any existing Worker can stop safely..." -ForegroundColor Yellow
+$StopScript = Join-Path $ScriptDir "stop.ps1"
+$PowerShellHost = (Get-Process -Id $PID -ErrorAction Stop).Path
+if (-not (Test-Path -LiteralPath $StopScript) -or [string]::IsNullOrWhiteSpace($PowerShellHost)) {
+    throw "Unable to invoke the Codex Worker safe-stop gate."
+}
+& $PowerShellHost -NoProfile -ExecutionPolicy Bypass -File $StopScript
+$safeStopExitCode = $LASTEXITCODE
+if ($safeStopExitCode -ne 0) {
+    Write-Host "  Refusing to start a replacement: the existing Worker did not prove safe quiescence." -ForegroundColor Red
+    exit $safeStopExitCode
 }
 
 # 安装依赖

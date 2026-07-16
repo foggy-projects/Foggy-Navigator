@@ -23,6 +23,7 @@ import {
   parseModelString,
   prepareResumeToolsModelCatalog,
   renderNavigatorBusinessMcpConfigBlock,
+  requestTaskCancellation,
   runQuery,
   resolveDefaultCodexHome,
   resolveCodexHome,
@@ -293,20 +294,21 @@ test('resolveModelAlias passes through unknown alias-like strings unchanged', ()
   })
 })
 
-test('shouldAbortBeforeTurnStart only aborts when completed turns reach the limit', () => {
+test('shouldAbortBeforeTurnStart identifies the advisory max-turn threshold without authorizing abort', () => {
   assert.equal(shouldAbortBeforeTurnStart(0, 1), false)
   assert.equal(shouldAbortBeforeTurnStart(1, 1), true)
   assert.equal(shouldAbortBeforeTurnStart(2, undefined), false)
 })
 
-test('getRunningTaskCount counts only running tasks', () => {
-  const ids = ['running-a', 'done-b', 'running-c']
+test('getRunningTaskCount includes cancellation-pending tasks that still own execution', () => {
+  const ids = ['running-a', 'done-b', 'running-c', 'cancel-pending-d']
   try {
     taskRegistry.set(ids[0], { taskId: ids[0], status: 'running', startedAt: Date.now() })
     taskRegistry.set(ids[1], { taskId: ids[1], status: 'completed', startedAt: Date.now(), completedAt: Date.now() })
     taskRegistry.set(ids[2], { taskId: ids[2], status: 'running', startedAt: Date.now() })
+    taskRegistry.set(ids[3], { taskId: ids[3], status: 'cancel_requested', startedAt: Date.now() })
 
-    assert.equal(getRunningTaskCount(), 2)
+    assert.equal(getRunningTaskCount(), 3)
   } finally {
     ids.forEach(id => taskRegistry.delete(id))
   }
@@ -353,14 +355,17 @@ test('thread item error is emitted as a non-terminal warning', () => {
 
   const events = mapThreadItemToEvents('task-warning', item, 'thread-warning', createSeq())
 
-  assert.deepEqual(events, [{
-    type: 'warning',
-    task_id: 'task-warning',
-    session_id: 'thread-warning',
-    content: 'This session was recorded with a different model.',
-    subtype: 'sdk_diagnostic',
-    seq: 1,
-  }])
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.type, 'warning')
+  assert.equal(events[0]?.task_id, 'task-warning')
+  assert.equal(events[0]?.session_id, 'thread-warning')
+  assert.equal(events[0]?.content, 'Codex 执行进程异常退出')
+  assert.equal(events[0]?.error_code, 'CODEX_WORKER_REMOTE_ERROR')
+  assert.equal(events[0]?.diagnostic_text, 'CODEX_WORKER_REMOTE_ERROR')
+  assert.equal(events[0]?.subtype, 'sdk_diagnostic')
+  assert.equal(events[0]?.seq, 1)
+  assert.equal(events[0]?.terminal_observed, undefined)
+  assert.doesNotMatch(JSON.stringify(events[0]), /different model/i)
 })
 
 test('buildCodexProcessEnv hardens Windows child process environment', () => {
@@ -1000,6 +1005,378 @@ test('runQuery keeps progress agent messages as commentary and uses only the fin
     )
     const result = workerEvents.find(event => event.type === 'result')
     assert.equal(result?.content, 'FINAL_ONLY')
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('max_turns emits TIMEOUT_PENDING_DECISION and never aborts the SDK signal automatically', async () => {
+  const taskId = `task-max-turns-${Date.now()}`
+  let capturedSignal: AbortSignal | undefined
+  const streamedThread = {
+    async runStreamed(_input: unknown, options: { signal: AbortSignal }) {
+      capturedSignal = options.signal
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-max-turns' }
+        yield { type: 'turn.started' }
+        yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }
+        yield { type: 'turn.started' }
+        yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'continue after the advisory turn limit',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      1,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => undefined,
+      },
+    )
+
+    assert.equal(capturedSignal?.aborted, false)
+    assert.equal(taskRegistry.get(taskId)?.status, 'completed')
+    const attentionEvent = taskBroadcasts.get(taskId)?.getEventsAfter(0)
+      .find(event => event.attention_status === 'TIMEOUT_PENDING_DECISION')
+    assert.equal(attentionEvent?.lifecycle_state, 'RUNNING')
+    assert.match(attentionEvent?.content || '', /max_turns limit reached/)
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('runQuery detects a spawned PID only after lazy stream iteration has begun', async () => {
+  const taskId = `task-lazy-pid-${Date.now()}`
+  let streamStarted = false
+  let detectCalls = 0
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        streamStarted = true
+        yield { type: 'thread.started', thread_id: 'thread-lazy-pid' }
+        yield { type: 'turn.started' }
+        yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'prove lazy PID discovery ordering',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => {
+          detectCalls++
+          assert.equal(streamStarted, true)
+          return 987
+        },
+      },
+    )
+
+    assert.equal(detectCalls, 1)
+    assert.equal(taskRegistry.get(taskId)?.pid, 987)
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('an explicit SDK cancellation that lacks a provider exit observation remains CANCEL_REQUESTED and keeps its stream open', async () => {
+  const taskId = `task-cancel-unconfirmed-${Date.now()}`
+  let firstEventObserved!: () => void
+  const firstEvent = new Promise<void>(resolve => { firstEventObserved = resolve })
+  let continueStream!: () => void
+  const streamContinuation = new Promise<void>(resolve => { continueStream = resolve })
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-cancel-unconfirmed' }
+        firstEventObserved()
+        await streamContinuation
+        throw new Error('SDK stream stopped after local cancellation')
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    const query = runQuery(
+      taskId,
+      'cancel only with observed terminal proof',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => 123,
+      },
+    )
+    await firstEvent
+    const requested = requestTaskCancellation(taskId, {
+      operation_id: 'operation-unconfirmed',
+      task_id: taskId,
+      worker_id: 'navigator-worker-sdk-wrapper',
+      kind: 'REMOTE_CANCEL',
+      origin: 'UPSTREAM_USER',
+      actor_id: 'user-1',
+      actor_type: 'USER',
+      authorization_decision_id: 'decision-1',
+      reason_code: 'USER_CANCELLED',
+      correlation_id: 'corr-1',
+      requested_at: new Date().toISOString(),
+      status: 'CANCEL_REQUESTED',
+    })
+    assert.equal(requested?.status, 'cancel_requested')
+    continueStream()
+    await query
+
+    const entry = taskRegistry.get(taskId)
+    assert.equal(entry?.status, 'cancel_requested')
+    assert.equal(entry?.completedAt, undefined)
+    assert.equal(entry?.terminationOperation?.status, 'UNCONFIRMED')
+    assert.equal(entry?.attention?.at(-1)?.code, 'TERMINATION_UNCONFIRMED')
+    assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('a non-terminal SDK stream exception remains PROCESS_UNVERIFIED and retains task ownership', async () => {
+  const taskId = `task-stream-unverified-${Date.now()}`
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-stream-unverified' }
+        throw new Error('provider stream connection lost')
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'retain state when the stream ends without a provider terminal event',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => 456,
+      },
+    )
+
+    const entry = taskRegistry.get(taskId)
+    assert.equal(entry?.status, 'running')
+    assert.equal(entry?.completedAt, undefined)
+    assert.equal(entry?.attention?.at(-1)?.code, 'PROCESS_UNVERIFIED')
+    assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('a provider terminal failure carries explicit terminal evidence for Java reconciliation', async () => {
+  const taskId = `task-provider-terminal-failure-${Date.now()}`
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-provider-terminal-failure' }
+        yield { type: 'turn.failed', error: { message: 'provider turn ended' } }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'emit terminal proof only after a provider terminal event',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => 458,
+      },
+    )
+
+    const error = taskBroadcasts.get(taskId)?.getEventsAfter(0)
+      .find(event => event.type === 'error')
+    assert.equal(error?.terminal_observed, true)
+    assert.equal(error?.terminal_status, 'FAILED')
+    assert.equal(error?.terminal_source, 'PROVIDER_TERMINAL_EVENT')
+    assert.equal(taskRegistry.get(taskId)?.status, 'failed')
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('a top-level SDK error is diagnostic-only without explicit terminal evidence', async () => {
+  const taskId = `task-top-level-sdk-error-${Date.now()}`
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-top-level-sdk-error' }
+        yield { type: 'error', message: 'provider stderr /workspace/private Bearer secret-token' }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'do not infer terminal state from a generic SDK error',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => 459,
+      },
+    )
+
+    const entry = taskRegistry.get(taskId)
+    const error = taskBroadcasts.get(taskId)?.getEventsAfter(0)
+      .find(event => event.type === 'error')
+    assert.equal(entry?.status, 'running')
+    assert.equal(entry?.completedAt, undefined)
+    assert.equal(entry?.attention?.at(-1)?.code, 'PROCESS_UNVERIFIED')
+    assert.equal(error?.terminal_observed, undefined)
+    assert.equal(error?.terminal_status, undefined)
+    assert.equal(error?.error_code, 'CODEX_STREAM_UNCONFIRMED')
+    assert.equal(error?.diagnostic_text, 'CODEX_STREAM_UNCONFIRMED')
+    assert.doesNotMatch(JSON.stringify(error), /workspace|secret-token|stderr/i)
+    assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('a clean SDK stream end without a provider terminal event remains PROCESS_UNVERIFIED', async () => {
+  const taskId = `task-clean-stream-unverified-${Date.now()}`
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-clean-stream-unverified' }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'do not infer completion from a clean stream close',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => 457,
+      },
+    )
+
+    const entry = taskRegistry.get(taskId)
+    assert.equal(entry?.status, 'running')
+    assert.equal(entry?.completedAt, undefined)
+    assert.equal(entry?.attention?.at(-1)?.code, 'PROCESS_UNVERIFIED')
+    assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
   } finally {
     taskBroadcasts.get(taskId)?.cleanup()
     taskBroadcasts.delete(taskId)

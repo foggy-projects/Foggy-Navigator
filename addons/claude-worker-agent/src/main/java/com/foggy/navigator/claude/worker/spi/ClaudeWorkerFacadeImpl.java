@@ -39,6 +39,14 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
     /** A2A 异步任务的超时时间：30 分钟 */
     private static final long ASYNC_TIMEOUT_SECONDS = 1800;
+    /** A tracked synchronous request lost its transport/result certainty after creation. */
+    private static final String TRACKED_SYNC_UNCONFIRMED = "TRACKED_SYNC_UNCONFIRMED";
+    /** Stable public result for a sync request without a verified terminal event. */
+    private static final String CLAUDE_SYNC_QUERY_UNCONFIRMED = "CLAUDE_SYNC_QUERY_UNCONFIRMED";
+    /** Stable diagnostic fallback for a local sync-query exception. */
+    private static final String CLAUDE_SYNC_QUERY_FAILED = "CLAUDE_SYNC_QUERY_FAILED";
+    /** Stable public replacement for an arbitrary Worker-provided error body. */
+    private static final String CLAUDE_RUNTIME_REMOTE_ERROR = "CLAUDE_RUNTIME_REMOTE_ERROR";
 
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
@@ -100,9 +108,14 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
-        // 不再单独调用 streamRelay.abortStream — taskService.abortTask 内部已统一处理
+        // The explicit request is auditable but remains non-terminal until a
+        // Worker event proves the process outcome.
         taskService.abortTask(taskId);
-        return Map.of("taskId", taskId, "status", "ABORTED");
+        // reserveAuthorizedAbort deliberately ignores a terminal task.  Read
+        // the durable state back so callers never receive a false pending
+        // cancellation acknowledgement for a task that was already finished.
+        var reconciledTask = taskService.getTaskEntity(taskId);
+        return Map.of("taskId", taskId, "status", reconciledTask.getStatus());
     }
 
     @Override
@@ -128,7 +141,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                     .block(java.time.Duration.ofSeconds(10));
             return sessions != null ? sessions : List.of();
         } catch (Exception e) {
-            log.warn("Failed to list sessions: workerId={}, error={}", workerId, e.getMessage());
+            log.warn("Failed to list sessions: workerId={}, code={}, type={}", workerId,
+                    stableFailureCode(e, "CLAUDE_SESSION_LIST_FAILED"), exceptionType(e));
             return List.of();
         }
     }
@@ -174,17 +188,38 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             result = doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
                     auth[0], auth[1], auth[2], envVars);
 
-            // 4. 持久化 prompt + result 到 Session（使历史会话面板能显示对话内容）
+            // 4. Resolve the outcome before changing the tracked task.  A
+            // client/SSE error after task creation is ambiguous: the Worker
+            // may already be running or may later emit a replayable terminal
+            // event.  Only the additive terminal contract can settle it.
             String resultText = (String) result.get("resultText");
-            taskService.persistTrackedSyncMessages(sessionId, prompt, resultText);
-
-            // 5. 完成/失败记录
             String error = (String) result.get("error");
             String workerTaskId = (String) result.get("workerTaskId");
             String newClaudeSessionId = (String) result.get("claudeSessionId");
-            if (error != null) {
-                taskService.failTask(taskId, workerTaskId, newClaudeSessionId, truncate(error, 500));
-            } else {
+            boolean resultObserved = Boolean.TRUE.equals(result.get("resultObserved"));
+            String terminalStatus = verifiedErrorTerminalStatus(result);
+
+            // Keep an audit-visible session record even when the task must
+            // remain pending.  A recoverable diagnostic is intentionally not
+            // stored as a terminal system error.
+            String persistedText = !resultObserved && terminalStatus == null
+                    ? appendUnconfirmedNotice(resultText)
+                    : resultText;
+            try {
+                taskService.persistTrackedSyncMessages(sessionId, prompt, persistedText);
+            } catch (Exception persistenceError) {
+                // The terminal protocol comes from the Worker event, not this
+                // optional session transcript write.  Preserve that outcome
+                // and surface the persistence failure separately.
+                log.warn("Unable to persist tracked sync transcript: taskId={}, code={}, type={}",
+                        taskId, stableFailureCode(persistenceError, "CLAUDE_SYNC_TRANSCRIPT_PERSIST_FAILED"),
+                        exceptionType(persistenceError));
+            }
+
+            // 5. Complete only an explicit result event.  Assistant text,
+            // an empty stream, a bare Worker error, and transport exceptions
+            // are all observationally incomplete and must remain pending.
+            if (resultObserved) {
                 taskService.completeTask(taskId, workerTaskId, newClaudeSessionId,
                         resultText,
                         toBigDecimal(result.get("costUsd")),
@@ -193,15 +228,31 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                         toLong(result.get("durationMs")),
                         toInteger(result.get("numTurns")),
                         (String) result.get("model"));
+            } else if ("FAILED".equals(terminalStatus)) {
+                taskService.failTask(taskId, workerTaskId, newClaudeSessionId, truncate(error, 500));
+            } else if ("ABORTED".equals(terminalStatus)) {
+                taskService.recordWorkerTerminalAbort(taskId, workerTaskId, newClaudeSessionId, null);
+            } else {
+                retainTrackedSyncPending(taskId, result);
             }
         } catch (Exception e) {
-            log.error("syncQueryTracked failed after task creation: taskId={}, error={}", taskId, e.getMessage(), e);
-            taskService.failTask(taskId, null, claudeSessionId, truncate(e.getMessage(), 500));
-            // 异常路径也要持久化消息，让前端会话面板能看到用户发了什么、失败原因
-            taskService.persistTrackedSyncMessages(sessionId, prompt,
-                    "[系统错误] Worker 请求失败: " + truncate(e.getMessage(), 300));
+            String failure = stableFailureCode(e, CLAUDE_SYNC_QUERY_FAILED);
+            log.error("syncQueryTracked failed after task creation: taskId={}, code={}, type={}",
+                    taskId, failure, exceptionType(e));
             result = new LinkedHashMap<>();
-            result.put("error", e.getMessage());
+            result.put("error", CLAUDE_SYNC_QUERY_UNCONFIRMED);
+            result.put("diagnosticCode", failure);
+            result.put("errorSource", "LOCAL_UNCONFIRMED");
+            result.put("terminalObserved", false);
+            try {
+                taskService.persistTrackedSyncMessages(sessionId, prompt,
+                        appendUnconfirmedNotice(null));
+            } catch (Exception persistenceError) {
+                log.warn("Unable to persist uncertain tracked sync transcript: taskId={}, code={}, type={}",
+                        taskId, stableFailureCode(persistenceError, "CLAUDE_SYNC_TRANSCRIPT_PERSIST_FAILED"),
+                        exceptionType(persistenceError));
+            }
+            retainTrackedSyncPending(taskId, result);
         }
 
         result.put("taskId", taskId);
@@ -322,18 +373,36 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             result.put("outputTokens", state.outputTokens);
             result.put("numTurns", state.numTurns);
             result.put("model", state.model);
-            if (state.error != null) {
-                result.put("error", state.error);
-                result.put("errorSource", "WORKER");
+            result.put("resultObserved", state.resultObserved);
+            if (state.errorEventObserved) {
+                String terminalStatus = state.verifiedErrorTerminalStatus();
+                if (terminalStatus != null) {
+                    result.put("error", stableWorkerError(state.error));
+                    result.put("errorSource", "WORKER_TERMINAL");
+                    result.put("terminalObserved", true);
+                    result.put("terminalStatus", terminalStatus);
+                } else {
+                    result.put("error", CLAUDE_SYNC_QUERY_UNCONFIRMED);
+                    result.put("errorSource", "WORKER_UNCONFIRMED");
+                    result.put("terminalObserved", false);
+                }
+            } else if (!state.resultObserved) {
+                result.put("error", CLAUDE_SYNC_QUERY_UNCONFIRMED);
+                result.put("errorSource", "STREAM_UNCONFIRMED");
+                result.put("terminalObserved", false);
             }
 
             log.info("doSyncQuery completed: workerId={}, events={}, hasResult={}, hasError={}",
-                    worker.getWorkerId(), state.eventCount, state.getResultText() != null, result.containsKey("error"));
+                    worker.getWorkerId(), state.eventCount, state.resultObserved, result.containsKey("error"));
 
         } catch (Exception e) {
-            log.error("syncQuery failed: workerId={}, error={}", worker.getWorkerId(), e.getMessage(), e);
-            result.put("error", e.getMessage());
+            String failure = stableFailureCode(e, CLAUDE_SYNC_QUERY_FAILED);
+            log.error("syncQuery failed: workerId={}, code={}, type={}",
+                    worker.getWorkerId(), failure, exceptionType(e));
+            result.put("error", CLAUDE_SYNC_QUERY_UNCONFIRMED);
+            result.put("diagnosticCode", failure);
             result.put("errorSource", "TRANSPORT");  // 传输层异常（超时、断连等）
+            result.put("terminalObserved", false);
             result.put("durationMs", System.currentTimeMillis() - startTime);
         }
 
@@ -392,7 +461,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                         objectMapper.getTypeFactory().constructMapType(Map.class, String.class, String.class));
                 merged.putAll(custom);
             } catch (Exception e) {
-                log.warn("Failed to parse customEnvVars for directory {}: {}", directoryId, e.getMessage());
+                log.warn("Failed to parse customEnvVars: directoryId={}, code={}, type={}", directoryId,
+                        stableFailureCode(e, "CLAUDE_DIRECTORY_ENV_PARSE_FAILED"), exceptionType(e));
             }
         }
 
@@ -415,8 +485,9 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             }
             log.info("Initialized directory on worker {}: path={} → {}", workerId, path, expandedPath);
         } catch (Exception e) {
-            log.error("Failed to init directory on worker {}: {}", workerId, e.getMessage(), e);
-            throw new RuntimeException("Failed to initialize directory: " + e.getMessage(), e);
+            log.error("Failed to init directory: workerId={}, code={}, type={}", workerId,
+                    stableFailureCode(e, "CLAUDE_DIRECTORY_INIT_FAILED"), exceptionType(e));
+            throw new IllegalStateException("CLAUDE_DIRECTORY_INIT_FAILED");
         }
 
         // 注册工作目录（如果已存在则返回现有 directoryId）
@@ -467,8 +538,9 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             }
             log.info("Initialized directory on worker {}: path={} → {}", workerId, path, expandedPath);
         } catch (Exception e) {
-            log.error("Failed to init directory on worker {}: {}", workerId, e.getMessage(), e);
-            throw new RuntimeException("Failed to initialize directory: " + e.getMessage(), e);
+            log.error("Failed to init directory: workerId={}, code={}, type={}", workerId,
+                    stableFailureCode(e, "CLAUDE_DIRECTORY_INIT_FAILED"), exceptionType(e));
+            throw new IllegalStateException("CLAUDE_DIRECTORY_INIT_FAILED");
         }
 
         // 注册工作目录（如果已存在则返回现有 directoryId）
@@ -590,6 +662,68 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         return map;
     }
 
+    private String verifiedErrorTerminalStatus(Map<String, Object> result) {
+        if (!Boolean.TRUE.equals(result.get("terminalObserved"))) {
+            return null;
+        }
+        Object candidate = result.get("terminalStatus");
+        if (candidate == null) {
+            return null;
+        }
+        String terminalStatus = String.valueOf(candidate);
+        if ("FAILED".equalsIgnoreCase(terminalStatus)) {
+            return "FAILED";
+        }
+        if ("ABORTED".equalsIgnoreCase(terminalStatus)) {
+            return "ABORTED";
+        }
+        return null;
+    }
+
+    private void retainTrackedSyncPending(String taskId, Map<String, Object> result) {
+        // Never retry/re-dispatch here: the client failure may have occurred
+        // after the Worker accepted the original request.  Reconciliation and
+        // event replay own the next observation step.
+        taskService.markLifecycleAttention(taskId, TRACKED_SYNC_UNCONFIRMED);
+        result.put("terminalObserved", false);
+        result.put("status", "RUNNING");
+        result.put("attentionStatus", TRACKED_SYNC_UNCONFIRMED);
+        result.put("availableActions", List.of("CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"));
+        result.putIfAbsent("error", CLAUDE_SYNC_QUERY_UNCONFIRMED);
+    }
+
+    private String appendUnconfirmedNotice(String resultText) {
+        String notice = "[系统提示] Worker 请求结果尚未确认，任务仍在等待状态。";
+        return resultText == null || resultText.isBlank()
+                ? notice
+                : resultText + "\n\n" + notice;
+    }
+
+    private String stableWorkerError(String error) {
+        return error != null && error.matches("[A-Z][A-Z0-9_]{0,127}")
+                ? error
+                : CLAUDE_RUNTIME_REMOTE_ERROR;
+    }
+
+    private String stableFailureCode(Throwable error, String fallback) {
+        Throwable current = error;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null) {
+                String candidate = message.split(":", 2)[0].trim();
+                if (candidate.matches("[A-Z][A-Z0-9_]{0,127}")) {
+                    return candidate;
+                }
+            }
+            current = current.getCause();
+        }
+        return fallback;
+    }
+
+    private String exceptionType(Throwable error) {
+        return error != null ? error.getClass().getSimpleName() : "UnknownException";
+    }
+
     private String truncate(String text, int maxLen) {
         if (text == null) return null;
         return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
@@ -634,6 +768,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                 acc.model = event.getModel();
             }
             if ("result".equals(event.getType())) {
+                acc.resultObserved = true;
                 acc.resultText = event.getContent() != null ? event.getContent() : event.getResult();
                 acc.costUsd = event.getCostUsd();
                 acc.durationMs = event.getDurationMs();
@@ -645,10 +780,13 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                     acc.assistantText.append(event.getContent());
                 }
             } else if ("error".equals(event.getType())) {
+                acc.errorEventObserved = true;
                 acc.error = event.getError();
+                acc.errorTerminalObserved = event.getTerminalObserved();
+                acc.errorTerminalStatus = event.getTerminalStatus();
             }
         } catch (Exception e) {
-            log.debug("Failed to parse sync query event: {}", e.getMessage());
+            log.debug("Failed to parse sync query event: type={}", exceptionType(e));
         }
     }
 
@@ -663,6 +801,10 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         private Integer numTurns;
         private String resultText;
         private String error;
+        private boolean resultObserved;
+        private boolean errorEventObserved;
+        private Boolean errorTerminalObserved;
+        private String errorTerminalStatus;
         private int eventCount;
         private final StringBuilder assistantText = new StringBuilder();
 
@@ -675,6 +817,19 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                 return resultText;
             }
             return assistantText.isEmpty() ? null : assistantText.toString();
+        }
+
+        private String verifiedErrorTerminalStatus() {
+            if (!Boolean.TRUE.equals(errorTerminalObserved)) {
+                return null;
+            }
+            if ("FAILED".equalsIgnoreCase(errorTerminalStatus)) {
+                return "FAILED";
+            }
+            if ("ABORTED".equalsIgnoreCase(errorTerminalStatus)) {
+                return "ABORTED";
+            }
+            return null;
         }
     }
 

@@ -95,6 +95,23 @@ public class WorkerStreamRelay {
 
     private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
 
+    /**
+     * States that may reconnect solely to consume durable Worker events.  A
+     * cancellation request remains eligible so a restarted/disconnected
+     * Navigator can replay the terminal evidence that settles its operation;
+     * reconnecting never dispatches an abort or changes the task status.
+     */
+    private static final List<String> STREAM_RECOVERY_STATUSES =
+            List.of("RUNNING", "AWAITING_PERMISSION", "CANCEL_REQUESTED");
+
+    private static final String STREAM_CONNECT_UNCONFIRMED = "STREAM_CONNECT_UNCONFIRMED";
+    private static final String STREAM_TRANSPORT_UNCONFIRMED = "STREAM_TRANSPORT_UNCONFIRMED";
+    private static final String STREAM_ERROR_UNCONFIRMED = "STREAM_ERROR_UNCONFIRMED";
+    /** Stable public/persisted fallback for a Worker-provided failure body. */
+    private static final String CLAUDE_RUNTIME_REMOTE_ERROR = "CLAUDE_RUNTIME_REMOTE_ERROR";
+    private static final String CLAUDE_WORKER_TRANSPORT_UNCONFIRMED =
+            "CLAUDE_WORKER_TRANSPORT_UNCONFIRMED";
+
     @Async("sessionEventExecutor")
     @EventListener(condition = "#event.providerType == 'claude-worker'")
     public void onTaskStart(WorkerTaskStartEvent event) {
@@ -167,10 +184,16 @@ public class WorkerStreamRelay {
                     .build());
 
         } catch (Exception e) {
-            log.error("Failed to start stream relay: taskId={}", taskId, e);
-            taskService.failTask(taskId, null, null, e.getMessage());
+            log.error("Failed to start stream relay: taskId={}, errorCode={}, errorType={}", taskId,
+                    remoteDiagnosticCode(e), exceptionType(e));
+            taskService.markLifecycleAttention(taskId, STREAM_CONNECT_UNCONFIRMED);
             publishMessage(sessionId, MessageType.ERROR,
-                    Map.of("content", "Failed to connect to worker: " + e.getMessage(), "taskId", taskId));
+                    Map.of("content", "Worker stream connection is unconfirmed; task remains pending.",
+                            "taskId", taskId,
+                            "attentionStatus", STREAM_CONNECT_UNCONFIRMED));
+            if (!attemptReconnect(taskId, sessionId, workerId, 0)) {
+                log.info("Initial Worker stream recovery deferred to Reconciler: taskId={}", taskId);
+            }
         }
     }
 
@@ -248,7 +271,8 @@ public class WorkerStreamRelay {
                     Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));
 
         } catch (Exception e) {
-            log.warn("Failed to reconnect task {}: {}", taskId, e.getMessage());
+            log.warn("Failed to reconnect task {}: errorCode={}, errorType={}", taskId,
+                    remoteDiagnosticCode(e), exceptionType(e));
             // Don't fail the task — Reconciler will handle it if CLI is truly dead.
         } finally {
             guard.set(false);
@@ -256,7 +280,7 @@ public class WorkerStreamRelay {
     }
 
     /**
-     * 启动时重连所有仍在 RUNNING / AWAITING_PERMISSION 状态的任务。
+     * 启动时重连所有仍可消费 Worker 证据的任务。
      */
     @Async("sessionEventExecutor")
     @EventListener(ApplicationReadyEvent.class)
@@ -268,8 +292,7 @@ public class WorkerStreamRelay {
             return;
         }
 
-        List<String> activeStatuses = List.of("RUNNING", "AWAITING_PERMISSION");
-        List<ClaudeTaskEntity> activeTasks = taskRepository.findByStatusIn(activeStatuses);
+        List<ClaudeTaskEntity> activeTasks = taskRepository.findByStatusIn(STREAM_RECOVERY_STATUSES);
 
         if (activeTasks.isEmpty()) {
             log.info("Startup reconnect: no active tasks found");
@@ -300,13 +323,14 @@ public class WorkerStreamRelay {
                         // 即使 Worker 已 closed，回放仍能让 Java 收到 result + sync_checkpoint
                     }
                 } catch (Exception e) {
-                    log.debug("Startup reconnect: cannot query Worker status for {}: {}",
-                            task.getTaskId(), e.getMessage());
+                    log.debug("Startup reconnect: cannot query Worker status for {}: errorCode={}, errorType={}",
+                            task.getTaskId(), remoteDiagnosticCode(e), exceptionType(e));
                 }
 
                 reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId());
             } catch (Exception e) {
-                log.warn("Startup reconnect failed for task {}: {}", task.getTaskId(), e.getMessage());
+                log.warn("Startup reconnect failed for task {}: errorCode={}, errorType={}", task.getTaskId(),
+                        remoteDiagnosticCode(e), exceptionType(e));
             }
         }
     }
@@ -326,6 +350,11 @@ public class WorkerStreamRelay {
                                          AtomicReference<String> detectedModel,
                                          AtomicReference<String> detectedClaudeSessionId,
                                          int reconnectAttempt) {
+        // Allocate the replay cursor before subscribing.  A subscription may
+        // fail before it produces its first event; that is still an
+        // unconfirmed stream outcome, not evidence that a just-created task
+        // completed and cleaned up its cursor.
+        lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0));
         return sseFlux
                 .doOnNext(sse -> {
                     String data = sse.data();
@@ -421,7 +450,8 @@ public class WorkerStreamRelay {
                     // Keep lastAckedSeq for future reconnect by Reconciler
                 })
                 .doOnError(e -> {
-                    log.error("Worker stream error: taskId={}", taskId, e);
+                    log.error("Worker stream error: taskId={}, errorCode={}, errorType={}", taskId,
+                            remoteDiagnosticCode(e), exceptionType(e));
                     activeStreams.remove(taskId);
 
                     // Fast path: task already completed via result event — no need to reconnect or fail
@@ -430,22 +460,33 @@ public class WorkerStreamRelay {
                         return;
                     }
 
-                    // 4xx client errors (e.g. 429 Too Many Requests) are not transient —
-                    // reconnecting won't help, fail immediately with a clear message.
-                    boolean isClientError = e instanceof WebClientResponseException wce
-                            && wce.getStatusCode().is4xxClientError();
-
-                    if (isClientError) {
-                        // Genuine startup failure — keep failTask for 4xx errors
-                        String errorMsg = extractWorkerErrorMessage(e);
-                        taskService.failTask(taskId, workerTaskIdMap.get(taskId), detectedClaudeSessionId.get(), errorMsg);
-                        publishMessage(sessionId, MessageType.ERROR,
-                                Map.of("content", errorMsg, "taskId", taskId));
-                        lastAckedSeq.remove(taskId);
+                    if (e instanceof DurableWorkerEventPersistenceException) {
+                        // The Worker event itself was not durably recorded,
+                        // so do not write lifecycle/UI side effects that
+                        // could outrun its replay.  Reconnect is still safe:
+                        // it replays the same ESN and leaves the cursor at
+                        // its prior acknowledged value.
+                        log.warn("Worker event persistence failed; retaining replay cursor: taskId={}", taskId);
+                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
+                        if (!reconnected) {
+                            log.info("SSE replay recovery deferred for task {} after persistence failure", taskId);
+                        }
                         return;
                     }
 
-                    // Transient error — infinite reconnect with capped backoff (Rule 2: never auto-fail)
+                    // A subscription transport failure is not Worker terminal
+                    // evidence, including 4xx responses after a task was
+                    // accepted. Keep the task pending and retain its replay
+                    // cursor instead of fabricating FAILED.
+                    taskService.markLifecycleAttention(taskId, STREAM_TRANSPORT_UNCONFIRMED);
+                    publishMessage(sessionId, MessageType.ERROR,
+                            Map.of("content", safeTransportDiagnostic(e),
+                                    "taskId", taskId,
+                                    "attentionStatus", STREAM_TRANSPORT_UNCONFIRMED));
+
+                    // Retry every transport failure with capped backoff.  If
+                    // recovery cannot start, the Reconciler retains the task
+                    // pending and later replays any Worker terminal evidence.
                     boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
                     if (reconnected) {
                         return;
@@ -460,7 +501,7 @@ public class WorkerStreamRelay {
 
     /**
      * 尝试通过 Worker subscribe 端点重连，带指数退避。
-     * 仅当任务仍在 RUNNING 或 AWAITING_PERMISSION 时尝试。
+     * 仅当任务仍可消费 Worker 证据时尝试。
      *
      * @param currentAttempt 当前重连次数（0-based），下次将传 currentAttempt+1
      * @return true 如果重连成功启动
@@ -539,8 +580,8 @@ public class WorkerStreamRelay {
             log.warn("SSE reconnection interrupted for task {}", taskId);
             return false;
         } catch (Exception e) {
-            log.warn("SSE reconnection failed for task {} (attempt {}): {}",
-                    taskId, currentAttempt + 1, e.getMessage());
+            log.warn("SSE reconnection failed for task {} (attempt {}): errorCode={}, errorType={}",
+                    taskId, currentAttempt + 1, remoteDiagnosticCode(e), exceptionType(e));
             return false;
         } finally {
             guard.set(false);
@@ -548,11 +589,33 @@ public class WorkerStreamRelay {
     }
 
     private boolean isRecoverableTaskStatus(String status) {
-        return "RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status);
+        return STREAM_RECOVERY_STATUSES.contains(status);
     }
 
     private boolean isTerminalWorkerEvent(WorkerEvent event) {
-        return event != null && ("result".equals(event.getType()) || "error".equals(event.getType()));
+        return event != null && ("result".equals(event.getType())
+                || verifiedErrorTerminalStatus(event) != null);
+    }
+
+    /**
+     * Error events are ambiguous by default: the Worker can emit one for a
+     * stream interruption, cancellation acknowledgement, or SDK cleanup
+     * while the remote CLI may still be running.  Only the additive explicit
+     * terminal contract authorizes a Java terminal transition.
+     */
+    private String verifiedErrorTerminalStatus(WorkerEvent event) {
+        if (event == null || !"error".equals(event.getType())
+                || !Boolean.TRUE.equals(event.getTerminalObserved())) {
+            return null;
+        }
+        String status = event.getTerminalStatus();
+        if ("FAILED".equalsIgnoreCase(status)) {
+            return "FAILED";
+        }
+        if ("ABORTED".equalsIgnoreCase(status)) {
+            return "ABORTED";
+        }
+        return null;
     }
 
     private boolean isUserVisibleOutputEvent(WorkerEvent event) {
@@ -590,16 +653,21 @@ public class WorkerStreamRelay {
             Map<String, Object> status = client.getTaskStatus(workerTaskId)
                     .block(java.time.Duration.ofSeconds(5));
             if (status == null) return false;
-            boolean closed = Boolean.TRUE.equals(status.get("closed"));
             int latestSeq = ((Number) status.getOrDefault("latest_seq", 0)).intValue();
-            if (closed && latestSeq <= ackSeq) {
-                log.info("{}: task {} Worker stream already closed and aligned (latestSeq={}, ackSeq={}), "
-                        + "skipping SSE reconnect", source, taskId, latestSeq, ackSeq);
+            String terminalStatus = status.get("terminal_status") == null
+                    ? null : String.valueOf(status.get("terminal_status"));
+            boolean terminalObserved = Boolean.TRUE.equals(status.get("terminal_observed"));
+            boolean verifiedTerminalStatus = "COMPLETED".equalsIgnoreCase(terminalStatus)
+                    || "FAILED".equalsIgnoreCase(terminalStatus)
+                    || "ABORTED".equalsIgnoreCase(terminalStatus);
+            if (terminalObserved && verifiedTerminalStatus && latestSeq <= ackSeq) {
+                log.info("{}: task {} Worker terminal state {} is aligned (latestSeq={}, ackSeq={}), "
+                        + "skipping SSE reconnect", source, taskId, terminalStatus, latestSeq, ackSeq);
                 return true;
             }
         } catch (Exception e) {
-            log.debug("{}: cannot check Worker status before reconnect for task {}: {}",
-                    source, taskId, e.getMessage());
+            log.debug("{}: cannot check Worker status before reconnect for task {}: errorCode={}, errorType={}",
+                    source, taskId, remoteDiagnosticCode(e), exceptionType(e));
         }
         return false;
     }
@@ -657,7 +725,8 @@ public class WorkerStreamRelay {
                         taskService.updateClaudeSessionId(taskId, event.getSessionId());
                         log.debug("Early saved claudeSessionId {} for task {}", event.getSessionId(), taskId);
                     } catch (Exception e) {
-                        log.warn("Failed to early save claudeSessionId for task {}: {}", taskId, e.getMessage());
+                        log.warn("Failed to early save claudeSessionId for task {}: errorCode={}, errorType={}", taskId,
+                                diagnosticCode(e, "CLAUDE_SESSION_PERSISTENCE_FAILED"), exceptionType(e));
                     }
                 }
                 String subtype = event.getSubtype();
@@ -761,34 +830,63 @@ public class WorkerStreamRelay {
                         taskService.updateClaudeSessionId(taskId, event.getSessionId());
                         log.debug("Early saved claudeSessionId {} for task {} (error event)", event.getSessionId(), taskId);
                     } catch (Exception e) {
-                        log.warn("Failed to early save claudeSessionId for task {} (error): {}", taskId, e.getMessage());
+                        log.warn("Failed to early save claudeSessionId for task {} (error): errorCode={}, errorType={}", taskId,
+                                diagnosticCode(e, "CLAUDE_SESSION_PERSISTENCE_FAILED"), exceptionType(e));
                     }
                 }
                 String errorClaudeSessionId = detectedClaudeSessionId.get();
-                publishBuilt(mb.error(event.getError())
-                        .put("claudeSessionId", nullSafe(errorClaudeSessionId)), workerMessageId);
-
-                taskService.failTask(taskId,
-                        event.getTaskId() != null ? event.getTaskId() : getWorkerTaskId(taskId),
-                        errorClaudeSessionId, event.getError(), event.getSeq());
-
-                Disposable failedSub = activeStreams.remove(taskId);
-                if (failedSub != null && !failedSub.isDisposed()) {
-                    failedSub.dispose();
-                    log.info("Disposed SSE subscription after task failure: taskId={}", taskId);
+                // Remote Worker error text may include CLI stderr, endpoint
+                // details, paths, or credentials.  It must never cross the
+                // relay's UI/persistence/completion boundary verbatim.
+                String stableError = stableWorkerError(event.getError());
+                String terminalStatus = verifiedErrorTerminalStatus(event);
+                AgentMessageBuilder errorMessage = mb.error(stableError)
+                        .put("claudeSessionId", nullSafe(errorClaudeSessionId));
+                if (terminalStatus == null) {
+                    errorMessage.put("terminalObserved", false)
+                            .put("attentionStatus", STREAM_ERROR_UNCONFIRMED)
+                            .put("availableActions", List.of("CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"));
+                } else {
+                    errorMessage.put("terminalObserved", true)
+                            .put("terminalStatus", terminalStatus)
+                            .put("terminalSource", event.getTerminalSource());
                 }
-                reconnecting.remove(taskId);
-                workerTaskIdMap.remove(taskId);
-                lastAckedSeq.remove(taskId);
+                publishBuilt(errorMessage, workerMessageId);
 
-                eventPublisher.publishEvent(TaskCompletionEvent.builder()
-                        .externalTaskId(taskId)
-                        .parentSessionId(sessionId)
-                        .targetAgentId(AGENT_ID)
-                        .status("FAILED")
-                        .resultSummary(event.getError())
-                        .extData(buildEventExtData(taskId))
-                        .build());
+                String resolvedWorkerTaskId = event.getTaskId() != null
+                        ? event.getTaskId() : getWorkerTaskId(taskId);
+                if (terminalStatus == null) {
+                    // Preserve the durable error message and replay cursor.
+                    // The following progress write ACKs this diagnostic event
+                    // but intentionally retains the stream/reconnect owner.
+                    taskService.markLifecycleAttention(taskId, STREAM_ERROR_UNCONFIRMED);
+                } else {
+                    if ("ABORTED".equals(terminalStatus)) {
+                        taskService.recordWorkerTerminalAbort(taskId, resolvedWorkerTaskId,
+                                errorClaudeSessionId, event.getSeq());
+                    } else {
+                        taskService.failTask(taskId, resolvedWorkerTaskId,
+                                errorClaudeSessionId, stableError, event.getSeq());
+                    }
+
+                    Disposable terminalSub = activeStreams.remove(taskId);
+                    if (terminalSub != null && !terminalSub.isDisposed()) {
+                        terminalSub.dispose();
+                        log.info("Disposed SSE subscription after observed {}: taskId={}", terminalStatus, taskId);
+                    }
+                    reconnecting.remove(taskId);
+                    workerTaskIdMap.remove(taskId);
+                    lastAckedSeq.remove(taskId);
+
+                    eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                            .externalTaskId(taskId)
+                            .parentSessionId(sessionId)
+                            .targetAgentId(AGENT_ID)
+                            .status(terminalStatus)
+                            .resultSummary(stableError)
+                            .extData(buildEventExtData(taskId))
+                            .build());
+                }
             }
             case "sync_checkpoint" -> {
                 Integer workerLatestSeq = event.getLatestSeq();
@@ -820,29 +918,50 @@ public class WorkerStreamRelay {
     }
 
     /**
-     * 从 WebClient 异常中提取用户友好的错误消息。
-     * 对于 Worker 返回的 HTTP 错误（如 429），解析 FastAPI 的 JSON 响应体提取 detail 字段。
+     * User-visible transport diagnostics must not include raw Worker bodies,
+     * endpoint details, exception messages, or credential-adjacent content.
      */
-    private String extractWorkerErrorMessage(Throwable e) {
+    private String safeTransportDiagnostic(Throwable e) {
         if (e instanceof WebClientResponseException wce) {
             int status = wce.getStatusCode().value();
-            String body = wce.getResponseBodyAsString();
-            // FastAPI returns {"detail": "..."} for HTTPException
-            if (body != null && !body.isBlank()) {
-                try {
-                    var json = objectMapper.readValue(body, Map.class);
-                    Object detail = json.get("detail");
-                    if (detail != null) {
-                        return "Worker rejected request (HTTP " + status + "): " + detail;
-                    }
-                } catch (Exception ignored) {
-                    // Not JSON — use raw body
-                }
-                return "Worker rejected request (HTTP " + status + "): " + body;
-            }
-            return "Worker rejected request (HTTP " + status + ")";
+            return "Worker stream transport is unconfirmed (HTTP " + status + "); task remains pending.";
         }
-        return "Worker connection error: " + e.getMessage();
+        return "Worker stream transport is unconfirmed; task remains pending.";
+    }
+
+    /**
+     * Accept an explicit contract code, but never expose a raw Worker error
+     * body through messages, task records, or cross-agent completion events.
+     */
+    private String stableWorkerError(String workerError) {
+        if (workerError != null && workerError.matches("[A-Z][A-Z0-9_]{0,127}")) {
+            return workerError;
+        }
+        return CLAUDE_RUNTIME_REMOTE_ERROR;
+    }
+
+    /** Return an operationally useful but non-sensitive transport code. */
+    private String remoteDiagnosticCode(Throwable error) {
+        return diagnosticCode(error, CLAUDE_WORKER_TRANSPORT_UNCONFIRMED);
+    }
+
+    private String diagnosticCode(Throwable error, String fallback) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof WebClientResponseException response) {
+                return "CLAUDE_WORKER_HTTP_" + response.getStatusCode().value();
+            }
+            String message = current.getMessage();
+            if (message != null && message.matches("[A-Z][A-Z0-9_]{0,127}")) {
+                return message;
+            }
+            current = current.getCause();
+        }
+        return fallback;
+    }
+
+    private String exceptionType(Throwable error) {
+        return error == null ? "UnknownException" : error.getClass().getSimpleName();
     }
 
     /**
@@ -879,7 +998,8 @@ public class WorkerStreamRelay {
                 }
             } catch (Exception e) {
                 // 扫描失败不影响任务完成流程
-                log.warn("Auto-scan checkpoints failed for task {}: {}", taskId, e.getMessage());
+                log.warn("Auto-scan checkpoints failed for task {}: errorCode={}, errorType={}", taskId,
+                        diagnosticCode(e, "CLAUDE_CHECKPOINT_SCAN_FAILED"), exceptionType(e));
             }
         }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()).subscribe();
     }
@@ -990,7 +1110,8 @@ public class WorkerStreamRelay {
                 }
             }
         } catch (Exception e) {
-            log.debug("Failed to build extData for taskId={}: {}", taskId, e.getMessage());
+            log.debug("Failed to build extData for taskId={}: errorCode={}, errorType={}", taskId,
+                    diagnosticCode(e, "CLAUDE_EVENT_CONTEXT_UNAVAILABLE"), exceptionType(e));
         }
         return ext;
     }

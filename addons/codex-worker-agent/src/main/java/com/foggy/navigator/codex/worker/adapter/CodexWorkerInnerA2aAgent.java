@@ -139,6 +139,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public void cancelTask(String taskId) {
+        requireOwnedTask(taskId);
         taskService.abortTask(taskId);
     }
 
@@ -151,7 +152,20 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public void abortWorkerTask(String taskId, String remoteTaskId) {
+        requireOwnedTask(taskId);
         taskService.doAbortWorkerTask(taskId, remoteTaskId);
+    }
+
+    /**
+     * Abort coordination may first look up a task across users so it can
+     * perform generic terminal-state handling.  The provider-specific action
+     * must nevertheless re-check the owning A2A identity before it creates a
+     * signed termination operation.
+     */
+    private void requireOwnedTask(String taskId) {
+        if (taskLookupProvider.getTaskByIdAndUser(taskId, entity.getUserId()).isEmpty()) {
+            throw new IllegalArgumentException("TERMINATION_TASK_ACCESS_DENIED");
+        }
     }
 
     // onPostAbort: Codex 无后置钩子，使用 InnerA2aAgent 默认 no-op

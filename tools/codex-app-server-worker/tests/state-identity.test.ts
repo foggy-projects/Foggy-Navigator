@@ -78,7 +78,7 @@ test('schema v1 marker receives one compatibility migration without changing its
 
   assert.equal(migrated, 'legacy-safe-instance')
   assert.equal(marker.schema_version, 2)
-  for (const directory of ['tasks', 'events']) {
+  for (const directory of ['tasks', 'events', 'termination-operations']) {
     const sentinel = JSON.parse(await fs.readFile(
       path.join(stateDir, directory, '.codex-store-generation.json'),
       'utf8',

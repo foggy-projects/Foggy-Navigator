@@ -44,14 +44,14 @@ echo "  Codex Agent Worker"
 echo "  Port: $PORT"
 echo "========================================"
 
-# 杀掉已有进程
+# Existing Worker safety gate. The stop script verifies workspace ownership and
+# task quiescence before it sends a graceful drain/stop request. Never replace
+# a Worker just because it happens to own this port.
 echo ""
-echo "[1/4] Checking existing processes on port $PORT..."
-EXISTING_PIDS=$(lsof -ti :$PORT 2>/dev/null || true)
-if [ -n "$EXISTING_PIDS" ]; then
-    echo "  Killing existing processes: $EXISTING_PIDS"
-    kill -9 $EXISTING_PIDS 2>/dev/null || true
-    sleep 2
+echo "[1/4] Verifying any existing Worker can stop safely..."
+if ! bash "$SCRIPT_DIR/stop.sh"; then
+    echo "  Refusing to start a replacement: the existing Worker did not prove safe quiescence." >&2
+    exit 2
 fi
 
 # 安装依赖

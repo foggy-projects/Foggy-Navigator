@@ -112,12 +112,13 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             result = doSyncQuery(taskId, workerId, codexConfig, prompt, cwd,
                     codexThreadId, model, maxTurns, null);
 
-            String error = (String) result.get("error");
             String workerTaskId = (String) result.get("workerTaskId");
             String newCodexThreadId = (String) result.get("codexThreadId");
-            if (error != null) {
-                taskService.failTask(taskId, workerTaskId, newCodexThreadId, truncate(error, 500));
-            } else {
+            boolean resultObserved = Boolean.TRUE.equals(result.get("resultObserved"));
+            boolean terminalObserved = Boolean.TRUE.equals(result.get("terminalObserved"));
+            String terminalStatus = (String) result.get("terminalStatus");
+            String error = (String) result.get("error");
+            if (resultObserved) {
                 taskService.completeTask(taskId, workerTaskId, newCodexThreadId,
                         (String) result.get("resultText"),
                         toBigDecimal(result.get("costUsd")),
@@ -126,14 +127,28 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
                         toLong(result.get("durationMs")),
                         toInteger(result.get("numTurns")),
                         (String) result.get("model"));
+            } else if (terminalObserved && "FAILED".equals(terminalStatus)) {
+                taskService.failTask(taskId, workerTaskId, newCodexThreadId, truncate(error, 500));
+            } else if (terminalObserved && "ABORTED".equals(terminalStatus)) {
+                taskService.reconcileAbortedTask(taskId, workerTaskId, newCodexThreadId);
+            } else {
+                // A sync transport failure, empty stream, or bare Worker
+                // error supplies no proof that the CLI stopped.  Preserve the
+                // task and make the uncertainty visible rather than writing a
+                // synthetic FAILED/COMPLETED terminal state.
+                taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
+                result.putIfAbsent("error", "CODEX_SYNC_QUERY_UNCONFIRMED");
+                result.put("terminalObserved", false);
             }
         } catch (Exception e) {
             String failure = stableFailureCode(e, "CODEX_SYNC_QUERY_FAILED");
             log.error("syncQueryTracked failed: taskId={}, code={}, type={}",
                     taskId, failure, exceptionType(e));
-            taskService.failTask(taskId, null, codexThreadId, failure);
+            taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
             result = new LinkedHashMap<>();
-            result.put("error", failure);
+            result.put("error", "CODEX_SYNC_QUERY_UNCONFIRMED");
+            result.put("diagnosticCode", failure);
+            result.put("terminalObserved", false);
         }
 
         result.put("taskId", taskId);
@@ -183,8 +198,13 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             result.put("outputTokens", state.outputTokens);
             result.put("numTurns", state.numTurns);
             result.put("model", state.model);
-            if (state.errorEventObserved) {
+            result.put("resultObserved", state.resultEventObserved);
+            result.put("terminalObserved", state.terminalObserved);
+            result.put("terminalStatus", state.terminalStatus);
+            if (state.errorEventObserved && state.terminalObserved) {
                 result.put("error", stableWorkerError(state.error));
+            } else if (!state.resultEventObserved) {
+                result.put("error", "CODEX_SYNC_QUERY_UNCONFIRMED");
             }
 
             log.info("doSyncQuery completed: workerId={}, events={}, hasResult={}, hasError={}",
@@ -194,7 +214,9 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             String failure = stableFailureCode(e, "CODEX_SYNC_QUERY_FAILED");
             log.error("syncQuery failed: workerId={}, code={}, type={}",
                     workerId, failure, exceptionType(e));
-            result.put("error", failure);
+            result.put("error", "CODEX_SYNC_QUERY_UNCONFIRMED");
+            result.put("diagnosticCode", failure);
+            result.put("terminalObserved", false);
             result.put("durationMs", System.currentTimeMillis() - startTime);
         }
 
@@ -305,6 +327,12 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             } else if ("error".equals(event.getType())) {
                 acc.errorEventObserved = true;
                 acc.error = event.getError();
+                if (Boolean.TRUE.equals(event.getTerminalObserved())
+                        && ("FAILED".equals(event.getTerminalStatus())
+                        || "ABORTED".equals(event.getTerminalStatus()))) {
+                    acc.terminalObserved = true;
+                    acc.terminalStatus = event.getTerminalStatus();
+                }
             }
         } catch (Exception e) {
             log.debug("Failed to parse sync query event: type={}", exceptionType(e));
@@ -349,6 +377,8 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         private String error;
         private boolean resultEventObserved;
         private boolean errorEventObserved;
+        private boolean terminalObserved;
+        private String terminalStatus;
         private int eventCount;
         private String assistantText;
 

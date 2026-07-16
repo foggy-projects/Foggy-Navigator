@@ -1,6 +1,8 @@
 package com.foggy.navigator.claude.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
+import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
@@ -15,7 +17,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 
@@ -26,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -34,6 +40,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -104,6 +111,62 @@ class WorkerStreamRelayTest {
     }
 
     @Test
+    void reconnectTaskReplaysEvidenceForCancelRequestedWithoutDispatchingAnotherAbort() {
+        ClaudeTaskEntity entity = new ClaudeTaskEntity();
+        entity.setTaskId("local-task-1");
+        entity.setWorkerId("worker-1");
+        entity.setSessionId("session-1");
+        entity.setWorkerTaskId("worker-task-9");
+        entity.setStatus("CANCEL_REQUESTED");
+        entity.setLastAckedSeq(7);
+
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(taskService.resolveWorkerTaskLookupId(entity)).thenReturn("worker-task-9");
+        when(client.getTaskStatus("worker-task-9")).thenReturn(just(Map.of("latest_seq", 9, "closed", false)));
+        when(client.subscribeToTask("worker-task-9", 7)).thenReturn(Flux.never());
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(client).subscribeToTask("worker-task-9", 7);
+        verify(taskService, never()).abortTask(anyString());
+    }
+
+    @Test
+    void initialStreamSetupFailureLeavesTaskPendingAndDefersRecovery() {
+        WorkerTaskStartEvent event = WorkerTaskStartEvent.builder()
+                .taskId("local-task-1")
+                .sessionId("session-1")
+                .workerId("worker-1")
+                .providerType("claude-worker")
+                .build();
+        when(workerService.getWorkerEntity("worker-1")).thenThrow(new IllegalStateException("worker offline"));
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
+
+        relay.onTaskStart(event);
+
+        verify(taskService).markLifecycleAttention("local-task-1", "STREAM_CONNECT_UNCONFIRMED");
+        verify(taskService, never()).failTask(anyString(), any(), any(), any());
+    }
+
+    @Test
+    void clientSubscriptionErrorLeavesTaskPendingAndRetainsReplayCursor() throws Exception {
+        WebClientResponseException error = WebClientResponseException.create(
+                HttpStatus.TOO_MANY_REQUESTS.value(), "too many requests", HttpHeaders.EMPTY, null, null);
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
+
+        invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
+
+        verify(taskService).markLifecycleAttention("local-task-1", "STREAM_TRANSPORT_UNCONFIRMED");
+        verify(taskService, never()).failTask(anyString(), any(), any(), any());
+        assertEquals(0, relay.getLastAckedSeq("local-task-1").get());
+    }
+
+    @Test
     void reconnectTaskSkipsWhenWorkerStreamAlreadyClosedAndAligned() {
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId("local-task-1");
@@ -120,11 +183,43 @@ class WorkerStreamRelayTest {
         when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(client);
         when(taskService.resolveWorkerTaskLookupId(entity)).thenReturn("worker-task-9");
-        when(client.getTaskStatus("worker-task-9")).thenReturn(just(Map.of("latest_seq", 7, "closed", true)));
+        when(client.getTaskStatus("worker-task-9")).thenReturn(just(Map.of(
+                "latest_seq", 7,
+                "closed", true,
+                "terminal_observed", true,
+                "terminal_status", "COMPLETED")));
 
         relay.reconnectTask("local-task-1", "session-1", "worker-1");
 
         verify(client, never()).subscribeToTask(anyString(), anyInt());
+    }
+
+    @Test
+    void reconnectTaskDoesNotTreatClosedStreamAsTerminalWithoutEvidence() {
+        ClaudeTaskEntity entity = new ClaudeTaskEntity();
+        entity.setTaskId("local-task-1");
+        entity.setWorkerId("worker-1");
+        entity.setSessionId("session-1");
+        entity.setWorkerTaskId("worker-task-9");
+        entity.setStatus("RUNNING");
+        entity.setLastAckedSeq(7);
+
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(taskService.resolveWorkerTaskLookupId(entity)).thenReturn("worker-task-9");
+        when(client.getTaskStatus("worker-task-9")).thenReturn(just(Map.of(
+                "latest_seq", 7,
+                "closed", true,
+                "terminal_observed", false)));
+        when(client.subscribeToTask("worker-task-9", 7)).thenReturn(Flux.never());
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(client).subscribeToTask("worker-task-9", 7);
     }
 
     @Test
@@ -305,19 +400,100 @@ class WorkerStreamRelayTest {
         event.setTaskId("worker-task-45");
         event.setSessionId("claude-session-45");
         event.setError("worker failure");
+        event.setTerminalObserved(true);
+        event.setTerminalStatus("FAILED");
         ServerSentEvent<String> sse = ServerSentEvent.<String>builder()
                 .data(new ObjectMapper().writeValueAsString(event))
                 .build();
         doThrow(new IllegalStateException("mysql unavailable"))
                 .when(taskService).failTask(eq("local-task-45"), eq("worker-task-45"),
-                        eq("claude-session-45"), eq("worker failure"), eq(45));
+                        eq("claude-session-45"), eq("CLAUDE_RUNTIME_REMOTE_ERROR"), eq(45));
 
         invokeSubscribeSseFlux(sse, "local-task-45", "session-45", "worker-45");
 
         verify(taskService).failTask(eq("local-task-45"), eq("worker-task-45"),
-                eq("claude-session-45"), eq("worker failure"), eq(45));
+                eq("claude-session-45"), eq("CLAUDE_RUNTIME_REMOTE_ERROR"), eq(45));
         verify(taskService, never()).recordWorkerProgress(any(), any(), any(), any(), any(), anyBoolean());
         assertEquals(0, relay.getLastAckedSeq("local-task-45").get());
+    }
+
+    @Test
+    void bareSequencedErrorStaysPendingAndAdvancesReplayCursor() throws Exception {
+        WorkerEvent event = new WorkerEvent();
+        event.setType("error");
+        event.setSeq(46);
+        event.setTaskId("worker-task-46");
+        event.setSessionId("claude-session-46");
+        event.setError("connection reset while worker may still run");
+        ServerSentEvent<String> sse = ServerSentEvent.<String>builder()
+                .data(new ObjectMapper().writeValueAsString(event))
+                .build();
+        when(taskRepository.findByTaskId("local-task-46")).thenReturn(Optional.empty());
+
+        invokeSubscribeSseFlux(sse, "local-task-46", "session-46", "worker-46");
+
+        verify(taskService).markLifecycleAttention("local-task-46", "STREAM_ERROR_UNCONFIRMED");
+        verify(taskService, never()).failTask(anyString(), any(), any(), any(), any());
+        verify(taskService).recordWorkerProgress("local-task-46", "worker-task-46",
+                "claude-session-46", null, 46, true);
+        assertEquals(46, relay.getLastAckedSeq("local-task-46").get());
+    }
+
+    @Test
+    void verifiedAbortedErrorRecordsAbortWithoutMappingToFailure() throws Exception {
+        WorkerEvent event = new WorkerEvent();
+        event.setType("error");
+        event.setSeq(47);
+        event.setTaskId("worker-task-47");
+        event.setSessionId("claude-session-47");
+        event.setError("Task was cancelled");
+        event.setTerminalObserved(true);
+        event.setTerminalStatus("ABORTED");
+        event.setTerminalSource("PROVIDER_TERMINAL_EVENT");
+
+        invokeRelayEvent("session-47", "local-task-47", event);
+
+        verify(taskService).recordWorkerTerminalAbort("local-task-47", "worker-task-47",
+                "claude-session-47", 47);
+        verify(taskService, never()).failTask(anyString(), any(), any(), any(), any());
+    }
+
+    @Test
+    void verifiedWorkerFailureNeverPublishesOrPersistsRawRemoteError() throws Exception {
+        WorkerEvent event = new WorkerEvent();
+        event.setType("error");
+        event.setSeq(48);
+        event.setTaskId("worker-task-48");
+        event.setSessionId("claude-session-48");
+        event.setError("stderr: token=super-secret /tmp/private-path");
+        event.setTerminalObserved(true);
+        event.setTerminalStatus("FAILED");
+        event.setTerminalSource("PROVIDER_TERMINAL_EVENT");
+
+        invokeRelayEvent("session-48", "local-task-48", event);
+
+        verify(taskService).failTask("local-task-48", "worker-task-48", "claude-session-48",
+                "CLAUDE_RUNTIME_REMOTE_ERROR", 48);
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, atLeast(2)).publishEvent(published.capture());
+
+        AgentMessage errorMessage = published.getAllValues().stream()
+                .filter(AgentMessage.class::isInstance)
+                .map(AgentMessage.class::cast)
+                .filter(message -> message.getType() == MessageType.ERROR)
+                .findFirst()
+                .orElseThrow();
+        assertFalse(String.valueOf(errorMessage.getPayload()).contains("super-secret"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) errorMessage.getPayload();
+        assertEquals("CLAUDE_RUNTIME_REMOTE_ERROR", payload.get("content"));
+
+        TaskCompletionEvent completion = published.getAllValues().stream()
+                .filter(TaskCompletionEvent.class::isInstance)
+                .map(TaskCompletionEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertEquals("CLAUDE_RUNTIME_REMOTE_ERROR", completion.getResultSummary());
     }
 
     private void invokeRelayEvent(String sessionId, String taskId, WorkerEvent event) throws Exception {
@@ -336,6 +512,11 @@ class WorkerStreamRelayTest {
 
     private void invokeSubscribeSseFlux(ServerSentEvent<String> sse, String taskId, String sessionId, String workerId)
             throws Exception {
+        invokeSubscribeSseFlux(Flux.just(sse), taskId, sessionId, workerId);
+    }
+
+    private void invokeSubscribeSseFlux(Flux<ServerSentEvent<String>> flux, String taskId, String sessionId,
+                                        String workerId) throws Exception {
         clearInvocations(eventPublisher, taskService);
         Method method = WorkerStreamRelay.class.getDeclaredMethod(
                 "subscribeSseFlux",
@@ -348,7 +529,7 @@ class WorkerStreamRelayTest {
                 int.class
         );
         method.setAccessible(true);
-        method.invoke(relay, Flux.just(sse), taskId, sessionId, workerId,
+        method.invoke(relay, flux, taskId, sessionId, workerId,
                 new AtomicReference<String>(), new AtomicReference<String>(), 0);
     }
 }

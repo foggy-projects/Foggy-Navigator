@@ -11,7 +11,8 @@ import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
 import sessionFileHintsRouter from './routes/session-file-hints.js'
 import { ensureUserAgentsSkillsDir } from './startup/skills-link.js'
-import { abortTask, taskRegistry } from './codex/sdk-wrapper.js'
+import { markTaskAttention, taskRegistry } from './codex/sdk-wrapper.js'
+import { isTaskExecutionActive } from './models.js'
 import {
   getCodexThreadReservations,
   releaseCodexThreadReservationsForTask,
@@ -22,8 +23,8 @@ const app = express()
 const threadProcessWatchdog = new CodexThreadProcessWatchdog({
   getTaskEntries: () => taskRegistry.values(),
   getReservations: getCodexThreadReservations,
-  abortTask,
   releaseReservationsForTask: releaseCodexThreadReservationsForTask,
+  markTaskAttention,
 }, {
   intervalMs: config.threadWatchdogIntervalMs,
   missingGraceMs: config.threadProcessMissingGraceMs,
@@ -77,18 +78,54 @@ async function bootstrap(): Promise<void> {
   })
   threadProcessWatchdog.start()
 
-  // Graceful shutdown
-  process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down...')
+  // Drain only the HTTP ingress.  Do not use deploy/shutdown as implicit
+  // authority to kill an active Codex CLI child: retain the Worker until every
+  // active task has an observed terminal state or an operator acts explicitly.
+  let draining = false
+  let ingressClosed = false
+  let drainMonitor: NodeJS.Timeout | undefined
+  const hasActiveExecutionOrReservation = () => (
+    Array.from(taskRegistry.values()).some(entry => isTaskExecutionActive(entry.status))
+    || getCodexThreadReservations().size > 0
+  )
+  const exitWhenDrained = () => {
+    if (!ingressClosed || hasActiveExecutionOrReservation()) return
+    if (drainMonitor) {
+      clearInterval(drainMonitor)
+      drainMonitor = undefined
+    }
     threadProcessWatchdog.stop()
-    server.close(() => process.exit(0))
-  })
+    console.log('Codex Worker ingress drained and all task exits observed; shutting down')
+    process.exit(0)
+  }
+  const beginDrain = (signal: 'SIGTERM' | 'SIGINT') => {
+    if (draining) {
+      console.warn(`${signal} received while Codex Worker is already draining; active tasks remain untouched`)
+      return
+    }
+    draining = true
+    console.log(`${signal} received, stopping new ingress and retaining active Codex tasks`)
+    for (const entry of taskRegistry.values()) {
+      if (!isTaskExecutionActive(entry.status)) continue
+      markTaskAttention(entry.taskId, {
+        code: 'WORKER_DRAINING_PENDING_DECISION',
+        message: 'Worker is draining; task remains active until an observed exit or explicit termination decision',
+        source: 'WORKER_DRAIN',
+        occurred_at: new Date().toISOString(),
+        recoverable: true,
+      })
+    }
+    server.close(() => {
+      ingressClosed = true
+      exitWhenDrained()
+    })
+    // Keep this monitor referenced: an unverified active task must keep the
+    // Worker alive instead of allowing a deploy to imply a child-process kill.
+    drainMonitor = setInterval(exitWhenDrained, 1_000)
+  }
 
-  process.on('SIGINT', () => {
-    console.log('SIGINT received, shutting down...')
-    threadProcessWatchdog.stop()
-    server.close(() => process.exit(0))
-  })
+  process.on('SIGTERM', () => beginDrain('SIGTERM'))
+  process.on('SIGINT', () => beginDrain('SIGINT'))
 }
 
 void bootstrap()

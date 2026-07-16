@@ -80,8 +80,6 @@ public class CodexStreamRelay {
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
     private static final long BACKGROUND_RECOVERY_DELAY_MS = 30_000;
-    private static final int MAX_ABORT_STATUS_POLLS = 5;
-    private static final long ABORT_STATUS_POLL_DELAY_MS = 200;
     /**
      * BUG-021 compatibility contract. Enforcement moved to the generic session
      * payload router so every provider is bounded after optional externalization.
@@ -360,12 +358,6 @@ public class CodexStreamRelay {
                         .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
             }
 
-            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
-                    && "ABORT_REQUESTED".equals(entity.getRuntimeAcceptanceState())) {
-                abortAndReconcileTask(entity);
-                return;
-            }
-
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(entity.getCodexThreadId());
             String providerType = resolveTaskProviderType(taskId);
@@ -424,7 +416,7 @@ public class CodexStreamRelay {
 
     void reconnectActiveTasks() {
         List<CodexTaskEntity> activeTasks = taskRepository.findByStatusIn(
-                List.of("RUNNING", "AWAITING_INPUT"));
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"));
         if (activeTasks.isEmpty()) {
             log.info("No active Codex tasks to reconnect on startup");
             return;
@@ -472,130 +464,21 @@ public class CodexStreamRelay {
      * 尝试远程中止 worker 侧任务；若尚未拿到 upstream task_id，仅记录日志。
      */
     public RemoteAbortResolution abortRemoteTask(CodexTaskEntity task) {
-        if (task == null) {
-            return null;
-        }
-        ReentrantLock operationLock = streamOperationLock(task.getTaskId());
-        operationLock.lock();
-        try {
-            return abortRemoteTaskLocked(task);
-        } finally {
-            operationLock.unlock();
-        }
+        throw new IllegalStateException(
+                "TERMINATION_CAPABILITY_REQUIRED: use CodexTaskService explicit cancellation flow");
     }
 
-    private RemoteAbortResolution abortRemoteTaskLocked(CodexTaskEntity task) {
-        boolean appServer = CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType());
-        if (appServer) {
-            CodexTaskRuntimeStateService.AbortClaim claim = taskRuntimeStateService.claimAbort(task.getTaskId());
-            if (claim == CodexTaskRuntimeStateService.AbortClaim.LOCAL_UNACCEPTED) {
-                return RemoteAbortResolution.aborted(null, task.getCodexThreadId());
-            }
-            if (claim == CodexTaskRuntimeStateService.AbortClaim.ALREADY_TERMINAL) {
-                return localTerminalResolution(taskRepository.findByTaskId(task.getTaskId()).orElse(task));
-            }
-            task = taskRepository.findByTaskId(task.getTaskId()).orElse(task);
-        }
-
-        CodexRuntimeBinding runtime = resolveRuntimeBinding(task);
-        String workerTaskId = task.getWorkerTaskId();
-        if (workerTaskId == null || workerTaskId.isBlank()) {
-            if (runtime.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
-                log.warn("abortRemoteTask skipped: no upstream workerTaskId for legacy task {}", task.getTaskId());
-                return RemoteAbortResolution.aborted(null, task.getCodexThreadId());
-            }
-            if (!isRecoverableAcceptanceState(task.getRuntimeAcceptanceState())) {
-                throw new IllegalStateException("CODEX_RUNTIME_ABORT_UNKNOWN: acceptance is not recoverable");
-            }
-            Map<String, Object> requestBody = taskRuntimeStateService.loadPreparedRequest(task.getTaskId());
-            workerTaskId = appServerAcceptanceService.accept(
-                    getCodexClient(task, runtime), task.getTaskId(), requestBody);
-        }
-
-        CodexWorkerClient client = getCodexClient(task, runtime);
-        if (runtime.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
-            try {
-                client.abortTask(workerTaskId).block(Duration.ofSeconds(10));
-                return RemoteAbortResolution.aborted(workerTaskId, task.getCodexThreadId());
-            } catch (Exception e) {
-                // Preserve the legacy SDK best-effort abort behavior.
-                log.warn("Failed to abort legacy upstream Codex task: localTaskId={}, type={}",
-                        task.getTaskId(), e.getClass().getSimpleName());
-                return RemoteAbortResolution.aborted(workerTaskId, task.getCodexThreadId());
-            }
-        }
-
-        try {
-            client.abortTask(workerTaskId).block(Duration.ofSeconds(10));
-            for (int attempt = 0; attempt < MAX_ABORT_STATUS_POLLS; attempt++) {
-                RemoteTaskStatus status = null;
-                try {
-                    status = fetchAppServerTaskStatus(task, client, workerTaskId);
-                } catch (Exception statusError) {
-                    log.warn("App-server abort status poll failed: localTaskId={}, attempt={}, type={}",
-                            task.getTaskId(), attempt + 1, statusError.getClass().getSimpleName());
-                }
-                if (status != null && status.isTerminal()) {
-                    return switch (status.outcome()) {
-                        case "aborted" -> RemoteAbortResolution.aborted(workerTaskId, status.threadId());
-                        case "completed" -> RemoteAbortResolution.completed(
-                                workerTaskId, status.threadId(), status.model());
-                        case "failed" -> RemoteAbortResolution.failed(
-                                workerTaskId, status.threadId(), status.model(),
-                                stableRemoteErrorCode(status.errorCode()));
-                        default -> throw new IllegalStateException(
-                                "CODEX_RUNTIME_ABORT_UNKNOWN: terminal outcome is unsupported");
-                    };
-                }
-                if (attempt + 1 < MAX_ABORT_STATUS_POLLS) {
-                    sleepAbortPollDelay();
-                }
-            }
-            throw new IllegalStateException(
-                    "CODEX_RUNTIME_ABORT_UNKNOWN: remote abort did not reach a terminal outcome");
-        } catch (Exception e) {
-            if (e instanceof IllegalStateException state
-                    && state.getMessage() != null
-                    && state.getMessage().startsWith("CODEX_RUNTIME_ABORT_UNKNOWN")) {
-                throw state;
-            }
-            log.warn("Failed to confirm app-server abort: localTaskId={}, workerTaskId={}, type={}",
-                    task.getTaskId(), workerTaskId, e.getClass().getSimpleName());
-            throw new IllegalStateException("CODEX_RUNTIME_ABORT_UNKNOWN: remote abort was not confirmed", e);
-        }
-    }
-
-    /** Applies only an authoritative remote/local abort outcome. */
+    /**
+     * Legacy recovery hook. It deliberately never issues a remote abort: all
+     * callers here are lifecycle/recovery paths rather than an explicit user
+     * cancellation operation. The original task/stream/reservation remains
+     * owned until terminal evidence arrives.
+     */
     public void abortAndReconcileTask(CodexTaskEntity task) {
-        ReentrantLock operationLock = streamOperationLock(task.getTaskId());
-        operationLock.lock();
-        try {
-            RemoteAbortResolution resolution = abortRemoteTaskLocked(task);
-            abortStreamLocked(task.getTaskId());
-            if (resolution == null) {
-                throw new IllegalStateException("CODEX_RUNTIME_ABORT_UNKNOWN: no authoritative abort outcome");
-            }
-            closePendingUserInputBeforeTerminal(
-                    task.getTaskId(), task.getSessionId(), resolveTaskProviderType(task.getTaskId()));
-            switch (resolution.outcome()) {
-                case "completed" -> {
-                    CodexTaskEntity current = taskRepository.findByTaskId(task.getTaskId()).orElse(task);
-                    if (!isLocalTerminal(current)) {
-                        taskRuntimeStateService.allowTerminalReplay(task.getTaskId());
-                        reconnectTaskLocked(task.getTaskId(), current.getSessionId(), current.getWorkerId(), 0);
-                    }
-                }
-                case "failed" -> taskService.failTask(
-                        task.getTaskId(), resolution.workerTaskId(), resolution.codexThreadId(),
-                        "CODEX_RUNTIME_REMOTE_FAILED: " + stableRemoteErrorCode(resolution.errorCode()));
-                case "aborted" -> taskService.reconcileAbortedTask(
-                        task.getTaskId(), resolution.workerTaskId(), resolution.codexThreadId());
-                default -> throw new IllegalStateException(
-                        "CODEX_RUNTIME_ABORT_UNKNOWN: unsupported authoritative outcome");
-            }
-        } finally {
-            operationLock.unlock();
-        }
+        if (task == null) return;
+        taskService.markLifecycleAttention(task.getTaskId(), "TERMINATION_REQUIRES_EXPLICIT_OPERATION");
+        log.warn("Suppressed automatic Codex termination: taskId={}, runtimeState={}",
+                task.getTaskId(), task.getRuntimeAcceptanceState());
     }
 
     // -------------------------------------------------------------------------
@@ -950,29 +833,6 @@ public class CodexStreamRelay {
         return result;
     }
 
-    private void sleepAbortPollDelay() {
-        try {
-            Thread.sleep(ABORT_STATUS_POLL_DELAY_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("CODEX_RUNTIME_ABORT_UNKNOWN: status polling interrupted", e);
-        }
-    }
-
-    private RemoteAbortResolution localTerminalResolution(CodexTaskEntity task) {
-        return switch (task.getStatus()) {
-            case "COMPLETED" -> RemoteAbortResolution.completed(
-                    task.getWorkerTaskId(), task.getCodexThreadId(), task.getModel());
-            case "FAILED" -> RemoteAbortResolution.failed(
-                    task.getWorkerTaskId(), task.getCodexThreadId(), task.getModel(),
-                    "CODEX_RUNTIME_REMOTE_FAILED");
-            case "ABORTED" -> RemoteAbortResolution.aborted(
-                    task.getWorkerTaskId(), task.getCodexThreadId());
-            default -> throw new IllegalStateException(
-                    "CODEX_RUNTIME_ABORT_UNKNOWN: local terminal outcome is unavailable");
-        };
-    }
-
     private record RemoteTaskStatus(String status, String outcome, String threadId,
                                     String model, String errorCode,
                                     Map<String, Object> pendingInteraction) {
@@ -983,19 +843,6 @@ public class CodexStreamRelay {
 
     public record RemoteAbortResolution(String outcome, String workerTaskId, String codexThreadId,
                                         String model, String errorCode) {
-        private static RemoteAbortResolution aborted(String workerTaskId, String codexThreadId) {
-            return new RemoteAbortResolution("aborted", workerTaskId, codexThreadId, null, null);
-        }
-
-        private static RemoteAbortResolution completed(String workerTaskId, String codexThreadId,
-                                                        String model) {
-            return new RemoteAbortResolution("completed", workerTaskId, codexThreadId, model, null);
-        }
-
-        private static RemoteAbortResolution failed(String workerTaskId, String codexThreadId,
-                                                     String model, String errorCode) {
-            return new RemoteAbortResolution("failed", workerTaskId, codexThreadId, model, errorCode);
-        }
     }
 
     private void failStreamTask(String taskId, String sessionId, String providerType,
@@ -1126,7 +973,10 @@ public class CodexStreamRelay {
                             workerMessageId(taskId, event));
                 }
                 case "warning" -> {
-                    String warning = event.getContent() != null ? event.getContent() : event.getError();
+                    // Worker diagnostics may contain command lines, workspace paths, or
+                    // credentials.  Keep a warning non-terminal, but never relay its
+                    // raw diagnostic text into durable session state/SSE.
+                    String warning = ErrorDiagnosticSanitizer.sanitize(event.getContent());
                     publishBuilt(mb.stateSync(warning != null ? warning : "CODEX_WORKER_WARNING", "warning"),
                             workerMessageId(taskId, event));
                 }
@@ -1186,10 +1036,38 @@ public class CodexStreamRelay {
                             .build());
                 }
                 case "error" -> {
-                    closePendingUserInputBeforeTerminal(taskId, sessionId, providerType);
                     ErrorEnvelope error = taskService.attachDiagnostic(
                             taskId, workerErrorEnvelope(event, taskId), workerDiagnosticInput(event));
                     String failure = error.getErrorCode();
+                    if (!isVerifiedTerminalError(event)) {
+                        // An `error` event can describe a transport failure,
+                        // cancellation request, or diagnostic emitted before
+                        // the CLI has exited.  It never proves a terminal task
+                        // outcome unless the Worker supplies explicit evidence.
+                        taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
+                        publishBuilt(mb.stateSync("PROCESS_UNVERIFIED", "PROCESS_UNVERIFIED"),
+                                workerMessageId(taskId, event));
+                        publishResultUnknown(sessionId, providerType, taskId);
+                        break;
+                    }
+
+                    closePendingUserInputBeforeTerminal(taskId, sessionId, providerType);
+                    if ("ABORTED".equals(event.getTerminalStatus())) {
+                        publishBuilt(mb.stateSync("CODEX_RUNTIME_REMOTE_ABORTED", "aborted"),
+                                workerMessageId(taskId, event));
+                        taskService.reconcileAbortedTask(taskId, event.getTaskId(),
+                                detectedCodexThreadId.get());
+                        lastAckedSeq.remove(taskId);
+                        eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                                .externalTaskId(taskId)
+                                .parentSessionId(sessionId)
+                                .targetAgentId(providerType)
+                                .resultSummary("CODEX_RUNTIME_REMOTE_ABORTED")
+                                .status("ABORTED")
+                                .build());
+                        break;
+                    }
+
                     publishBuilt(mb.error(error), workerMessageId(taskId, event));
                     if (event.getSeq() != null) {
                         taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
@@ -1284,7 +1162,21 @@ public class CodexStreamRelay {
     }
 
     private boolean isTerminalWorkerEvent(WorkerEvent event) {
-        return event != null && ("result".equals(event.getType()) || "error".equals(event.getType()));
+        return event != null && ("result".equals(event.getType()) || isVerifiedTerminalError(event));
+    }
+
+    /**
+     * Error payloads are diagnostic by default.  A Worker must explicitly
+     * attest that it observed a provider terminal event or verified process
+     * exit before Java releases ownership or writes a terminal task state.
+     */
+    private boolean isVerifiedTerminalError(WorkerEvent event) {
+        if (event == null || !"error".equals(event.getType())
+                || !Boolean.TRUE.equals(event.getTerminalObserved())) {
+            return false;
+        }
+        return "FAILED".equals(event.getTerminalStatus())
+                || "ABORTED".equals(event.getTerminalStatus());
     }
 
     private boolean isNextWorkerEvent(WorkerEvent event, String taskId, AtomicInteger seqTracker) {

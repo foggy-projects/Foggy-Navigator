@@ -8,8 +8,22 @@ import { Codex } from '@openai/codex-sdk'
 import type { CodexOptions, Input, ThreadOptions, ThreadItem } from '@openai/codex-sdk'
 import fs from 'node:fs/promises'
 import { config } from '../config.js'
-import type { CodexApprovalPolicy, CodexSandboxMode, CodexWebSearchMode, ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
+import {
+  isTaskExecutionActive,
+  isTaskTerminal,
+  toTaskLifecycleState,
+  type CodexApprovalPolicy,
+  type CodexSandboxMode,
+  type CodexWebSearchMode,
+  type ImageAttachment,
+  type TaskAttention,
+  type TaskEntry,
+  type TaskStatus,
+  type TerminationOperationSummary,
+  type WorkerEvent,
+} from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
+import { safeSdkError } from '../diagnostics.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
@@ -219,6 +233,8 @@ export function resolveSupportedModelAlias(
 }
 
 export function shouldAbortBeforeTurnStart(completedTurns: number, maxTurns: number | undefined): boolean {
+  // Kept as a source-compatible threshold helper.  Callers must only create a
+  // TIMEOUT_PENDING_DECISION marker; it no longer authorizes AbortController.
   return maxTurns !== undefined && completedTurns >= maxTurns
 }
 
@@ -694,7 +710,7 @@ export async function seedCodexHomeAuthIfAvailable(
 export function getRunningTaskCount(): number {
   let count = 0
   for (const entry of taskRegistry.values()) {
-    if (entry.status === 'running') {
+    if (isTaskExecutionActive(entry.status)) {
       count++
     }
   }
@@ -828,6 +844,162 @@ function emitWorkerEvent(
   return eventWithSeq
 }
 
+function lifecycleEvent(
+  entry: TaskEntry,
+  subtype: string,
+  content: string,
+): void {
+  const broadcast = taskBroadcasts.get(entry.taskId)
+  if (!broadcast || broadcast.isClosed()) return
+  const latestAttention = entry.attention?.at(-1)
+  emitWorkerEvent(broadcast, {
+    type: 'warning',
+    task_id: entry.taskId,
+    session_id: entry.threadId,
+    pid: entry.pid,
+    subtype,
+    content,
+    attention: entry.attention,
+    attention_status: latestAttention?.code,
+    available_actions: entry.availableActions,
+    lifecycle_state: toTaskLifecycleState(entry.status),
+    termination_operation: entry.terminationOperation,
+  })
+}
+
+const PENDING_DECISION_ACTIONS = ['CONTINUE_WAIT', 'QUERY_DIAGNOSTICS', 'CANCEL'] as const
+
+/**
+ * Records a non-terminal lifecycle observation.  This deliberately does not
+ * alter execution state or release a thread reservation.
+ */
+export function markTaskAttention(taskId: string, attention: TaskAttention): TaskEntry | undefined {
+  const entry = taskRegistry.get(taskId)
+  if (!entry || !isTaskExecutionActive(entry.status)) return undefined
+
+  const existing = entry.attention ?? []
+  if (existing.some(candidate => candidate.code === attention.code)) {
+    return entry
+  }
+  entry.attention = [...existing, attention]
+  entry.availableActions = [...PENDING_DECISION_ACTIONS]
+  lifecycleEvent(entry, 'lifecycle_attention', attention.message)
+  return entry
+}
+
+function finalizeTask(
+  entry: TaskEntry,
+  status: Extract<TaskStatus, 'completed' | 'failed' | 'aborted'>,
+  result?: string,
+): void {
+  entry.status = status
+  entry.completedAt = Date.now()
+  entry.availableActions = []
+  if (entry.terminationOperation && entry.terminationOperation.status === 'CANCEL_REQUESTED') {
+    entry.terminationOperation = {
+      ...entry.terminationOperation,
+      status: 'OBSERVED_EXIT',
+      observed_at: new Date(entry.completedAt).toISOString(),
+      result: result ?? (status === 'aborted' ? 'PROVIDER_TERMINAL_ABORT' : 'PROVIDER_TERMINAL_EXIT'),
+    }
+  }
+  releaseCodexThreadReservationsForTask(entry.taskId)
+  lifecycleEvent(entry, 'lifecycle_terminal', result ?? toTaskLifecycleState(status))
+}
+
+/**
+ * An explicit, already-authorized remote cancel request.  The acknowledgement
+ * remains CANCEL_REQUESTED until a provider terminal event or a verified
+ * process exit is observed.
+ */
+export function requestTaskCancellation(
+  taskId: string,
+  operation: TerminationOperationSummary,
+): TaskEntry | undefined {
+  const entry = taskRegistry.get(taskId)
+  if (!entry || entry.status !== 'running') return undefined
+
+  entry.status = 'cancel_requested'
+  entry.terminationOperation = operation
+  markTaskAttention(taskId, {
+    code: 'CANCELLATION_PENDING_CONFIRMATION',
+    message: 'Cancellation was requested and is awaiting provider exit confirmation',
+    source: 'EXPLICIT_TERMINATION_OPERATION',
+    occurred_at: new Date().toISOString(),
+    recoverable: true,
+  })
+  lifecycleEvent(entry, 'termination_requested', 'Cancellation request dispatched to the Codex runtime')
+  entry.abortController?.abort(`Termination operation ${operation.operation_id}: ${operation.reason_code}`)
+  return entry
+}
+
+/**
+ * Records an explicit manual PID kill request without signalling the SDK
+ * stream.  The process route is responsible for proving the process exit
+ * before it can call confirmTaskProcessExit().
+ */
+export function requestTaskProcessKill(
+  taskId: string,
+  operation: TerminationOperationSummary,
+): TaskEntry | undefined {
+  const entry = taskRegistry.get(taskId)
+  if (!entry || !isTaskExecutionActive(entry.status)) return undefined
+
+  entry.status = 'cancel_requested'
+  entry.terminationOperation = operation
+  markTaskAttention(taskId, {
+    code: 'CANCELLATION_PENDING_CONFIRMATION',
+    message: 'Manual process termination was requested and is awaiting verified process exit',
+    source: 'EXPLICIT_TERMINATION_OPERATION',
+    occurred_at: new Date().toISOString(),
+    recoverable: true,
+  })
+  lifecycleEvent(entry, 'manual_process_kill_requested', 'Manual process kill request accepted')
+  return entry
+}
+
+/** Marks an explicit termination operation as not yet proven to have exited. */
+export function markTaskTerminationUnconfirmed(
+  taskId: string,
+  operationId: string,
+  result: string,
+): TaskEntry | undefined {
+  const entry = taskRegistry.get(taskId)
+  if (!entry || entry.terminationOperation?.operation_id !== operationId) return undefined
+  entry.terminationOperation = {
+    ...entry.terminationOperation,
+    status: 'UNCONFIRMED',
+    observed_at: new Date().toISOString(),
+    result,
+  }
+  markTaskAttention(taskId, {
+    code: 'TERMINATION_UNCONFIRMED',
+    message: 'Termination command was dispatched but process exit could not be verified',
+    source: 'EXPLICIT_TERMINATION_OPERATION',
+    occurred_at: new Date().toISOString(),
+    recoverable: true,
+  })
+  lifecycleEvent(entry, 'termination_unconfirmed', result)
+  return entry
+}
+
+/**
+ * The only local path that turns an explicitly killed task into ABORTED: a
+ * post-kill process scan has proved the target process no longer exists.
+ */
+export function confirmTaskProcessExit(
+  taskId: string,
+  operationId: string,
+  result = 'PROCESS_EXIT_VERIFIED',
+): TaskEntry | undefined {
+  const entry = taskRegistry.get(taskId)
+  if (!entry || entry.terminationOperation?.operation_id !== operationId) return undefined
+  finalizeTask(entry, 'aborted', result)
+  const broadcast = taskBroadcasts.get(taskId)
+  broadcast?.close()
+  return entry
+}
+
 function createToolUseEvent(
   taskId: string,
   threadId: string | undefined,
@@ -850,9 +1022,8 @@ function logMcpToolItem(
   phase: 'started' | 'updated' | 'completed',
   item: Extract<ThreadItem, { type: 'mcp_tool_call' }>
 ): void {
-  const error = item.error?.message ? ` error=${sanitizeLogSegment(item.error.message)}` : ''
   console.log(
-    `[codex] mcp_tool_${phase} task=${taskId} id=${item.id} server=${item.server} tool=${item.tool} status=${item.status} has_result=${Boolean(item.result)}${error}`
+    `[codex] mcp_tool_${phase} task=${taskId} id=${item.id} server=${item.server} tool=${item.tool} status=${item.status} has_result=${Boolean(item.result)} has_error=${Boolean(item.error?.message)}`
   )
 }
 
@@ -1007,17 +1178,22 @@ export function mapThreadItemToEvents(
       break
 
     case 'error':
-      events.push({
-        // ThreadItem errors are SDK diagnostics and may be followed by a
-        // successful agent_message/result. Terminal failures are represented
-        // separately by top-level turn.failed/error events below.
-        type: 'warning',
-        task_id: taskId,
-        session_id: threadId,
-        content: item.message,
-        subtype: 'sdk_diagnostic',
-        seq: nextSeq(),
-      })
+      {
+        const safeError = safeSdkError(item.message)
+        events.push({
+          // ThreadItem errors are SDK diagnostics and may be followed by a
+          // successful agent_message/result. Terminal failures are represented
+          // separately by explicit top-level turn.failed evidence or verified
+          // process exits below.
+          type: 'warning',
+          task_id: taskId,
+          session_id: threadId,
+          content: safeError.error_message,
+          ...safeError,
+          subtype: 'sdk_diagnostic',
+          seq: nextSeq(),
+        })
+      }
       break
   }
 
@@ -1090,10 +1266,9 @@ export async function runQuery(
   let pendingAssistantText: string | undefined
   let totalUsage = { inputTokens: 0, outputTokens: 0 }
   let resolvedThreadId = threadId
-  let terminalEventSent = false
-  let terminalFailureMessage: string | undefined
+  let providerTerminalObserved = false
+  let terminalFailureCode: string | undefined
   let generatedResumeModelCatalogPath: string | undefined
-  let abortReason = 'Task aborted'
   const startedToolUses = new Set<string>()
   const maxTurnLimit = maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns > 0
     ? maxTurns
@@ -1116,7 +1291,18 @@ export async function runQuery(
   let resolvedModel = effectiveModel
 
   try {
-    const existingPids = await (dependencies.snapshotCodexCliPids ?? snapshotCodexCliPids)()
+    let existingPids = new Set<number>()
+    try {
+      existingPids = await (dependencies.snapshotCodexCliPids ?? snapshotCodexCliPids)()
+    } catch {
+      markTaskAttention(taskId, {
+        code: 'PROCESS_UNVERIFIED',
+        message: 'Codex CLI process baseline could not be inspected; task remains active pending diagnostics',
+        source: 'PROCESS_DISCOVERY',
+        occurred_at: new Date().toISOString(),
+        recoverable: true,
+      })
+    }
 
     // 创建 Codex 实例
     // 支持两种认证模式：
@@ -1262,10 +1448,27 @@ export async function runQuery(
       turnOptions.outputSchema = runOptions.outputSchema
     }
     const { events } = await thread.runStreamed(input, turnOptions)
-    entry.pid = await (dependencies.detectSpawnedCodexPid ?? detectSpawnedCodexPid)(existingPids)
+    let pidDetectionStarted = false
 
     for await (const event of events) {
-      if (abortController.signal.aborted) break
+      // The SDK stream is lazy: wait until its first event starts iteration
+      // before looking for a new child PID.  Taking the snapshot immediately
+      // after runStreamed() can incorrectly classify a just-starting task as
+      // missing.
+      if (!pidDetectionStarted) {
+        pidDetectionStarted = true
+        try {
+          entry.pid = await (dependencies.detectSpawnedCodexPid ?? detectSpawnedCodexPid)(existingPids)
+        } catch {
+          markTaskAttention(taskId, {
+            code: 'PROCESS_UNVERIFIED',
+            message: 'Codex CLI process could not be discovered after stream start; task remains active pending diagnostics',
+            source: 'PROCESS_DISCOVERY',
+            occurred_at: new Date().toISOString(),
+            recoverable: true,
+          })
+        }
+      }
 
       switch (event.type) {
         case 'thread.started':
@@ -1276,8 +1479,13 @@ export async function runQuery(
         case 'turn.started':
           if (numTurns > 0) flushPendingAssistantAsCommentary()
           if (shouldAbortBeforeTurnStart(numTurns, maxTurnLimit)) {
-            abortReason = `Task aborted: max_turns limit reached (${maxTurnLimit})`
-            abortController.abort(abortReason)
+            markTaskAttention(taskId, {
+              code: 'TIMEOUT_PENDING_DECISION',
+              message: `max_turns limit reached (${maxTurnLimit}); task remains active pending an explicit decision`,
+              source: 'MAX_TURNS_GUARD',
+              occurred_at: new Date().toISOString(),
+              recoverable: true,
+            })
           }
           break
 
@@ -1350,6 +1558,7 @@ export async function runQuery(
         }
 
         case 'turn.completed':
+          providerTerminalObserved = true
           numTurns++
           if (event.usage) {
             totalUsage.inputTokens += event.usage.input_tokens || 0
@@ -1358,46 +1567,75 @@ export async function runQuery(
           break
 
         case 'turn.failed':
+          providerTerminalObserved = true
           flushPendingAssistantAsCommentary()
-          terminalFailureMessage = event.error.message
+          terminalFailureCode = safeSdkError(event.error.message).error_code
           broadcast.emit(createErrorEvent(
-            taskId, resolvedThreadId, terminalFailureMessage, broadcast.nextSeq()
+            taskId,
+            resolvedThreadId,
+            event.error.message,
+            broadcast.nextSeq(),
+            entry.status === 'cancel_requested' ? 'ABORTED' : 'FAILED',
           ))
-          terminalEventSent = true
           break
 
         case 'error':
           flushPendingAssistantAsCommentary()
-          terminalFailureMessage = event.message
+          // The SDK types describe this as a stream error, but it does not
+          // carry the durable provider-terminal evidence required to end a
+          // Navigator task. Preserve ownership and wait for an explicit
+          // turn.failed or verified process-exit observation instead.
           broadcast.emit(createErrorEvent(
-            taskId, resolvedThreadId, terminalFailureMessage, broadcast.nextSeq()
+            taskId,
+            resolvedThreadId,
+            'CODEX_STREAM_UNCONFIRMED',
+            broadcast.nextSeq(),
           ))
-          terminalEventSent = true
+          markTaskAttention(taskId, {
+            code: 'PROCESS_UNVERIFIED',
+            message: 'Codex SDK stream reported an unconfirmed error; task remains active pending diagnostics',
+            source: 'SDK_STREAM',
+            occurred_at: new Date().toISOString(),
+            recoverable: true,
+          })
           break
       }
 
-      if (terminalFailureMessage || abortController.signal.aborted) {
+      if (terminalFailureCode) {
         break
       }
     }
 
-    if (terminalFailureMessage) {
-      entry.status = 'failed'
-      entry.completedAt = Date.now()
+    if (terminalFailureCode) {
+      finalizeTask(
+        entry,
+        entry.status === 'cancel_requested' ? 'aborted' : 'failed',
+        entry.status === 'cancel_requested' ? 'PROVIDER_TERMINAL_AFTER_CANCEL' : terminalFailureCode,
+      )
       return
     }
 
-    if (abortController.signal.aborted) {
-      flushPendingAssistantAsCommentary()
-      entry.status = 'aborted'
-      entry.completedAt = Date.now()
-      if (!terminalEventSent) {
-        broadcast.emit(createErrorEvent(
-          taskId,
-          resolvedThreadId,
-          abortReason,
-          broadcast.nextSeq()
-        ))
+    // A clean iterator end is not sufficient proof that the provider/CLI
+    // reached a terminal state.  Treat it like an interrupted SSE stream
+    // unless the SDK explicitly emitted a terminal turn event.
+    if (!providerTerminalObserved) {
+      if (abortController.signal.aborted || entry.status === 'cancel_requested') {
+        const operationId = entry.terminationOperation?.operation_id
+        if (operationId) {
+          markTaskTerminationUnconfirmed(
+            taskId,
+            operationId,
+            'CANCEL_DISPATCHED_AWAITING_PROVIDER_OR_PROCESS_EXIT',
+          )
+        }
+      } else {
+        markTaskAttention(taskId, {
+          code: 'PROCESS_UNVERIFIED',
+          message: 'Codex SDK stream ended without a provider terminal observation; task remains active pending diagnostics',
+          source: 'SDK_STREAM',
+          occurred_at: new Date().toISOString(),
+          recoverable: true,
+        })
       }
       return
     }
@@ -1410,50 +1648,54 @@ export async function runQuery(
     )
     broadcast.emit(resultEvent)
 
-    entry.status = 'completed'
-    entry.completedAt = Date.now()
+    finalizeTask(
+      entry,
+      'completed',
+      entry.status === 'cancel_requested'
+        ? 'PROVIDER_COMPLETED_AFTER_CANCEL_REQUEST'
+        : 'PROVIDER_COMPLETED',
+    )
 
-  } catch (error: any) {
+  } catch {
     flushPendingAssistantAsCommentary()
-    if (abortController.signal.aborted) {
-      entry.status = 'aborted'
-      if (!terminalEventSent) {
-        const reason = typeof abortController.signal.reason === 'string'
-          ? abortController.signal.reason
-          : abortReason
-        const abortEvent = createErrorEvent(taskId, resolvedThreadId, reason, broadcast.nextSeq())
-        broadcast.emit(abortEvent)
+    if (abortController.signal.aborted || entry.status === 'cancel_requested') {
+      const operationId = entry.terminationOperation?.operation_id
+      if (operationId) {
+        markTaskTerminationUnconfirmed(
+          taskId,
+          operationId,
+          'CANCEL_DISPATCHED_AWAITING_PROVIDER_OR_PROCESS_EXIT',
+        )
+      } else {
+        markTaskAttention(taskId, {
+          code: 'PROCESS_UNVERIFIED',
+          message: 'Task interruption was observed without an authorized termination operation',
+          source: 'SDK_STREAM',
+          occurred_at: new Date().toISOString(),
+          recoverable: true,
+        })
       }
     } else {
-      entry.status = 'failed'
-      const errorMsg = error?.message || String(error)
-      if (!terminalEventSent) {
-        const errorEvent = createErrorEvent(taskId, resolvedThreadId, errorMsg, broadcast.nextSeq())
-        broadcast.emit(errorEvent)
-      }
+      // A local SDK/stream exception does not prove the managed CLI exited.
+      // Preserve task ownership until a provider terminal event or verified
+      // process exit is observed, and avoid reflecting raw runtime errors into
+      // the public event stream where they might contain sensitive details.
+      markTaskAttention(taskId, {
+        code: 'PROCESS_UNVERIFIED',
+        message: 'Codex SDK stream ended without a provider terminal observation; task remains active pending diagnostics',
+        source: 'SDK_STREAM',
+        occurred_at: new Date().toISOString(),
+        recoverable: true,
+      })
     }
-    entry.completedAt = Date.now()
   } finally {
-    broadcast.close()
+    if (isTaskTerminal(entry.status)) {
+      broadcast.close()
+    }
     if (generatedResumeModelCatalogPath) {
       await fs.unlink(generatedResumeModelCatalogPath).catch(() => undefined)
     }
   }
-}
-
-/**
- * Abort a running task
- */
-export function abortTask(taskId: string, reason = 'Task aborted'): boolean {
-  const entry = taskRegistry.get(taskId)
-  if (!entry || entry.status !== 'running') return false
-
-  entry.abortController?.abort(reason)
-  entry.status = 'aborted'
-  entry.completedAt = Date.now()
-  releaseCodexThreadReservationsForTask(taskId)
-
-  return true
 }
 
 /**
@@ -1469,7 +1711,7 @@ export function getTaskStatus(taskId: string): TaskEntry | undefined {
 export function cleanupOldTasks(): void {
   const MAX_COMPLETED = 100
   const completed = Array.from(taskRegistry.entries())
-    .filter(([, e]) => e.status !== 'running')
+    .filter(([, e]) => isTaskTerminal(e.status))
     .sort((a, b) => (b[1].completedAt || 0) - (a[1].completedAt || 0))
 
   if (completed.length > MAX_COMPLETED) {

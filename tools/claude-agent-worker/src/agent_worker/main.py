@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
     logger.info("  port           = %s", settings.port)
     logger.info("  worker_name    = %s", settings.worker_name or "(not set)")
     logger.info("  auth           = %s", "enabled" if settings.worker_token else "disabled (dev mode)")
-    logger.info("  allowed_cwds   = %s", settings.allowed_cwds or "(unrestricted)")
+    logger.info("  allowed_cwd_count = %d", len(settings.allowed_cwds))
     logger.info("  max_concurrent = %s", settings.max_concurrent_tasks)
     logger.info(
         "  anthropic_key  = %s",
@@ -117,10 +117,7 @@ async def lifespan(app: FastAPI):
         "  anthropic_token= %s",
         "configured" if settings.anthropic_auth_token else "(not set)",
     )
-    logger.info(
-        "  anthropic_url  = %s",
-        settings.anthropic_base_url or "(default)",
-    )
+    logger.info("  anthropic_url_configured = %s", bool(settings.anthropic_base_url))
     # Determine default auth mode
     if settings.anthropic_api_key:
         default_auth = "API_KEY"

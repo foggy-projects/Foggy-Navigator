@@ -204,6 +204,24 @@ invoke_script() {
   bash "$script" "$@"
 }
 
+invoke_worker_stop_script() {
+  local label="$1"
+  local relative_path="$2"
+  local script="$REPO_ROOT/$relative_path"
+
+  [ -f "$script" ] || {
+    echo "$label script not found: $script" >&2
+    return 1
+  }
+
+  echo
+  echo "==> $label"
+  if ! bash "$script"; then
+    echo "$label did not prove safe Worker quiescence; local stack will not continue or start a replacement Worker." >&2
+    return 1
+  fi
+}
+
 start_node_worker() {
   local label="$1"
   local dir="$2"
@@ -314,8 +332,8 @@ fi
 
 if [ "$ACTION" = "stop" ] || [ "$ACTION" = "restart" ]; then
   [ "$NO_GEMINI" -eq 1 ] || stop_port "gemini-worker" "$GEMINI_PORT"
-  [ "$NO_CODEX" -eq 1 ] || invoke_script "Stop Codex Worker" "tools/codex-agent-worker/stop.sh"
-  [ "$NO_CLAUDE" -eq 1 ] || invoke_script "Stop Claude Worker" "tools/claude-agent-worker/stop.sh"
+  [ "$NO_CODEX" -eq 1 ] || invoke_worker_stop_script "Stop Codex Worker" "tools/codex-agent-worker/stop.sh"
+  [ "$NO_CLAUDE" -eq 1 ] || invoke_worker_stop_script "Stop Claude Worker" "tools/claude-agent-worker/stop.sh"
   [ "$NO_LOCAL_BIZ" -eq 1 ] || stop_port "local-biz-worker" "$LOCAL_BIZ_PORT"
   [ "$NO_BACKEND" -eq 1 ] || invoke_script "Stop Java Backend" "scripts/stop-launcher.sh"
   [ "$NO_WSL_BIZ" -eq 1 ] || invoke_wsl_biz stop

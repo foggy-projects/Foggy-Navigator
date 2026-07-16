@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import net, { type AddressInfo } from 'node:net'
 import test from 'node:test'
 import { createApp } from '../src/app.js'
 import type { ExecutionResult, TaskExecutor } from '../src/app-server/executor.js'
+import { AppServerRuntimeError } from '../src/app-server/runtime.js'
 import { TaskStore } from '../src/persistence/task-store.js'
 import type { TaskRequest } from '../src/models.js'
 import { TaskManager } from '../src/task-manager.js'
 import { GeneratedImageStore } from '../src/generated-image-store.js'
+import { TerminationOperationReceiptLedger } from '../src/termination-operation.js'
 import { FakeExecutor, tempDirectory, testConfig, waitFor } from './helpers.js'
 import {
   ACTUAL_INSTANCE_HEADER,
@@ -46,6 +49,7 @@ test('instance affinity guard rejects every task route before manager access', a
     ['/api/v1/tasks/task-1/abort', { method: 'POST', headers }],
     ['/api/v1/tasks/task-1/respond', { method: 'POST', headers, body: JSON.stringify({ request_id: 'r', answers: {} }) }],
     ['/api/v1/tasks/task-1', { method: 'DELETE', headers }],
+    ['/api/v1/processes', { headers }],
   ]
   for (const [path, init] of requests) {
     const response = await fetch(`${baseUrl}${path}`, init)
@@ -99,6 +103,46 @@ test('task and capability responses prove the actual instance while absent expec
   })
   assert.notEqual(status.status, 409)
   assert.equal(status.headers.get(ACTUAL_INSTANCE_HEADER), config.instanceId)
+})
+
+test('managed process snapshots expose only fixed task-bound app-server identity without dispatching work', async t => {
+  const stateDir = await tempDirectory('codex-app-managed-process-snapshot-')
+  const config = testConfig(stateDir)
+  const executor = new ManagedProcessSnapshotExecutor([{
+    taskId: 'managed-process-task',
+    pid: 4242,
+    instanceId: 'instance-managed-process',
+  }])
+  const manager = new TaskManager(
+    config,
+    new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! }),
+    executor,
+  )
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const response = await fetch(`${baseUrl}/api/v1/processes`, { headers: authHeaders() })
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    processes: [{
+      pid: 4242,
+      command: 'codex-app-server',
+      process_type: 'codex-app-server',
+      is_orphan: false,
+      foggy_task_id: 'managed-process-task',
+      process_identity: 'app-server-instance:instance-managed-process',
+    }],
+    active_task_count: 1,
+    total: 1,
+  })
+  assert.equal(executor.snapshotCalls, 1)
+  assert.equal(executor.executeCalls, 0)
+  assert.equal(executor.manualPidKillCalls, 0)
 })
 
 test('generated images are served through an authenticated task route and removed with the tombstone', async t => {
@@ -609,23 +653,25 @@ test('abort endpoint interrupts an active task without creating another executio
   })
   await postTask(baseUrl, 'task-abort', { prompt: 'wait' })
   await waitFor(() => manager.get('task-abort')?.status === 'running')
-  const abort = await fetch(`${baseUrl}/api/v1/tasks/task-abort/abort`, { method: 'POST', headers: authHeaders() })
+  const abort = await fetch(`${baseUrl}/api/v1/tasks/task-abort/abort`, {
+    method: 'POST', headers: terminationHeaders('task-abort'),
+  })
   assert.equal(abort.status, 200)
   const abortBody = await abort.json() as Record<string, unknown>
   assert.equal(abortBody.abort_status, 'aborted')
   await waitFor(() => manager.get('task-abort')?.status === 'terminal')
   assert.equal(manager.get('task-abort')?.outcome, 'aborted')
   const repeatedAbort = await fetch(`${baseUrl}/api/v1/tasks/task-abort/abort`, {
-    method: 'POST', headers: authHeaders(),
+    method: 'POST', headers: terminationHeaders('task-abort'),
   })
   assert.equal(repeatedAbort.status, 200)
   const repeatedBody = await repeatedAbort.json() as Record<string, unknown>
-  assert.equal(repeatedBody.abort_status, 'aborted')
+  assert.equal(repeatedBody.abort_status, 'already_terminal')
   assert.equal(repeatedBody.outcome, 'aborted')
   assert.equal(executor.calls, 1)
 })
 
-test('abort reports an authoritative terminal outcome while pending interruption remains non-2xx', async t => {
+test('abort reports an authoritative terminal outcome while a pending interruption remains cancel-requested', async t => {
   const completedState = await tempDirectory('codex-app-abort-complete-')
   const completedConfig = testConfig(completedState)
   const completedStore = new TaskStore({ stateDir: completedState, encryptionKey: completedConfig.stateEncryptionKey! })
@@ -637,7 +683,7 @@ test('abort reports an authoritative terminal outcome while pending interruption
   await postTask(completedUrl, 'abort-completion-wins', { prompt: 'complete' })
   await waitFor(() => completedManager.get('abort-completion-wins')?.status === 'running')
   const completedAbort = await fetch(`${completedUrl}/api/v1/tasks/abort-completion-wins/abort`, {
-    method: 'POST', headers: authHeaders(),
+    method: 'POST', headers: terminationHeaders('abort-completion-wins'),
   })
   assert.equal(completedAbort.status, 200)
   const completedBody = await completedAbort.json() as Record<string, unknown>
@@ -659,16 +705,385 @@ test('abort reports an authoritative terminal outcome while pending interruption
   await postTask(pendingUrl, 'abort-pending', { prompt: 'wait' })
   await waitFor(() => pendingManager.get('abort-pending')?.status === 'running')
   const pendingAbort = await fetch(`${pendingUrl}/api/v1/tasks/abort-pending/abort`, {
-    method: 'POST', headers: authHeaders(),
+    method: 'POST', headers: terminationHeaders('abort-pending'),
   })
-  assert.equal(pendingAbort.status, 409)
-  assert.equal((await pendingAbort.json() as Record<string, unknown>).error, 'ABORT_PENDING')
+  assert.equal(pendingAbort.status, 202)
+  const pendingBody = await pendingAbort.json() as Record<string, unknown>
+  assert.equal(pendingBody.lifecycle_status, 'CANCEL_REQUESTED')
+  assert.equal(pendingBody.abort_status, 'cancel_requested')
+  const pendingStatus = await fetch(`${pendingUrl}/api/v1/tasks/abort-pending/status`, {
+    headers: authHeaders(),
+  })
+  assert.equal(pendingStatus.status, 200)
+  const pendingStatusBody = await pendingStatus.json() as Record<string, any>
+  assert.equal(pendingStatusBody.lifecycle_status, 'CANCEL_REQUESTED')
+  assert.equal(pendingStatusBody.termination_operation.status, 'CANCEL_REQUESTED')
+  assert.equal(pendingStatusBody.termination_operation.task_id, 'abort-pending')
+  assert.equal(pendingStatusBody.termination_operation.worker_id, pendingConfig.navigatorWorkerId)
+  assert.deepEqual(pendingStatusBody.available_actions, ['CONTINUE_WAIT', 'QUERY_DIAGNOSTICS'])
   assert.equal(pendingManager.get('abort-pending')?.status, 'running')
   pendingExecutor.finish()
   await waitFor(() => pendingManager.get('abort-pending')?.status === 'terminal')
   await new Promise<void>(resolve => pendingServer.close(() => resolve()))
   await fs.rm(pendingState, { recursive: true, force: true })
   t.after(() => undefined)
+})
+
+test('termination endpoints require a signed, task-bound, single-use operation and bind manual kill to its PID', async t => {
+  const stateDir = await tempDirectory('codex-app-termination-operation-')
+  const config = testConfig(stateDir)
+  const seed = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await seed.initialize()
+  await seed.accept('manual-kill-task', { prompt: 'wait for an authorized operation' })
+  await seed.transition('manual-kill-task', 'starting')
+  await seed.transition('manual-kill-task', 'committed', { thread_id: 'thread-manual-kill' })
+  await seed.transition('manual-kill-task', 'running', {
+    thread_id: 'thread-manual-kill',
+    turn_id: 'turn-manual-kill',
+    app_server_instance_id: 'instance-manual-kill',
+  })
+  const executor = new ManualKillExecutor()
+  const manager = new TaskManager(config, seed, executor)
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const unsigned = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST', headers: authHeaders(),
+  })
+  assert.equal(unsigned.status, 400)
+  assert.equal((await unsigned.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_MISSING')
+
+  const invalidSignature = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, signatureToken: 'wrong-worker-token',
+    }),
+  })
+  assert.equal(invalidSignature.status, 403)
+  assert.equal((await invalidSignature.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_SIGNATURE_INVALID')
+
+  const expired = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    }),
+  })
+  assert.equal(expired.status, 400)
+  assert.equal((await expired.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_EXPIRED')
+
+  const missingWorkerBinding = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, workerId: '',
+    }),
+  })
+  assert.equal(missingWorkerBinding.status, 400)
+  assert.equal((await missingWorkerBinding.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_INVALID')
+
+  const missingProcessIdentity = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, expectedProcessIdentity: null,
+    }),
+  })
+  assert.equal(missingProcessIdentity.status, 400)
+  assert.equal((await missingProcessIdentity.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_INVALID')
+
+  const wrongWorkerBinding = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, workerId: 'another-navigator-worker',
+    }),
+  })
+  assert.equal(wrongWorkerBinding.status, 409)
+  assert.equal((await wrongWorkerBinding.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_MISMATCH')
+
+  const wrongTask = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('some-other-task', { kind: 'MANUAL_PID_KILL', expectedPid: 4242 }),
+  })
+  assert.equal(wrongTask.status, 409)
+  assert.equal((await wrongTask.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_MISMATCH')
+
+  const wrongPid = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', { kind: 'MANUAL_PID_KILL', expectedPid: 4243 }),
+  })
+  assert.equal(wrongPid.status, 409)
+  assert.equal((await wrongPid.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_MISMATCH')
+
+  const invalidOrigin = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, origin: 'UPSTREAM_USER',
+    }),
+  })
+  assert.equal(invalidOrigin.status, 400)
+  assert.equal((await invalidOrigin.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_INVALID')
+
+  const validHeaders = terminationHeaders('manual-kill-task', {
+    kind: 'MANUAL_PID_KILL', expectedPid: 4242,
+  })
+  const killed = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST', headers: validHeaders,
+  })
+  assert.equal(killed.status, 200)
+  const killedBody = await killed.json() as Record<string, any>
+  assert.equal(killedBody.observed_exit, true)
+  assert.equal(killedBody.lifecycle_status, 'ABORTED')
+  assert.equal(killedBody.termination_operation.status, 'OBSERVED_EXIT')
+  assert.equal(killedBody.termination_operation.task_id, 'manual-kill-task')
+  assert.equal(killedBody.termination_operation.worker_id, config.navigatorWorkerId)
+  assert.equal(killedBody.termination_operation.expected_pid, 4242)
+  assert.equal(killedBody.termination_operation.expected_process_identity, 'app-server-instance:instance-manual-kill')
+  assert.deepEqual(executor.calls, [{ taskId: 'manual-kill-task', pid: 4242 }])
+
+  const replayed = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST', headers: validHeaders,
+  })
+  assert.equal(replayed.status, 409)
+  assert.equal((await replayed.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_REPLAYED')
+
+  const corruptOperationId = 'manual-kill-corrupt-ledger-operation'
+  const corruptReceipt = new TerminationOperationReceiptLedger(
+    path.join(stateDir, 'termination-operations', 'receipts'),
+  ).receiptPathFor(config.navigatorWorkerId, corruptOperationId)
+  await fs.mkdir(path.dirname(corruptReceipt), { recursive: true })
+  await fs.writeFile(corruptReceipt, '{not-json', 'utf8')
+  const unavailable = await fetch(`${baseUrl}/api/v1/tasks/manual-kill-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('manual-kill-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, operationId: corruptOperationId,
+    }),
+  })
+  assert.equal(unavailable.status, 503)
+  assert.equal((await unavailable.json() as Record<string, unknown>).error,
+    'TERMINATION_OPERATION_REPLAY_LEDGER_UNAVAILABLE')
+  assert.deepEqual(executor.calls, [{ taskId: 'manual-kill-task', pid: 4242 }])
+})
+
+test('a fresh manual PID capability cannot attribute a prior terminal task to itself', async t => {
+  const stateDir = await tempDirectory('codex-app-terminal-manual-kill-')
+  const config = testConfig(stateDir)
+  const seed = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await seed.initialize()
+  await seed.accept('already-terminal-manual-kill', { prompt: 'historical task' })
+  await seed.transition('already-terminal-manual-kill', 'starting')
+  await seed.transition('already-terminal-manual-kill', 'committed', { thread_id: 'thread-historical' })
+  await seed.transition('already-terminal-manual-kill', 'running', {
+    thread_id: 'thread-historical',
+    turn_id: 'turn-historical',
+    app_server_instance_id: 'instance-historical',
+  })
+  const historicalOperation = {
+    operation_id: 'historical-manual-pid-operation',
+    task_id: 'already-terminal-manual-kill',
+    worker_id: config.navigatorWorkerId,
+    kind: 'MANUAL_PID_KILL' as const,
+    origin: 'ADMIN_MANUAL' as const,
+    actor_id: 'historical-operator',
+    actor_type: 'MANUAL_OPERATOR',
+    authorization_decision_id: 'historical-decision',
+    reason_code: 'MANUAL_PID_KILL',
+    correlation_id: 'historical-correlation',
+    issued_at: new Date(0).toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    requested_at: new Date(0).toISOString(),
+    status: 'OBSERVED_EXIT' as const,
+    expected_pid: 4242,
+    expected_process_identity: 'app-server-instance:instance-historical',
+    result_code: 'TASK_ABORTED',
+    observed_exit_at: new Date(0).toISOString(),
+  }
+  await seed.transition('already-terminal-manual-kill', 'terminal', {
+    outcome: 'aborted',
+    error_code: 'TASK_ABORTED',
+    termination_operation: historicalOperation,
+  })
+  const executor = new ManualKillExecutor()
+  const manager = new TaskManager(config, seed, executor)
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const response = await fetch(`${baseUrl}/api/v1/tasks/already-terminal-manual-kill/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('already-terminal-manual-kill', {
+      kind: 'MANUAL_PID_KILL',
+      expectedPid: 4242,
+      operationId: 'fresh-manual-pid-operation',
+      expectedProcessIdentity: 'app-server-instance:wrong-or-recycled-runtime',
+    }),
+  })
+
+  assert.equal(response.status, 202)
+  const body = await response.json() as Record<string, any>
+  assert.equal(body.status, 'terminal')
+  assert.equal(body.lifecycle_status, 'CANCEL_REQUESTED')
+  assert.equal(body.observed_exit, false)
+  assert.equal(body.termination_operation.operation_id, historicalOperation.operation_id)
+  assert.equal(body.termination_operation.task_id, historicalOperation.task_id)
+  assert.equal(body.termination_operation.status, 'OBSERVED_EXIT')
+  assert.deepEqual(executor.calls, [])
+  const record = manager.get('already-terminal-manual-kill')
+  assert.equal(record?.status, 'terminal')
+  assert.equal(record?.termination_operation?.operation_id, historicalOperation.operation_id)
+})
+
+test('a pending termination operation rejects different signed operations before dispatch', async t => {
+  const stateDir = await tempDirectory('codex-app-termination-operation-conflict-')
+  const config = testConfig(stateDir)
+  const seed = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await seed.initialize()
+  await seed.accept('operation-conflict-task', { prompt: 'wait for one termination decision' })
+  await seed.transition('operation-conflict-task', 'starting')
+  await seed.transition('operation-conflict-task', 'committed', { thread_id: 'thread-operation-conflict' })
+  await seed.transition('operation-conflict-task', 'running', {
+    thread_id: 'thread-operation-conflict',
+    turn_id: 'turn-operation-conflict',
+    app_server_instance_id: 'instance-manual-kill',
+  })
+  const executor = new PendingTerminationOperationExecutor()
+  const manager = new TaskManager(config, seed, executor)
+  await manager.initialize({ resume: false })
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const first = await fetch(`${baseUrl}/api/v1/tasks/operation-conflict-task/abort`, {
+    method: 'POST',
+    headers: terminationHeaders('operation-conflict-task', { operationId: 'remote-cancel-operation-a' }),
+  })
+  assert.equal(first.status, 202)
+  assert.equal((await first.json() as Record<string, any>).termination_operation.operation_id, 'remote-cancel-operation-a')
+
+  const manual = await fetch(`${baseUrl}/api/v1/tasks/operation-conflict-task/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders('operation-conflict-task', {
+      kind: 'MANUAL_PID_KILL', expectedPid: 4242, operationId: 'manual-pid-operation-b',
+    }),
+  })
+  assert.equal(manual.status, 409)
+  assert.equal((await manual.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_PENDING')
+
+  const secondRemote = await fetch(`${baseUrl}/api/v1/tasks/operation-conflict-task/abort`, {
+    method: 'POST',
+    headers: terminationHeaders('operation-conflict-task', { operationId: 'remote-cancel-operation-c' }),
+  })
+  assert.equal(secondRemote.status, 409)
+  assert.equal((await secondRemote.json() as Record<string, unknown>).error, 'TERMINATION_OPERATION_PENDING')
+  assert.deepEqual(executor.manualCalls, [])
+  const record = manager.get('operation-conflict-task')
+  assert.equal(record?.status, 'running')
+  assert.equal(record?.termination_operation?.operation_id, 'remote-cancel-operation-a')
+})
+
+test('active manual PID termination serializes its durable outcome with the execution unwind', async () => {
+  for (const observedExit of [true, false]) {
+    const suffix = observedExit ? 'verified' : 'unconfirmed'
+    const stateDir = await tempDirectory(`codex-app-active-manual-${suffix}-`)
+    const config = testConfig(stateDir)
+    const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+    const executor = new ActiveManualPidTerminationExecutor(observedExit)
+    const manager = new TaskManager(config, store, executor)
+    await manager.initialize()
+    const server = createApp(config, manager).listen(0, '127.0.0.1')
+    await new Promise<void>(resolve => server.once('listening', resolve))
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    try {
+      const taskId = `active-manual-${suffix}`
+      assert.equal((await postTask(baseUrl, taskId, { prompt: 'wait for authorized manual termination' })).response.status, 202)
+      await waitFor(() => manager.get(taskId)?.status === 'running')
+
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/processes/4242/kill`, {
+        method: 'POST', headers: terminationHeaders(taskId, {
+          kind: 'MANUAL_PID_KILL', expectedPid: 4242,
+        }),
+      })
+      assert.equal(response.status, observedExit ? 200 : 202)
+      const body = await response.json() as Record<string, any>
+      assert.equal(body.observed_exit, observedExit)
+      await waitFor(() => manager.activeCount() === 0)
+
+      const record = manager.get(taskId)
+      assert.equal(executor.manualPidKillCalls, 1)
+      if (observedExit) {
+        assert.equal(record?.status, 'terminal')
+        assert.equal(record?.outcome, 'aborted')
+        assert.deepEqual(record?.attention || [], [])
+        const errors = manager.getBroadcast(taskId).getEventsAfter(0)
+          .filter(event => event.type === 'error')
+        assert.equal(errors.filter(event => event.subtype === 'TASK_ABORTED').length, 1)
+        assert.equal(errors.some(event => event.subtype === 'PROCESS_UNVERIFIED'), false)
+      } else {
+        assert.notEqual(record?.status, 'terminal')
+        assert.equal(record?.termination_operation?.result_code, 'MANUAL_PID_KILL_UNCONFIRMED')
+        assert.deepEqual(record?.attention?.map(item => `${item.status}:${item.reason_code}`), [
+          'TERMINATION_UNCONFIRMED:MANUAL_PID_KILL_UNCONFIRMED',
+        ])
+      }
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await fs.rm(stateDir, { recursive: true, force: true })
+    }
+  }
+})
+
+test('a signed manual PID request yields to an observed provider terminal without false cancellation provenance', async t => {
+  const stateDir = await tempDirectory('codex-app-provider-terminal-manual-race-')
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const executor = new ProviderTerminalManualRaceExecutor()
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const taskId = 'provider-terminal-manual-race'
+  assert.equal((await postTask(baseUrl, taskId, { prompt: 'complete from the provider' })).response.status, 202)
+  await waitFor(() => manager.get(taskId)?.status === 'running')
+
+  const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/processes/4242/kill`, {
+    method: 'POST',
+    headers: terminationHeaders(taskId, { kind: 'MANUAL_PID_KILL', expectedPid: 4242 }),
+  })
+  assert.equal(response.status, 202)
+  const body = await response.json() as Record<string, any>
+  assert.equal(body.observed_exit, false)
+  assert.equal(body.provider_terminal_observed, true)
+  assert.equal(body.lifecycle_status, 'RUNNING')
+  assert.equal(body.termination_operation, undefined)
+
+  await waitFor(() => manager.get(taskId)?.status === 'terminal')
+  const record = manager.get(taskId)
+  assert.equal(executor.manualPidKillCalls, 1)
+  assert.equal(record?.outcome, 'completed')
+  assert.equal(record?.abort_requested_at, undefined)
+  assert.equal(record?.termination_operation, undefined)
+  assert.deepEqual(record?.attention || [], [])
+  const events = manager.getBroadcast(taskId).getEventsAfter(0)
+  assert.equal(events.filter(event => event.type === 'result').length, 1)
+  assert.equal(events.some(event => event.type === 'error' && event.subtype === 'TASK_ABORTED'), false)
 })
 
 test('terminal cleanup removes payload/events but preserves a permanent idempotency tombstone', async t => {
@@ -750,6 +1165,57 @@ async function postTask(baseUrl: string, key: string, body: Record<string, unkno
 
 function authHeaders(): Record<string, string> {
   return { Authorization: 'Bearer test-worker-token' }
+}
+
+function terminationHeaders(
+  taskId: string,
+  options: {
+    kind?: 'REMOTE_CANCEL' | 'MANUAL_PID_KILL'
+    origin?: 'UPSTREAM_USER' | 'UPSTREAM_SYSTEM' | 'ADMIN_MANUAL'
+    expectedPid?: number
+    operationId?: string
+    expiresAt?: string
+    signatureToken?: string
+    targetWorkerId?: string
+    workerId?: string
+    /** null deliberately omits the claim for negative-contract coverage. */
+    expectedProcessIdentity?: string | null
+  } = {},
+): Record<string, string> {
+  const kind = options.kind || 'REMOTE_CANCEL'
+  const issuedAt = new Date().toISOString()
+  const operation: Record<string, unknown> = {
+    schema_version: 1,
+    operation_id: options.operationId || `operation-${crypto.randomUUID()}`,
+    task_id: taskId,
+    worker_id: options.workerId === undefined ? 'test-navigator-worker' : options.workerId,
+    kind,
+    origin: options.origin || (kind === 'MANUAL_PID_KILL' ? 'ADMIN_MANUAL' : 'UPSTREAM_USER'),
+    actor_id: 'test-user',
+    actor_type: 'USER',
+    authorization_decision_id: 'decision-test',
+    reason_code: 'USER_REQUESTED',
+    correlation_id: `correlation-${crypto.randomUUID()}`,
+    issued_at: issuedAt,
+    expires_at: options.expiresAt || new Date(Date.now() + 60_000).toISOString(),
+  }
+  if (options.expectedPid !== undefined) operation.expected_pid = options.expectedPid
+  const expectedProcessIdentity = options.expectedProcessIdentity === undefined
+    ? (kind === 'MANUAL_PID_KILL' ? 'app-server-instance:instance-manual-kill' : undefined)
+    : options.expectedProcessIdentity
+  if (expectedProcessIdentity !== undefined && expectedProcessIdentity !== null) {
+    operation.expected_process_identity = expectedProcessIdentity
+  }
+  if (options.targetWorkerId !== undefined) operation.target_worker_id = options.targetWorkerId
+  const encoded = Buffer.from(JSON.stringify(operation)).toString('base64url')
+  const signature = crypto.createHmac('sha256', options.signatureToken || 'test-worker-token')
+    .update(encoded)
+    .digest('base64url')
+  return {
+    ...authHeaders(),
+    'X-Navigator-Termination-Operation': encoded,
+    'X-Navigator-Termination-Signature': signature,
+  }
 }
 
 async function requestWithDeclaredLength(
@@ -846,6 +1312,133 @@ class PendingAbortExecutor implements TaskExecutor {
     }
   }
   finish(): void { this.resolve() }
+}
+
+class ManagedProcessSnapshotExecutor implements TaskExecutor {
+  snapshotCalls = 0
+  executeCalls = 0
+  manualPidKillCalls = 0
+
+  constructor(private readonly snapshots: Array<{
+    taskId: string
+    pid: number
+    instanceId: string
+  }>) {}
+
+  async execute(): Promise<ExecutionResult> {
+    this.executeCalls++
+    throw new Error('process snapshot must not execute a task')
+  }
+
+  listManagedTaskProcesses() {
+    this.snapshotCalls++
+    return this.snapshots
+  }
+
+  async manualPidKill(): Promise<{ observed_exit: boolean }> {
+    this.manualPidKillCalls++
+    return { observed_exit: false }
+  }
+}
+
+class ManualKillExecutor implements TaskExecutor {
+  readonly calls: Array<{ taskId: string; pid: number }> = []
+
+  async execute(): Promise<ExecutionResult> {
+    throw new Error('seeded manual-kill task must not be executed')
+  }
+
+  async manualPidKill(taskId: string, pid: number): Promise<{ observed_exit: boolean }> {
+    this.calls.push({ taskId, pid })
+    return { observed_exit: true }
+  }
+}
+
+class PendingTerminationOperationExecutor implements TaskExecutor {
+  readonly manualCalls: Array<{ taskId: string; pid: number }> = []
+
+  async execute(): Promise<ExecutionResult> {
+    throw new Error('seeded operation-conflict task must not be executed')
+  }
+
+  async requestExplicitAbort(): Promise<'requested'> {
+    return 'requested'
+  }
+
+  async reconcile(): Promise<{ status: 'unknown'; threadId: string }> {
+    return { status: 'unknown', threadId: 'thread-operation-conflict' }
+  }
+
+  async manualPidKill(taskId: string, pid: number): Promise<{ observed_exit: boolean }> {
+    this.manualCalls.push({ taskId, pid })
+    return { observed_exit: true }
+  }
+}
+
+class ActiveManualPidTerminationExecutor implements TaskExecutor {
+  private rejectExecution?: (error: Error) => void
+  manualPidKillCalls = 0
+
+  constructor(private readonly observedExit: boolean) {}
+
+  async execute(options: Parameters<TaskExecutor['execute']>[0]): Promise<ExecutionResult> {
+    await options.callbacks.onInstanceResolved('instance-manual-kill', 'lane-manual-kill')
+    await options.callbacks.onThreadResolved('thread-active-manual-kill')
+    await options.callbacks.onExecutionCommitted('thread-active-manual-kill')
+    await options.callbacks.onTurnStarted('thread-active-manual-kill', 'turn-active-manual-kill')
+    return new Promise<ExecutionResult>((_resolve, reject) => {
+      this.rejectExecution = reject
+    })
+  }
+
+  async manualPidKill(): Promise<{ observed_exit: boolean }> {
+    this.manualPidKillCalls++
+    const code = this.observedExit
+      ? 'APP_SERVER_AUTHORIZED_PROCESS_EXIT'
+      : 'APP_SERVER_MANUAL_TERMINATION_UNCONFIRMED'
+    this.rejectExecution?.(new AppServerRuntimeError('authorized manual PID test outcome', {
+      executionCommitted: true,
+      turnMayHaveStarted: !this.observedExit,
+      threadId: 'thread-active-manual-kill',
+      turnId: 'turn-active-manual-kill',
+      reason: this.observedExit ? 'aborted' : 'runtime',
+      code,
+    }))
+    // Give execute() a chance to enter its catch path while the signed manual
+    // operation still owns the task-operation lock.
+    await Promise.resolve()
+    return { observed_exit: this.observedExit }
+  }
+}
+
+class ProviderTerminalManualRaceExecutor implements TaskExecutor {
+  manualPidKillCalls = 0
+  private completeProviderTurn?: () => void
+
+  async execute(options: Parameters<TaskExecutor['execute']>[0]): Promise<ExecutionResult> {
+    await options.callbacks.onInstanceResolved('instance-manual-kill', 'lane-manual-kill')
+    await options.callbacks.onThreadResolved('thread-provider-terminal-race')
+    await options.callbacks.onExecutionCommitted('thread-provider-terminal-race')
+    await options.callbacks.onTurnStarted('thread-provider-terminal-race', 'turn-provider-terminal-race')
+    await new Promise<void>(resolve => { this.completeProviderTurn = resolve })
+    return {
+      threadId: 'thread-provider-terminal-race',
+      turnId: 'turn-provider-terminal-race',
+      status: 'completed',
+      assistantText: 'provider completion',
+      model: 'gpt-5.6-sol',
+      durationMs: 1,
+    }
+  }
+
+  async manualPidKill(): Promise<{ observed_exit: false; provider_terminal_observed: true }> {
+    this.manualPidKillCalls++
+    this.completeProviderTurn?.()
+    // Let execute() reach TaskManager's per-task terminal gate while this
+    // signed PID request still owns that gate.
+    await Promise.resolve()
+    return { observed_exit: false, provider_terminal_observed: true }
+  }
 }
 
 class SlowTaskStore extends TaskStore {

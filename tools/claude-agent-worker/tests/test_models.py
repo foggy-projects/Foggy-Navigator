@@ -132,6 +132,18 @@ class TestQueryEvent:
         evt = QueryEvent(type="error", task_id="t1", error="Timeout")
         assert evt.error == "Timeout"
 
+    def test_terminal_evidence_fields_are_additive(self):
+        evt = QueryEvent(
+            type="result",
+            task_id="t1",
+            terminal_observed=True,
+            terminal_status="COMPLETED",
+            terminal_source="PROVIDER_TERMINAL_EVENT",
+        )
+        assert evt.terminal_observed is True
+        assert evt.terminal_status == "COMPLETED"
+        assert evt.terminal_source == "PROVIDER_TERMINAL_EVENT"
+
     def test_serialization_roundtrip(self):
         evt = QueryEvent(type="assistant_text", task_id="t1", content="Hi")
         json_str = evt.model_dump_json()
@@ -314,6 +326,7 @@ class TestCliProcessInfo:
         assert p.command == ""
         assert p.memory_mb == 0.0
         assert p.is_orphan is True
+        assert p.process_identity is None
         assert p.claude_session_id is None
         assert p.foggy_task_id is None
 
@@ -323,6 +336,7 @@ class TestCliProcessInfo:
             command="node cli.js --stream-json",
             memory_mb=150.3,
             started_at="2026-01-15T10:00:00",
+            process_identity="claude-cli:5678:2026-01-15T10:00:00",
             is_orphan=False,
             claude_session_id="cs-123",
             foggy_task_id="ft-456",
@@ -330,6 +344,7 @@ class TestCliProcessInfo:
         )
         assert p.is_orphan is False
         assert p.foggy_session_id == "fs-789"
+        assert p.process_identity == "claude-cli:5678:2026-01-15T10:00:00"
 
 
 # ---------------------------------------------------------------------------

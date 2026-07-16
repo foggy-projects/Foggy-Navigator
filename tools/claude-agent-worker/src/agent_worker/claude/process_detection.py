@@ -137,7 +137,12 @@ class WindowsDetector:
                     started_at=started,
                 ))
         except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
-            logger.warning("Failed to get process details via PowerShell: %s", exc)
+            logger.warning(
+                "PowerShell process details unavailable: "
+                "event_name=PROCESS_DETAILS_POWERSHELL_FAILED pid_count=%d error_type=%s",
+                len(pids),
+                type(exc).__name__,
+            )
             for pid in pids:
                 results.append(ProcessInfo(pid=pid))
 
@@ -161,7 +166,11 @@ class WindowsDetector:
                 if line.isdigit():
                     out_pids.add(int(line))
         except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
-            logger.debug("PowerShell process query failed: %s", exc)
+            logger.debug(
+                "PowerShell process query failed: "
+                "event_name=PROCESS_QUERY_POWERSHELL_FAILED error_type=%s",
+                type(exc).__name__,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +250,12 @@ class UnixDetector:
                     started_at=started,
                 ))
         except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
-            logger.warning("Failed to get process details via ps: %s", exc)
+            logger.warning(
+                "ps process details unavailable: "
+                "event_name=PROCESS_DETAILS_PS_FAILED pid_count=%d error_type=%s",
+                len(pids),
+                type(exc).__name__,
+            )
             for pid in pids:
                 results.append(ProcessInfo(pid=pid))
 
@@ -302,12 +316,20 @@ class MacOSDetector:
                     name = child.name()
                     if name in self._TARGET_NAMES:
                         found.add(child.pid)
-                        logger.info("macOS: found child CLI process pid=%d name=%r", child.pid, name)
+                        logger.info(
+                            "macOS CLI child detected: "
+                            "event_name=CLI_CHILD_DETECTED pid=%d",
+                            child.pid,
+                        )
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass
             logger.info("macOS: %d total children, %d CLI pids", len(children), len(found))
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            logger.warning("macOS: failed to enumerate children: %s", exc)
+            logger.warning(
+                "macOS CLI child enumeration failed: "
+                "event_name=CLI_CHILD_ENUMERATION_FAILED error_type=%s",
+                type(exc).__name__,
+            )
 
         return found
 
@@ -359,8 +381,8 @@ def register_pid(pid: int, task_id: str) -> None:
     **Ownership rule**: if *pid* is already registered to a *different* task,
     the registration is silently skipped.  ``_capture_child_pids()`` scans
     **all** children of the Worker process, so concurrent tasks would
-    cross-register each other's CLIs without this guard — causing "abort
-    one task → kills all CLIs" (false-kill / 误杀).
+    cross-register each other's CLIs without this guard — causing one task's
+    lifecycle observation to be attributed to another (false association).
     """
     existing_owner = _tracked_pids.get(pid)
     if existing_owner is not None and existing_owner != task_id:
@@ -410,8 +432,9 @@ def get_pids_for_task(task_id: str) -> list[int]:
     """Return all tracked PIDs associated with the given task (read-only snapshot).
 
     Unlike ``unregister_pids_for_task`` this does **not** mutate ``_tracked_pids``.
-    Used by ``abort_query()`` to snapshot PIDs before cancellation so they can
-    be killed even after the asyncio finally block unregisters them.
+    Used by lifecycle observers to correlate stream completion with managed
+    process exit.  Explicit task cancellation never signals these PIDs
+    directly; manual PID termination is a separately authorized operation.
     """
     return [pid for pid, tid in _tracked_pids.items() if tid == task_id]
 
@@ -423,8 +446,8 @@ _CLI_PROCESS_NAMES: frozenset[str] = frozenset(("node", "claude"))
 def is_cli_process(pid: int) -> bool:
     """Check whether *pid* still belongs to a recognised CLI process.
 
-    Used by ``abort_query()`` before sending SIGTERM to avoid killing an
-    unrelated process that reused the same PID after the original CLI exited.
+    Used by lifecycle observers before treating a tracked PID as active, so a
+    reused PID cannot be mistaken for the managed CLI.
 
     Returns ``True`` only when the process exists **and** its name matches
     one of the known CLI executable names (``node``, ``claude``).

@@ -85,6 +85,27 @@ class QueryEvent(BaseModel):
     num_turns: int | None = Field(None, description="Number of agentic turns (result events)")
     model: str | None = Field(None, description="Model used (assistant_text / result events)")
     error: str | None = Field(None, description="Error message (error events)")
+    terminal_observed: bool | None = Field(
+        None,
+        description="Whether this event carries independently verified terminal evidence",
+    )
+    terminal_status: str | None = Field(
+        None,
+        description="Verified terminal status: COMPLETED | FAILED | ABORTED",
+    )
+    terminal_source: str | None = Field(
+        None,
+        description="Provider or verified-process source for terminal evidence",
+    )
+    # Additive GOV-004 lifecycle fields.  Older consumers can ignore them.
+    attention: list[dict[str, Any]] | None = Field(None, description="Recoverable lifecycle attention entries")
+    attention_status: str | None = Field(None, description="Latest recoverable attention code")
+    available_actions: list[str] | None = Field(None, description="Supported next lifecycle actions")
+    lifecycle_state: str | None = Field(None, description="Stable task lifecycle state")
+    termination_operation: dict[str, Any] | None = Field(
+        None,
+        description="Safe summary of a signed termination operation; never includes capability or signature",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +142,25 @@ class SessionInfo(BaseModel):
 # ---------------------------------------------------------------------------
 
 class AbortResponse(BaseModel):
-    """Response for ``POST /api/v1/query/{task_id}/abort``."""
+    """Acknowledgement for an explicitly-authorized cancellation request.
+
+    ``CANCEL_REQUESTED`` is deliberately non-terminal.  Navigator must wait
+    for the task stream / status evidence to report the actual CLI exit before
+    considering the task aborted or releasing its execution ownership.
+    """
 
     task_id: str
     status: str
-    killed_pids: list[int] = Field(default_factory=list, description="PIDs of CLI processes that were killed")
+    operation_id: str | None = Field(None, description="One-time Navigator termination operation ID")
+    attention_state: str | None = Field(None, description="Non-terminal lifecycle attention state")
+    observed_exit: bool = Field(False, description="True only after Worker observed the CLI/stream exit")
+    attention: list[dict[str, Any]] = Field(default_factory=list, description="Recoverable lifecycle attention entries")
+    available_actions: list[str] = Field(default_factory=list, description="Supported next lifecycle actions")
+    lifecycle_state: str = Field("CANCEL_REQUESTED", description="Stable non-terminal lifecycle state")
+    termination_operation: dict[str, Any] | None = Field(
+        None,
+        description="Safe summary of a signed termination operation; never includes capability or signature",
+    )
 
 
 class PermissionResponse(BaseModel):
@@ -403,7 +438,14 @@ class CliProcessInfo(BaseModel):
     """A single Claude CLI node process."""
 
     pid: int
-    command: str = Field("", description="Command line excerpt (truncated to 200 chars)")
+    process_identity: str | None = Field(
+        None,
+        description="Opaque PID/start-time identity used to reject PID reuse during manual termination",
+    )
+    # Retained only while the Worker enriches a process with its ``--resume``
+    # binding.  A command line can contain prompt text, local paths, or
+    # credentials, so it must never cross the /api/v1/processes boundary.
+    command: str = Field("", exclude=True, repr=False)
     memory_mb: float = Field(0.0, description="Working set memory in MB")
     started_at: str = Field("", description="Process start time (ISO 8601 or raw)")
     is_orphan: bool = Field(True, description="True if not associated with any active task")
@@ -428,11 +470,26 @@ class KillProcessRequest(BaseModel):
 
 
 class KillProcessResponse(BaseModel):
-    """Response for ``POST /api/v1/processes/{pid}/kill``."""
+    """Non-terminal acknowledgement for ``POST /api/v1/processes/{pid}/kill``."""
 
     pid: int
-    status: str = Field(..., description="killed | not_found | failed")
+    status: str = Field(..., description="KILL_REQUESTED | not_found | failed")
     message: str = ""
+    operation_id: str | None = Field(None, description="One-time Navigator manual PID operation ID")
+    lifecycle_status: str = Field(
+        "KILL_REQUESTED_UNVERIFIED",
+        description="Dispatch/observation state; never a task terminal state by itself",
+    )
+    observed_exit: bool = Field(False, description="True only after a separate lifecycle observer confirms exit")
+    attention_state: str | None = Field(None, description="Non-terminal lifecycle attention state")
+    task_id: str | None = Field(None, description="Task identity bound to the manual PID operation")
+    attention: list[dict[str, Any]] = Field(default_factory=list, description="Recoverable lifecycle attention entries")
+    available_actions: list[str] = Field(default_factory=list, description="Supported next lifecycle actions")
+    lifecycle_state: str = Field("RUNNING", description="Stable non-terminal lifecycle state")
+    termination_operation: dict[str, Any] | None = Field(
+        None,
+        description="Safe summary of a signed termination operation; never includes capability or signature",
+    )
 
 
 # ---------------------------------------------------------------------------

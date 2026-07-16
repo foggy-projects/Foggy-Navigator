@@ -28,7 +28,7 @@ import static org.mockito.Mockito.*;
  * <p>
  * 测试四象限状态机逻辑：
  * Q1: DB active + CLI alive → touchAlive
- * Q2: DB active + CLI dead → miss count → eventually COMPLETED
+ * Q2: DB active + CLI dead → retain ownership and request evidence
  * Q3: DB done + CLI alive → orphan detection
  * Q4: DB done + CLI dead → cleanup orphan
  */
@@ -136,7 +136,7 @@ class TaskStateReconcilerTest {
     }
 
     @Test
-    void reconcileAll_activeTask_cliDead_workerClosed_seqAligned_completesStaleTask() {
+    void reconcileAll_activeTask_cliDead_workerClosed_seqAlignedRetainsTaskPendingEvidence() {
         ClaudeWorkerEntity worker = buildWorker("w1");
         when(workerRepository.findAll()).thenReturn(List.of(worker));
         when(workerService.createClient(worker)).thenReturn(workerClient);
@@ -149,7 +149,7 @@ class TaskStateReconcilerTest {
         when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
                 .thenReturn(List.of(task));
 
-        // Worker closed with aligned seq
+        // A closed stream with aligned sequence is not terminal evidence.
         when(workerClient.getTaskStatus("task-1"))
                 .thenReturn(Mono.just(Map.of("latest_seq", 5, "closed", true)));
         when(streamRelay.getLastAckedSeq("task-1"))
@@ -157,14 +157,15 @@ class TaskStateReconcilerTest {
 
         reconciler.reconcileAll();
 
-        verify(taskService).reconcilerCompleteTask("task-1",
-                "Worker stream closed and all events were acknowledged by Java");
+        verify(taskService).markLifecycleAttention("task-1", "PROCESS_UNVERIFIED");
+        verify(taskService, never()).reconcilerCompleteTask(anyString(), anyString());
     }
 
     @Test
     @SuppressWarnings("unchecked")
-    void reconcileAll_activeTask_cliDead_miss3_confirmedDead_completesTask() throws Exception {
-        // Pre-populate miss count to 2 (one more miss will trigger completion)
+    void reconcileAll_activeTask_cliDead_miss3RetainsTaskPendingEvidence() throws Exception {
+        // Missing-process observations accumulate for diagnostics but never
+        // manufacture a terminal state.
         ConcurrentHashMap<String, Integer> missMap = getMissCountMap();
         missMap.put("task-1", 2);
 
@@ -179,8 +180,9 @@ class TaskStateReconcilerTest {
         task.setCreatedAt(LocalDateTime.now().minusMinutes(10));
         when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
                 .thenReturn(List.of(task));
+        when(taskRepository.findByTaskId("task-1")).thenReturn(Optional.of(task));
 
-        // Worker has no recovery (null or worker query returns same seq)
+        // Worker has no replayable event evidence.
         when(workerClient.getTaskStatus("task-1"))
                 .thenReturn(Mono.just(Map.of("latest_seq", 0)))
                 .thenReturn(Mono.just(Map.of("cli_alive", false)));
@@ -189,7 +191,9 @@ class TaskStateReconcilerTest {
 
         reconciler.reconcileAll();
 
-        verify(taskService).reconcilerCompleteTask(eq("task-1"), contains("CLI process exited"));
+        verify(taskService).markLifecycleAttention("task-1", "PROCESS_UNVERIFIED");
+        verify(taskService, never()).reconcilerCompleteTask(anyString(), anyString());
+        assertEquals(3, missMap.get("task-1"));
     }
 
     // ---- 象限 3: DB done + CLI alive → orphan ----

@@ -45,6 +45,18 @@ test('createConfig rejects relative allowed cwd entries', () => {
   }), /CODEX_ALLOWED_CWDS entries must be absolute paths/)
 })
 
+test('createConfig uses an absolute durable termination receipt ledger directory', () => {
+  const ledgerDir = process.platform === 'win32'
+    ? 'D:\\codex-termination-operations'
+    : '/var/lib/codex-termination-operations'
+  assert.equal(createConfig({
+    CODEX_TERMINATION_OPERATION_LEDGER_DIR: ledgerDir,
+  }).terminationOperationLedgerDir, ledgerDir)
+  assert.throws(() => createConfig({
+    CODEX_TERMINATION_OPERATION_LEDGER_DIR: 'relative/termination-operations',
+  }), /CODEX_TERMINATION_OPERATION_LEDGER_DIR must be an absolute path/)
+})
+
 test('createConfig rejects invalid log level', () => {
   assert.throws(() => createConfig({
     CODEX_LOG_LEVEL: 'trace',

@@ -5,14 +5,21 @@ import type {
   PendingUserInputInteraction,
   ResolvedUserInputInteraction,
   StoredTaskRecord,
+  TaskAttention,
+  TaskAttentionStatus,
   TaskRequest,
+  TerminationOperationSummary,
   WorkerEvent,
 } from './models.js'
 import type { PoolRateLimitsView } from './app-server/rate-limits.js'
 import { parseModelString, resolveSupportedModelAlias } from './model-resolution.js'
 import { EventBroadcast } from './persistence/event-store.js'
 import { TaskStore } from './persistence/task-store.js'
-import { cleanupMaterializedInput, type TaskExecutor } from './app-server/executor.js'
+import {
+  cleanupMaterializedInput,
+  type ManagedTaskProcessSnapshot,
+  type TaskExecutor,
+} from './app-server/executor.js'
 import { AppServerRuntimeError } from './app-server/runtime.js'
 import { GeneratedImageStore } from './generated-image-store.js'
 import { classifyErrorCode, safeAppServerMessage } from './diagnostics.js'
@@ -81,11 +88,26 @@ type AbortPreparation =
   | { kind: 'terminal'; result: AbortTaskResult }
   | { kind: 'active'; record: StoredTaskRecord; controller: AbortController }
   | { kind: 'local'; record: StoredTaskRecord; broadcast: EventBroadcast }
+  /**
+   * The task may already have reached the provider, but this executor cannot
+   * reconcile it after a process restart.  Cancellation intent is durable;
+   * a local terminal outcome would be fabricated evidence.
+   */
+  | { kind: 'unconfirmed'; record: StoredTaskRecord }
   | { kind: 'reconcile'; record: StoredTaskRecord; broadcast: EventBroadcast }
+
+type TerminalTransitionPatch = NonNullable<Parameters<TaskStore['transition']>[2]>
 
 export type AbortTaskResult = {
   record: StoredTaskRecord
-  abort_status: 'aborted' | 'abort_pending' | 'already_terminal'
+  abort_status: 'aborted' | 'cancel_requested' | 'already_terminal'
+}
+
+export type ManualPidKillResult = {
+  record: StoredTaskRecord
+  observed_exit: boolean
+  /** A provider terminal event won before this signed operation could signal. */
+  provider_terminal_observed?: boolean
 }
 
 export class TaskManager {
@@ -97,8 +119,12 @@ export class TaskManager {
   private pendingAccepts = 0
   private readonly inFlightAccepts = new Map<string, Promise<{ record: StoredTaskRecord; created: boolean }>>()
   private readonly taskOperations = new Map<string, Promise<void>>()
+  /** Coordinates the execute() unwind with the signed manual-PID owner. */
+  private readonly manualPidTerminations = new Map<string, Promise<void>>()
   private readonly threadReservations = new Map<string, string>()
   private readonly taskThreadReservations = new Map<string, Set<string>>()
+  /** A recovery collision keeps the thread unavailable until it is resolved. */
+  private readonly blockedThreadReservations = new Set<string>()
   private readonly liveUserInput = new Map<string, LiveUserInputInteraction>()
   private recoveryRun?: Promise<void>
 
@@ -129,7 +155,6 @@ export class TaskManager {
       }
       if (record.pending_interaction) {
         await this.finalizeLostUserInput(record, this.getBroadcast(record.task_id))
-        this.releaseThreadReservations(record.task_id)
         continue
       }
       const broadcast = this.getBroadcast(record.task_id)
@@ -205,6 +230,17 @@ export class TaskManager {
     return this.store.get(taskId)
   }
 
+  /**
+   * The executor owns the live lease map.  This pass-through intentionally
+   * has no reconciliation, signaling, or pool-management side effect: a
+   * process snapshot is evidence for a later authorized operation, not an
+   * operation by itself.
+   */
+  async listManagedTaskProcesses(): Promise<readonly ManagedTaskProcessSnapshot[]> {
+    const snapshot = await this.executor.listManagedTaskProcesses?.()
+    return snapshot || []
+  }
+
   async respondToUserInput(taskId: string, body: UserInputResponseBody): Promise<StoredTaskRecord> {
     return this.withTaskOperation(taskId, async () => {
       const record = this.store.get(taskId)
@@ -246,7 +282,8 @@ export class TaskManager {
 
   getBroadcast(taskId: string): EventBroadcast {
     let broadcast = this.broadcasts.get(taskId)
-    if (!broadcast || (broadcast.isClosed() && this.store.get(taskId)?.status !== 'terminal')) {
+    if (!broadcast || ((broadcast.isClosed() || broadcast.hasWriteError())
+      && this.store.get(taskId)?.status !== 'terminal')) {
       broadcast = new EventBroadcast(taskId, path.join(this.config.stateDir, 'events'))
       broadcast.loadFromDisk()
       this.broadcasts.set(taskId, broadcast)
@@ -259,17 +296,19 @@ export class TaskManager {
     return broadcast
   }
 
-  async abort(taskId: string): Promise<AbortTaskResult | undefined> {
+  async abort(taskId: string, operation?: TerminationOperationSummary): Promise<AbortTaskResult | undefined> {
     const preparation = await this.withTaskOperation<AbortPreparation>(taskId, async () => {
       let record = this.store.get(taskId)
       if (!record) return { kind: 'missing' }
       if (record.status === 'terminal') {
         return { kind: 'terminal', result: {
           record,
-          abort_status: record.outcome === 'aborted' ? 'aborted' : 'already_terminal',
+          // This request did not cause the terminal event, including when the
+          // historical outcome happened to be ABORTED.
+          abort_status: 'already_terminal',
         } }
       }
-      record = await this.store.requestAbort(taskId)
+      record = await this.store.requestAbort(taskId, operation)
       this.queued.delete(taskId)
       const broadcast = this.getBroadcast(taskId)
       if (record.pending_interaction) {
@@ -281,9 +320,10 @@ export class TaskManager {
         controller.abort('Task aborted')
         return { kind: 'active', record, controller }
       }
-      if (record.status === 'accepted' || record.status === 'starting' || !this.executor.reconcile) {
+      if (record.status === 'accepted' || record.status === 'starting') {
         return { kind: 'local', record, broadcast }
       }
+      if (!this.executor.reconcile) return { kind: 'unconfirmed', record }
       return { kind: 'reconcile', record, broadcast }
     })
 
@@ -299,7 +339,7 @@ export class TaskManager {
       return {
         record: current,
         abort_status: current.status !== 'terminal'
-          ? 'abort_pending'
+          ? 'cancel_requested'
           : current.outcome === 'aborted'
             ? 'aborted'
             : 'already_terminal',
@@ -309,15 +349,144 @@ export class TaskManager {
       const terminal = await this.finalizeLocalAbort(preparation.record, preparation.broadcast)
       return { record: terminal, abort_status: 'aborted' }
     }
-    await this.reconcileCommitted(preparation.record, preparation.broadcast)
+    if (preparation.kind === 'unconfirmed') {
+      // A restart can leave COMMITTED/RUNNING durable state without a local
+      // runtime.  Do not convert a requested cancel into a terminal outcome
+      // merely because this executor cannot query the provider.
+      await this.recordTerminationResult(taskId, 'CANCEL_RECONCILIATION_UNCONFIRMED')
+      await this.markAttention(
+        taskId,
+        'TERMINATION_UNCONFIRMED',
+        'CANCEL_RECONCILIATION_UNCONFIRMED',
+      )
+      return {
+        record: this.store.get(taskId) || preparation.record,
+        abort_status: 'cancel_requested',
+      }
+    }
+    let dispatched: Awaited<ReturnType<NonNullable<TaskExecutor['requestExplicitAbort']>>> | undefined
+    try {
+      dispatched = await this.executor.requestExplicitAbort?.(taskId, preparation.record)
+    } catch {
+      await this.recordTerminationResult(taskId, 'TERMINATION_DISPATCH_FAILED')
+      await this.markAttention(taskId, 'TERMINATION_UNCONFIRMED', 'TERMINATION_DISPATCH_FAILED')
+      const current = this.store.get(taskId) || preparation.record
+      return { record: current, abort_status: 'cancel_requested' }
+    }
+    if (dispatched === 'requested') {
+      await this.recordTerminationResult(taskId, 'CANCEL_DISPATCHED')
+      await this.reconcileCommitted(preparation.record, preparation.broadcast)
+    } else {
+      await this.recordTerminationResult(taskId, 'TERMINATION_RUNTIME_UNAVAILABLE')
+      await this.markAttention(taskId, 'PROCESS_UNVERIFIED', 'CANCEL_REQUESTED_WITHOUT_LIVE_RUNTIME')
+    }
     const terminal = this.store.get(taskId) || preparation.record
     return {
       record: terminal,
       abort_status: terminal.status !== 'terminal'
-        ? 'abort_pending'
+        ? 'cancel_requested'
         : terminal.outcome === 'aborted'
           ? 'aborted'
           : 'already_terminal',
+    }
+  }
+
+  async manualPidKill(
+    taskId: string,
+    pid: number,
+    operation: TerminationOperationSummary,
+  ): Promise<ManualPidKillResult | undefined> {
+    const existingCompletion = this.manualPidTerminations.get(taskId)
+    let resolveCompletion: (() => void) | undefined
+    const completion = existingCompletion || new Promise<void>(resolve => { resolveCompletion = resolve })
+    if (!existingCompletion) this.manualPidTerminations.set(taskId, completion)
+    try {
+      return await this.withTaskOperation(taskId, async () => {
+        let record = this.store.get(taskId)
+        if (!record) return undefined
+        // A freshly authorized manual operation must never inherit a terminal
+        // outcome from an earlier execution or operation.  In particular, an
+        // already-ABORTED task is evidence about its historical terminal event,
+        // not proof that this incoming PID capability observed a process exit.
+        // Leave the durable record (and any historical operation) untouched.
+        if (record.status === 'terminal') return { record, observed_exit: false }
+        const abortRequestedBeforeOperation = record.abort_requested_at
+        const terminationOperationBeforeRequest = record.termination_operation
+        const ownsNewTerminationOperation = terminationOperationBeforeRequest?.operation_id !== operation.operation_id
+        record = await this.store.requestAbort(taskId, operation)
+        let result: Awaited<ReturnType<NonNullable<TaskExecutor['manualPidKill']>>> | undefined
+        try {
+          result = await this.executor.manualPidKill?.(taskId, pid, record, operation)
+        } catch {
+          await this.recordTerminationResultLocked(taskId, 'MANUAL_PID_KILL_DISPATCH_FAILED')
+          const marked = await this.markAttentionLocked(
+            taskId,
+            'TERMINATION_UNCONFIRMED',
+            'MANUAL_PID_KILL_DISPATCH_FAILED',
+          )
+          return { record: marked || this.store.get(taskId) || record, observed_exit: false }
+        }
+        if (result?.provider_terminal_observed) {
+          // Provider terminal evidence arrived before this capability could
+          // signal.  This request must not leave a false CANCEL_REQUESTED
+          // marker or claim the provider's natural terminal event as a manual
+          // PID result.  The provider result branch is serialized on the same
+          // task operation and will publish the sole terminal outcome next.
+          const current = this.store.get(taskId)
+          if (current
+              && current.status !== 'terminal'
+              && ownsNewTerminationOperation
+              && current.termination_operation?.operation_id === operation.operation_id) {
+            const restored = await this.store.patch(taskId, {
+              abort_requested_at: abortRequestedBeforeOperation,
+              termination_operation: terminationOperationBeforeRequest,
+            })
+            return {
+              record: restored,
+              observed_exit: false,
+              provider_terminal_observed: true,
+            }
+          }
+          return {
+            record: current || record,
+            observed_exit: false,
+            provider_terminal_observed: true,
+          }
+        }
+        if (!result?.observed_exit) {
+          await this.recordTerminationResultLocked(taskId, 'MANUAL_PID_KILL_UNCONFIRMED')
+          const marked = await this.markAttentionLocked(
+            taskId,
+            'TERMINATION_UNCONFIRMED',
+            'MANUAL_PID_KILL_UNCONFIRMED',
+          )
+          return { record: marked || this.store.get(taskId) || record, observed_exit: false }
+        }
+        const broadcast = this.getBroadcast(taskId)
+        this.emitError(
+          broadcast,
+          taskId,
+          record.thread_id,
+          'TASK_ABORTED',
+          'ABORTED',
+          'VERIFIED_MANAGED_PROCESS_EXIT',
+        )
+        await broadcast.flush()
+        const terminal = await this.transitionTerminal(taskId, {
+          outcome: 'aborted',
+          error_code: 'TASK_ABORTED',
+        })
+        this.releaseThreadReservations(taskId)
+        await this.retireBroadcast(taskId, broadcast)
+        return { record: terminal, observed_exit: true }
+      })
+    } finally {
+      if (!existingCompletion) {
+        resolveCompletion?.()
+        if (this.manualPidTerminations.get(taskId) === completion) {
+          this.manualPidTerminations.delete(taskId)
+        }
+      }
     }
   }
 
@@ -398,7 +567,6 @@ export class TaskManager {
             if (this.executor.reconcile) await this.reconcileCommitted(current, broadcast)
           })
         } catch (error) {
-          await this.retireBroadcast(snapshot.task_id)
           await this.markRecoveryRequired(snapshot.task_id)
           console.warn(`[codex-app-server] recoverable_task_retry task=${sanitize(snapshot.task_id)} code=${stableExecutionErrorCode(error)}`)
         }
@@ -418,6 +586,17 @@ export class TaskManager {
     const deadline = Date.now() + timeoutMs
     const settleReserveMs = Math.min(1_000, Math.floor(timeoutMs / 10))
     let drainCompleted = true
+    const drainingTasks = new Set([
+      ...this.active,
+      ...this.store.list()
+        .filter(record => record.status === 'starting' || record.status === 'committed' || record.status === 'running')
+        .map(record => record.task_id),
+    ])
+    await Promise.all([...drainingTasks].map(taskId => this.markAttention(
+      taskId,
+      'WORKER_DRAINING_PENDING_DECISION',
+      'WORKER_DRAIN_REQUESTED_WHILE_TASK_ACTIVE',
+    )))
     try {
       await this.executor.drain?.(Math.max(0, deadline - Date.now() - settleReserveMs))
     } catch {
@@ -430,11 +609,15 @@ export class TaskManager {
   }
 
   private isQuiesced(): boolean {
+    const unresolvedExecution = this.store.list().some(record => (
+      record.status === 'starting' || record.status === 'committed' || record.status === 'running'
+    ))
     return this.active.size === 0
       && this.pendingAccepts === 0
       && this.inFlightAccepts.size === 0
       && this.taskOperations.size === 0
       && this.recoveryRun === undefined
+      && !unresolvedExecution
   }
 
   private enqueue(taskId: string): void {
@@ -613,16 +796,17 @@ export class TaskManager {
     this.emitUserInputResolved(broadcast, record.task_id, pending, 'cleared')
     this.emitError(broadcast, record.task_id, pending.thread_id, 'USER_INPUT_CHANNEL_LOST')
     await broadcast.flush()
-    await this.store.transition(record.task_id, 'terminal', {
-      outcome: 'failed',
-      error_code: 'USER_INPUT_CHANNEL_LOST',
+    await this.store.patch(record.task_id, {
+      recovery_required: true,
       pending_interaction: undefined,
       last_interaction: this.resolvedInteraction(pending, 'failed'),
     })
+    // Persist the pending-decision marker before waking the execution promise.
+    // Otherwise its catch path can race ahead and manufacture a terminal
+    // failure from the local user-input channel loss.
+    await this.markAttentionLocked(record.task_id, 'PROCESS_UNVERIFIED', 'USER_INPUT_CHANNEL_LOST')
     const live = this.liveUserInput.get(record.task_id)
     if (live) this.settleLiveUserInput(live, { error: new Error('USER_INPUT_CHANNEL_LOST') })
-    this.releaseThreadReservations(record.task_id)
-    await this.retireBroadcast(record.task_id, broadcast)
   }
 
   private async finalizeLostUserInput(record: StoredTaskRecord, broadcast: EventBroadcast): Promise<void> {
@@ -631,13 +815,12 @@ export class TaskManager {
     this.emitUserInputResolved(broadcast, record.task_id, pending, 'cleared')
     this.emitError(broadcast, record.task_id, pending.thread_id, 'USER_INPUT_CHANNEL_LOST')
     await broadcast.flush()
-    await this.store.transition(record.task_id, 'terminal', {
-      outcome: 'failed',
-      error_code: 'USER_INPUT_CHANNEL_LOST',
+    await this.store.patch(record.task_id, {
+      recovery_required: true,
       pending_interaction: undefined,
       last_interaction: this.resolvedInteraction(pending, 'failed'),
     })
-    await this.retireBroadcast(record.task_id, broadcast)
+    await this.markAttentionLocked(record.task_id, 'PROCESS_UNVERIFIED', 'USER_INPUT_CHANNEL_LOST')
   }
 
   private resolvedInteraction(
@@ -673,6 +856,7 @@ export class TaskManager {
   private rebuildThreadReservations(): Set<string> {
     this.threadReservations.clear()
     this.taskThreadReservations.clear()
+    this.blockedThreadReservations.clear()
     const conflicts = new Set<string>()
     const records = this.store.list().sort((left, right) => (
       left.created_at.localeCompare(right.created_at) || left.task_id.localeCompare(right.task_id)
@@ -694,6 +878,7 @@ export class TaskManager {
         for (const threadId of candidates) this.reserveThread(record.task_id, threadId)
       } catch (error) {
         if (!(error instanceof TaskThreadActiveError)) throw error
+        for (const threadId of candidates) this.blockedThreadReservations.add(threadId.trim())
         this.releaseThreadReservations(record.task_id)
         conflicts.add(record.task_id)
       }
@@ -705,7 +890,9 @@ export class TaskManager {
     const key = threadId.trim()
     if (!key) return
     const owner = this.threadReservations.get(key)
-    if (owner && owner !== taskId) throw new TaskThreadActiveError()
+    if ((owner && owner !== taskId) || (this.blockedThreadReservations.has(key) && owner !== taskId)) {
+      throw new TaskThreadActiveError()
+    }
     this.threadReservations.set(key, taskId)
     const reservations = this.taskThreadReservations.get(taskId) || new Set<string>()
     reservations.add(key)
@@ -727,12 +914,11 @@ export class TaskManager {
   ): Promise<void> {
     this.emitError(broadcast, record.task_id, record.thread_id, 'APP_SERVER_THREAD_ACTIVE_RECOVERY')
     await broadcast.flush()
-    await this.store.transition(record.task_id, 'terminal', {
-      outcome: 'failed',
-      error_code: 'APP_SERVER_THREAD_ACTIVE_RECOVERY',
-    })
-    this.releaseThreadReservations(record.task_id)
-    await this.retireBroadcast(record.task_id, broadcast)
+    await this.markAttentionLocked(
+      record.task_id,
+      'PROCESS_UNVERIFIED',
+      'APP_SERVER_THREAD_ACTIVE_RECOVERY',
+    )
   }
 
   private pump(): void {
@@ -822,39 +1008,69 @@ export class TaskManager {
           ),
         },
       })
-      if (result.status === 'interrupted') {
-        this.emitError(broadcast, taskId, result.threadId, 'TASK_ABORTED')
-        await broadcast.flush()
-        await this.store.transition(taskId, 'terminal', { outcome: 'aborted', error_code: 'TASK_ABORTED' })
-      } else if (result.status === 'failed') {
-        const code = result.errorCode || 'APP_SERVER_TURN_FAILED'
-        this.emitError(broadcast, taskId, result.threadId, code)
-        await broadcast.flush()
-        await this.store.transition(taskId, 'terminal', { outcome: 'failed', error_code: code })
-      } else {
-        broadcast.emit({
-          type: 'result',
-          task_id: taskId,
-          session_id: result.threadId,
-          result: result.assistantText || undefined,
-          input_tokens: result.inputTokens,
-          output_tokens: result.outputTokens,
-          duration_ms: result.durationMs,
-          num_turns: 1,
-          model: result.model,
-        })
-        await broadcast.flush()
-        await this.store.transition(taskId, 'terminal', {
-          outcome: 'completed',
-          thread_id: result.threadId,
-          turn_id: result.turnId,
-        })
-      }
+      // A provider terminal event and a signed manual PID request can arrive
+      // during the same event-loop turn.  Publish and persist the provider
+      // result under the same per-task operation used by manual PID dispatch,
+      // so the losing side cannot emit a contradictory terminal event.
+      await this.withTaskOperation(taskId, async () => {
+        const current = this.store.get(taskId)
+        if (!current || current.status === 'terminal') return
+        if (result.status === 'interrupted') {
+          this.emitError(broadcast, taskId, result.threadId, 'TASK_ABORTED', 'ABORTED', 'PROVIDER_TERMINAL_EVENT')
+          await broadcast.flush()
+          await this.transitionTerminal(taskId, { outcome: 'aborted', error_code: 'TASK_ABORTED' })
+        } else if (result.status === 'failed') {
+          const code = result.errorCode || 'APP_SERVER_TURN_FAILED'
+          this.emitError(broadcast, taskId, result.threadId, code, 'FAILED', 'PROVIDER_TERMINAL_EVENT')
+          await broadcast.flush()
+          await this.transitionTerminal(taskId, { outcome: 'failed', error_code: code })
+        } else {
+          broadcast.emit({
+            type: 'result',
+            task_id: taskId,
+            session_id: result.threadId,
+            result: result.assistantText || undefined,
+            input_tokens: result.inputTokens,
+            output_tokens: result.outputTokens,
+            duration_ms: result.durationMs,
+            num_turns: 1,
+            model: result.model,
+          })
+          await broadcast.flush()
+          await this.transitionTerminal(taskId, {
+            outcome: 'completed',
+            thread_id: result.threadId,
+            turn_id: result.turnId,
+          })
+        }
+      })
     } catch (error) {
+      const runtimeError = error instanceof AppServerRuntimeError ? error : undefined
+      const manualPidTermination = runtimeError?.code === 'APP_SERVER_AUTHORIZED_PROCESS_EXIT'
+        || runtimeError?.code === 'APP_SERVER_MANUAL_TERMINATION_UNCONFIRMED'
+      if (manualPidTermination) {
+        // The manual-PID request owns the durable ABORTED transition.  Wait
+        // for it before this concurrently unwinding execution decides whether
+        // attention/recovery is needed.  This applies to both verified and
+        // unconfirmed exits: the latter owns the single authoritative
+        // TERMINATION_UNCONFIRMED marker, rather than racing a second generic
+        // PROCESS_UNVERIFIED write under a different task operation lock.
+        await this.manualPidTerminations.get(taskId)
+      }
       const aborted = controller.signal.aborted
       await this.clearLiveUserInput(taskId, 'cleared', broadcast)
       let latest = this.store.get(taskId)
-      const runtimeError = error instanceof AppServerRuntimeError ? error : undefined
+      if (manualPidTermination && latest) {
+        const manualOutcomeRecorded = latest.status === 'terminal'
+          || latest.termination_operation?.result_code === 'MANUAL_PID_KILL_UNCONFIRMED'
+          || latest.termination_operation?.result_code === 'MANUAL_PID_KILL_DISPATCH_FAILED'
+          || latest.attention?.some(item => (
+            item.status === 'TERMINATION_UNCONFIRMED'
+            && (item.reason_code === 'MANUAL_PID_KILL_UNCONFIRMED'
+              || item.reason_code === 'MANUAL_PID_KILL_DISPATCH_FAILED')
+          ))
+        if (manualOutcomeRecorded) return
+      }
       if (runtimeError?.turnId && latest && !latest.turn_id) {
         latest = await this.store.patch(taskId, {
           thread_id: runtimeError.threadId || latest.thread_id,
@@ -866,6 +1082,27 @@ export class TaskManager {
         || (!runtimeError && latest?.status === 'committed')
       const reconciliationUnsafe = runtimeError?.code === 'APP_SERVER_TURN_STALLED'
         || runtimeError?.code === 'APP_SERVER_UNEXPECTED_IMAGE_GENERATION'
+        || runtimeError?.code === 'APP_SERVER_ABORT_UNCONFIRMED'
+        || runtimeError?.code === 'APP_SERVER_PROCESS_UNVERIFIED'
+        || runtimeError?.code === 'APP_SERVER_PROCESS_IDENTITY_MISMATCH'
+        || runtimeError?.code === 'APP_SERVER_AUTHORIZED_PROCESS_EXIT'
+      const hasPendingDecision = Boolean(latest?.attention?.length)
+      if (latest && latest.status !== 'terminal' && (
+        reconciliationUnsafe || runtimeError?.turnMayHaveStarted || hasPendingDecision
+      )) {
+        const code = stableExecutionErrorCode(error)
+        this.emitError(broadcast, taskId, latest.thread_id, code)
+        await broadcast.flush()
+        await this.markAttentionLocked(
+          taskId,
+          runtimeError?.code === 'APP_SERVER_TURN_STALLED'
+            ? 'TIMEOUT_PENDING_DECISION'
+            : 'PROCESS_UNVERIFIED',
+          code,
+          runtimeError?.turnId ? `turn_id=${sanitize(runtimeError.turnId)}` : undefined,
+        )
+        return
+      }
       if (latest && latest.status !== 'terminal' && mayHaveExecuted && this.executor.reconcile && !reconciliationUnsafe) {
         try {
           await this.reconcileCommitted(latest, broadcast)
@@ -877,28 +1114,39 @@ export class TaskManager {
           throw reconcileError
         }
       }
-      const code = aborted ? 'TASK_ABORTED' : stableExecutionErrorCode(error)
+      // An AbortController signal or a thrown runtime exception is not proof
+      // that the provider turn/CLI exited.  In particular, an explicit cancel
+      // can race a transport failure.  Keep the durable task pending until a
+      // terminal result, verified exit, or reconciliation supplies evidence.
+      const code = aborted ? 'CANCEL_RECONCILIATION_UNCONFIRMED' : stableExecutionErrorCode(error)
       if (latest?.status !== 'terminal') {
         this.emitError(broadcast, taskId, latest?.thread_id, code)
-        try {
-          await broadcast.flush()
-        } finally {
-          await this.store.transition(taskId, 'terminal', {
-            outcome: aborted ? 'aborted' : 'failed',
-            error_code: code,
-          })
-        }
+        await broadcast.flush()
+        await this.markAttentionLocked(
+          taskId,
+          aborted || Boolean(latest?.abort_requested_at)
+            ? 'TERMINATION_UNCONFIRMED'
+            : 'PROCESS_UNVERIFIED',
+          code,
+        )
       }
-      console.warn(`[codex-app-server] task_failed task=${sanitize(taskId)} code=${code}`)
+      console.warn(`[codex-app-server] task_pending_observation task=${sanitize(taskId)} code=${code}`)
     } finally {
       await this.clearLiveUserInput(taskId, 'cleared', broadcast)
       await this.markRecoveryRequired(taskId)
-      await this.retireBroadcast(taskId, broadcast)
+      if (this.store.get(taskId)?.status === 'terminal') await this.retireBroadcast(taskId, broadcast)
       if (this.store.get(taskId)?.status === 'terminal') this.releaseThreadReservations(taskId)
     }
   }
 
-  private emitError(broadcast: EventBroadcast, taskId: string, threadId: string | undefined, code: string): void {
+  private emitError(
+    broadcast: EventBroadcast,
+    taskId: string,
+    threadId: string | undefined,
+    code: string,
+    terminalStatus?: 'FAILED' | 'ABORTED',
+    terminalSource?: string,
+  ): void {
     const alreadyEmitted = broadcast.getEventsAfter(0).some(event => event.type === 'error' && event.subtype === code)
     if (alreadyEmitted) return
     broadcast.emit({
@@ -916,7 +1164,65 @@ export class TaskManager {
       runtime_type: 'APP_SERVER',
       provider_status: code,
       subtype: code,
+      ...(terminalStatus
+        ? {
+            terminal_observed: true,
+            terminal_status: terminalStatus,
+            terminal_source: terminalSource || 'PROVIDER_TERMINAL_EVENT',
+          }
+        : {}),
     })
+  }
+
+  async markAttention(
+    taskId: string,
+    status: TaskAttentionStatus,
+    reasonCode: string,
+    activityEvidence?: string,
+  ): Promise<StoredTaskRecord | undefined> {
+    return this.withTaskOperation(taskId, () => this.markAttentionLocked(
+      taskId,
+      status,
+      reasonCode,
+      activityEvidence,
+    ))
+  }
+
+  private async markAttentionLocked(
+    taskId: string,
+    status: TaskAttentionStatus,
+    reasonCode: string,
+    activityEvidence?: string,
+  ): Promise<StoredTaskRecord | undefined> {
+    const current = this.store.get(taskId)
+    if (!current || current.status === 'terminal') return current
+    const observedAt = new Date().toISOString()
+    const nextAttention: TaskAttention = {
+      status,
+      reason_code: reasonCode,
+      observed_at: observedAt,
+      ...(activityEvidence ? { activity_evidence: activityEvidence } : {}),
+    }
+    const attention = (current.attention || []).filter(item => item.status !== status)
+    attention.push(nextAttention)
+    const updated = await this.store.patch(taskId, {
+      attention,
+      recovery_required: true,
+    })
+    const broadcast = this.getBroadcast(taskId)
+    broadcast.emit({
+      type: 'lifecycle_update',
+      task_id: taskId,
+      session_id: updated.thread_id,
+      subtype: status,
+      data: {
+        attention,
+        available_actions: availableActions(updated),
+        termination_operation: updated.termination_operation,
+      },
+    })
+    await broadcast.flush()
+    return updated
   }
 
   private async reconcileCommitted(record: StoredTaskRecord, broadcast: EventBroadcast): Promise<void> {
@@ -969,10 +1275,14 @@ export class TaskManager {
         subtype: 'recovered',
       })
       await broadcast.flush()
-      await this.store.transition(record.task_id, 'terminal', { ...common, outcome: 'completed' })
-    } else if (result.status === 'unknown' && record.abort_requested_at) {
+      await this.transitionTerminal(record.task_id, { ...common, outcome: 'completed' })
+    } else if (result.status === 'unknown') {
       await this.store.patch(record.task_id, { ...common, recovery_required: true })
-      await this.retireBroadcast(record.task_id, broadcast)
+      await this.markAttentionLocked(
+        record.task_id,
+        'PROCESS_UNVERIFIED',
+        record.abort_requested_at ? 'CANCEL_RECONCILIATION_UNCONFIRMED' : 'APP_SERVER_RECOVERY_UNKNOWN',
+      )
       return
     } else {
       const code = result.status === 'interrupted'
@@ -980,9 +1290,16 @@ export class TaskManager {
         : result.status === 'failed'
           ? result.errorCode || 'APP_SERVER_TURN_FAILED'
           : 'APP_SERVER_RECOVERY_UNKNOWN'
-      this.emitError(broadcast, record.task_id, common.thread_id, code)
+      this.emitError(
+        broadcast,
+        record.task_id,
+        common.thread_id,
+        code,
+        result.status === 'interrupted' ? 'ABORTED' : 'FAILED',
+        'PROVIDER_TERMINAL_EVENT',
+      )
       await broadcast.flush()
-      await this.store.transition(record.task_id, 'terminal', {
+      await this.transitionTerminal(record.task_id, {
         ...common,
         outcome: result.status === 'interrupted' ? 'aborted' : 'failed',
         error_code: code,
@@ -991,7 +1308,9 @@ export class TaskManager {
     if (this.store.get(record.task_id)?.status === 'terminal') {
       this.releaseThreadReservations(record.task_id)
     }
-    await this.retireBroadcast(record.task_id, broadcast)
+    if (this.store.get(record.task_id)?.status === 'terminal') {
+      await this.retireBroadcast(record.task_id, broadcast)
+    }
   }
 
   private async finalizeDurableTerminalEvent(
@@ -999,15 +1318,27 @@ export class TaskManager {
     broadcast: EventBroadcast,
     events = broadcast.getEventsAfter(0),
   ): Promise<boolean> {
-    const terminal = [...events].reverse().find(event => event.type === 'result' || event.type === 'error')
+    // An error event is normally the durable precursor of a terminal state
+    // transition.  That is deliberately not true for an uncertain runtime:
+    // those errors are diagnostics, followed by a durable attention marker.
+    // Never turn that diagnostic into a synthetic provider exit during restart
+    // or recovery; only an observed result/terminal error may release the task.
+    const pendingDecisionCodes = new Set((record.attention || []).map(item => item.reason_code))
+    const terminal = [...events].reverse().find(event => (
+      event.type === 'result'
+      || (event.type === 'error'
+        && event.terminal_observed === true
+        && (event.terminal_status === 'FAILED' || event.terminal_status === 'ABORTED')
+        && !pendingDecisionCodes.has(event.subtype || event.error_code || event.error || ''))
+    ))
     if (!terminal) return false
     const patch = terminal.type === 'result'
       ? { outcome: 'completed' as const }
       : {
-          outcome: terminal.subtype === 'TASK_ABORTED' ? 'aborted' as const : 'failed' as const,
+          outcome: terminal.terminal_status === 'ABORTED' ? 'aborted' as const : 'failed' as const,
           error_code: terminal.subtype,
         }
-    await this.store.transition(record.task_id, 'terminal', patch)
+    await this.transitionTerminal(record.task_id, patch)
     this.releaseThreadReservations(record.task_id)
     await this.retireBroadcast(record.task_id, broadcast)
     return true
@@ -1017,15 +1348,46 @@ export class TaskManager {
     record: StoredTaskRecord,
     broadcast: EventBroadcast,
   ): Promise<StoredTaskRecord> {
-    this.emitError(broadcast, record.task_id, record.thread_id, 'TASK_ABORTED')
+    this.emitError(
+      broadcast,
+      record.task_id,
+      record.thread_id,
+      'TASK_ABORTED',
+      'ABORTED',
+      'NO_EXECUTION_CONFIRMED',
+    )
     await broadcast.flush()
-    const terminal = await this.store.transition(record.task_id, 'terminal', {
+    const terminal = await this.transitionTerminal(record.task_id, {
       outcome: 'aborted',
       error_code: 'TASK_ABORTED',
     })
     this.releaseThreadReservations(record.task_id)
     await this.retireBroadcast(record.task_id, broadcast)
     return terminal
+  }
+
+  private async transitionTerminal(
+    taskId: string,
+    patch: TerminalTransitionPatch,
+  ): Promise<StoredTaskRecord> {
+    const current = this.store.get(taskId)
+    const operation = current?.termination_operation
+      ? {
+          ...current.termination_operation,
+          status: 'OBSERVED_EXIT' as const,
+          result_code: patch.error_code || patch.outcome?.toUpperCase() || 'OBSERVED_EXIT',
+          observed_exit_at: new Date().toISOString(),
+        }
+      : undefined
+    return this.store.transition(taskId, 'terminal', {
+      ...patch,
+      // An observed terminal event resolves previous lifecycle uncertainty.
+      // A terminal task must never continue to advertise a stale attention
+      // marker or recovery requirement to clients.
+      attention: [],
+      recovery_required: false,
+      ...(operation ? { termination_operation: operation } : {}),
+    })
   }
 
   private async markRecoveryRequired(taskId: string): Promise<void> {
@@ -1037,6 +1399,18 @@ export class TaskManager {
     } catch {
       console.error(`[codex-app-server] recovery_marker_failed task=${sanitize(taskId)}`)
     }
+  }
+
+  private async recordTerminationResult(taskId: string, resultCode: string): Promise<void> {
+    await this.withTaskOperation(taskId, () => this.recordTerminationResultLocked(taskId, resultCode))
+  }
+
+  private async recordTerminationResultLocked(taskId: string, resultCode: string): Promise<void> {
+    const operation = this.store.get(taskId)?.termination_operation
+    if (!operation || operation.result_code === resultCode) return
+    await this.store.patch(taskId, {
+      termination_operation: { ...operation, result_code: resultCode },
+    })
   }
 
   private async retireBroadcast(taskId: string, expected?: EventBroadcast): Promise<void> {
@@ -1071,6 +1445,7 @@ export function toPublicTask(record: StoredTaskRecord): Record<string, unknown> 
   return compact({
     task_id: record.task_id,
     status: record.pending_interaction && record.status !== 'terminal' ? 'awaiting_input' : record.status,
+    lifecycle_status: lifecycleStatus(record),
     outcome: record.outcome,
     error_code: record.error_code,
     thread_id: record.thread_id,
@@ -1084,10 +1459,27 @@ export function toPublicTask(record: StoredTaskRecord): Record<string, unknown> 
     recovery_required: record.recovery_required,
     abort_requested: Boolean(record.abort_requested_at),
     abort_requested_at: record.abort_requested_at,
+    attention: record.attention || [],
+    available_actions: availableActions(record),
+    termination_operation: record.termination_operation,
     tombstoned: Boolean(record.tombstoned_at),
     tombstoned_at: record.tombstoned_at,
     pending_interaction: record.pending_interaction,
   })
+}
+
+function lifecycleStatus(record: StoredTaskRecord): string {
+  if (record.status === 'terminal') return record.outcome?.toUpperCase() || 'TERMINAL'
+  if (record.abort_requested_at) return 'CANCEL_REQUESTED'
+  if (record.status === 'accepted' || record.status === 'starting') return 'ACCEPTED'
+  return 'RUNNING'
+}
+
+function availableActions(record: StoredTaskRecord): string[] {
+  if (record.status === 'terminal') return []
+  const actions = ['CONTINUE_WAIT', 'QUERY_DIAGNOSTICS']
+  if (!record.abort_requested_at) actions.push('CANCEL')
+  return actions
 }
 
 function compact<T extends Record<string, unknown>>(value: T): T {
@@ -1116,6 +1508,9 @@ function stableExecutionErrorCode(error: unknown): string {
     'APP_SERVER_POOL_ACQUIRE_TIMEOUT',
     'APP_SERVER_TURN_STALLED',
     'APP_SERVER_UNEXPECTED_IMAGE_GENERATION',
+    'APP_SERVER_ABORT_UNCONFIRMED',
+    'APP_SERVER_PROCESS_UNVERIFIED',
+    'APP_SERVER_PROCESS_IDENTITY_MISMATCH',
     'APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE',
     'APP_SERVER_PROCESS_TREE_UNSAFE',
     'WORKING_DIRECTORY_NOT_ALLOWED',

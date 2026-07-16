@@ -20,11 +20,14 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.entity.TerminationOperationEntity;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
+import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.common.util.ProviderStateCodec;
@@ -38,6 +41,7 @@ import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
+import com.foggy.navigator.session.service.TerminationOperationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,7 +49,11 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -60,6 +68,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -138,6 +148,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Autowired(required = false)
     @Nullable
     private ErrorDiagnosticService errorDiagnosticService;
+
+    /** Optional only for legacy unit wiring; production must fail closed if absent. */
+    @Autowired(required = false)
+    @Nullable
+    private TerminationOperationService terminationOperationService;
+
+    /**
+     * Used only to reserve a termination operation under the task-row lock.
+     * HTTP dispatch deliberately happens after this transaction commits.
+     */
+    @Autowired(required = false)
+    @Nullable
+    private PlatformTransactionManager terminationTransactionManager;
 
     @Autowired
     @Lazy
@@ -230,7 +253,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
         if (taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
                 form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType,
-                List.of("RUNNING", "AWAITING_INPUT"))) {
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"))) {
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
@@ -557,7 +580,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         requireTaskProvider(entity, providerType);
-        if (!"RUNNING".equals(entity.getStatus()) && !"AWAITING_INPUT".equals(entity.getStatus())) {
+        if (!"RUNNING".equals(entity.getStatus()) && !"AWAITING_INPUT".equals(entity.getStatus())
+                && !"CANCEL_REQUESTED".equals(entity.getStatus())) {
             return;
         }
         streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
@@ -568,14 +592,14 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      */
     public boolean hasRunningTask(String codexThreadId, String workerId, String userId) {
         return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
-                codexThreadId, workerId, userId, List.of("RUNNING", "AWAITING_INPUT"));
+                codexThreadId, workerId, userId, List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"));
     }
 
     public boolean hasRunningTaskForProvider(String codexThreadId, String workerId,
                                              String userId, String providerType) {
         return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
                 codexThreadId, workerId, userId, normalizeProviderType(providerType),
-                List.of("RUNNING", "AWAITING_INPUT"));
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"));
     }
 
     /** Registers the sanitized app-server requestUserInput projection before it is acknowledged. */
@@ -587,7 +611,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
             throw interactionError("CODEX_USER_INPUT_RUNTIME_UNSUPPORTED");
         }
-        if (isTerminalStatus(entity.getStatus())) {
+        // A late input card is not terminal evidence and must never reopen a
+        // cancellation that has already been durably accepted for dispatch.
+        if (isTerminalStatus(entity.getStatus()) || "CANCEL_REQUESTED".equals(entity.getStatus())) {
             return UserInputRegistration.ignored();
         }
 
@@ -615,6 +641,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         pending.put("state", "PENDING");
         savePendingUserInput(sessionTask, entity, pending);
         String previousStatus = entity.getStatus();
+        String previousRuntimeAcceptanceState = entity.getRuntimeAcceptanceState();
         if (entity.getCodexThreadId() == null || entity.getCodexThreadId().isBlank()) {
             entity.setCodexThreadId(stringValue(pending.get("thread_id")));
         }
@@ -798,36 +825,500 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     /**
-     * 中止任务（完整流程：terminal guard + doAbortWorkerTask）。
-     * Provider Controller 和 SPI 入口调用此方法。
+     * Requests an explicitly authorized remote cancellation.  This method
+     * never locally aborts a process, disposes the stream, releases ownership,
+     * or writes ABORTED: only Worker terminal evidence can do that.
      */
     public void abortTask(String taskId) {
-        CodexTaskEntity entity = taskRepository.findByTaskId(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-
-        if ("COMPLETED".equals(entity.getStatus()) || "FAILED".equals(entity.getStatus())
-                || "ABORTED".equals(entity.getStatus())) {
-            log.warn("Task {} is already in terminal state: {}", taskId, entity.getStatus());
-            return;
-        }
-
-        String remoteTaskId = entity.getWorkerTaskId();
-        doAbortWorkerTask(taskId, remoteTaskId);
+        dispatchAuthorizedAbort(reserveAuthorizedAbort(taskId, null));
     }
 
     /**
-     * 远端中止 + 流清理 + 状态落库 + 事件发布。
-     * <p>
-     * 由 {@code CodexWorkerInnerA2aAgent.abortWorkerTask()} 和 {@code abortTask()} 复用。
-     * 不包含 terminal-state guard（调用方负责）。
+     * Compatibility entry for A2A's already-resolved Worker id.  It follows
+     * the same operation/capability gate as {@link #abortTask(String)}.
      *
      * @param taskId       平台侧 taskId
      * @param remoteTaskId 已解析的远端 Worker 任务标识（可能为 null，由装饰层通过 resolveRemoteTaskId 提供）
      */
     public void doAbortWorkerTask(String taskId, String remoteTaskId) {
-        CodexTaskEntity entity = taskRepository.findByTaskId(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        streamRelay.abortAndReconcileTask(entity);
+        dispatchAuthorizedAbort(reserveAuthorizedAbort(taskId, remoteTaskId));
+    }
+
+    /**
+     * Reserves exactly one operation while the task row is locked. The
+     * reservation is committed before any Worker HTTP call, so a duplicate
+     * cancel cannot mint a second capability and no database lock spans the
+     * provider round trip.
+     */
+    private RemoteTerminationReservation reserveAuthorizedAbort(String taskId, String resolvedRemoteTaskId) {
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            if (isTerminalStatus(entity.getStatus())) {
+                log.info("Ignoring cancellation for terminal Codex task: taskId={}, status={}",
+                        taskId, entity.getStatus());
+                return null;
+            }
+
+            String persistedRemoteTaskId = entity.getWorkerTaskId();
+            if (resolvedRemoteTaskId != null && !resolvedRemoteTaskId.isBlank()
+                    && !resolvedRemoteTaskId.equals(persistedRemoteTaskId)) {
+                throw new IllegalArgumentException("TERMINATION_REMOTE_TASK_MISMATCH");
+            }
+            if (persistedRemoteTaskId == null || persistedRemoteTaskId.isBlank()) {
+                markCancellationAttention(entity, "REMOTE_TASK_ID_UNAVAILABLE");
+                return null;
+            }
+            if (terminationOperationService == null) {
+                markCancellationAttention(entity, "TERMINATION_AUDIT_UNAVAILABLE");
+                return null;
+            }
+            if (terminationOperationService.hasActiveOperationForTask(entity.getTaskId())) {
+                markCancellationAttention(entity, "TERMINATION_OPERATION_PENDING");
+                log.info("Retaining existing Codex termination operation: taskId={}", entity.getTaskId());
+                return null;
+            }
+
+            String correlationId = "remote-cancel:" + UUID.randomUUID();
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            entity.getTaskId(), persistedRemoteTaskId, entity.getSessionId(), entity.getUserId(),
+                            entity.getTenantId(), resolveProviderType(entity), entity.getWorkerId(),
+                            "REMOTE_CANCEL", "UPSTREAM_USER", entity.getUserId(), "USER",
+                            "user-request:" + UUID.randomUUID(), "USER_CANCEL", correlationId,
+                            null, null, 300));
+
+            String previousStatus = entity.getStatus();
+            String previousRuntimeAcceptanceState = entity.getRuntimeAcceptanceState();
+            entity.setStatus("CANCEL_REQUESTED");
+            entity.setErrorMessage(null);
+            if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+                entity.setRuntimeAcceptanceState("ABORT_REQUESTED");
+            }
+            persistTask(entity);
+            if (!"CANCEL_REQUESTED".equals(previousStatus)) {
+                publishStatusChange(entity, previousStatus);
+            }
+            return new RemoteTerminationReservation(entity.getTaskId(), persistedRemoteTaskId,
+                    previousStatus, previousRuntimeAcceptanceState, operation);
+        });
+    }
+
+    private void dispatchAuthorizedAbort(RemoteTerminationReservation reservation) {
+        if (reservation == null || terminationOperationService == null) return;
+        CodexTaskEntity current = taskRepository.findByTaskId(reservation.taskId()).orElse(null);
+        if (current == null || isTerminalStatus(current.getStatus())) return;
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            CodexWorkerClient client = terminationClient(current);
+            TerminationOperationCapability capability = TerminationOperationCapability.issue(
+                    reservation.operation(), client.terminationSigningSecret());
+            Map<String, Object> acknowledgement = client.abortTask(reservation.providerTaskId(), capability)
+                    .block(Duration.ofSeconds(10));
+            if (!isCancellationAcknowledged(acknowledgement)) {
+                throw new TerminationDispatchUnconfirmedException("TERMINATION_ACK_INVALID");
+            }
+            terminationOperationService.markCancelRequested(reservation.operation().getOperationId());
+            log.info("Codex cancellation request accepted by Worker: taskId={}, operationId={}",
+                    reservation.taskId(), reservation.operation().getOperationId());
+        } catch (Exception error) {
+            if (isDefinitiveTerminationRejection(error)) {
+                rejectOperationAndRestoreTask(reservation.taskId(), reservation.operation().getOperationId(),
+                        reservation.previousStatus(), reservation.previousRuntimeAcceptanceState(),
+                        terminationRejectionCode(error));
+                log.warn("Codex cancellation rejected by Worker: taskId={}, operationId={}, type={}",
+                        reservation.taskId(), reservation.operation().getOperationId(), error.getClass().getSimpleName());
+            } else {
+                terminationOperationService.markUnconfirmed(reservation.operation().getOperationId(),
+                        terminationFailureCode(error));
+                markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+                log.warn("Codex cancellation dispatch is unconfirmed: taskId={}, operationId={}, type={}",
+                        reservation.taskId(), reservation.operation().getOperationId(), error.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private record RemoteTerminationReservation(String taskId, String providerTaskId, String previousStatus,
+                                                String previousRuntimeAcceptanceState,
+                                                TerminationOperationEntity operation) {
+    }
+
+    /**
+     * Accepts a human-authorized PID operation before the Worker is contacted.
+     * The returned capability is bound to the Worker task id and exact PID;
+     * callers must report the Worker response through
+     * {@link #recordManualPidKillResult(ManualPidKillRequest, Map)} rather
+     * than inferring a terminal state from a successful HTTP dispatch.
+     */
+    public ManualPidKillRequest prepareManualPidKill(String taskId, String expectedWorkerId,
+                                                      String actorId, String actorType,
+                                                      String authorizedTenantId, boolean crossUserAuthorized, int pid,
+                                                      String expectedProcessIdentity, String workerToken) {
+        if (pid < 1) {
+            throw new IllegalArgumentException("TERMINATION_MANUAL_PID_REQUIRED");
+        }
+        if (expectedProcessIdentity == null || expectedProcessIdentity.isBlank()) {
+            throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_REQUIRED");
+        }
+        ManualPidKillReservation reservation = reserveManualPidKill(taskId, expectedWorkerId, actorId,
+                actorType, authorizedTenantId, crossUserAuthorized, pid, expectedProcessIdentity);
+
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            return new ManualPidKillRequest(reservation.operation().getOperationId(), reservation.taskId(),
+                    reservation.previousStatus(), reservation.previousRuntimeAcceptanceState(),
+                    TerminationOperationCapability.issue(reservation.operation(), workerToken));
+        } catch (Exception error) {
+            terminationOperationService.markUnconfirmed(reservation.operation().getOperationId(),
+                    terminationFailureCode(error));
+            markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+            if (error instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("TERMINATION_CAPABILITY_ISSUE_FAILED", error);
+        }
+    }
+
+    /**
+     * Commits the task marker and audited operation before any nested
+     * operation-status transaction is started.  In particular,
+     * {@code markDispatchStarted(REQUIRES_NEW)} must be able to read the
+     * operation row rather than racing an uncommitted outer transaction.
+     */
+    private ManualPidKillReservation reserveManualPidKill(String taskId, String expectedWorkerId,
+                                                          String actorId, String actorType,
+                                                          String authorizedTenantId, boolean crossUserAuthorized,
+                                                          int pid, String expectedProcessIdentity) {
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            requireManualPidAuthorization(entity, expectedWorkerId, actorId, actorType,
+                    authorizedTenantId, crossUserAuthorized);
+            if (isTerminalStatus(entity.getStatus())) {
+                throw new IllegalStateException("TERMINATION_TASK_ALREADY_TERMINAL");
+            }
+            if (terminationOperationService == null) {
+                markCancellationAttention(entity, "TERMINATION_AUDIT_UNAVAILABLE");
+                throw new IllegalStateException("TERMINATION_AUDIT_UNAVAILABLE");
+            }
+            if (terminationOperationService.hasActiveOperationForTask(entity.getTaskId())) {
+                markCancellationAttention(entity, "TERMINATION_OPERATION_PENDING");
+                throw new IllegalStateException("TERMINATION_OPERATION_PENDING");
+            }
+            String workerTaskId = entity.getWorkerTaskId();
+            if (workerTaskId == null || workerTaskId.isBlank()) {
+                markCancellationAttention(entity, "REMOTE_TASK_ID_UNAVAILABLE");
+                throw new IllegalStateException("REMOTE_TASK_ID_UNAVAILABLE");
+            }
+            requireManualProcessIdentity(entity, pid, expectedProcessIdentity);
+
+            String authorizationDecisionId = issueManualAuthorizationDecisionId(actorType);
+            String correlationId = "manual-pid-kill:" + UUID.randomUUID();
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            entity.getTaskId(), workerTaskId, entity.getSessionId(), entity.getUserId(),
+                            entity.getTenantId(), resolveProviderType(entity), entity.getWorkerId(),
+                            "MANUAL_PID_KILL", "ADMIN_MANUAL", actorId,
+                            firstNonBlank(actorType, "MANUAL_OPERATOR"),
+                            authorizationDecisionId, "MANUAL_PID_KILL", correlationId, pid,
+                            expectedProcessIdentity,
+                            300));
+
+            String previousStatus = entity.getStatus();
+            String previousRuntimeAcceptanceState = entity.getRuntimeAcceptanceState();
+            entity.setStatus("CANCEL_REQUESTED");
+            entity.setErrorMessage(null);
+            if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+                entity.setRuntimeAcceptanceState("ABORT_REQUESTED");
+            }
+            persistTask(entity);
+            if (!"CANCEL_REQUESTED".equals(previousStatus)) {
+                publishStatusChange(entity, previousStatus);
+            }
+            return new ManualPidKillReservation(entity.getTaskId(), previousStatus,
+                    previousRuntimeAcceptanceState, operation);
+        });
+    }
+
+    /**
+     * The decision id is issued only after the controller role gate and the
+     * tenant-scoped administrator check above have succeeded.  It is kept
+     * distinct from the transport correlation id and cannot be supplied by a
+     * Worker or HTTP request body.
+     */
+    private static String issueManualAuthorizationDecisionId(String actorType) {
+        return "authz-v1:" + actorType.toLowerCase(Locale.ROOT) + ":" + UUID.randomUUID();
+    }
+
+    private void requireManualProcessIdentity(CodexTaskEntity entity, int pid, String processIdentity) {
+        if (processIdentity == null || processIdentity.isBlank() || processIdentity.length() > 160) {
+            throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_REQUIRED");
+        }
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            String instanceId = entity.getRuntimeInstanceId();
+            String expected = instanceId == null || instanceId.isBlank()
+                    ? null : "app-server-instance:" + instanceId;
+            if (!processIdentity.equals(expected)) {
+                throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_MISMATCH");
+            }
+            return;
+        }
+        String expectedPrefix = "codex-cli:" + pid + ":";
+        if (!processIdentity.startsWith(expectedPrefix) || processIdentity.length() == expectedPrefix.length()) {
+            throw new IllegalArgumentException("TERMINATION_PROCESS_IDENTITY_MISMATCH");
+        }
+    }
+
+    private record ManualPidKillReservation(String taskId, String previousStatus,
+                                            String previousRuntimeAcceptanceState,
+                                            TerminationOperationEntity operation) {
+    }
+
+    /** Records a Worker response without turning an unverified signal into ABORTED. */
+    @Transactional
+    public void recordManualPidKillResult(ManualPidKillRequest request, Map<String, Object> result) {
+        if (request == null || request.operationId() == null || request.taskId() == null) return;
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(request.taskId()).orElse(null);
+        if (entity == null || terminationOperationService == null) return;
+        if (manualPidExitObserved(request, entity, result)) {
+            String previousStatus = entity.getStatus();
+            if (!isTerminalStatus(previousStatus)) {
+                entity.setStatus("ABORTED");
+                entity.setErrorMessage(null);
+                entity.setLastAliveAt(LocalDateTime.now());
+                persistTask(entity);
+                publishStatusChange(entity, previousStatus);
+            }
+            terminationOperationService.markObservedTerminal(request.operationId(), "ABORTED");
+            return;
+        }
+        terminationOperationService.markAwaitingObservation(request.operationId(), "TERMINATION_UNCONFIRMED");
+        if (!isTerminalStatus(entity.getStatus())) {
+            markCancellationAttention(entity, "TERMINATION_UNCONFIRMED");
+        }
+    }
+
+    /** Records an indeterminate network/Worker failure after a manual operation was accepted. */
+    @Transactional
+    public void markManualPidKillUnconfirmed(ManualPidKillRequest request, Exception error) {
+        if (request == null || request.operationId() == null || terminationOperationService == null) return;
+        terminationOperationService.markUnconfirmed(request.operationId(), terminationFailureCode(error));
+        taskRepository.findByTaskIdForUpdate(request.taskId()).ifPresent(entity -> {
+            if (!isTerminalStatus(entity.getStatus())) {
+                markCancellationAttention(entity, "TERMINATION_UNCONFIRMED");
+            }
+        });
+    }
+
+    /**
+     * Records the only two safe outcomes of a failed manual dispatch: a
+     * definitive Worker rejection restores the pre-request task marker;
+     * transport uncertainty preserves CANCEL_REQUESTED for reconciliation.
+     */
+    public void markManualPidKillDispatchFailure(ManualPidKillRequest request, Exception error) {
+        if (request == null || request.operationId() == null || terminationOperationService == null) return;
+        if (!isDefinitiveTerminationRejection(error)) {
+            markManualPidKillUnconfirmed(request, error);
+            return;
+        }
+        rejectOperationAndRestoreTask(request.taskId(), request.operationId(), request.previousStatus(),
+                request.previousRuntimeAcceptanceState(), terminationRejectionCode(error));
+    }
+
+    private void requireManualPidAuthorization(CodexTaskEntity entity, String expectedWorkerId,
+                                               String actorId, String actorType, String authorizedTenantId,
+                                               boolean crossUserAuthorized) {
+        if (expectedWorkerId == null || !expectedWorkerId.equals(entity.getWorkerId())) {
+            throw new IllegalArgumentException("TERMINATION_WORKER_TASK_MISMATCH");
+        }
+        // A task owner may inspect its Worker, but must not gain signal
+        // authority merely through ownership.  Only trusted admin entrypoints
+        // set both this actor type and the tenant-scoped authorization flag.
+        boolean trustedManualAdministrator = ("TENANT_ADMIN_MANUAL".equals(actorType)
+                || "UPSTREAM_ADMIN_MANUAL".equals(actorType))
+                && actorId != null && !actorId.isBlank()
+                && crossUserAuthorized && authorizedTenantId != null
+                && authorizedTenantId.equals(entity.getTenantId());
+        if (!trustedManualAdministrator) {
+            throw new IllegalArgumentException("TERMINATION_TASK_ACCESS_DENIED");
+        }
+    }
+
+    private boolean manualPidExitObserved(ManualPidKillRequest request, CodexTaskEntity task,
+                                          Map<String, Object> result) {
+        if (request == null || task == null || result == null) return false;
+        if (!booleanTrue(result.get("observed_exit"))) return false;
+        // The authenticated Worker response must prove that this exact
+        // operation, task, and physical Worker observed the exit. A lifecycle
+        // label or a generic observed_exit flag is not sufficient evidence.
+        if (!hasValue(result.get("task_id"), request.taskId())) return false;
+        Object operationValue = result.get("termination_operation");
+        if (!(operationValue instanceof Map<?, ?> operation)) return false;
+        return hasValue(operation.get("operation_id"), request.operationId())
+                && hasValue(operation.get("task_id"), request.taskId())
+                && hasValue(operation.get("worker_id"), task.getWorkerId())
+                && hasValue(operation.get("kind"), "MANUAL_PID_KILL")
+                && hasValue(operation.get("origin"), "ADMIN_MANUAL")
+                && hasValue(operation.get("status"), "OBSERVED_EXIT")
+                && hasObservedExitTimestamp(operation);
+    }
+
+    private boolean booleanTrue(Object value) {
+        return Boolean.TRUE.equals(value);
+    }
+
+    private boolean hasValue(Object value, String expected) {
+        return value instanceof String actual && expected.equals(actual);
+    }
+
+    private boolean hasText(Object value) {
+        return value instanceof String text && !text.isBlank();
+    }
+
+    private boolean hasObservedExitTimestamp(Map<?, ?> operation) {
+        return hasText(operation.get("observed_at"))
+                || hasText(operation.get("observed_exit_at"));
+    }
+
+    public record ManualPidKillRequest(String operationId, String taskId, String previousStatus,
+                                       String previousRuntimeAcceptanceState,
+                                       TerminationOperationCapability capability) {
+    }
+
+    private boolean isCancellationAcknowledged(Map<String, Object> acknowledgement) {
+        if (acknowledgement == null) return false;
+        return hasCancellationRequestedValue(acknowledgement.get("status"))
+                || hasCancellationRequestedValue(acknowledgement.get("abort_status"))
+                || hasCancellationRequestedValue(acknowledgement.get("lifecycle_state"))
+                || hasCancellationRequestedValue(acknowledgement.get("lifecycle_status"));
+    }
+
+    private boolean hasCancellationRequestedValue(Object value) {
+        return value != null && "cancel_requested".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    private boolean isDefinitiveTerminationRejection(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof WebClientResponseException responseException) {
+                int status = responseException.getStatusCode().value();
+                return status >= 400 && status < 500 && status != 408 && status != 429;
+            }
+        }
+        return false;
+    }
+
+    private void restoreRejectedCancellation(CodexTaskEntity entity, String previousStatus,
+                                             String previousRuntimeAcceptanceState) {
+        if (entity == null || isTerminalStatus(entity.getStatus())
+                || !"CANCEL_REQUESTED".equals(entity.getStatus())
+                || previousStatus == null || "CANCEL_REQUESTED".equals(previousStatus)) {
+            return;
+        }
+        entity.setStatus(previousStatus);
+        entity.setRuntimeAcceptanceState(previousRuntimeAcceptanceState);
+        entity.setErrorMessage("TERMINATION_REJECTED");
+        persistTask(entity);
+        publishStatusChange(entity, "CANCEL_REQUESTED");
+    }
+
+    /**
+     * Hold the task row lock before making the operation terminal.  Otherwise
+     * a retry could observe REJECTED, reserve a new operation, and then be
+     * overwritten by this stale pre-request restoration.
+     */
+    private void rejectOperationAndRestoreTask(String taskId, String operationId, String previousStatus,
+                                                String previousRuntimeAcceptanceState, String rejectionCode) {
+        inTerminationTransaction(() -> {
+            var task = taskRepository.findByTaskIdForUpdate(taskId);
+            terminationOperationService.markRejected(operationId, rejectionCode);
+            task.ifPresent(entity ->
+                    restoreRejectedCancellation(entity, previousStatus, previousRuntimeAcceptanceState));
+            return null;
+        });
+    }
+
+    private void markCancellationAttention(String taskId, String attentionCode) {
+        inTerminationTransaction(() -> {
+            taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity ->
+                    markCancellationAttention(entity, attentionCode));
+            return null;
+        });
+    }
+
+    private <T> T inTerminationTransaction(Supplier<T> action) {
+        if (terminationTransactionManager == null) {
+            return action.get();
+        }
+        TransactionTemplate transaction = new TransactionTemplate(terminationTransactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return transaction.execute(status -> action.get());
+    }
+
+    private String terminationRejectionCode(Exception error) {
+        String suffix = error == null ? "UNKNOWN" : error.getClass().getSimpleName();
+        String code = "TERMINATION_REJECTED_" + suffix;
+        return code.substring(0, Math.min(code.length(), 160));
+    }
+
+    private static final class TerminationDispatchUnconfirmedException extends IllegalStateException {
+        private TerminationDispatchUnconfirmedException(String message) {
+            super(message);
+        }
+    }
+
+    private CodexWorkerClient terminationClient(CodexTaskEntity entity) {
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            if (runtimeRegistryService == null) {
+                throw new IllegalStateException("CODEX_RUNTIME_REGISTRY_UNAVAILABLE");
+            }
+            CodexRuntimeBinding binding = runtimeRegistryService.resolveBoundRuntime(
+                    entity.getRuntimeId(), entity.getRuntimeRevision(), entity.getWorkerId(),
+                    entity.getRuntimeInstanceId());
+            return clientFactory.getOrCreate(
+                    "runtime:" + binding.getRuntimeId() + ":" + binding.getRuntimeRevision(),
+                    binding.getEndpointUrl(), binding.getAuthToken(), binding.getInstanceId());
+        }
+        CodexConfig config = workerManagementFacade.getCodexConfig(entity.getWorkerId());
+        if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {
+            throw new IllegalStateException("CODEX_WORKER_UNAVAILABLE");
+        }
+        return clientFactory.getOrCreate(entity.getWorkerId() + ":codex",
+                config.getBaseUrl(), config.getAuthToken());
+    }
+
+    /** Keeps the task active while exposing a safe lifecycle marker. */
+    @Transactional
+    public void markLifecycleAttention(String taskId, String attentionCode) {
+        taskRepository.findByTaskIdForUpdate(taskId).ifPresent(entity -> {
+            if (isTerminalStatus(entity.getStatus())) return;
+            entity.setErrorMessage(attentionCode);
+            persistTask(entity);
+        });
+    }
+
+    private void markCancellationAttention(CodexTaskEntity entity, String attentionCode) {
+        String previousStatus = entity.getStatus();
+        if (!isTerminalStatus(previousStatus)) {
+            entity.setStatus("CANCEL_REQUESTED");
+        }
+        entity.setErrorMessage(attentionCode);
+        persistTask(entity);
+        if (!previousStatus.equals(entity.getStatus())) {
+            publishStatusChange(entity, previousStatus);
+        }
+    }
+
+    private String terminationFailureCode(Exception error) {
+        String name = error == null ? "UNKNOWN" : error.getClass().getSimpleName();
+        return ("TERMINATION_DISPATCH_" + name).substring(0,
+                Math.min(160, ("TERMINATION_DISPATCH_" + name).length()));
+    }
+
+    private void markTerminationObserved(String taskId, String outcome) {
+        if (terminationOperationService != null) {
+            terminationOperationService.markObservedTerminalForTask(taskId, outcome);
+        }
     }
 
     /**
@@ -886,6 +1377,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         advanceAckSeq(entity, ackSeq);
 
         persistTask(entity);
+        markTerminationObserved(taskId, "COMPLETED");
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
         if (!"COMPLETED".equals(previousStatus)) {
             publishStatusChange(entity, previousStatus);
@@ -946,6 +1438,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         advanceAckSeq(entity, ackSeq);
 
         persistTask(entity);
+        markTerminationObserved(taskId, "FAILED");
         log.info("Failed Codex task: taskId={}, error={}", taskId, stableError);
         if (!"FAILED".equals(previousStatus)) {
             publishStatusChange(entity, previousStatus);
@@ -997,6 +1490,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
         entity.setLastAliveAt(LocalDateTime.now());
         persistTask(entity);
+        markTerminationObserved(taskId, "ABORTED");
         log.info("Reconciled remotely aborted Codex task: taskId={}", taskId);
         if (!"ABORTED".equals(previousStatus)) {
             publishStatusChange(entity, previousStatus);
@@ -1160,7 +1654,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     public List<DispatchTaskDTO> listActiveDispatchTasksForProvider(String userId, String providerType) {
         return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                        userId, List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT")).stream()
+                        userId, List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT", "CANCEL_REQUESTED")).stream()
                 .filter(entity -> matchesProvider(entity, providerType))
                 .map(this::toDispatchDTO)
                 .toList();
@@ -1302,8 +1796,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
             entity = taskRuntimeStateService.claimTerminalDeletion(taskId, userId);
             deleteTerminalAppServerTask(entity);
-        } else if ("RUNNING".equals(entity.getStatus())) {
-            throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
+        } else if (!isTerminalStatus(entity.getStatus())) {
+            throw new IllegalStateException("Cannot delete a non-terminal task. Wait for observed exit first.");
         }
         if (nativeSubtaskStateRepository != null) {
             nativeSubtaskStateRepository.deleteByTaskId(taskId);
@@ -1470,7 +1964,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private String deriveInteractionState(String taskStatus) {
-        if ("RUNNING".equals(taskStatus) || "PENDING".equals(taskStatus)) {
+        if ("RUNNING".equals(taskStatus) || "PENDING".equals(taskStatus)
+                || "CANCEL_REQUESTED".equals(taskStatus)) {
             return "PROCESSING";
         }
         if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
@@ -2654,7 +3149,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
         requireTaskProvider(task, providerType);
         if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())
-                || "AWAITING_INPUT".equals(task.getStatus())) {
+                || "AWAITING_INPUT".equals(task.getStatus()) || "CANCEL_REQUESTED".equals(task.getStatus())) {
             throw new IllegalStateException("Cannot rewind a running task");
         }
 

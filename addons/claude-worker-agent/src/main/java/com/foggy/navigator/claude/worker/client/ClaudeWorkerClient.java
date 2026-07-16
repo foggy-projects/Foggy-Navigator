@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.client;
 
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
+import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
@@ -9,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
@@ -26,21 +28,26 @@ public class ClaudeWorkerClient {
 
     private final WebClient webClient;
     private final String workerId;
+    /** Never log or serialize; only used to sign one-shot termination capabilities. */
+    private final String terminationSigningSecret;
 
     public ClaudeWorkerClient(String workerId, String baseUrl, String authToken) {
         this.workerId = workerId;
+        this.terminationSigningSecret = authToken;
         // Configure Netty HttpClient with generous timeouts for long-running SSE streams.
         // responseTimeout=30min prevents WebClient from closing idle SSE connections
         // (especially during AWAITING_PERMISSION where no events flow for extended periods).
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000)
                 .responseTimeout(Duration.ofMinutes(30));
-        this.webClient = WebClient.builder()
+        WebClient.Builder builder = WebClient.builder()
                 .baseUrl(baseUrl)
-                .defaultHeader("Authorization", "Bearer " + authToken)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(24 * 1024 * 1024)) // cover tool outputs and file preview payloads
-                .build();
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(24 * 1024 * 1024)); // cover tool outputs and file preview payloads
+        if (authToken != null && !authToken.isBlank()) {
+            builder.defaultHeader("Authorization", "Bearer " + authToken);
+        }
+        this.webClient = builder.build();
     }
 
     /**
@@ -53,7 +60,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Health check failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("Health check failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -132,7 +140,7 @@ public class ClaudeWorkerClient {
                 Object parsed = new com.fasterxml.jackson.databind.ObjectMapper().readValue(images, java.util.List.class);
                 body.put("images", parsed);
             } catch (Exception e) {
-                log.warn("Failed to parse images JSON, skipping: {}", e.getMessage());
+                log.warn("Failed to parse images JSON, skipping: errorType={}", exceptionType(e));
             }
         }
         if (attachments != null && !attachments.isEmpty()) {
@@ -177,7 +185,9 @@ public class ClaudeWorkerClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
-                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
+                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                .doOnError(e -> log.warn("Stream query failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -211,8 +221,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Respond to permission failed for worker {}, task {}: {}",
-                        workerId, taskId, e.getMessage()));
+                .doOnError(e -> log.warn("Respond to permission failed for worker {}, task {}: errorCode={}, errorType={}",
+                        workerId, taskId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -225,7 +235,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Get auth config failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("Get auth config failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -246,20 +257,31 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Rewind files failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("Rewind files failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
      * 中止任务
      */
     @SuppressWarnings("unchecked")
-    public Mono<Map<String, Object>> abortTask(String taskId) {
+    public Mono<Map<String, Object>> abortTask(String taskId, TerminationOperationCapability capability) {
+        requireCapability(capability);
         return webClient.post()
                 .uri("/api/v1/query/{taskId}/abort", taskId)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Abort task failed for worker {}, task {}: {}", workerId, taskId, e.getMessage()));
+                .doOnError(e -> log.warn("Abort task failed for worker {}, task {}: errorCode={}, errorType={}",
+                        workerId, taskId, remoteErrorCode(e), exceptionType(e)));
+    }
+
+    /** @deprecated Remote termination without an audited capability is rejected. */
+    @Deprecated
+    public Mono<Map<String, Object>> abortTask(String taskId) {
+        return Mono.error(new IllegalStateException("TERMINATION_CAPABILITY_REQUIRED"));
     }
 
     /**
@@ -272,7 +294,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("List sessions failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("List sessions failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -285,8 +308,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("Scan session checkpoints failed for worker {}, session {}: {}",
-                        workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("Scan session checkpoints failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -299,8 +322,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Get session message count failed for worker {}, session {}: {}",
-                        workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("Get session message count failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -313,8 +336,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("Get session messages failed for worker {}, session {}: {}",
-                        workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("Get session messages failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -338,8 +361,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("Get session messages (paginated) failed for worker {}, session {}: {}",
-                        workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("Get session messages (paginated) failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -353,8 +376,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Rewind conversation failed for worker {}, session {}: {}",
-                        workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("Rewind conversation failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -367,7 +390,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Sync sessions failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("Sync sessions failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -380,7 +404,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Git info failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Git info failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -393,7 +418,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("List skills failed for worker {}, cwd {}: {}", workerId, cwd, e.getMessage()));
+                .doOnError(e -> log.warn("List skills failed for worker {}, cwd {}: errorCode={}, errorType={}",
+                        workerId, cwd, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -406,7 +432,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("List worktrees failed for worker {}, path {}: {}", workerId, repoPath, e.getMessage()));
+                .doOnError(e -> log.warn("List worktrees failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, repoPath, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -427,7 +454,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Create worktree failed for worker {}, path {}: {}", workerId, repoPath, e.getMessage()));
+                .doOnError(e -> log.warn("Create worktree failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, repoPath, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -442,7 +470,8 @@ public class ClaudeWorkerClient {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Void.class)
-                .doOnError(e -> log.warn("Remove worktree failed for worker {}, path {}: {}", workerId, worktreePath, e.getMessage()));
+                .doOnError(e -> log.warn("Remove worktree failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, worktreePath, remoteErrorCode(e), exceptionType(e)));
     }
 
     // ---- File browser --------------------------------------------------------
@@ -460,7 +489,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("List files failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("List files failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -475,7 +505,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Read file content failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Read file content failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -488,7 +519,8 @@ public class ClaudeWorkerClient {
                         .build())
                 .retrieve()
                 .toEntity(byte[].class)
-                .doOnError(e -> log.warn("Read raw file failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Read raw file failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -503,7 +535,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Git diff summary failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Git diff summary failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -520,7 +553,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Search files failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Search files failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -546,7 +580,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Search content failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Search content failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -562,7 +597,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("File diff failed for worker {}, path {}, file {}: {}", workerId, path, file, e.getMessage()));
+                .doOnError(e -> log.warn("File diff failed for worker {}, path {}, file {}: errorCode={}, errorType={}",
+                        workerId, path, file, remoteErrorCode(e), exceptionType(e)));
     }
 
     // ===== Git Log / History Methods =====
@@ -581,7 +617,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Git log failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Git log failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -597,7 +634,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Commit detail failed for worker {}, path {}, hash {}: {}", workerId, path, hash, e.getMessage()));
+                .doOnError(e -> log.warn("Commit detail failed for worker {}, path {}, hash {}: errorCode={}, errorType={}",
+                        workerId, path, hash, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -614,8 +652,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Commit file diff failed for worker {}, path {}, hash {}, file {}: {}",
-                        workerId, path, hash, file, e.getMessage()));
+                .doOnError(e -> log.warn("Commit file diff failed for worker {}, path {}, hash {}, file {}: errorCode={}, errorType={}",
+                        workerId, path, hash, file, remoteErrorCode(e), exceptionType(e)));
     }
 
     // ===== Foggy Ignore Methods =====
@@ -632,7 +670,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Get foggy ignore failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Get foggy ignore failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -650,7 +689,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Add foggy ignore failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Add foggy ignore failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -668,7 +708,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Remove foggy ignore failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Remove foggy ignore failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     // ===== SSH Proxy Methods =====
@@ -683,7 +724,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
-                .doOnError(e -> log.warn("List SSH sessions failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("List SSH sessions failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -698,7 +740,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("SSH connect failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("SSH connect failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -711,7 +754,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("SSH close failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("SSH close failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -725,7 +769,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("SSH resize failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("SSH resize failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -740,7 +785,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("SSH image upload failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
+                .doOnError(e -> log.warn("SSH image upload failed for worker {}, session {}: errorCode={}, errorType={}",
+                        workerId, sessionId, remoteErrorCode(e), exceptionType(e)));
     }
 
     // ===== CLI Process Management =====
@@ -755,24 +801,72 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("List CLI processes failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("List CLI processes failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
      * 终止指定 PID 的 Claude CLI 进程
      */
     @SuppressWarnings("unchecked")
-    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force) {
+    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force,
+                                                     TerminationOperationCapability capability) {
+        requireCapability(capability);
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("force", force);
         return webClient.post()
                 .uri("/api/v1/processes/" + pid + "/kill")
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Kill CLI process failed for worker {}, pid {}: {}", workerId, pid, e.getMessage()));
+                .doOnError(e -> log.warn("Kill CLI process failed for worker {}, pid {}: errorCode={}, errorType={}",
+                        workerId, pid, remoteErrorCode(e), exceptionType(e)));
+    }
+
+    /** @deprecated Manual PID termination without an audited capability is rejected. */
+    @Deprecated
+    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force) {
+        return Mono.error(new IllegalStateException("TERMINATION_CAPABILITY_REQUIRED"));
+    }
+
+    /** Package-safe access for the control-plane capability issuer; never log this value. */
+    public String terminationSigningSecret() {
+        return terminationSigningSecret;
+    }
+
+    private static void requireCapability(TerminationOperationCapability capability) {
+        if (capability == null || capability.encodedOperation() == null || capability.encodedOperation().isBlank()
+                || capability.signature() == null || capability.signature().isBlank()) {
+            throw new IllegalArgumentException("TERMINATION_CAPABILITY_REQUIRED");
+        }
+    }
+
+    /**
+     * Remote Worker response bodies can contain CLI stderr and credential-
+     * adjacent values.  Lifecycle logging records a stable code and exception
+     * type only; callers must not render raw transport messages.
+     */
+    private static String remoteErrorCode(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof WebClientResponseException response) {
+                return "CLAUDE_WORKER_HTTP_" + response.getStatusCode().value();
+            }
+            String message = current.getMessage();
+            if (message != null && message.matches("[A-Z][A-Z0-9_]{0,127}")) {
+                return message;
+            }
+            current = current.getCause();
+        }
+        return "CLAUDE_WORKER_TRANSPORT_UNCONFIRMED";
+    }
+
+    private static String exceptionType(Throwable error) {
+        return error == null ? "UnknownException" : error.getClass().getSimpleName();
     }
 
     /**
@@ -787,7 +881,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Init directory failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+                .doOnError(e -> log.warn("Init directory failed for worker {}, path {}: errorCode={}, errorType={}",
+                        workerId, path, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -802,7 +897,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.warn("Deploy skills failed for worker {}: {}", workerId, e.getMessage()));
+                .doOnError(e -> log.warn("Deploy skills failed for worker {}: errorCode={}, errorType={}",
+                        workerId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -821,7 +917,9 @@ public class ClaudeWorkerClient {
                         .queryParam("replay_from", ackSeq)  // 向后兼容旧 Worker
                         .build(taskId))
                 .retrieve()
-                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
+                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                .doOnError(e -> log.warn("Subscribe stream failed for worker {}, task {}: errorCode={}, errorType={}",
+                        workerId, taskId, remoteErrorCode(e), exceptionType(e)));
     }
 
     /**
@@ -838,8 +936,8 @@ public class ClaudeWorkerClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnError(e -> log.debug("Task status query failed for worker {}, task {}: {}",
-                        workerId, taskId, e.getMessage()));
+                .doOnError(e -> log.debug("Task status query failed for worker {}, task {}: errorCode={}, errorType={}",
+                        workerId, taskId, remoteErrorCode(e), exceptionType(e)));
     }
 
     public String getWorkerId() {

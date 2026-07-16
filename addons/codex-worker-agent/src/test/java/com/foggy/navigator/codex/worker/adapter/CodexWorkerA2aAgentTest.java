@@ -418,10 +418,26 @@ class CodexWorkerA2aAgentTest {
 
         @Test
         void cancelTask_delegatesToService() {
+            when(taskService.getTaskByIdAndUser("task-1", "user-1"))
+                    .thenReturn(Optional.of(DispatchTaskDTO.builder().taskId("task-1").build()));
             A2aAgent agent = pipelineWithoutContextStore();
             agent.cancelTask("task-1");
 
             verify(taskService).abortTask("task-1");
+        }
+
+        @Test
+        void cancelTask_rejectsTaskOutsideA2aOwnerScope() {
+            when(taskService.getTaskByIdAndUser("other-user-task", "user-1"))
+                    .thenReturn(Optional.empty());
+
+            A2aAgent agent = pipelineWithoutContextStore();
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> agent.cancelTask("other-user-task"));
+
+            assertEquals("TERMINATION_TASK_ACCESS_DENIED", error.getMessage());
+            verify(taskService, never()).abortTask(anyString());
         }
 
         @Test

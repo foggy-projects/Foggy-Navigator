@@ -9,6 +9,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.InitDirectoryOpenForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -39,6 +40,7 @@ class UpstreamAdminWorkerDirectoryControllerTest {
     private final UpstreamClientAppAdminCredentialService adminCredentialService =
             mock(UpstreamClientAppAdminCredentialService.class);
     private final ClaudeWorkerService workerService = mock(ClaudeWorkerService.class);
+    private final ClaudeTaskService claudeTaskService = mock(ClaudeTaskService.class);
     private final WorkingDirectoryService directoryService = mock(WorkingDirectoryService.class);
     private final ClaudeWorkerFacade claudeWorkerFacade = mock(ClaudeWorkerFacade.class);
     private final ClaudeWorkerRepository workerRepository = mock(ClaudeWorkerRepository.class);
@@ -49,6 +51,7 @@ class UpstreamAdminWorkerDirectoryControllerTest {
             new UpstreamAdminWorkerDirectoryController(
                     adminCredentialService,
                     workerService,
+                    claudeTaskService,
                     directoryService,
                     claudeWorkerFacade,
                     workerRepository,

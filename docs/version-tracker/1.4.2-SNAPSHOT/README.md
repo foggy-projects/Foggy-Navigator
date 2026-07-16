@@ -21,6 +21,7 @@
 - formal_quality_gate: reviewed-ready-with-risks
 - coverage_audit: reviewed-needs-more-tests
 - acceptance_status: rejected
+- gov004_acceptance_status: verification-blocked
 
 ## 版本定位
 
@@ -101,6 +102,10 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 
 命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；本机与 hosted runner 通过不代表 GitHub required check/分支保护已生效，也不代表验收或生产批准。
 
+### GOV-004 增量状态（2026-07-16）
+
+GOV-004 的 Java 控制面与 Claude、Codex SDK、Codex app-server 三条 Worker 路径已完成本地实现和针对性自动化：自动超时、watchdog、stream/探测不确定性只写 attention，不得主动终止受管 CLI；显式取消或人工 PID 终止改为受签名、一次性、可审计的 operation。Java 使用持久 `termination_operations` 审计账本，三个 Worker 分别保留重启后仍有效的本地 receipt ledger。该 workitem 的正式状态是 `verification-blocked`，而非 accepted：真实隔离 CLI 五态矩阵、目标环境数据库迁移/回滚和告警部署/送达证据均尚未完成；跨主机或多实例也不能把各自本地 ledger 当作共享防重放存储。详见 [workitem](./workitems/GOV-004-cli-non-termination-and-lifecycle-observability.md)、[质量记录](./quality/GOV-004-cli-non-termination-and-lifecycle-observability-implementation-quality.md)、[覆盖审计](./coverage/GOV-004-cli-non-termination-and-lifecycle-observability-coverage-audit.md)、[验收记录](./acceptance/GOV-004-cli-non-termination-and-lifecycle-observability-acceptance.md) 和 [运行手册](./runbooks/GOV-004-cli-non-termination-and-lifecycle-observability-runbook.md)。这不改变版本级既有 `rejected` 结论，也不改变生产路由或 external enablement。
+
 ## 工作项总览
 
 | Workitem | 范围 | 计划阶段 | 当前状态 |
@@ -109,6 +114,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | in-progress |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | in-progress |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | in-progress |
+| [GOV-004](./workitems/GOV-004-cli-non-termination-and-lifecycle-observability.md) | Java 与三类 Worker 的 CLI 非主动终止原则、显式终止审计与生命周期可观测性 | P2 | verification-blocked |
 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | Node、lockfile、Java/前端/Worker clean build 与 CI | P1 | in-progress |
 | [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | LangGraph 实时工具进度事件重复 | P1 | closed |
 | [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) | Open SDK 测试编译、JUnit 5 与跨平台 clean 基线 | P1 | closed |
@@ -127,7 +133,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 |---|---|---|---|
 | P0 | 冻结目标、边界、术语、ownership 和代码清单 | in-progress | 否；仅规划与文档基线 |
 | P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | in-progress（hosted baseline passed） | 否；Repository CI 7-job 矩阵已通过，main required check/分支保护未配置，修复后 nightly、根 reactor hosted 验证仍待完成 |
-| P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | in-progress（partial） | 生产路由未改变、external 默认关闭且未启用；credential v1、pool identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、definitive terminal、Claude tenant 与 audit writer 事务隔离已落地；Codex 安全转发、开关组合、OS 隔离、pause/generation、reliable audit/outbox 和 L3 仍待完成 |
+| P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | in-progress（partial；GOV-004 verification-blocked） | 生产路由未改变、external 默认关闭且未启用；credential v1、pool identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、definitive terminal、Claude tenant 与 audit writer 事务隔离已落地。GOV-004 已在本地收敛三类 Worker 的非主动终止、签名 operation 和 durable receipt；仍缺真实 CLI 五态、目标 DB、告警及多实例部署证据。Codex 安全转发、开关组合、OS 隔离、pause/generation、reliable audit/outbox 和 L3 仍待完成 |
 | P3 | 在 service/facade 层补齐 Session/Task ownership | in-progress（partial） | 首批 userId+tenantId 门面及 Session/Task/Agent/SSE/config/shared/forward/context/model-config 已落地；隔离 Session 双账号 UI/API/SSE 已通过，越权行为收紧但生产路由未改变。全列表 tenant、Provider taskId、admin/system、Task live Provider fixture、共享数据库与 L3 仍待完成 |
 | P4 | 清理低风险孤儿代码和失效文档 | not-started | 否；每项仍需引用扫描、验证和回滚证据 |
 | P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并用 test-only fixture 替代 Echo 后退出默认装配 | in-progress | 无生产环境，`production_routing_changed: no`；但 `launcher_default_agent_inventory_changed: yes`，默认制品不再注册 Echo；hosted CI 和版本正式门禁已执行，签收为 `rejected`，切片专项浏览器/PowerShell/模块级签收仍待补 |
@@ -220,6 +226,11 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - [GOV-001 内外部信任边界](./workitems/GOV-001-internal-external-trust-boundary.md)
 - [GOV-002 Biz Worker 与 upstream user 边界](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md)
 - [GOV-003 Session/Task 资源归属](./workitems/GOV-003-session-task-resource-ownership.md)
+- [GOV-004 CLI 非主动终止与生命周期可观测性](./workitems/GOV-004-cli-non-termination-and-lifecycle-observability.md)
+- [GOV-004 实现质量记录](./quality/GOV-004-cli-non-termination-and-lifecycle-observability-implementation-quality.md)
+- [GOV-004 覆盖审计](./coverage/GOV-004-cli-non-termination-and-lifecycle-observability-coverage-audit.md)
+- [GOV-004 验收记录](./acceptance/GOV-004-cli-non-termination-and-lifecycle-observability-acceptance.md)
+- [GOV-004 运行手册](./runbooks/GOV-004-cli-non-termination-and-lifecycle-observability-runbook.md)
 - [OPT-001 构建与 CI 基线](./workitems/OPT-001-build-and-ci-baseline.md)
 - [BUG-001 LangGraph 实时工具进度事件重复](./workitems/BUG-001-langgraph-progress-event-duplication.md)
 - [BUG-002 Open SDK clean test 基线](./workitems/BUG-002-open-sdk-clean-test-baseline.md)

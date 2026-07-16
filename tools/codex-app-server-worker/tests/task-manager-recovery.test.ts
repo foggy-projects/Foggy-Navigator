@@ -8,6 +8,7 @@ import { TaskManager } from '../src/task-manager.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import { FakeExecutor, tempDirectory, testConfig, waitFor } from './helpers.js'
 import { GeneratedImageStore } from '../src/generated-image-store.js'
+import type { ExecutionResult, TaskExecutor } from '../src/app-server/executor.js'
 
 test('TaskManager persists committed before executor side effects and executes an accepted task once', async t => {
   const stateDir = await tempDirectory('codex-app-manager-')
@@ -80,6 +81,31 @@ test('TaskManager resumes accepted work but never replays committed work after r
   assert.equal(manager.get('committed-task')?.recovery_required, true)
 })
 
+test('TaskManager keeps a recovered committed cancel pending when its executor cannot reconcile', async t => {
+  const stateDir = await tempDirectory('codex-app-manager-unreconciled-cancel-')
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
+  const config = testConfig(stateDir)
+  const seed = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await seed.initialize()
+  await seed.accept('committed-cancel-without-reconcile', { prompt: 'must not become a fabricated terminal' })
+  await seed.transition('committed-cancel-without-reconcile', 'starting')
+  await seed.transition('committed-cancel-without-reconcile', 'committed', { thread_id: 'thread-unreconciled' })
+
+  const recoveredStore = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, recoveredStore, new NoReconcileExecutor())
+  await manager.initialize({ resume: false })
+
+  const result = await manager.abort('committed-cancel-without-reconcile')
+  assert.equal(result?.abort_status, 'cancel_requested')
+  const record = manager.get('committed-cancel-without-reconcile')
+  assert.equal(record?.status, 'committed')
+  assert.equal(record?.outcome, undefined)
+  assert.equal(record?.termination_operation, undefined)
+  assert.deepEqual(record?.attention?.map(item => `${item.status}:${item.reason_code}`), [
+    'TERMINATION_UNCONFIRMED:CANCEL_RECONCILIATION_UNCONFIRMED',
+  ])
+})
+
 test('TaskManager fails startup closed when the durable encryption key is wrong', async t => {
   const stateDir = await tempDirectory('codex-app-manager-key-')
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
@@ -95,6 +121,12 @@ test('TaskManager fails startup closed when the durable encryption key is wrong'
   await assert.rejects(manager.initialize(), /authenticate data|authentication|Unsupported state/i)
   assert.equal(executor.calls, 0)
 })
+
+class NoReconcileExecutor implements TaskExecutor {
+  async execute(): Promise<ExecutionResult> {
+    throw new Error('recovered committed work must not execute without reconciliation')
+  }
+}
 
 test('TaskManager resumes recovery-required accepted work exactly once after readiness returns', async t => {
   const stateDir = await tempDirectory('codex-app-manager-readiness-')
@@ -135,6 +167,11 @@ test('TaskManager finalizes a durable pre-commit abort after restart without exe
   assert.equal(manager.get('aborted-before-start')?.status, 'terminal')
   assert.equal(manager.get('aborted-before-start')?.outcome, 'aborted')
   assert.equal(manager.get('aborted-before-start')?.error_code, 'TASK_ABORTED')
+  const terminalError = manager.getBroadcast('aborted-before-start').getEventsAfter(0)
+    .find(event => event.type === 'error')
+  assert.equal(terminalError?.terminal_observed, true)
+  assert.equal(terminalError?.terminal_status, 'ABORTED')
+  assert.equal(terminalError?.terminal_source, 'NO_EXECUTION_CONFIRMED')
 })
 
 test('TaskManager removes crash-left materialized image plaintext during startup recovery', async t => {

@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -92,6 +93,9 @@ class CodexWorkerFacadeImplTest {
         assertEquals("Final answer", result.get("resultText"));
         assertEquals(new BigDecimal("0.12"), result.get("costUsd"));
         assertNull(result.get("error"));
+        verify(taskService).completeTask(
+                eq("local-task-1"), eq("worker-task-9"), eq("thread-1"), eq("Final answer"),
+                eq(new BigDecimal("0.12")), eq(101L), eq(22L), eq(9159L), eq(2), eq("gpt-5.6-sol"));
     }
 
     @Test
@@ -118,6 +122,10 @@ class CodexWorkerFacadeImplTest {
                 "user-1", "worker-1", "check repo", "D:/repo", "thread-0", 2, null);
 
         assertEquals("LATEST_COMPLETED_ITEM", result.get("resultText"));
+        assertEquals("CODEX_SYNC_QUERY_UNCONFIRMED", result.get("error"));
+        verify(taskService).markLifecycleAttention("local-task-1", "PROCESS_UNVERIFIED");
+        verify(taskService, never()).completeTask(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -157,9 +165,33 @@ class CodexWorkerFacadeImplTest {
         Map<String, Object> result = facade.syncQuery(
                 "user-1", "worker-1", "check repo", "D:/repo", null, 1, "gpt-5.6-sol");
 
-        assertEquals("CODEX_SYNC_QUERY_FAILED", result.get("error"));
+        assertEquals("CODEX_SYNC_QUERY_UNCONFIRMED", result.get("error"));
         assertTrue(result.values().stream().noneMatch(value -> String.valueOf(value).contains(sentinel)));
-        verify(taskService).failTask("local-task-1", null, null, "CODEX_SYNC_QUERY_FAILED");
+        verify(taskService).markLifecycleAttention("local-task-1", "PROCESS_UNVERIFIED");
+        verify(taskService, never()).failTask(any(), any(), any(), any());
+    }
+
+    @Test
+    void trackedSyncQueryOnlyFailsWhenWorkerProvidesTerminalEvidence() {
+        mockSdkWorker();
+        when(taskService.createTrackedSyncTask(
+                "user-1", "worker-1", "session-1", "check repo", "D:/repo", null,
+                "thread-0", "gpt-5.6-sol"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
+                eq("gpt-5.6-sol"), eq(1), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(sse("""
+                        {"type":"error","task_id":"worker-task-9","session_id":"thread-1",
+                         "error":"CODEX_ACCOUNT_RATE_LIMITED","terminal_observed":true,"terminal_status":"FAILED"}
+                        """)));
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo", "thread-0", 1,
+                null, "session-1");
+
+        assertEquals("CODEX_ACCOUNT_RATE_LIMITED", result.get("error"));
+        verify(taskService).failTask("local-task-1", "worker-task-9", "thread-1",
+                "CODEX_ACCOUNT_RATE_LIMITED");
     }
 
     @Test

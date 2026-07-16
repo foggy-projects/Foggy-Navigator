@@ -451,13 +451,9 @@ if [[ "$WAS_RUNNING" == true ]]; then
   run_process_tree verify --pid "$pid" --entry "$INSTALLED_ENTRY" --output "$UPDATE_SNAPSHOT"
   verify_status=$PROCESS_TREE_STATUS
   if (( stop_status != 0 || verify_status != 0 )); then
-    run_process_tree kill --pid "$pid" --entry "$INSTALLED_ENTRY" --output "$UPDATE_SNAPSHOT"
-    kill_status=$PROCESS_TREE_STATUS
-    run_process_tree verify --pid "$pid" --entry "$INSTALLED_ENTRY" --output "$UPDATE_SNAPSHOT"
-    final_verify_status=$PROCESS_TREE_STATUS
-    if (( kill_status == 0 && final_verify_status == 0 )); then reason=update_drain_not_proven; else reason=update_process_residue; fi
+    if (( verify_status == 0 )); then reason=update_drain_not_proven; else reason=update_drain_pending_operator_decision; fi
     write_failed_stop_latch "$reason"
-    echo 'Worker drain failed or left verified descendants; current installation was not replaced' >&2
+    echo 'Worker drain was not proven; no Worker process was terminated and the current installation was not replaced. Use an explicit signed termination operation or operator recovery.' >&2
     exit 1
   fi
   if [[ -e "$LIFECYCLE_FAILURE_FILE" || -L "$LIFECYCLE_FAILURE_FILE" ]]; then

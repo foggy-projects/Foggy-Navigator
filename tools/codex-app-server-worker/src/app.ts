@@ -15,6 +15,7 @@ export function createApp(config: AppConfig, manager: TaskManager): Express {
   app.use(exposeActualInstance(config))
   app.use(createAuthMiddleware(config))
   app.use('/api/v1/tasks', guardExpectedInstance(config))
+  app.use('/api/v1/processes', guardExpectedInstance(config))
   app.use('/api/v1/runtime', requireExpectedInstance(config))
   app.use(express.json({ limit: '25mb' }))
   app.use(createHealthRouter(config, manager))

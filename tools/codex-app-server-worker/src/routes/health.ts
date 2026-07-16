@@ -25,6 +25,7 @@ export function createHealthRouter(config: AppConfig, manager: TaskManager): Rou
       auth_configured: external.auth_configured,
       hostname: os.hostname(),
       worker_name: config.workerName,
+      navigator_worker_id: config.navigatorWorkerId || null,
       version: APP_VERSION,
       runtime_id: config.runtimeId,
       runtime_revision: config.runtimeRevision,

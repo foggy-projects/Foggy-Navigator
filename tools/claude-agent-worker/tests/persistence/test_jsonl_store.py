@@ -7,7 +7,9 @@ ensuring no I/O side effects between tests.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -265,6 +267,23 @@ class TestUnicodeSupport:
 
 class TestFailSafe:
     """I/O errors are logged, not raised."""
+
+    def test_append_failure_log_redacts_error_message(
+        self,
+        store: JsonlEventStore,
+        caplog,
+    ):
+        secret = "EVENT_STORE_SENTINEL_token=private"
+        with caplog.at_level(
+            logging.WARNING,
+            logger="agent_worker.persistence.jsonl_store",
+        ):
+            with patch.object(Path, "mkdir", side_effect=OSError(secret)):
+                store.append("task-log-redaction", {"seq": 1, "type": "event"})
+
+        assert secret not in caplog.text
+        assert "event_name=EVENT_PERSISTENCE_FAILED" in caplog.text
+        assert "error_type=OSError" in caplog.text
 
     def test_append_to_readonly_dir_does_not_raise(self, tmp_path: Path):
         """Verify append is fail-safe (logs warning, does not crash)."""

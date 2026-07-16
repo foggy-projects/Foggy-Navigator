@@ -5,9 +5,12 @@ import { promisify } from 'node:util'
 import {
   buildListProcessesWindowsScript,
   buildWindowsKillAttemptArgs,
+  canonicalizeCodexCliProcessStartedAt,
   CodexProcessKillError,
+  codexCliProcessIdentity,
   extractResumedThreadId,
   findCodexCliProcessForThread,
+  isCanonicalCodexCliProcessIdentity,
   killCodexCliProcessWindows,
 } from '../src/codex/processes.ts'
 
@@ -34,6 +37,29 @@ test('findCodexCliProcessForThread uses registry pid before command fallback', (
     { threadId: 'thread-known', pid: 101 },
   ])?.pid, 101)
   assert.equal(findCodexCliProcessForThread('thread-orphan', processes)?.pid, 202)
+})
+
+test('Codex CLI process identity uses a canonical UTC start timestamp', () => {
+  assert.equal(
+    canonicalizeCodexCliProcessStartedAt('2026-07-16T08:00:00+08:00'),
+    '2026-07-16T00:00:00.000Z',
+  )
+  assert.equal(
+    codexCliProcessIdentity(123, '2026-07-16T00:00:00.000Z'),
+    'codex-cli:123:2026-07-16T00:00:00.000Z',
+  )
+  assert.equal(
+    codexCliProcessIdentity(123, '2026-07-16T00:00:00+00:00'),
+    undefined,
+  )
+  assert.equal(
+    isCanonicalCodexCliProcessIdentity('codex-cli:123:2026-07-16T00:00:00.000Z', 123),
+    true,
+  )
+  assert.equal(
+    isCanonicalCodexCliProcessIdentity('codex-cli:123:2026-07-16T00:00:00+00:00', 123),
+    false,
+  )
 })
 
 test('buildListProcessesWindowsScript keeps PowerShell expressions intact', () => {

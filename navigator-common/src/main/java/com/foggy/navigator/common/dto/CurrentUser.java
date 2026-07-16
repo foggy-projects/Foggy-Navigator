@@ -6,7 +6,6 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -27,14 +26,14 @@ public class CurrentUser {
      * 是否为超级管理员（ROOT）
      */
     public boolean isSuperAdmin() {
-        return roles != null && roles.contains("SUPER_ADMIN");
+        return hasRole("SUPER_ADMIN");
     }
 
     /**
      * 是否为租户管理员
      */
     public boolean isTenantAdmin() {
-        return roles != null && roles.contains("TENANT_ADMIN");
+        return hasRole("TENANT_ADMIN");
     }
 
     /**
@@ -42,16 +41,19 @@ public class CurrentUser {
      */
     public List<String> getRoleList() {
         if (roles == null || roles.isEmpty()) {
-            return Collections.emptyList();
+            return List.of();
         }
-        return Arrays.asList(roles.split(","));
+        return Arrays.stream(roles.split(","))
+                .map(String::trim)
+                .filter(role -> !role.isEmpty())
+                .toList();
     }
 
     /**
      * 检查是否有指定角色
      */
     public boolean hasRole(String role) {
-        return roles != null && roles.contains(role);
+        return role != null && getRoleList().contains(role);
     }
 
     /**

@@ -1,4 +1,8 @@
-import type { TaskEntry } from '../models.js'
+import {
+  isTaskExecutionActive,
+  type TaskAttention,
+  type TaskEntry,
+} from '../models.js'
 import {
   findCodexCliProcessForThread,
   listCodexCliProcesses,
@@ -16,8 +20,9 @@ export type CodexThreadProcessWatchdogDependencies = {
   getTaskEntries: () => Iterable<TaskEntry>
   getReservations: () => ReadonlyMap<string, Readonly<CodexThreadReservationOwner>>
   listProcesses?: () => Promise<CodexCliProcessInfo[]>
-  abortTask: (taskId: string, reason: string) => boolean
   releaseReservationsForTask: (taskId: string) => string[]
+  /** Emits a recoverable lifecycle event in the owning Worker. */
+  markTaskAttention?: (taskId: string, attention: TaskAttention) => void
   now?: () => number
 }
 
@@ -26,14 +31,17 @@ export type CodexThreadProcessWatchdogReport = {
   liveTasks: number
   uncertainTasks: number
   suspectedMissingTasks: number
+  unverifiedTasks: string[]
+  /** @deprecated Kept for status compatibility; watchdogs never abort tasks. */
   abortedTasks: string[]
   releasedThreadIds: string[]
 }
 
 /**
  * Keeps Worker-owned task/thread state aligned with the actual Codex CLI processes.
- * A missing process must remain absent for a safety window before the task is aborted.
- * Process scan failures never mutate task or reservation state.
+ * A missing process or a failed scan is an observation gap, not authority to
+ * terminate a user task.  The watchdog only emits recoverable attention and
+ * never calls an abort path or releases an active task reservation.
  */
 export class CodexThreadProcessWatchdog {
   private readonly missingSince = new Map<string, number>()
@@ -71,20 +79,34 @@ export class CodexThreadProcessWatchdog {
       liveTasks: 0,
       uncertainTasks: 0,
       suspectedMissingTasks: 0,
+      unverifiedTasks: [],
       abortedTasks: [],
       releasedThreadIds: [],
     }
-    if (!taskEntries.some(entry => entry.status === 'running') && reservations.length === 0) {
+    const activeEntries = taskEntries.filter(entry => isTaskExecutionActive(entry.status))
+    if (activeEntries.length === 0 && reservations.length === 0) {
       return report
     }
 
-    const processes = await (this.dependencies.listProcesses ?? listCodexCliProcesses)()
     const now = (this.dependencies.now ?? Date.now)()
+    let processes: CodexCliProcessInfo[]
+    try {
+      processes = await (this.dependencies.listProcesses ?? listCodexCliProcesses)()
+    } catch {
+      for (const entry of activeEntries) {
+        this.markUnverified(entry, 'Codex CLI process scan failed; task remains active pending diagnostics', now)
+        report.unverifiedTasks.push(entry.taskId)
+      }
+      // Do not log the underlying process-enumeration error: platform command
+      // output can contain complete CLI command lines and their sensitive args.
+      console.warn('[codex-thread-watchdog] process scan failed; task state retained')
+      return report
+    }
     const startupGraceMs = this.options.startupGraceMs
       ?? Math.max(10_000, this.options.missingGraceMs)
 
     for (const entry of taskEntries) {
-      if (entry.status !== 'running') {
+      if (!isTaskExecutionActive(entry.status)) {
         this.missingSince.delete(entry.taskId)
         continue
       }
@@ -97,13 +119,24 @@ export class CodexThreadProcessWatchdog {
         continue
       }
 
-      // A new task may not have exposed its child PID yet. Resumed tasks can be
-      // reconciled by thread command after the startup window; brand-new tasks
-      // without either PID or thread ID remain uncertain rather than guessed dead.
-      if (entry.pid === undefined
-          && (now - entry.startedAt < startupGraceMs || !entry.threadId)) {
+      // A new task may not have exposed its child PID yet.  That short startup
+      // window is expected and must not be treated as a dead task.
+      if (entry.pid === undefined && now - entry.startedAt < startupGraceMs) {
         this.missingSince.delete(entry.taskId)
         report.uncertainTasks += 1
+        continue
+      }
+
+      // Once startup grace expires, the absence of both process identity and
+      // thread identity is itself an observable uncertainty.  Keep the task
+      // and reservation active; an operator can decide what to do next.
+      if (entry.pid === undefined && !entry.threadId) {
+        this.markUnverified(
+          entry,
+          'Codex CLI process and thread identity could not be verified after startup grace',
+          now,
+        )
+        report.unverifiedTasks.push(entry.taskId)
         continue
       }
 
@@ -119,16 +152,18 @@ export class CodexThreadProcessWatchdog {
       }
 
       const pidDetail = entry.pid !== undefined ? ` pid=${entry.pid}` : ''
-      const reason = `Codex CLI process disappeared:${pidDetail || ' no matching process'}`
-      if (this.dependencies.abortTask(entry.taskId, reason)) {
-        report.abortedTasks.push(entry.taskId)
-      }
+      this.markUnverified(
+        entry,
+        `Codex CLI process could not be verified:${pidDetail || ' no matching process'}`,
+        now,
+      )
+      report.unverifiedTasks.push(entry.taskId)
       this.missingSince.delete(entry.taskId)
     }
 
     for (const owner of reservations) {
       const task = taskById.get(owner.taskId)
-      if (!task || task.status !== 'running') {
+      if (!task || !isTaskExecutionActive(task.status)) {
         report.releasedThreadIds.push(
           ...this.dependencies.releaseReservationsForTask(owner.taskId),
         )
@@ -155,13 +190,34 @@ export class CodexThreadProcessWatchdog {
     this.scanInProgress = true
     try {
       const report = await this.runOnce()
-      if (report.abortedTasks.length > 0 || report.releasedThreadIds.length > 0) {
-        console.warn('[codex-thread-watchdog] reconciled stale execution state', report)
+      if (report.unverifiedTasks.length > 0 || report.releasedThreadIds.length > 0) {
+        console.warn('[codex-thread-watchdog] reconciled lifecycle observations', report)
       }
-    } catch (error) {
-      console.warn('[codex-thread-watchdog] process scan failed; state left unchanged', error)
+    } catch {
+      // Preserve the no-auto-termination invariant even for an unexpected
+      // watchdog implementation failure.
+      console.warn('[codex-thread-watchdog] unexpected scan failure; task state retained')
     } finally {
       this.scanInProgress = false
     }
+  }
+
+  private markUnverified(entry: TaskEntry, message: string, now: number): void {
+    const attention: TaskAttention = {
+      code: 'PROCESS_UNVERIFIED',
+      message,
+      source: 'THREAD_PROCESS_WATCHDOG',
+      occurred_at: new Date(now).toISOString(),
+      recoverable: true,
+    }
+    if (this.dependencies.markTaskAttention) {
+      this.dependencies.markTaskAttention(entry.taskId, attention)
+      return
+    }
+    const existing = entry.attention ?? []
+    if (!existing.some(candidate => candidate.code === attention.code)) {
+      entry.attention = [...existing, attention]
+    }
+    entry.availableActions = ['CONTINUE_WAIT', 'QUERY_DIAGNOSTICS', 'CANCEL']
   }
 }

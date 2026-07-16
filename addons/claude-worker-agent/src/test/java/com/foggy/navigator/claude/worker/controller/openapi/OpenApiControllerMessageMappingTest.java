@@ -2479,6 +2479,7 @@ class OpenApiControllerMessageMappingTest {
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
+                mock(ClaudeTaskService.class),
                 mock(WorkingDirectoryService.class),
                 mock(ClaudeWorkerFacade.class),
                 mock(ClaudeWorkerRepository.class),

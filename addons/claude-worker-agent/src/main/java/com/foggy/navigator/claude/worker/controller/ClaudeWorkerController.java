@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.model.dto.WorkerDTO;
 import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.PlatformSkillSyncer;
 import com.foggy.navigator.claude.worker.service.TaskStateReconciler;
 import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
@@ -20,7 +21,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * Worker 管理 API
@@ -33,6 +33,7 @@ import java.util.Objects;
 public class ClaudeWorkerController {
 
     private final ClaudeWorkerService workerService;
+    private final ClaudeTaskService taskService;
     private final WorkerHealthChecker healthChecker;
     private final TaskStateReconciler reconciler;
     private final PlatformSkillSyncer platformSkillSyncer;
@@ -140,8 +141,9 @@ public class ClaudeWorkerController {
             }
             return RX.ok(result);
         } catch (Exception e) {
-            log.warn("Failed to list CLI processes for worker {}: {}", workerId, e.getMessage());
-            return RX.failA("获取 CLI 进程列表失败: " + e.getMessage());
+            log.warn("Failed to list CLI processes for worker {}: type={}",
+                    workerId, e.getClass().getSimpleName());
+            return RX.failA("获取 CLI 进程列表失败: CLAUDE_WORKER_PROCESS_QUERY_FAILED");
         }
     }
 
@@ -172,6 +174,7 @@ public class ClaudeWorkerController {
     }
 
     @PostMapping("/{workerId}/processes/{pid}/kill")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<Map<String, Object>> killCliProcess(
             @PathVariable String workerId,
             @PathVariable int pid,
@@ -186,23 +189,39 @@ public class ClaudeWorkerController {
             force = Boolean.TRUE.equals(body.get("force"));
         }
         var client = workerService.createClient(entity);
+        ClaudeTaskService.ManualPidKillRequest operation = null;
         try {
-            try {
-                Map<String, Object> snapshot = client.listCliProcesses().block(Duration.ofSeconds(5));
-                if (snapshot != null) {
-                    enrichWithOrphanInfo(workerId, snapshot);
-                    logKillRequestDiagnostics(workerId, pid, force, snapshot);
-                }
-            } catch (Exception snapshotEx) {
-                log.warn("Failed to capture CLI process snapshot before kill for worker {} pid {}: {}",
-                        workerId, pid, snapshotEx.getMessage());
+            Map<String, Object> snapshot = client.listCliProcesses().block(Duration.ofSeconds(5));
+            if (snapshot == null) {
+                return RX.failA("无法确认 CLI PID 与任务绑定，已拒绝终止操作");
             }
-            Map<String, Object> result = client.killCliProcess(pid, force)
+            enrichWithOrphanInfo(workerId, snapshot);
+            logKillRequestDiagnostics(workerId, pid, force, snapshot);
+            String taskId = resolveBoundTaskId(snapshot, pid, body);
+            String processIdentity = resolveProcessIdentity(snapshot, pid, taskId);
+            if (taskId == null || processIdentity == null) {
+                return RX.failA("仅允许终止已绑定到活动任务的 CLI PID");
+            }
+            // PID termination is deliberately an administrator-only operation;
+            // Worker ownership alone is insufficient authorization to signal a
+            // managed CLI process.
+            operation = taskService.prepareManualPidKill(taskId, workerId, userId, "TENANT_ADMIN_MANUAL",
+                    UserContext.getCurrentTenantId(), true, pid, processIdentity,
+                    client.terminationSigningSecret());
+            Map<String, Object> workerResult = client.killCliProcess(pid, force, operation.capability())
                     .block(Duration.ofSeconds(10));
+            Map<String, Object> result = workerResult == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(workerResult);
+            taskService.recordManualPidKillResult(operation, result);
+            result.put("termination_operation_id", operation.operationId());
             return RX.ok(result);
         } catch (Exception e) {
-            log.warn("Failed to kill CLI process {} for worker {}: {}", pid, workerId, e.getMessage());
-            return RX.failA("终止 CLI 进程失败: " + e.getMessage());
+            if (operation != null) {
+                taskService.markManualPidKillDispatchFailure(operation, e);
+            }
+            log.warn("Failed to kill CLI process {} for worker {}: type={}",
+                    pid, workerId, e.getClass().getSimpleName());
+            return RX.failA("终止 CLI 进程失败: CLAUDE_WORKER_TERMINATION_UNCONFIRMED");
         }
     }
 
@@ -229,9 +248,52 @@ public class ClaudeWorkerController {
         brief.put("isOrphan", proc.get("is_orphan"));
         brief.put("orphanFirstSeenAt", proc.get("orphan_first_seen_at"));
         brief.put("startedAt", proc.get("started_at"));
-        Object command = proc.get("command");
-        brief.put("command", command == null ? null : String.valueOf(command).substring(0, Math.min(String.valueOf(command).length(), 160)));
+        brief.put("processIdentity", proc.get("process_identity"));
         return brief;
+    }
+
+    private String resolveBoundTaskId(Map<String, Object> snapshot, int pid, Map<String, Object> body) {
+        Map<String, Object> target = extractProcesses(snapshot).stream()
+                .filter(proc -> pidMatches(proc.get("pid"), pid))
+                .findFirst()
+                .orElse(null);
+        if (target == null) return null;
+        String boundTaskId = stringValue(target.get("foggy_task_id"));
+        if (boundTaskId == null || boundTaskId.isBlank()) return null;
+        String requestedTaskId = body == null || body.get("taskId") == null
+                ? null : stringValue(body.get("taskId"));
+        if (requestedTaskId != null && !requestedTaskId.isBlank()
+                && !requestedTaskId.equals(boundTaskId)) {
+            throw new IllegalArgumentException("TERMINATION_WORKER_TASK_MISMATCH");
+        }
+        return boundTaskId;
+    }
+
+    /** Returns the opaque identity from the same fresh PID/task snapshot. */
+    private String resolveProcessIdentity(Map<String, Object> snapshot, int pid, String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        Map<String, Object> target = extractProcesses(snapshot).stream()
+                .filter(proc -> pidMatches(proc.get("pid"), pid))
+                .filter(proc -> taskId.equals(stringValue(proc.get("foggy_task_id"))))
+                .findFirst()
+                .orElse(null);
+        if (target == null) return null;
+        String identity = stringValue(target.get("process_identity"));
+        return isSafeProcessIdentity(identity) ? identity : null;
+    }
+
+    private boolean pidMatches(Object value, int pid) {
+        if (value instanceof Number number) return number.intValue() == pid;
+        try {
+            return value != null && Integer.parseInt(String.valueOf(value)) == pid;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isSafeProcessIdentity(String value) {
+        return value != null && value.length() <= 160
+                && value.matches("[A-Za-z0-9][A-Za-z0-9._:+-]{0,159}");
     }
 
     private String duplicateIdentityKey(Map<String, Object> proc) {
@@ -274,7 +336,7 @@ public class ClaudeWorkerController {
     private void logKillRequestDiagnostics(String workerId, int pid, boolean force, Map<String, Object> snapshot) {
         List<Map<String, Object>> processes = extractProcesses(snapshot);
         Map<String, Object> target = processes.stream()
-                .filter(proc -> Objects.equals(proc.get("pid"), pid))
+                .filter(proc -> pidMatches(proc.get("pid"), pid))
                 .findFirst()
                 .orElse(null);
         if (target == null) {
@@ -286,7 +348,7 @@ public class ClaudeWorkerController {
         String targetFoggyTaskId = stringValue(target.get("foggy_task_id"));
         String targetClaudeSessionId = stringValue(target.get("claude_session_id"));
         List<Map<String, Object>> related = processes.stream()
-                .filter(proc -> !Objects.equals(proc.get("pid"), pid))
+                .filter(proc -> !pidMatches(proc.get("pid"), pid))
                 .filter(proc -> {
                     String procFoggyTaskId = stringValue(proc.get("foggy_task_id"));
                     String procClaudeSessionId = stringValue(proc.get("claude_session_id"));

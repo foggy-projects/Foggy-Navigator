@@ -32,6 +32,20 @@ export interface PoolRuntimeInstance {
   readonly pid: number | undefined
   isHealthy(): boolean
   isActive(): boolean
+  requiresAttention?(): boolean
+  markObservedTerminal?(): void
+  /**
+   * True only after this runtime observed a matching provider terminal event
+   * for its current root turn.  It is a no-signal fence for a late manual PID
+   * operation while TaskManager is still persisting that terminal result.
+   */
+  hasProviderTerminalObserved?(): boolean
+  /**
+   * The boolean is deliberately an observation result, not a dispatch ACK.
+   * A signed manual PID operation may signal a process, but TaskManager must
+   * retain the task unless the runtime also verified that its child exited.
+   */
+  forceTerminateForAuthorizedOperation?(expectedPid: number): boolean | void | Promise<boolean | void>
   runTurn(options: PersistentTurnOptions): ReturnType<AppServerRuntimeInstance['runTurn']>
   readThread(threadId: string, includeTurns?: boolean): Promise<Record<string, unknown>>
   listLoadedThreads?(): Promise<string[]>
@@ -264,8 +278,8 @@ export class AppServerPool {
     const records = [...this.instances.values()]
     return {
       instances: records.length,
-      busy: records.filter(record => record.busy).length,
-      idle: records.filter(record => !record.busy).length,
+      busy: records.filter(record => record.busy || record.runtime.requiresAttention?.()).length,
+      idle: records.filter(record => !record.busy && !record.runtime.requiresAttention?.()).length,
       creating: this.creating,
       queued: this.waiters.length,
       lanes: new Set(records.map(record => record.laneKey)).size,
@@ -297,7 +311,10 @@ export class AppServerPool {
   sweep(): void {
     const now = this.now()
     for (const record of [...this.instances.values()]) {
-      if (record.busy) continue
+      // An unverified runtime is deliberately retained until a terminal
+      // observation or a separately authorized kill.  Do not let periodic
+      // pool maintenance turn an observability failure into a process kill.
+      if (record.busy || record.runtime.isActive() || record.runtime.requiresAttention?.()) continue
       if (!record.runtime.isHealthy() || record.crashed) {
         this.retire(record, true)
       } else if (
@@ -327,11 +344,23 @@ export class AppServerPool {
       this.drainDeadline = deadline
       for (const waiter of [...this.waiters]) this.rejectWaiter(waiter, new AppServerPoolDrainingError())
       for (const controller of this.creationControllers) controller.abort('Pool draining')
-      for (const record of [...this.instances.values()]) if (!record.busy) this.retire(record, false)
-      while (([...this.instances.values()].some(record => record.busy) || this.creating > 0) && Date.now() < deadline) {
+      for (const record of [...this.instances.values()]) {
+        if (!record.busy && !record.runtime.isActive() && !record.runtime.requiresAttention?.()) {
+          this.retire(record, false)
+        }
+      }
+      while (([...this.instances.values()].some(record => (
+        record.busy || record.runtime.isActive() || record.runtime.requiresAttention?.()
+      )) || this.creating > 0) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 25))
       }
-      for (const record of [...this.instances.values()]) this.retire(record, false)
+      // Never retire a lane that still owns an active or unverified turn.
+      // runtime.close() may SIGTERM/SIGKILL the app-server process tree.
+      for (const record of [...this.instances.values()]) {
+        if (!record.busy && !record.runtime.isActive() && !record.runtime.requiresAttention?.()) {
+          this.retire(record, false)
+        }
+      }
       while ((this.retirements.size > 0 || this.creating > 0) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 25))
       }
@@ -600,7 +629,7 @@ export class AppServerPool {
       return false
     }
     const candidate = [...this.instances.values()]
-      .filter(record => !record.busy && !record.runtime.isActive())
+      .filter(record => !record.busy && !record.runtime.isActive() && !record.runtime.requiresAttention?.())
       .sort((left, right) => {
         const leftSameLane = left.laneKey === laneKey ? 1 : 0
         const rightSameLane = right.laneKey === laneKey ? 1 : 0
@@ -662,6 +691,7 @@ export class AppServerPool {
   private isIdleReusable(record: InstanceRecord, now: number): boolean {
     return !record.busy
       && !record.crashed
+      && !record.runtime.requiresAttention?.()
       && record.runtime.isHealthy()
       && now - record.lastUsedAt < this.config.poolIdleTtlMs
       && now - record.createdAt < this.config.poolMaxLifetimeMs
@@ -712,6 +742,9 @@ export class AppServerPool {
   }
 
   private retire(record: InstanceRecord, crashed: boolean): void {
+    if (record.busy || record.runtime.isActive() || record.runtime.requiresAttention?.()) {
+      return
+    }
     if (!this.instances.delete(record.id)) return
     record.unsubscribeFatal?.()
     record.unsubscribeRateLimits?.()

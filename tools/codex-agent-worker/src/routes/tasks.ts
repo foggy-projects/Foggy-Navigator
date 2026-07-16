@@ -1,10 +1,24 @@
 import { Router, Request, Response } from 'express'
-import { taskRegistry, taskBroadcasts, abortTask, getTaskStatus } from '../codex/sdk-wrapper.js'
+import { config } from '../config.js'
+import {
+  taskBroadcasts,
+  getTaskStatus,
+  requestTaskCancellation,
+} from '../codex/sdk-wrapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
-import type { WorkerEvent } from '../models.js'
+import { toTaskLifecycleState, type WorkerEvent } from '../models.js'
+import {
+  TerminationOperationReceiptLedger,
+  TerminationOperationValidationError,
+  toTerminationOperationSummary,
+  validateTerminationOperation,
+} from '../termination-operation.js'
 
-const router = Router()
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000
+
+export type TasksRouterDependencies = {
+  terminationReplayLedger?: TerminationOperationReceiptLedger
+}
 
 function startSseHeartbeat(res: Response): () => void {
   const timer = setInterval(() => {
@@ -25,6 +39,34 @@ function getSingleQuery(value: string | string[] | undefined): string | undefine
   if (Array.isArray(value)) return value[0]
   return value
 }
+
+function taskStatusPayload(entry: NonNullable<ReturnType<typeof getTaskStatus>>) {
+  return {
+    task_id: entry.taskId,
+    status: entry.status,
+    lifecycle_state: toTaskLifecycleState(entry.status),
+    thread_id: entry.threadId,
+    pid: entry.pid ?? null,
+    started_at: new Date(entry.startedAt).toISOString(),
+    completed_at: entry.completedAt ? new Date(entry.completedAt).toISOString() : null,
+    duration_ms: entry.completedAt ? entry.completedAt - entry.startedAt : Date.now() - entry.startedAt,
+    attention: entry.attention ?? [],
+    attention_status: entry.attention?.at(-1)?.code,
+    available_actions: entry.availableActions ?? [],
+    termination_operation: entry.terminationOperation,
+  }
+}
+
+function sendTerminationOperationError(res: Response, error: unknown): boolean {
+  if (!(error instanceof TerminationOperationValidationError)) return false
+  res.status(error.statusCode).json({ error: error.code, code: error.code })
+  return true
+}
+
+export function createTasksRouter(dependencies: TasksRouterDependencies = {}): Router {
+  const router = Router()
+  const terminationReplayLedger = dependencies.terminationReplayLedger
+    ?? new TerminationOperationReceiptLedger(config.terminationOperationLedgerDir)
 
 /**
  * GET /api/v1/tasks/:taskId/subscribe — Reconnect to existing task's SSE stream
@@ -139,29 +181,61 @@ router.get('/api/v1/tasks/:taskId/status', (req: Request, res: Response) => {
     return
   }
 
-  res.json({
-    task_id: entry.taskId,
-    status: entry.status,
-    thread_id: entry.threadId,
-    started_at: new Date(entry.startedAt).toISOString(),
-    completed_at: entry.completedAt ? new Date(entry.completedAt).toISOString() : null,
-    duration_ms: entry.completedAt ? entry.completedAt - entry.startedAt : Date.now() - entry.startedAt,
-  })
+  res.json(taskStatusPayload(entry))
 })
 
 /**
- * POST /api/v1/tasks/:taskId/abort — Abort a running task
+ * POST /api/v1/tasks/:taskId/abort — Request an explicitly authorized cancel.
+ * The ACK is non-terminal: the task remains CANCEL_REQUESTED until a provider
+ * terminal event or verified process exit is observed.
  */
 router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
   const taskId = getSingleParam(req.params.taskId)
-  const success = abortTask(taskId)
-
-  if (!success) {
-    res.status(404).json({ error: `Task not found or not running: ${taskId}` })
+  const entry = getTaskStatus(taskId)
+  if (!entry) {
+    res.status(404).json({ error: `Task not found: ${taskId}` })
     return
   }
 
-  res.json({ task_id: taskId, status: 'aborted' })
+  let claims
+  try {
+    claims = validateTerminationOperation(
+      req.headers['x-navigator-termination-operation'],
+      req.headers['x-navigator-termination-signature'],
+      {
+        workerToken: config.workerToken,
+        expectedWorkerId: config.navigatorWorkerId,
+        expectedKind: 'REMOTE_CANCEL',
+        expectedTaskId: taskId,
+        replayLedger: terminationReplayLedger,
+      },
+    )
+  } catch (error) {
+    if (sendTerminationOperationError(res, error)) return
+    throw error
+  }
+
+  const operation = toTerminationOperationSummary(claims, 'CANCEL_REQUESTED')
+  const requested = requestTaskCancellation(taskId, operation)
+
+  if (!requested) {
+    res.status(409).json({
+      error: 'TASK_CANCELLATION_NOT_ACCEPTED',
+      code: 'TASK_CANCELLATION_NOT_ACCEPTED',
+      ...taskStatusPayload(entry),
+    })
+    return
+  }
+
+  res.status(202).json({
+    ...taskStatusPayload(requested),
+    status: 'cancel_requested',
+    lifecycle_state: 'CANCEL_REQUESTED',
+    termination_operation: operation,
+  })
 })
 
-export default router
+  return router
+}
+
+export default createTasksRouter()

@@ -15,6 +15,7 @@ export function testConfig(stateDir: string, overrides: Partial<AppConfig> = {})
     port: 0,
     host: '127.0.0.1',
     workerName: 'test-app-server-worker',
+    navigatorWorkerId: 'test-navigator-worker',
     workerToken: 'test-worker-token',
     externalEnabled: false,
     runtimeId: 'test-runtime',

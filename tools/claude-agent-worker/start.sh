@@ -32,6 +32,14 @@ fi
 echo -e "${CYAN}=== Claude Agent Worker (后台模式) ===${NC}"
 echo -e "${CYAN}Port: $Port${NC}"
 
+# Existing Worker safety gate. The stop script proves workspace ownership and
+# a quiescent process snapshot before a non-forced stop is attempted.
+echo -e "${YELLOW}Verifying any existing Worker can stop safely...${NC}"
+if ! bash "$WorkerDir/stop.sh"; then
+    echo -e "${RED}Refusing to start a replacement: the existing Worker did not prove safe quiescence.${NC}" >&2
+    exit 2
+fi
+
 # Find Python 3
 PYTHON_CMD=""
 for cmd in python3 python; do
@@ -85,23 +93,6 @@ fi
 
 echo -e "${CYAN}Using venv: $PYTHON${NC}"
 echo -e "${CYAN}Python version: $($PYTHON --version)${NC}"
-
-# Kill existing process on the port
-ExistingPid=$(lsof -ti:$Port 2>/dev/null || true)
-if [ ! -z "$ExistingPid" ]; then
-    echo -e "${YELLOW}Stopping existing process on port $Port (PID: $ExistingPid)...${NC}"
-    kill -9 $ExistingPid 2>/dev/null || true
-    sleep 0.5
-fi
-
-# Remove old PID file if exists
-if [ -f "$PidFile" ]; then
-    OldPid=$(cat "$PidFile" 2>/dev/null || true)
-    if [ ! -z "$OldPid" ]; then
-        kill -9 $OldPid 2>/dev/null || true
-    fi
-    rm -f "$PidFile"
-fi
 
 # Start the worker in background (使用 venv 的 python，不用系统 python3)
 cd "$WorkerDir"

@@ -105,6 +105,7 @@ public class OpenApiController {
 
     private final OpenApiProvisioningService provisioningService;
     private final ClaudeWorkerService workerService;
+    private final ClaudeTaskService claudeTaskService;
     private final WorkingDirectoryService directoryService;
     private final ClaudeWorkerFacade claudeWorkerFacade;
     private final ClaudeWorkerRepository workerRepository;
@@ -2092,8 +2093,9 @@ public class OpenApiController {
             }
             return RX.ok(result);
         } catch (Exception e) {
-            log.warn("Failed to list CLI processes for worker {}: {}", workerId, e.getMessage());
-            return RX.failA("获取 CLI 进程列表失败: " + e.getMessage());
+            log.warn("Failed to list CLI processes for worker {}: type={}",
+                    workerId, e.getClass().getSimpleName());
+            return RX.failA("获取 CLI 进程列表失败: CLAUDE_WORKER_PROCESS_QUERY_FAILED");
         }
     }
 
@@ -2115,18 +2117,87 @@ public class OpenApiController {
             force = Boolean.TRUE.equals(body.get("force"));
         }
         ClaudeWorkerClient client = workerService.createClient(worker);
+        ClaudeTaskService.ManualPidKillRequest operation = null;
         try {
-            Map<String, Object> result = client.killCliProcess(pid, force)
+            Map<String, Object> snapshot = client.listCliProcesses().block(Duration.ofSeconds(5));
+            String taskId = resolveBoundProcessTaskId(snapshot, pid, body);
+            String processIdentity = resolveProcessIdentity(snapshot, pid, taskId);
+            if (taskId == null || processIdentity == null) {
+                return RX.failA("仅允许终止已绑定到活动任务的 CLI PID");
+            }
+            operation = claudeTaskService.prepareManualPidKill(taskId, workerId,
+                    UserContext.getCurrentUserId(), "TENANT_ADMIN_MANUAL",
+                    UserContext.getCurrentTenantId(), true, pid, processIdentity,
+                    client.terminationSigningSecret());
+            Map<String, Object> workerResult = client.killCliProcess(pid, force, operation.capability())
                     .block(Duration.ofSeconds(10));
-            log.info("Open API killed CLI process: workerId={}, pid={}, force={}", workerId, pid, force);
+            Map<String, Object> result = workerResult == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(workerResult);
+            claudeTaskService.recordManualPidKillResult(operation, result);
+            result.put("termination_operation_id", operation.operationId());
+            log.info("Open API dispatched explicit CLI PID operation: workerId={}, pid={}, operationId={}",
+                    workerId, pid, operation.operationId());
             return RX.ok(result);
         } catch (Exception e) {
-            log.warn("Failed to kill CLI process {} for worker {}: {}", pid, workerId, e.getMessage());
-            return RX.failA("终止 CLI 进程失败: " + e.getMessage());
+            if (operation != null) {
+                claudeTaskService.markManualPidKillDispatchFailure(operation, e);
+            }
+            log.warn("Failed to kill CLI process {} for worker {}: type={}",
+                    pid, workerId, e.getClass().getSimpleName());
+            return RX.failA("终止 CLI 进程失败: CLAUDE_WORKER_TERMINATION_UNCONFIRMED");
         }
     }
 
     // ===== 内部工具方法 =====
+
+    @SuppressWarnings("unchecked")
+    private String resolveBoundProcessTaskId(Map<String, Object> snapshot, int pid,
+                                             Map<String, Object> body) {
+        if (snapshot == null || !(snapshot.get("processes") instanceof List<?> processes)) return null;
+        for (Object item : processes) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            Object candidatePid = raw.get("pid");
+            if (!pidMatches(candidatePid, pid)) continue;
+            Object task = raw.get("foggy_task_id");
+            if (task == null || String.valueOf(task).isBlank()) return null;
+            String boundTaskId = String.valueOf(task);
+            Object requested = body == null ? null : body.get("taskId");
+            if (requested != null && !String.valueOf(requested).isBlank()
+                    && !boundTaskId.equals(String.valueOf(requested))) {
+                throw new IllegalArgumentException("TERMINATION_WORKER_TASK_MISMATCH");
+            }
+            return boundTaskId;
+        }
+        return null;
+    }
+
+    private String resolveProcessIdentity(Map<String, Object> snapshot, int pid, String taskId) {
+        if (snapshot == null || !StringUtils.hasText(taskId)
+                || !(snapshot.get("processes") instanceof List<?> processes)) return null;
+        for (Object item : processes) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            if (!pidMatches(raw.get("pid"), pid)) continue;
+            String boundTaskId = stringValue(raw.get("foggy_task_id"));
+            if (!taskId.equals(boundTaskId)) continue;
+            String identity = stringValue(raw.get("process_identity"));
+            return isSafeProcessIdentity(identity) ? identity : null;
+        }
+        return null;
+    }
+
+    private boolean pidMatches(Object value, int pid) {
+        if (value instanceof Number number) return number.intValue() == pid;
+        try {
+            return value != null && Integer.parseInt(String.valueOf(value)) == pid;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isSafeProcessIdentity(String value) {
+        return value != null && value.length() <= 160
+                && value.matches("[A-Za-z0-9][A-Za-z0-9._:+-]{0,159}");
+    }
 
     /**
      * 验证 Agent 存在并返回（Open API 上下文）

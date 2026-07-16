@@ -17,15 +17,19 @@ if (Test-Path $EnvFile) {
 Write-Host "=== Claude Agent Worker ===" -ForegroundColor Cyan
 Write-Host "Port: $Port" -ForegroundColor Cyan
 
-# Kill existing process on the port
-$existingPid = (netstat -ano | Select-String ":$Port\s+.*LISTENING" | ForEach-Object {
-    ($_ -split '\s+')[-1]
-} | Select-Object -First 1)
-
-if ($existingPid) {
-    Write-Host "Stopping existing process on port $Port (PID: $existingPid)..." -ForegroundColor Yellow
-    taskkill /F /PID $existingPid 2>$null
-    Start-Sleep -Milliseconds 500
+# Existing Worker safety gate. Run stop.ps1 in a child PowerShell because its
+# explicit exit codes are part of the no-replacement contract.
+Write-Host "Verifying any existing Worker can stop safely..." -ForegroundColor Yellow
+$StopScript = Join-Path $WorkerDir "stop.ps1"
+$PowerShellHost = (Get-Process -Id $PID -ErrorAction Stop).Path
+if (-not (Test-Path -LiteralPath $StopScript) -or [string]::IsNullOrWhiteSpace($PowerShellHost)) {
+    throw "Unable to invoke the Claude Worker safe-stop gate."
+}
+& $PowerShellHost -NoProfile -ExecutionPolicy Bypass -File $StopScript
+$safeStopExitCode = $LASTEXITCODE
+if ($safeStopExitCode -ne 0) {
+    Write-Host "Refusing to start a replacement: the existing Worker did not prove safe quiescence." -ForegroundColor Red
+    exit $safeStopExitCode
 }
 
 # --- Locate venv Python --------------------------------------------------

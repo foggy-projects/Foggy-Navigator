@@ -67,6 +67,20 @@ function Invoke-RepoScript {
     }
 }
 
+function Invoke-WorkerStopScript {
+    param(
+        [string]$Label,
+        [string]$RelativePath
+    )
+
+    try {
+        Invoke-RepoScript -Label $Label -RelativePath $RelativePath
+    }
+    catch {
+        throw "$Label did not prove safe Worker quiescence; local stack will not continue or start a replacement Worker. $($_.Exception.Message)"
+    }
+}
+
 function Get-PortListeners {
     param([int]$Port)
 
@@ -221,8 +235,8 @@ if ($Action -eq "status") {
 
 if ($Action -eq "stop" -or $Action -eq "restart") {
     if (-not $NoGemini) { Invoke-RepoScript -Label "Stop Gemini Worker" -RelativePath "tools\gemini-agent-worker\stop.ps1" }
-    if (-not $NoCodex) { Invoke-RepoScript -Label "Stop Codex Worker" -RelativePath "tools\codex-agent-worker\stop.ps1" }
-    if (-not $NoClaude) { Invoke-RepoScript -Label "Stop Claude Worker" -RelativePath "tools\claude-agent-worker\stop.ps1" }
+    if (-not $NoCodex) { Invoke-WorkerStopScript -Label "Stop Codex Worker" -RelativePath "tools\codex-agent-worker\stop.ps1" }
+    if (-not $NoClaude) { Invoke-WorkerStopScript -Label "Stop Claude Worker" -RelativePath "tools\claude-agent-worker\stop.ps1" }
     if (-not $NoWinBiz) { Invoke-RepoScript -Label "Stop Windows LangGraph Biz Worker" -RelativePath "tools\langgraph-biz-worker\stop.ps1" }
     if (-not $NoBackend) { Invoke-RepoScript -Label "Stop Java Backend" -RelativePath "scripts\stop-launcher.ps1" }
     Invoke-WslBizStop

@@ -38,6 +38,22 @@ test('runtime and instance identifiers respect the Java registry persistence lim
   }), /CODEX_APP_SERVER_INSTANCE_ID must be 1-128 characters/)
 })
 
+test('Navigator Worker identity is distinct from runtime and instance identity', () => {
+  const configured = createConfig({
+    ...process.env,
+    CODEX_APP_SERVER_NAVIGATOR_WORKER_ID: 'navigator-worker-42',
+    CODEX_APP_SERVER_RUNTIME_ID: 'runtime-42',
+    CODEX_APP_SERVER_INSTANCE_ID: 'instance-42',
+  })
+  assert.equal(configured.navigatorWorkerId, 'navigator-worker-42')
+  assert.notEqual(configured.navigatorWorkerId, configured.runtimeId)
+  assert.notEqual(configured.navigatorWorkerId, configured.instanceId)
+  assert.throws(() => createConfig({
+    ...process.env,
+    CODEX_APP_SERVER_NAVIGATOR_WORKER_ID: 'w'.repeat(129),
+  }), /CODEX_APP_SERVER_NAVIGATOR_WORKER_ID must be at most 128 characters/)
+})
+
 test('built-in Ultra and Max aliases cannot be silently downgraded', () => {
   assert.throws(() => createConfig({
     ...process.env,

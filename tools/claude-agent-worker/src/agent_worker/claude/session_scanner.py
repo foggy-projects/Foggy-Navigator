@@ -91,7 +91,11 @@ def _parse_jsonl_head(filepath: Path, max_lines: int = 20) -> dict | None:
                 if all((session_id, cwd, slug, git_branch, timestamp)):
                     break
     except OSError as exc:
-        logger.warning("Failed to read %s: %s", filepath, exc)
+        logger.warning(
+            "Claude session metadata read failed: "
+            "event_name=SESSION_METADATA_READ_FAILED error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
     if not session_id or not cwd:
@@ -117,7 +121,10 @@ def scan_sessions_for_cwd(cwd: str) -> list[dict]:
     project_dir = projects_dir / encoded
 
     if not project_dir.is_dir():
-        logger.debug("Project directory not found: %s", project_dir)
+        logger.debug(
+            "Claude project directory not found: "
+            "event_name=SESSION_PROJECT_DIRECTORY_NOT_FOUND"
+        )
         return []
 
     results: list[dict] = []
@@ -250,7 +257,12 @@ def read_session_messages(
                                 "timestamp": timestamp,
                             })
     except OSError as exc:
-        logger.warning("Failed to read session %s: %s", session_id, exc)
+        logger.warning(
+            "Claude session message read failed: "
+            "event_name=SESSION_MESSAGES_READ_FAILED session_id=%s error_type=%s",
+            session_id,
+            type(exc).__name__,
+        )
         return []
 
     # Apply offset/limit slicing
@@ -314,7 +326,12 @@ def scan_session_checkpoints(session_id: str) -> list[dict]:
                     "timestamp": obj.get("timestamp", ""),
                 })
     except OSError as exc:
-        logger.warning("Failed to scan checkpoints for session %s: %s", session_id, exc)
+        logger.warning(
+            "Claude checkpoint scan failed: "
+            "event_name=SESSION_CHECKPOINT_SCAN_FAILED session_id=%s error_type=%s",
+            session_id,
+            type(exc).__name__,
+        )
         return []
 
     return checkpoints
@@ -352,7 +369,12 @@ def count_session_messages(session_id: str) -> dict:
                 elif msg_type == "assistant":
                     assistant_count += 1
     except OSError as exc:
-        logger.warning("Failed to count messages for session %s: %s", session_id, exc)
+        logger.warning(
+            "Claude session message count failed: "
+            "event_name=SESSION_MESSAGE_COUNT_FAILED session_id=%s error_type=%s",
+            session_id,
+            type(exc).__name__,
+        )
         return {"user_count": 0, "assistant_count": 0, "total": 0}
 
     return {"user_count": user_count, "assistant_count": assistant_count, "total": user_count + assistant_count}
@@ -432,7 +454,12 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
             import shutil
             shutil.copy2(filepath, backup_path)
         except OSError as exc:
-            logger.warning("Failed to create rewind backup for %s: %s", session_id, exc)
+            logger.warning(
+                "Claude rewind backup failed: "
+                "event_name=SESSION_REWIND_BACKUP_FAILED session_id=%s error_type=%s",
+                session_id,
+                type(exc).__name__,
+            )
 
     # ── Special case: rewind to first turn ────────────────────────
     # When rewinding to the very first user turn, no conversation lines
@@ -450,8 +477,9 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
 
         logger.info(
             "Rewound session %s to turn 1: deleted session file, "
-            "user_prompt=%s",
-            session_id, repr(user_prompt[:80]) if user_prompt else None,
+            "user_prompt_chars=%d",
+            session_id,
+            len(user_prompt),
         )
         return {
             "status": "rewound",
@@ -528,10 +556,10 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
 
     logger.info(
         "Rewound session %s to turn %d: cutoff_line=%d, original_lines=%d, "
-        "kept_lines=%d, removed=%d, user_prompt=%s",
+        "kept_lines=%d, removed=%d, user_prompt_chars=%d",
         session_id, turn_index, cutoff_line, len(lines),
         len(final_lines), removed_count,
-        repr(user_prompt[:80]) if user_prompt else None,
+        len(user_prompt),
     )
 
     return {"status": "rewound", "user_prompt": user_prompt, "turn_index": turn_index}

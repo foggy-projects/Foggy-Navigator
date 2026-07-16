@@ -8,7 +8,7 @@ import { TaskManager, toPublicTask } from '../src/task-manager.js'
 import type { ReconciliationResult } from '../src/app-server/executor.js'
 import { FakeExecutor, tempDirectory, testConfig, waitFor } from './helpers.js'
 
-test('restart clears an unanswerable durable interaction with a stable failure and releases its thread', async t => {
+test('restart clears an unanswerable durable interaction but retains the unverified task and its thread', async t => {
   const stateDir = await tempDirectory('codex-app-user-input-restart-')
   const config = testConfig(stateDir)
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
@@ -27,21 +27,31 @@ test('restart clears an unanswerable durable interaction with a stable failure a
   await manager.initialize()
 
   const lost = manager.get('lost-input')!
-  assert.equal(lost.status, 'terminal')
-  assert.equal(lost.error_code, 'USER_INPUT_CHANNEL_LOST')
+  assert.equal(lost.status, 'running')
+  assert.equal(lost.error_code, undefined)
+  assert.equal(lost.attention?.at(-1)?.status, 'PROCESS_UNVERIFIED')
+  assert.equal(lost.attention?.at(-1)?.reason_code, 'USER_INPUT_CHANNEL_LOST')
   assert.equal(lost.pending_interaction, undefined)
   assert.equal(toPublicTask(lost).pending_interaction, undefined)
   const events = manager.getBroadcast('lost-input').getEventsAfter(0)
   assert.equal(events.some(event => event.type === 'user_input_resolved'
     && (event.data as Record<string, unknown>).reason === 'cleared'), true)
-  assert.equal(events.some(event => event.type === 'error' && event.subtype === 'USER_INPUT_CHANNEL_LOST'), true)
+  const diagnostic = events.find(event => event.type === 'error' && event.subtype === 'USER_INPUT_CHANNEL_LOST')
+  assert.ok(diagnostic)
+  assert.equal(diagnostic.terminal_observed, undefined)
+  assert.equal(diagnostic.terminal_status, undefined)
 
-  await manager.accept('after-lost-input', { prompt: 'continue', session_id: 'thread-lost' })
-  await waitFor(() => manager.get('after-lost-input')?.status === 'terminal')
-  await waitFor(() => manager.activeCount() === 0)
+  const restartedStore = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const restarted = new TaskManager(config, restartedStore, new FakeExecutor())
+  await restarted.initialize()
+  assert.equal(restarted.get('lost-input')?.status, 'running', 'diagnostic event must not become a synthetic terminal result')
+  await assert.rejects(
+    restarted.accept('after-lost-input', { prompt: 'continue', session_id: 'thread-lost' }),
+    { code: 'APP_SERVER_THREAD_ACTIVE' },
+  )
 })
 
-test('legacy duplicate nonterminal thread journals fail only the later owner instead of blocking startup', async t => {
+test('legacy duplicate nonterminal thread journals remain pending decision instead of releasing either owner', async t => {
   const stateDir = await tempDirectory('codex-app-legacy-thread-conflict-')
   const config = testConfig(stateDir)
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
@@ -68,16 +78,17 @@ test('legacy duplicate nonterminal thread journals fail only the later owner ins
   await manager.initialize({ resume: false })
 
   assert.equal(manager.get('legacy-first')?.status, 'accepted')
-  assert.equal(manager.get('legacy-second')?.status, 'terminal')
-  assert.equal(manager.get('legacy-second')?.error_code, 'APP_SERVER_THREAD_ACTIVE_RECOVERY')
+  assert.equal(manager.get('legacy-second')?.status, 'accepted')
+  assert.equal(manager.get('legacy-second')?.attention?.at(-1)?.reason_code, 'APP_SERVER_THREAD_ACTIVE_RECOVERY')
   assert.equal(manager.getBroadcast('legacy-second').getEventsAfter(0)
     .some(event => event.subtype === 'APP_SERVER_THREAD_ACTIVE_RECOVERY'), true)
 
   const aborted = await manager.abort('legacy-first')
   assert.equal(aborted?.abort_status, 'aborted')
-  await manager.accept('legacy-third', { prompt: 'third', session_id: 'legacy-thread' })
-  await waitFor(() => manager.get('legacy-third')?.status === 'terminal')
-  await waitFor(() => manager.activeCount() === 0)
+  await assert.rejects(
+    manager.accept('legacy-third', { prompt: 'third', session_id: 'legacy-thread' }),
+    { code: 'APP_SERVER_THREAD_ACTIVE' },
+  )
 })
 
 test('reconciliation terminal outcome releases a rebuilt thread reservation', async t => {

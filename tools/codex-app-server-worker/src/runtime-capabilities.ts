@@ -107,6 +107,7 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
     model_aliases: modelAliases,
     worker: {
       name: config.workerName,
+      navigator_worker_id: config.navigatorWorkerId || null,
       version: APP_VERSION,
       hostname: os.hostname(),
     },

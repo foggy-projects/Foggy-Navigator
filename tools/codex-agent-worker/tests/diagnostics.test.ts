@@ -7,10 +7,12 @@ test('SDK diagnostics classify errors and never expose the raw message as error'
   assert.equal(result.error, 'CODEX_TURN_TIMEOUT')
   assert.equal(result.error_category, 'TIMEOUT')
   assert.equal(result.runtime_phase, 'TURN_EXECUTION')
+  assert.equal(result.diagnostic_text, 'CODEX_TURN_TIMEOUT')
   assert.doesNotMatch(result.diagnostic_text || '', /\/home\/sa|secret-token/)
 })
 
-test('diagnostic sanitizer removes credentials, urls and identity hints', () => {
+test('diagnostic sanitizer returns only a stable code for arbitrary runtime text', () => {
   const result = sanitizeDiagnostic('api_key=abc123 https://u:p@example.com/a?q=x user@example.com 10.1.2.3')
-  assert.equal(result, '[credential] [url] [email] [ip]')
+  assert.equal(result, 'CODEX_AUTH_REQUIRED')
+  assert.doesNotMatch(result || '', /abc123|example\.com|user@|10\.1\.2\.3/)
 })

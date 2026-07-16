@@ -39,6 +39,55 @@ export interface TaskRequest {
 
 export type TaskPhase = 'accepted' | 'starting' | 'committed' | 'running' | 'terminal'
 export type TaskOutcome = 'completed' | 'failed' | 'aborted'
+export type TaskAttentionStatus =
+  | 'TIMEOUT_PENDING_DECISION'
+  | 'PROCESS_UNVERIFIED'
+  | 'TERMINATION_UNCONFIRMED'
+  | 'WORKER_DRAINING_PENDING_DECISION'
+
+/**
+ * A durable, non-terminal observation.  Attention never implies that the
+ * provider process has stopped; callers must wait for an observed terminal
+ * result or submit a separately-authorized termination operation.
+ */
+export interface TaskAttention {
+  status: TaskAttentionStatus
+  reason_code: string
+  observed_at: string
+  activity_evidence?: string
+}
+
+export type TerminationOperationKind = 'REMOTE_CANCEL' | 'MANUAL_PID_KILL'
+export type TerminationOperationOrigin = 'UPSTREAM_USER' | 'UPSTREAM_SYSTEM' | 'ADMIN_MANUAL'
+export type TerminationOperationStatus = 'CANCEL_REQUESTED' | 'OBSERVED_EXIT'
+
+/** Safe-to-persist projection of the signed termination command. */
+export interface TerminationOperationSummary {
+  operation_id: string
+  /** Task id bound by the verified signed operation. */
+  task_id: string
+  /** Exact Navigator Worker identity that accepted the signed capability. */
+  worker_id: string
+  /** Optional legacy alias supplied alongside the mandatory worker_id. */
+  target_worker_id?: string
+  kind: TerminationOperationKind
+  origin: TerminationOperationOrigin
+  actor_id: string
+  actor_type: string
+  authorization_decision_id: string
+  reason_code: string
+  correlation_id: string
+  issued_at: string
+  expires_at: string
+  requested_at: string
+  status: TerminationOperationStatus
+  expected_pid?: number
+  /** Immutable process/runtime identity paired with expected_pid for manual kill. */
+  expected_process_identity?: string
+  /** Safe stable result code; never contains provider output or credentials. */
+  result_code?: string
+  observed_exit_at?: string
+}
 
 export type AppServerRequestId = string | number
 
@@ -125,6 +174,8 @@ export interface StoredTaskRecord {
   terminal_at?: string
   recovery_required?: boolean
   abort_requested_at?: string
+  attention?: TaskAttention[]
+  termination_operation?: TerminationOperationSummary
   tombstoned_at?: string
   pending_interaction?: PendingUserInputInteraction
   last_interaction?: ResolvedUserInputInteraction
@@ -150,7 +201,7 @@ export interface NativeSubtaskUpdateData {
 
 export interface WorkerEvent {
   type: 'assistant_text' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'native_subtask_update'
-    | 'user_input_request' | 'user_input_resolved' | 'image_generation'
+    | 'user_input_request' | 'user_input_resolved' | 'image_generation' | 'lifecycle_update'
   task_id: string
   session_id?: string
   content?: string
@@ -184,6 +235,18 @@ export interface WorkerEvent {
   tool_use_id?: string
   is_error?: boolean
   subtype?: string
-  data?: NativeSubtaskUpdateData | UserInputRequestData | UserInputResolvedData | GeneratedImageData
+  /**
+   * An error is a terminal lifecycle event only when this explicit evidence
+   * accompanies it.  Transport and reconciliation errors deliberately omit
+   * these fields so Java keeps the task pending for observation.
+   */
+  terminal_observed?: boolean
+  terminal_status?: 'FAILED' | 'ABORTED'
+  terminal_source?: string
+  data?: NativeSubtaskUpdateData | UserInputRequestData | UserInputResolvedData | GeneratedImageData | {
+    attention?: TaskAttention[]
+    available_actions?: string[]
+    termination_operation?: TerminationOperationSummary
+  }
   seq?: number
 }

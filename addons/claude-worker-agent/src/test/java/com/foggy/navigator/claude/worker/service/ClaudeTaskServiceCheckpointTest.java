@@ -24,7 +24,7 @@ import static org.mockito.Mockito.*;
  * Tests for ClaudeTaskService checkpoint/rewind-related methods:
  * - scanAndPopulateCheckpoints
  * - truncateSessionMessages
- * - abortTask (checkpoint scan trigger)
+ * - checkpoint scans only after a terminal Worker observation
  */
 class ClaudeTaskServiceCheckpointTest {
 
@@ -91,7 +91,7 @@ class ClaudeTaskServiceCheckpointTest {
     @Test
     void testScanAndPopulateCheckpoints_success() {
         ClaudeTaskEntity entity = createTaskEntity();
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         List<Map<String, Object>> checkpoints = List.of(
@@ -110,7 +110,7 @@ class ClaudeTaskServiceCheckpointTest {
 
     @Test
     void testScanAndPopulateCheckpoints_taskNotFound() {
-        when(taskRepository.findByTaskId("nonexistent")).thenReturn(Optional.empty());
+        when(taskRepository.findByTaskIdForUpdate("nonexistent")).thenReturn(Optional.empty());
 
         assertThrows(IllegalArgumentException.class, () ->
                 service.scanAndPopulateCheckpoints("nonexistent", List.of()));
@@ -119,7 +119,7 @@ class ClaudeTaskServiceCheckpointTest {
     @Test
     void testScanAndPopulateCheckpoints_emptyList() {
         ClaudeTaskEntity entity = createTaskEntity();
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         String json = service.scanAndPopulateCheckpoints(TASK_ID, List.of());
@@ -153,60 +153,39 @@ class ClaudeTaskServiceCheckpointTest {
     }
 
     // -----------------------------------------------------------------------
-    // abortTask — checkpoint scan trigger
+    // cancellation does not fabricate a terminal checkpoint scan
     // -----------------------------------------------------------------------
 
     @Test
-    void testAbortTask_triggersCheckpointScan() {
+    void testAbortTaskWithoutTerminalEvidenceDoesNotScanCheckpoints() {
         ClaudeTaskEntity entity = createTaskEntity();
         entity.setClaudeSessionId(CLAUDE_SESSION_ID);
 
-        when(streamRelay.getWorkerTaskId(TASK_ID)).thenReturn("worker-task-1");
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
-        when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(createWorkerEntity());
-
-        ClaudeWorkerClient mockClient = mock(ClaudeWorkerClient.class);
-        when(workerService.createClient(any())).thenReturn(mockClient);
-        when(mockClient.abortTask(anyString())).thenReturn(reactor.core.publisher.Mono.empty());
-
-        // txTemplate should execute the consumer
-        doAnswer(inv -> {
-            @SuppressWarnings("unchecked")
-            var consumer = (java.util.function.Consumer<org.springframework.transaction.TransactionStatus>) inv.getArgument(0);
-            consumer.accept(null);
-            return null;
-        }).when(txTemplate).executeWithoutResult(any());
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.abortTask(TASK_ID);
 
-        // Verify step 5: autoScanCheckpoints was called
-        verify(streamRelay).autoScanCheckpoints(TASK_ID, CLAUDE_SESSION_ID);
+        // A cancel request is not completion.  Checkpoints are scanned by the
+        // relay only once it receives a verified terminal Worker event.
+        verify(streamRelay, never()).autoScanCheckpoints(anyString(), anyString());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", entity.getErrorMessage());
     }
 
     @Test
-    void testAbortTask_noClaudeSessionId_skipsCheckpointScan() {
+    void testAbortTaskWithoutClaudeSessionIdStillDoesNotScanCheckpoints() {
         ClaudeTaskEntity entity = createTaskEntity();
         entity.setClaudeSessionId(null); // No Claude session
 
-        when(streamRelay.getWorkerTaskId(TASK_ID)).thenReturn("worker-task-1");
-        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
-        when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(createWorkerEntity());
-
-        ClaudeWorkerClient mockClient = mock(ClaudeWorkerClient.class);
-        when(workerService.createClient(any())).thenReturn(mockClient);
-        when(mockClient.abortTask(anyString())).thenReturn(reactor.core.publisher.Mono.empty());
-
-        doAnswer(inv -> {
-            @SuppressWarnings("unchecked")
-            var consumer = (java.util.function.Consumer<org.springframework.transaction.TransactionStatus>) inv.getArgument(0);
-            consumer.accept(null);
-            return null;
-        }).when(txTemplate).executeWithoutResult(any());
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.abortTask(TASK_ID);
 
-        // autoScanCheckpoints should NOT be called (no claudeSessionId)
+        // A cancellation acknowledgement alone never prompts a scan.
         verify(streamRelay, never()).autoScanCheckpoints(anyString(), anyString());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
     }
 
     // -----------------------------------------------------------------------

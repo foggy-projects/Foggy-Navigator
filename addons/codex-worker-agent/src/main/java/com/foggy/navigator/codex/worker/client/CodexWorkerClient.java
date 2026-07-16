@@ -1,13 +1,16 @@
 package com.foggy.navigator.codex.worker.client;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
+import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
@@ -27,6 +30,7 @@ public class CodexWorkerClient {
 
     public static final String EXPECTED_INSTANCE_HEADER = "X-Codex-Expected-Instance-Id";
     public static final String ACTUAL_INSTANCE_HEADER = "X-Codex-Instance-Id";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Set<String> USER_INPUT_ERROR_CODES = Set.of(
             "INVALID_USER_INPUT_RESPONSE",
             "TASK_NOT_FOUND",
@@ -37,12 +41,15 @@ public class CodexWorkerClient {
 
     private final WebClient webClient;
     private final WebClient generatedImageWebClient;
+    /** Never log or serialize; only used to sign one-shot termination capabilities. */
+    private final String terminationSigningSecret;
 
     public CodexWorkerClient(String baseUrl, String authToken) {
         this(baseUrl, authToken, null);
     }
 
     public CodexWorkerClient(String baseUrl, String authToken, String expectedInstanceId) {
+        this.terminationSigningSecret = authToken;
         this.webClient = buildWebClient(baseUrl, authToken, expectedInstanceId, 4 * 1024 * 1024);
         this.generatedImageWebClient = buildWebClient(
                 baseUrl, authToken, expectedInstanceId, 32 * 1024 * 1024);
@@ -420,20 +427,74 @@ public class CodexWorkerClient {
     }
 
     /**
-     * 中止任务
+     * Dispatches an explicitly authorized cancellation. A Worker ACK is not a
+     * terminal observation and callers must retain the stream/ownership until
+     * a provider terminal event or verified process exit arrives.
      */
     @SuppressWarnings("unchecked")
-    public Mono<Map<String, Object>> abortTask(String taskId) {
+    public Mono<Map<String, Object>> abortTask(String taskId, TerminationOperationCapability capability) {
+        requireCapability(capability);
         return webClient.post()
                 .uri("/api/v1/tasks/{taskId}/abort", taskId)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
                 .exchangeToMono(response -> {
-                    if (response.statusCode().is2xxSuccessful() || response.statusCode().value() == 409) {
+                    if (response.statusCode().is2xxSuccessful()) {
                         return response.bodyToMono(Map.class)
                                 .map(body -> (Map<String, Object>) body);
+                    }
+                    if (response.statusCode().value() == 409) {
+                        return response.createException().flatMap(error -> {
+                            Map<String, Object> conflict = responseBodyAsMap(error);
+                            if (isAbortPendingConflict(taskId, conflict)) {
+                                Map<String, Object> acknowledgement = new LinkedHashMap<>(conflict);
+                                acknowledgement.putIfAbsent("task_id", taskId);
+                                acknowledgement.put("status", "abort_pending");
+                                return Mono.just(acknowledgement);
+                            }
+                            return Mono.error(error);
+                        });
                     }
                     return response.createException().flatMap(Mono::error);
                 })
                 .timeout(Duration.ofSeconds(10));
+    }
+
+    private static Map<String, Object> responseBodyAsMap(WebClientResponseException error) {
+        try {
+            Object decoded = OBJECT_MAPPER.readValue(error.getResponseBodyAsByteArray(), Object.class);
+            if (!(decoded instanceof Map<?, ?> values)) return Map.of();
+            Map<String, Object> result = new LinkedHashMap<>();
+            values.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    result.put(stringKey, value);
+                }
+            });
+            return result;
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private static boolean isAbortPendingConflict(String taskId, Map<String, Object> conflict) {
+        String responseTaskId = stringValue(conflict.get("task_id"), null);
+        if (responseTaskId != null && !taskId.equals(responseTaskId)) return false;
+        return "abort_pending".equalsIgnoreCase(stringValue(conflict.get("status"), ""))
+                || "TERMINATION_OPERATION_PENDING".equals(operationConflictCode(conflict));
+    }
+
+    private static String operationConflictCode(Map<String, Object> conflict) {
+        for (String key : List.of("error_code", "error", "code")) {
+            String value = stringValue(conflict.get(key), null);
+            if (value != null) return value;
+        }
+        return "";
+    }
+
+    /** @deprecated Remote termination without an audited capability is rejected. */
+    @Deprecated
+    public Mono<Map<String, Object>> abortTask(String taskId) {
+        return Mono.error(new IllegalStateException("TERMINATION_CAPABILITY_REQUIRED"));
     }
 
     /**
@@ -580,14 +641,36 @@ public class CodexWorkerClient {
      * 终止 Worker 上的 Codex CLI 进程
      */
     @SuppressWarnings("unchecked")
-    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force) {
+    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force,
+                                                     TerminationOperationCapability capability) {
+        requireCapability(capability);
         return webClient.post()
                 .uri("/api/v1/processes/{pid}/kill", pid)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("force", force))
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
                 .timeout(Duration.ofSeconds(10));
+    }
+
+    /** @deprecated Manual PID termination without an audited capability is rejected. */
+    @Deprecated
+    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force) {
+        return Mono.error(new IllegalStateException("TERMINATION_CAPABILITY_REQUIRED"));
+    }
+
+    /** Package-safe access for the control-plane capability issuer; never log this value. */
+    public String terminationSigningSecret() {
+        return terminationSigningSecret;
+    }
+
+    private static void requireCapability(TerminationOperationCapability capability) {
+        if (capability == null || capability.encodedOperation() == null || capability.encodedOperation().isBlank()
+                || capability.signature() == null || capability.signature().isBlank()) {
+            throw new IllegalArgumentException("TERMINATION_CAPABILITY_REQUIRED");
+        }
     }
 }

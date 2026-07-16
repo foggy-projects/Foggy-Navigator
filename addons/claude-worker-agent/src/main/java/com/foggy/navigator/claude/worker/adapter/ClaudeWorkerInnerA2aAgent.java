@@ -148,27 +148,35 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public void cancelTask(String taskId) {
+        requireOwnedTask(taskId);
         taskService.abortTask(taskId);
     }
 
     @Override
     public RemoteTaskIdResolution resolveRemoteTaskId(String taskId) {
         try {
-            var task = taskService.getTaskEntity(taskId);
-            // Claude 允许 fallback 到平台 taskId（Worker 支持 foggy_task_id 别名）
-            return RemoteTaskIdResolution.withFallback(
-                    task.getWorkerTaskId(),
-                    task.getTaskId(),
-                    true
-            );
+            DispatchTaskDTO task = taskService.getTask(entity.getUserId(), taskId);
+            // Only resolve aliases after the A2A owner scope has been
+            // checked. Returning the caller-supplied id as a fallback would
+            // let an unauthorized task id reach the signed abort route.
+            return RemoteTaskIdResolution.withFallback(task.getWorkerTaskId(), task.getTaskId(), true);
         } catch (IllegalArgumentException e) {
-            return RemoteTaskIdResolution.withFallback(null, taskId, true);
+            return RemoteTaskIdResolution.of(null, false);
         }
     }
 
     @Override
     public void abortWorkerTask(String taskId, String remoteTaskId) {
+        requireOwnedTask(taskId);
         taskService.doAbortWorkerTask(taskId, remoteTaskId);
+    }
+
+    private void requireOwnedTask(String taskId) {
+        try {
+            taskService.getTask(entity.getUserId(), taskId);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("TERMINATION_TASK_ACCESS_DENIED", error);
+        }
     }
 
     @Override

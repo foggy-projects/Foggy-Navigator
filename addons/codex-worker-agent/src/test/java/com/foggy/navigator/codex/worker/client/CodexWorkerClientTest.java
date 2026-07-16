@@ -2,6 +2,7 @@ package com.foggy.navigator.codex.worker.client;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -220,15 +221,18 @@ class CodexWorkerClientTest {
     }
 
     @Test
-    void abortTaskParsesAcceptedResponseForTerminalReconciliation() throws Exception {
+    void abortTaskSendsSignedOperationAndParsesAcceptedResponse() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
 
-            Map<String, Object> response = client.abortTask("worker-task-9")
+            Map<String, Object> response = client.abortTask("worker-task-9",
+                            new TerminationOperationCapability("encoded-operation", "encoded-signature"))
                     .block(Duration.ofSeconds(5));
 
             assertEquals("POST", server.method());
             assertEquals("/api/v1/tasks/worker-task-9/abort", server.path());
+            assertEquals("encoded-operation", server.terminationOperation());
+            assertEquals("encoded-signature", server.terminationSignature());
             assertEquals("worker-task-9", response.get("task_id"));
             assertEquals("accepted", response.get("status"));
         }
@@ -271,17 +275,59 @@ class CodexWorkerClientTest {
     }
 
     @Test
-    void abortTaskParsesConflictAsPendingReconciliation() throws Exception {
+    void abortTaskNormalizesTerminationOperationPendingConflictAsCancellationPending() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
-            server.abortReturnsPendingConflict();
+            server.abortReturnsTerminationOperationPendingConflict();
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
 
-            Map<String, Object> response = client.abortTask("worker-task-9")
+            Map<String, Object> response = client.abortTask("worker-task-9",
+                            new TerminationOperationCapability("encoded-operation", "encoded-signature"))
                     .block(Duration.ofSeconds(5));
 
             assertEquals("worker-task-9", response.get("task_id"));
             assertEquals("abort_pending", response.get("status"));
         }
+    }
+
+    @Test
+    void abortTaskKeepsExplicitAbortPendingConflictAsCancellationPending() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.abortReturnsConflict("{\"task_id\":\"worker-task-9\",\"status\":\"abort_pending\"}");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            Map<String, Object> response = client.abortTask("worker-task-9",
+                            new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("worker-task-9", response.get("task_id"));
+            assertEquals("abort_pending", response.get("status"));
+        }
+    }
+
+    @Test
+    void abortTaskKeepsOtherConflictAsHttpFailure() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.abortReturnsConflict("{\"error\":\"TASK_NOT_FOUND\"}");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            WebClientResponseException error = assertThrows(WebClientResponseException.class,
+                    () -> client.abortTask("worker-task-9",
+                                    new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                            .block(Duration.ofSeconds(5)));
+
+            assertEquals(409, error.getStatusCode().value());
+            assertEquals("{\"error\":\"TASK_NOT_FOUND\"}", error.getResponseBodyAsString());
+        }
+    }
+
+    @Test
+    void abortTaskWithoutCapabilityFailsClosed() {
+        CodexWorkerClient client = new CodexWorkerClient("http://127.0.0.1:1", "token");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> client.abortTask("worker-task-9").block(Duration.ofSeconds(5)));
+
+        assertEquals("TERMINATION_CAPABILITY_REQUIRED", error.getMessage());
     }
 
     @Test
@@ -346,7 +392,9 @@ class CodexWorkerClientTest {
         private final AtomicReference<String> path = new AtomicReference<>();
         private final AtomicReference<String> expectedInstanceId = new AtomicReference<>();
         private final AtomicReference<String> authorization = new AtomicReference<>();
-        private volatile boolean abortPendingConflict;
+        private final AtomicReference<String> terminationOperation = new AtomicReference<>();
+        private final AtomicReference<String> terminationSignature = new AtomicReference<>();
+        private volatile String abortConflictResponse;
         private volatile boolean queryThreadActiveConflict;
         private volatile int respondStatus = 200;
         private volatile String respondErrorCode;
@@ -386,6 +434,10 @@ class CodexWorkerClientTest {
                 capture.path.set(exchange.getRequestURI().getPath());
                 capture.expectedInstanceId.set(exchange.getRequestHeaders().getFirst(
                         CodexWorkerClient.EXPECTED_INSTANCE_HEADER));
+                capture.terminationOperation.set(exchange.getRequestHeaders().getFirst(
+                        TerminationOperationCapability.OPERATION_HEADER));
+                capture.terminationSignature.set(exchange.getRequestHeaders().getFirst(
+                        TerminationOperationCapability.SIGNATURE_HEADER));
                 capture.body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 capture.idempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
                 capture.addInstanceProof(exchange);
@@ -423,13 +475,13 @@ class CodexWorkerClientTest {
                     return;
                 }
                 boolean abort = exchange.getRequestURI().getPath().endsWith("/abort");
-                String responseJson = abort && capture.abortPendingConflict
-                        ? "{\"task_id\":\"worker-task-9\",\"status\":\"abort_pending\"}"
+                String responseJson = abort && capture.abortConflictResponse != null
+                        ? capture.abortConflictResponse
                         : "{\"task_id\":\"worker-task-9\",\"status\":\"accepted\"}";
                 byte[] response = responseJson
                         .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
-                exchange.sendResponseHeaders(abort && capture.abortPendingConflict ? 409 : 202, response.length);
+                exchange.sendResponseHeaders(abort && capture.abortConflictResponse != null ? 409 : 202, response.length);
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
@@ -510,6 +562,14 @@ class CodexWorkerClientTest {
             return authorization.get();
         }
 
+        String terminationOperation() {
+            return terminationOperation.get();
+        }
+
+        String terminationSignature() {
+            return terminationSignature.get();
+        }
+
         void actualInstanceId(String value) {
             actualInstanceId = value;
         }
@@ -524,8 +584,12 @@ class CodexWorkerClientTest {
             }
         }
 
-        void abortReturnsPendingConflict() {
-            abortPendingConflict = true;
+        void abortReturnsTerminationOperationPendingConflict() {
+            abortConflictResponse = "{\"error\":\"TERMINATION_OPERATION_PENDING\"}";
+        }
+
+        void abortReturnsConflict(String response) {
+            abortConflictResponse = response;
         }
 
         void queryReturnsThreadActiveConflict() {

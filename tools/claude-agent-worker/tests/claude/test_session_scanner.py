@@ -7,6 +7,7 @@ Tests use tmp_path to create synthetic JSONL files and mock the
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -92,6 +93,19 @@ class TestParseJsonlHead:
 
         meta = _parse_jsonl_head(f)
         assert meta is None
+
+    def test_read_failure_log_redacts_path_and_error_message(self, tmp_path: Path, caplog):
+        secret = "SESSION_PATH_SENTINEL_api_key=private"
+        with caplog.at_level(
+            logging.WARNING,
+            logger="agent_worker.claude.session_scanner",
+        ):
+            with patch("builtins.open", side_effect=OSError(secret)):
+                assert _parse_jsonl_head(tmp_path / secret) is None
+
+        assert secret not in caplog.text
+        assert "event_name=SESSION_METADATA_READ_FAILED" in caplog.text
+        assert "error_type=OSError" in caplog.text
 
     def test_file_history_snapshot_skipped(self, tmp_path: Path):
         f = tmp_path / "session.jsonl"
@@ -488,6 +502,29 @@ class TestRewindSessionConversation:
             messages = read_session_messages(sid)
         # Only turn 1 should remain (turn 2+ marked as sidechain)
         assert len(messages) == 2  # user1 + assistant1
+
+    def test_rewind_log_redacts_user_prompt(self, tmp_path: Path, caplog):
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        secret = "PROMPT_SENTINEL_api_key=private"
+        self._create_session(
+            tmp_path,
+            sid,
+            [{"type": "user", "message": {"content": secret}}],
+        )
+
+        with caplog.at_level(
+            logging.INFO,
+            logger="agent_worker.claude.session_scanner",
+        ):
+            with patch(
+                "agent_worker.claude.session_scanner._claude_projects_dir",
+                return_value=tmp_path,
+            ):
+                result = rewind_session_conversation(sid, turn_index=1)
+
+        assert result["status"] == "rewound"
+        assert secret not in caplog.text
+        assert "user_prompt_chars=" in caplog.text
 
     def test_rewind_turn_not_found(self, tmp_path: Path):
         sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

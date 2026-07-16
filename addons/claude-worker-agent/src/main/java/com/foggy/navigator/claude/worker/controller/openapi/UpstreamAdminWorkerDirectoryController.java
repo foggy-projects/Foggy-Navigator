@@ -13,6 +13,7 @@ import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -29,6 +30,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -40,6 +42,7 @@ public class UpstreamAdminWorkerDirectoryController {
 
     private final UpstreamClientAppAdminCredentialService adminCredentialService;
     private final ClaudeWorkerService workerService;
+    private final ClaudeTaskService claudeTaskService;
     private final WorkingDirectoryService directoryService;
     private final ClaudeWorkerFacade claudeWorkerFacade;
     private final ClaudeWorkerRepository workerRepository;
@@ -112,7 +115,9 @@ public class UpstreamAdminWorkerDirectoryController {
         try {
             return RX.ok(workerService.createClient(worker).listCliProcesses().block(Duration.ofSeconds(10)));
         } catch (Exception e) {
-            return RX.failA("获取 CLI 进程列表失败: " + e.getMessage());
+            log.warn("Upstream admin failed to list CLI processes for worker {}: type={}",
+                    workerId, e.getClass().getSimpleName());
+            return RX.failA("获取 CLI 进程列表失败: CLAUDE_WORKER_PROCESS_QUERY_FAILED");
         }
     }
 
@@ -121,14 +126,85 @@ public class UpstreamAdminWorkerDirectoryController {
                                                      @PathVariable String workerId,
                                                      @PathVariable int pid,
                                                      @RequestBody(required = false) Map<String, Object> body) {
-        requireWorkerManage(request);
+        UpstreamClientAppAdminPrincipal principal = requireWorkerManage(request);
         ClaudeWorkerEntity worker = resolveWorkerForAdmin(request, workerId);
         boolean force = body != null && Boolean.TRUE.equals(body.get("force"));
+        ClaudeTaskService.ManualPidKillRequest operation = null;
         try {
-            return RX.ok(workerService.createClient(worker).killCliProcess(pid, force).block(Duration.ofSeconds(10)));
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> snapshot = client.listCliProcesses().block(Duration.ofSeconds(5));
+            String taskId = resolveBoundProcessTaskId(snapshot, pid, body);
+            String processIdentity = resolveProcessIdentity(snapshot, pid, taskId);
+            if (taskId == null || processIdentity == null) {
+                return RX.failA("仅允许终止已绑定到活动任务的 CLI PID");
+            }
+            operation = claudeTaskService.prepareManualPidKill(taskId, workerId,
+                    "upstream-admin:" + principal.getCredentialId(), "UPSTREAM_ADMIN_MANUAL",
+                    worker.getTenantId(), true, pid, processIdentity,
+                    client.terminationSigningSecret());
+            Map<String, Object> workerResult = client.killCliProcess(pid, force, operation.capability())
+                    .block(Duration.ofSeconds(10));
+            Map<String, Object> result = workerResult == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(workerResult);
+            claudeTaskService.recordManualPidKillResult(operation, result);
+            result.put("termination_operation_id", operation.operationId());
+            return RX.ok(result);
         } catch (Exception e) {
-            return RX.failA("终止 CLI 进程失败: " + e.getMessage());
+            if (operation != null) {
+                claudeTaskService.markManualPidKillDispatchFailure(operation, e);
+            }
+            log.warn("Upstream admin failed to kill CLI process {} for worker {}: type={}",
+                    pid, workerId, e.getClass().getSimpleName());
+            return RX.failA("终止 CLI 进程失败: CLAUDE_WORKER_TERMINATION_UNCONFIRMED");
         }
+    }
+
+    private String resolveBoundProcessTaskId(Map<String, Object> snapshot, int pid,
+                                             Map<String, Object> body) {
+        if (snapshot == null || !(snapshot.get("processes") instanceof List<?> processes)) return null;
+        for (Object item : processes) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            if (!pidMatches(raw.get("pid"), pid)) continue;
+            Object task = raw.get("foggy_task_id");
+            if (task == null || String.valueOf(task).isBlank()) return null;
+            String boundTaskId = String.valueOf(task);
+            Object requested = body == null ? null : body.get("taskId");
+            if (requested != null && !String.valueOf(requested).isBlank()
+                    && !boundTaskId.equals(String.valueOf(requested))) {
+                throw new IllegalArgumentException("TERMINATION_WORKER_TASK_MISMATCH");
+            }
+            return boundTaskId;
+        }
+        return null;
+    }
+
+    private String resolveProcessIdentity(Map<String, Object> snapshot, int pid, String taskId) {
+        if (snapshot == null || !StringUtils.hasText(taskId)
+                || !(snapshot.get("processes") instanceof List<?> processes)) return null;
+        for (Object item : processes) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            if (!pidMatches(raw.get("pid"), pid)) continue;
+            Object task = raw.get("foggy_task_id");
+            if (task == null || !taskId.equals(String.valueOf(task))) continue;
+            Object identity = raw.get("process_identity");
+            String value = identity == null ? null : String.valueOf(identity);
+            return isSafeProcessIdentity(value) ? value : null;
+        }
+        return null;
+    }
+
+    private boolean pidMatches(Object value, int pid) {
+        if (value instanceof Number number) return number.intValue() == pid;
+        try {
+            return value != null && Integer.parseInt(String.valueOf(value)) == pid;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isSafeProcessIdentity(String value) {
+        return value != null && value.length() <= 160
+                && value.matches("[A-Za-z0-9][A-Za-z0-9._:+-]{0,159}");
     }
 
     @PostMapping("/directories/init")

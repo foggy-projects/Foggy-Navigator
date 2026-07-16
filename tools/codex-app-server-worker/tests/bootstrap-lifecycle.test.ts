@@ -51,7 +51,7 @@ test('stop request reports success only after quiescence and writer lease releas
   await replacement.release()
 })
 
-test('stop request reports failure and retains the writer lease when work cannot quiesce', async t => {
+test('stop request reports pending decision and retains HTTP control plus the writer lease when work cannot quiesce', async t => {
   const stateDir = await tempDirectory('codex-bootstrap-stop-failure-state-')
   const runDir = await tempDirectory('codex-bootstrap-stop-failure-run-')
   const config = testConfig(stateDir, { shutdownTimeoutMs: 50 })
@@ -78,9 +78,10 @@ test('stop request reports failure and retains the writer lease when work cannot
 
   const requestId = 'shutdown-failure-123'
   await fs.writeFile(path.join(runDir, STOP_REQUEST_FILE), requestId, 'utf8')
-  await waitFor(() => exitCodes.length === 1)
+  await waitForFile(path.join(runDir, SHUTDOWN_FAILURE_FILE), 2_000)
 
-  assert.deepEqual(exitCodes, [1])
+  assert.deepEqual(exitCodes, [])
+  assert.equal(handle.server.listening, true)
   assert.equal(await fs.readFile(path.join(runDir, SHUTDOWN_FAILURE_FILE), 'utf8'), `${requestId}\n`)
   await assert.rejects(fs.access(path.join(runDir, SHUTDOWN_SUCCESS_FILE)), hasCode('ENOENT'))
   await assert.rejects(
@@ -127,7 +128,7 @@ test('signal-triggered shutdown exits without writing stop-request outcome marke
   await assert.rejects(fs.access(path.join(stateDir, LIFECYCLE_FAILURE_FILE)), hasCode('ENOENT'))
 })
 
-test('signal-triggered nonquiescent shutdown latches stop.failed and exits nonzero', async t => {
+test('signal-triggered nonquiescent shutdown latches stop.failed but preserves the running Worker', async t => {
   const stateDir = await tempDirectory('codex-bootstrap-signal-failure-state-')
   const runDir = await tempDirectory('codex-bootstrap-signal-failure-run-')
   const config = testConfig(stateDir, { shutdownTimeoutMs: 50 })
@@ -160,9 +161,10 @@ test('signal-triggered nonquiescent shutdown latches stop.failed and exits nonze
   await executor.started
 
   termHandler('SIGTERM')
-  await waitFor(() => exitCodes.length === 1)
+  await waitForFile(path.join(runDir, STOP_FAILURE_FILE), 2_000)
 
-  assert.deepEqual(exitCodes, [1])
+  assert.deepEqual(exitCodes, [])
+  assert.equal(handle.server.listening, true)
   assert.equal(
     await fs.readFile(path.join(runDir, STOP_FAILURE_FILE), 'utf8'),
     'SIGNAL_SHUTDOWN_NOT_QUIESCED\n',
@@ -207,16 +209,17 @@ test('signal failure falls back to a durable state lifecycle latch when run dir 
   })
 
   termHandler('SIGTERM')
-  await waitFor(() => exitCodes.length === 1)
+  await waitForFile(path.join(stateDir, LIFECYCLE_FAILURE_FILE), 2_000)
 
-  assert.deepEqual(exitCodes, [1])
+  assert.deepEqual(exitCodes, [])
+  assert.equal(handle.server.listening, true)
   assert.equal(
     await fs.readFile(path.join(stateDir, LIFECYCLE_FAILURE_FILE), 'utf8'),
     'SIGNAL_SHUTDOWN_NOT_QUIESCED\n',
   )
 })
 
-test('signal drain failure retains real descendant evidence and latches restart', async t => {
+test('signal drain preserves a real active descendant without attempting runtime cleanup', async t => {
   const fixture = await createStubbornProcessTreeFixture(t, 'turn')
   const runDir = await tempDirectory('codex-bootstrap-signal-tree-run-')
   const config = testConfig(fixture.stateDir, { shutdownTimeoutMs: 200 })
@@ -247,6 +250,11 @@ test('signal drain failure retains real descendant evidence and latches restart'
     else process.env.CODEX_APP_SERVER_RUN_DIR = previousRunDir
     process.removeListener('SIGTERM', termHandler)
     process.removeListener('SIGINT', intHandler)
+    // The production failure path intentionally keeps control HTTP alive.
+    // Close it explicitly in this fixture so the test does not retain a
+    // listener after the stubborn-process fixture performs its cleanup.
+    handle.server.closeAllConnections()
+    await new Promise<void>(resolve => handle.server.close(() => resolve()))
     await pool.drain(100).catch(() => undefined)
     await fs.rm(runDir, { recursive: true, force: true })
   })
@@ -264,17 +272,14 @@ test('signal drain failure retains real descendant evidence and latches restart'
   await fs.rm(path.join(processTreeRoot, snapshotDirectory.name, 'tree.json'))
 
   termHandler('SIGTERM')
-  await waitFor(() => exitCodes.length === 1, 5_000)
+  await waitForFile(path.join(runDir, STOP_FAILURE_FILE), 5_000)
   const cleanupFailure = path.join(processTreeRoot, snapshotDirectory.name, 'cleanup.failure')
-  await waitForFile(cleanupFailure, 5_000)
 
-  assert.deepEqual(exitCodes, [1])
+  assert.deepEqual(exitCodes, [])
+  assert.equal(handle.server.listening, true)
   assert.equal(await fs.readFile(path.join(runDir, STOP_FAILURE_FILE), 'utf8'), 'SIGNAL_SHUTDOWN_NOT_QUIESCED\n')
   assert.equal(isProcessAlive(descendantPid), true)
-  assert.equal(
-    (JSON.parse(await fs.readFile(cleanupFailure, 'utf8')) as Record<string, unknown>).reason,
-    'CLOSE_CLEANUP_UNPROVEN',
-  )
+  await assert.rejects(fs.access(cleanupFailure), hasCode('ENOENT'))
   assert.equal(pool.isDraining(), true)
   await assert.rejects(
     acquireStateWriterLease(config.stateDir),
@@ -300,7 +305,7 @@ test('bootstrap retains the writer lease when an active task misses the shutdown
   await executor.started
 
   assert.equal(await handle.close(), false)
-  assert.equal(handle.server.listening, false)
+  assert.equal(handle.server.listening, true)
   await assert.rejects(
     acquireStateWriterLease(config.stateDir),
     error => error instanceof StateStoreSafetyError

@@ -1,34 +1,35 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { abortTaskBoundToProcess } from '../src/routes/processes.ts'
+import { findActiveTaskBoundToProcess } from '../src/routes/processes.ts'
 
-test('process termination aborts the running Worker task bound to the PID', () => {
-  const calls: Array<{ taskId: string; reason: string }> = []
-  const taskId = abortTaskBoundToProcess(321, [
+test('manual process route finds the active Worker task bound to the PID without mutating it', () => {
+  const task = findActiveTaskBoundToProcess(321, [
     { taskId: 'task-other', pid: 123, status: 'running' },
     { taskId: 'task-target', pid: 321, status: 'running' },
-  ], (candidateTaskId, reason) => {
-    calls.push({ taskId: candidateTaskId, reason })
-    return true
-  })
+  ])
 
-  assert.equal(taskId, 'task-target')
-  assert.deepEqual(calls, [{
-    taskId: 'task-target',
-    reason: 'Codex CLI process 321 was terminated',
-  }])
+  assert.deepEqual(task, { taskId: 'task-target', pid: 321, status: 'running' })
 })
 
-test('process termination does not mutate completed or unrelated tasks', () => {
-  let abortCount = 0
-  const taskId = abortTaskBoundToProcess(321, [
+test('manual process route accepts a cancellation-pending task but ignores terminal or unrelated tasks', () => {
+  const pending = findActiveTaskBoundToProcess(321, [
+    { taskId: 'task-complete', pid: 321, status: 'completed' },
+    { taskId: 'task-pending', pid: 321, status: 'cancel_requested' },
+  ])
+  const unrelated = findActiveTaskBoundToProcess(321, [
     { taskId: 'task-complete', pid: 321, status: 'completed' },
     { taskId: 'task-other', pid: 123, status: 'running' },
-  ], () => {
-    abortCount += 1
-    return true
-  })
+  ])
 
-  assert.equal(taskId, undefined)
-  assert.equal(abortCount, 0)
+  assert.equal(pending?.taskId, 'task-pending')
+  assert.equal(unrelated, undefined)
+})
+
+test('manual process route rejects ambiguous active PID bindings', () => {
+  const ambiguous = findActiveTaskBoundToProcess(321, [
+    { taskId: 'task-one', pid: 321, status: 'running' },
+    { taskId: 'task-two', pid: 321, status: 'cancel_requested' },
+  ])
+
+  assert.equal(ambiguous, undefined)
 })

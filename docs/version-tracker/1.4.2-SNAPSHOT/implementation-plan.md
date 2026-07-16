@@ -59,6 +59,7 @@
 | E-017 | 本地实施 + hosted 测试证据 | `50351ada`、`73d31a19`、`97240642`、`fb11137d`、`9f3f1422`、`edee0fc4`、`9008c554` 完成旧 Provider API/SPI/DTO 子切片的仓内迁移和物理删除 | passed-local-and-hosted-partial-scope | LangGraph 8/8 reactor、68 Java tests + frontend type-check/1 Vitest + L3 TypeScript；Claude 8/8、367 tests；Codex 8/8、1757 total/371 Codex tests；最新 Repository CI 7/7 jobs 成功。仍活跃的 LangGraph 内部 `LanggraphTaskDTO`/`CreateLanggraphTaskForm` 已保留；巨类拆分和 state schema 强化未完成 |
 | E-018 | 构建可复现性证据 | `2a859336` 将仓内实际使用的 RX/异常 wire contract 收入 `navigator-common/src/main/java/com/foggyframework/core/ex/` | passed-local-and-hosted | 移除无法从 clean runner 获取的 `com.foggysource:foggy-core:8.1.10.beta`；`RXContractTest` 和 `GlobalExceptionHandlerTest` 保护序列化/异常契约，截至正式闸门的最新已验证实现 hosted Java job 成功。该 shim 只覆盖当前仓内契约，不声称兼容原库所有 API |
 | E-019 | 隔离运行态/浏览器证据 | `9d03bee9` 增加 `packages/navigator-frontend/e2e/ownership-live.spec.ts`，在一次性 H2 上用两个真实登录用户验证 Session ownership | passed-isolated-partial-scope | owner list/深链/history 成功，non-owner list 隐藏且 history/SSE/direct read 均 403，拒绝体不泄露资源/owner 信息。未使用真实 Provider Task 或共享 DB；不等同人工验证、正式验收或生产批准 |
+| E-020 | GOV-004 本地实现与自动化证据 | Java operation 审计账本、三类 Worker 的签名一次性终止 capability/local receipt ledger，以及自动 attention 取代自动 CLI 终止已落地 | implementation-complete / verification-blocked | 定向 replay/operation 矩阵：Codex SDK 100、Codex app-server 30、Claude 16 均通过；SDK 全量 207 passed/1 skipped + typecheck、app-server 全量 292 passed/1 skipped + typecheck、Claude 全量 542 passed/11 skipped；Java relevant reactor `BUILD SUCCESS`。Docker MySQL 仅隔离 forward/index/assert/rollback 通过。真实隔离 CLI 五态、目标环境迁移、告警部署与多实例部署证据未完成，不能作为 accepted 或生产批准 |
 
 ## 阶段与工作项映射
 
@@ -66,7 +67,7 @@
 |---|---|---|---|---|
 | P0 | [DOC-001](./workitems/DOC-001-documentation-alignment.md) + 全部 workitem | 冻结定位、术语、证据边界、代码清单和 Owner | 本计划批准 | no |
 | P1 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | 恢复 Java、前端和 Worker 可复现 clean build | P0 | no |
-| P2 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md)、[GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | 收敛外部 Biz Worker/upstream user 边界；模式门禁、task capability/terminal、Gateway principal/lease 与 Biz prebind 已部分实施 | P0、P1 最小门禁 | no production routing；external 未启用，开发树的错误/readiness 与 Gateway principal 契约已收紧 |
+| P2 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md)、[GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md)、[GOV-004](./workitems/GOV-004-cli-non-termination-and-lifecycle-observability.md) | 收敛外部 Biz Worker/upstream user 边界；GOV-004 已在本地实施 Java 与三类 Worker 不得自动终止 CLI、签名终止 operation 和 durable receipt，但运行态验收为 `verification-blocked`；模式门禁、task capability/terminal、Gateway principal/lease 与 Biz prebind 已部分实施 | P0、P1 最小门禁 | no production routing；external 未启用；GOV-004 不得以本机测试替代真实 CLI、目标 DB、告警或多实例证据 |
 | P3 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | 统一内部 Session/Task ownership | P0、P1；复用 P2 术语 | no；越权请求响应会收紧 |
 | P4 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)、[DOC-001](./workitems/DOC-001-documentation-alignment.md) | 清理已核准孤儿和失效当前指引 | P0、P1 | no |
 | P5 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md)、[CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | dev-only 独立移除 Monitoring、metadata-query、code-review；迁移 Echo fixture 后退出生产装配 | P0 清单、P1 最小基线；各切片引用扫描 | 当前无生产路由；发现共享/生产资源即停止 |
@@ -111,7 +112,7 @@
 |---|---|
 | 输入和前置条件 | P0 信任矩阵、P1 最小测试门禁；现有 ClientApp runtime/control credential、upstream user grant、BusinessTask、task token、Gateway、审批绑定与审计；ODR-142-002 至 ODR-142-005 已批准。 |
 | 涉及模块 | `business-agent-module`、Claude Open API、Codex/LangGraph Biz Addon、`navigator-open-sdk`、Claude/Codex/Gemini/LangGraph Worker、配置/readiness。 |
-| 当前实施状态 | `in-progress`。既有平台/Worker external gate、task capability v2、definitive terminal、Worker credential/pool 已落地；`EXEC-142-013` 新增 `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false`，Gateway 严格要求 `X-Navigator-Worker-Id/Credential/Lease-Id`，partial/blank/legacy fail closed，并校验 exact worker/lease/tenant/ClientApp/pool/member/backend/owner/route。Biz Provider 已 DB preselect/prebind，非 Biz Open API 不获 Gateway capability；LangGraph 已传播 credential 并收紧子进程 secret boundary；Codex 配置长期 credential 后保持 unready、Business MCP preflight 503。external 未启用，P2 仍未完成。 |
+| 当前实施状态 | `in-progress`。既有平台/Worker external gate、task capability v2、definitive terminal、Worker credential/pool 已落地；`EXEC-142-013` 新增 `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false`，Gateway 严格要求 `X-Navigator-Worker-Id/Credential/Lease-Id`，partial/blank/legacy fail closed，并校验 exact worker/lease/tenant/ClientApp/pool/member/backend/owner/route。Biz Provider 已 DB preselect/prebind，非 Biz Open API 不获 Gateway capability；LangGraph 已传播 credential 并收紧子进程 secret boundary；Codex 配置长期 credential 后保持 unready、Business MCP preflight 503。GOV-004 的本地代码与自动化已完成，但其真实 CLI 五态、目标 DB、告警和多实例运行态未取证，状态为 `verification-blocked`。external 未启用，P2 仍未完成。 |
 | 实施内容 | 已落显式默认关闭模式、Worker readiness、task capability/terminal、credential/pool、Gateway strict principal/lease 与 Biz prebind。后续继续以 ClientApp credential + upstream user mapping/grant 为 internal-dev 身份基线；补平台/Gateway 开关组合 invariant、Codex 安全转发与 OS 隔离、pause/generation、审批/恢复/取消 ownership、可靠 outbox、execution policy 与真实 L3。signed assertion/JWK/jti 作为未来外部开放门禁，不阻塞当前 internal-dev 收口。 |
 | 非目标 | 不在本版强制所有 internal-dev ClientApp 接入 signed assertion；不关闭显式 loopback internal-dev；不重写 Spring Security；不实现通用权限平台；不实现动态插件；不在未迁移仓内消费者前删旧 Provider API。 |
 | 自动化测试 | `EXEC-142-013`：`mvn -B -pl launcher -am clean test` 15/15 reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck 通过。既有 gate/capability/credential/terminal/migration 证据保持。待执行：双 ClientApp/upstream user/task/function 真实矩阵、pause/generation、审批 binding mismatch、OS 隔离、Codex 安全转发、workdir/tool escalation、reliable audit/outbox、L3/真实网络/hosted CI。 |
@@ -120,6 +121,17 @@
 | 回滚方式 | external 当前保持默认关闭；配置/门禁、Worker readiness、平台消费分别位于 `12cbe697`、`5d62707b`、`cce75f1b`，可按依赖逆序独立 revert。发现回归先关闭显式 external 开关，再回滚对应策略提交，不恢复请求体身份信任；后续 token schema 保留只读迁移期；旧 API 删除继续使用独立提交 revert。 |
 | 完成判据 | 每个外部请求可追溯 tenant/ClientApp/upstream user/task；task token 不能跨任务/函数；审批/恢复/取消不能只凭 taskId；非 loopback 空凭据 fail closed/unready；审计负向用例有证据。当前已增加本机 Gateway strict principal/lease 与 Biz prebind 证据，但 Codex 安全转发、OS 隔离、开关组合、pause/generation、ownership、outbox、L3/真实网络仍未完成，P2 不得标记完成。 |
 | 生产路由/外部契约 | production_routing_changed: no；external_enablement: no；external_contract_changed: yes（开发树的默认关闭、503、readiness 和错误语义已收紧）。平台 `surfaceReady` 仅代表 routing gate；正式启用必须等待其余 P2 门禁、独立审批并回写状态。 |
+
+### GOV-004：CLI 非主动终止与生命周期可观测性（实施完成、本地验证；正式验证受阻）
+
+| 要素 | 已冻结/已实施事实 | 当前边界 |
+|---|---|---|
+| 自动路径 | Java、Claude、Codex SDK、Codex app-server 的 timeout、watchdog、流/进程探测失败和 drain 不再把不确定性当作 CLI 已退出；只保留 attention、诊断和待决策状态。 | 尚未用真实隔离 CLI 覆盖自然完成、CLI 自身异常、显式取消、人工 PID kill、未确认/超时五态。 |
+| 显式终止 | Java 先持久化 `TerminationOperation v1`，绑定 task/session/provider task/worker、origin、actor、授权决定、PID/process identity、时效和结果；Worker 只接受 signed `REMOTE_CANCEL` 或 `MANUAL_PID_KILL`，请求 ACK 不是终态。 | 目标环境的真实授权 HTTP、可查询审计和上游体验尚未验证。 |
+| 持久账本 | Java `termination_operations` 是可查询的 DB 审计账本；Codex SDK、Claude、Codex app-server 各有独立 local receipt ledger，receipt 只存 worker/operation/expiry，不存 capability、签名、prompt 或 credential。 | Worker receipt 是本地防重放围栏，不是分布式账本。相同 PhysicalWorker ID 在多个独立本地卷/主机上运行会失去跨实例重放保护；须保持单实例/同一持久卷，或使用独立 worker ID/路由，或另行验证共享原子 claim 存储。 |
+| 迁移与回滚 | [forward SQL](../../migration/2026-07-16-termination-operations.sql) 创建 `termination_operations` 与索引；[rollback SQL](../../migration/2026-07-16-termination-operations-rollback.sql) 是经保留/导出和显式批准后的破坏性 drop。隔离 Docker MySQL 已完成 forward、索引/断言和 rollback。 | 未执行目标环境 migration、`ddl-auto=validate` 或回滚演练。文件 receipt 没有 SQL rollback；回滚 Worker 代码必须保留 receipt 目录，旧版本虽忽略它但会削弱防重放。 |
+| 自动化 | 定向 operation/replay 矩阵已通过：Codex SDK 100、Codex app-server 30、Claude 16；SDK 全量 207 passed/1 skipped + typecheck、app-server 全量 292 passed/1 skipped + typecheck、Claude 全量 542 passed/11 skipped，Java relevant reactor `BUILD SUCCESS`。 | 这些本地自动化不替代真实 CLI 五态、告警触发/投递、目标环境迁移或跨实例重放演练。 |
+| 发布状态 | `production_routing_changed: no`；`external_enablement: no`；没有自动 kill 策略，也没有把本地验证升级为生产批准。 | GOV-004 `acceptance_status: verification-blocked`；见 [workitem](./workitems/GOV-004-cli-non-termination-and-lifecycle-observability.md)、[quality](./quality/GOV-004-cli-non-termination-and-lifecycle-observability-implementation-quality.md)、[coverage](./coverage/GOV-004-cli-non-termination-and-lifecycle-observability-coverage-audit.md)、[acceptance](./acceptance/GOV-004-cli-non-termination-and-lifecycle-observability-acceptance.md) 和 [runbook](./runbooks/GOV-004-cli-non-termination-and-lifecycle-observability-runbook.md)。 |
 
 ## P3：Session/Task 定向 ownership 治理
 

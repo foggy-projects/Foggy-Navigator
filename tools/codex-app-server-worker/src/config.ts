@@ -23,6 +23,8 @@ export interface AppConfig {
   port: number
   host: string
   workerName: string
+  /** Stable Navigator PhysicalWorker id used by signed termination operations. */
+  navigatorWorkerId: string
   workerToken: string
   externalEnabled: boolean
   runtimeId: string
@@ -61,6 +63,14 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: integer(env.CODEX_APP_SERVER_WORKER_PORT, 3062, 1, 65535, 'CODEX_APP_SERVER_WORKER_PORT'),
     host: nonEmpty(env.CODEX_APP_SERVER_WORKER_HOST || '127.0.0.1', 'CODEX_APP_SERVER_WORKER_HOST', 255),
     workerName: nonEmpty(env.CODEX_APP_SERVER_WORKER_NAME || 'codex-app-server-worker-default', 'CODEX_APP_SERVER_WORKER_NAME', 128),
+    // This is intentionally distinct from the runtime/instance identity.  A
+    // termination capability is authorized for a Navigator Worker resource,
+    // not for an arbitrary process replica or display name.
+    navigatorWorkerId: optionalNonEmpty(
+      env.CODEX_APP_SERVER_NAVIGATOR_WORKER_ID,
+      'CODEX_APP_SERVER_NAVIGATOR_WORKER_ID',
+      128,
+    ),
     workerToken: token(env.CODEX_APP_SERVER_WORKER_TOKEN),
     externalEnabled: booleanFlag(
       env.CODEX_APP_SERVER_EXTERNAL_ENABLED,
@@ -128,6 +138,12 @@ function imageGenerationMode(raw: string | undefined): AppConfig['imageGeneratio
 function nonEmpty(raw: string, field: string, max: number): string {
   const value = raw.trim()
   if (!value || value.length > max) throw new Error(`${field} must be 1-${max} characters`)
+  return value
+}
+
+function optionalNonEmpty(raw: string | undefined, field: string, max: number): string {
+  const value = (raw || '').trim()
+  if (value.length > max) throw new Error(`${field} must be at most ${max} characters`)
   return value
 }
 

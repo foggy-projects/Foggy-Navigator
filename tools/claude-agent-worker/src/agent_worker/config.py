@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     worker_token: str = ""
     worker_name: str = ""
+    # Stable Navigator control-plane identity.  It is intentionally separate
+    # from the display name: signed termination capabilities must be scoped to
+    # this exact registered Worker and fail closed when it is not configured.
+    navigator_worker_id: str = ""
     allowed_cwds: list[str] = []
     max_concurrent_tasks: int = 3
 
@@ -32,6 +36,11 @@ class Settings(BaseSettings):
     # Event persistence — durable JSONL event log for ESN-based sync recovery
     event_persistence_enabled: bool = True
     event_store_dir: str = ""  # empty = default (logs/events/)
+
+    # Independent durable receipt ledger for one-use termination capabilities.
+    # It remains enabled even when event persistence is disabled, because a
+    # Worker restart must not make an unexpired signed operation replayable.
+    termination_operation_ledger_dir: str = ""  # empty = default (logs/termination-operations/)
 
     # LLM config -- injected into Claude Code CLI subprocess via env
     # 二选一：api_key 或 auth_token（取决于你平时用哪个）

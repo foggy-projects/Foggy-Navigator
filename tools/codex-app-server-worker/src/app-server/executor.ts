@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { AppConfig } from '../config.js'
 import { requireCodexConfigOverride } from '../codex-config.js'
-import type { CodexInput, StoredTaskRecord, TaskRequest } from '../models.js'
+import type { CodexInput, StoredTaskRecord, TaskRequest, TerminationOperationSummary } from '../models.js'
 import { parseModelString, resolveSupportedModelAlias } from '../model-resolution.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { GeneratedImageStore } from '../generated-image-store.js'
@@ -26,6 +26,7 @@ import { AppServerPool } from './pool.js'
 import type { PoolRateLimitsView } from './rate-limits.js'
 import type { UserInputServerRequest, UserInputWireResponse } from './user-input.js'
 import {
+  AppServerRuntimeError,
   isAppServerProcessTreeSafetyError,
   VALIDATED_APP_SERVER_CLI_VERSION,
 } from './runtime.js'
@@ -65,6 +66,27 @@ export type ReconciliationResult = {
   errorCode?: string
 }
 
+export type ExplicitAbortDispatchResult = 'requested' | 'unavailable'
+export type ManualPidKillResult = {
+  observed_exit: boolean
+  /**
+   * A matching provider terminal event was already observed.  No signal was
+   * sent and TaskManager must let the natural terminal path own provenance.
+   */
+  provider_terminal_observed?: boolean
+}
+
+/**
+ * A deliberately minimal projection of a lease currently owned by a task.
+ * It is used only to bind a human-authorized manual PID operation; callers
+ * must not treat it as a general process-inspection API.
+ */
+export type ManagedTaskProcessSnapshot = {
+  taskId: string
+  pid: number
+  instanceId: string
+}
+
 export interface TaskExecutor {
   execute(options: {
     taskId: string
@@ -83,11 +105,28 @@ export interface TaskExecutor {
   isDraining?(): boolean
   drain?(timeoutMs: number): Promise<void>
   readDefaultRateLimits?(refresh?: boolean): Promise<PoolRateLimitsView>
+  requestExplicitAbort?(taskId: string, record: StoredTaskRecord): Promise<ExplicitAbortDispatchResult>
+  listManagedTaskProcesses?(): Promise<readonly ManagedTaskProcessSnapshot[]> | readonly ManagedTaskProcessSnapshot[]
+  manualPidKill?(
+    taskId: string,
+    pid: number,
+    record: StoredTaskRecord,
+    operation: TerminationOperationSummary,
+  ): Promise<ManualPidKillResult>
+}
+
+type TaskRuntimeLease = {
+  lease: Awaited<ReturnType<AppServerPool['acquire']>>
+  threadId?: string
+  turnId?: string
+  retainLease: boolean
 }
 
 export class StrictAppServerExecutor implements TaskExecutor {
   private readonly pool: AppServerPool
   private readonly locks: KeyedExecutionLocks
+  /** A retained lease prevents a failed observer from being recycled over a live turn. */
+  private readonly taskRuntimeLeases = new Map<string, TaskRuntimeLease>()
 
   constructor(
     private readonly config: AppConfig,
@@ -111,6 +150,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
     let inputFiles: Awaited<ReturnType<typeof materializeInput>> | undefined
     let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
     let retireLease = false
+    let taskRuntime: TaskRuntimeLease | undefined
     try {
       inputFiles = await materializeInput(options.taskId, options.request, this.config.stateDir)
       this.assertCanonicalCwdUnchanged(context.cwd)
@@ -118,6 +158,8 @@ export class StrictAppServerExecutor implements TaskExecutor {
         ? await this.pool.acquireForThread(context.lane, options.request.session_id, options.signal)
         : await this.pool.acquire(context.lane, options.signal)
       const runtimeInstanceId = lease.instanceId
+      taskRuntime = { lease, retainLease: false }
+      this.taskRuntimeLeases.set(options.taskId, taskRuntime)
       await options.callbacks.onInstanceResolved(runtimeInstanceId, context.lane.key)
       const bridge = new AppServerEventBridge({
         taskId: options.taskId,
@@ -142,11 +184,16 @@ export class StrictAppServerExecutor implements TaskExecutor {
         signal: options.signal,
         turnStallTimeoutMs: this.config.turnStallTimeoutMs,
         onThreadResolved: async threadId => {
+          if (taskRuntime) taskRuntime.threadId = threadId
           bridge.setRootThreadId(threadId)
           await options.callbacks.onThreadResolved(threadId)
         },
         onExecutionCommitted: options.callbacks.onExecutionCommitted,
         onTurnStarted: async (threadId, turnId) => {
+          if (taskRuntime) {
+            taskRuntime.threadId = threadId
+            taskRuntime.turnId = turnId
+          }
           if (turnId) bridge.setRootTurnId(turnId)
           await options.callbacks.onTurnStarted(threadId, turnId)
         },
@@ -181,15 +228,123 @@ export class StrictAppServerExecutor implements TaskExecutor {
         errorCode,
       }
     } catch (error) {
+      if (taskRuntime && (shouldRetainLeaseForUnverifiedTurn(error)
+          || isAppServerProcessTreeSafetyError(error)
+          || taskRuntime.lease.runtime.requiresAttention?.())) {
+        taskRuntime.retainLease = true
+      }
       if (isAppServerProcessTreeSafetyError(error)) {
         this.pool.failClosed(error instanceof Error ? error : new Error(String(error)))
       }
       throw error
     } finally {
-      lease?.release(lease.runtime.isHealthy() && !retireLease)
+      if (lease && taskRuntime?.retainLease) {
+        // Deliberately retain the app-server process and its exact lane.  A
+        // timeout/protocol failure is not evidence that the underlying turn
+        // stopped, so pool retirement must not call runtime.close().
+      } else if (lease) {
+        lease.runtime.markObservedTerminal?.()
+        lease.release(lease.runtime.isHealthy() && !retireLease)
+        if (this.taskRuntimeLeases.get(options.taskId) === taskRuntime) {
+          this.taskRuntimeLeases.delete(options.taskId)
+        }
+      }
       await inputFiles?.cleanup()
       for (const release of releases.reverse()) release()
     }
+  }
+
+  async requestExplicitAbort(taskId: string, record: StoredTaskRecord): Promise<ExplicitAbortDispatchResult> {
+    const retained = this.taskRuntimeLeases.get(taskId)
+    if (!retained || !retained.threadId || !retained.turnId || !retained.lease.runtime.interruptTurn) {
+      return 'unavailable'
+    }
+    if (record.thread_id && record.thread_id !== retained.threadId) return 'unavailable'
+    if (record.turn_id && record.turn_id !== retained.turnId) return 'unavailable'
+    await retained.lease.runtime.interruptTurn(retained.threadId, retained.turnId)
+    return 'requested'
+  }
+
+  /**
+   * Returns only task-owned, retained runtime leases.  It never probes the
+   * operating system or touches the app-server transport, so taking this
+   * snapshot cannot interrupt, release, or otherwise alter a running turn.
+   */
+  listManagedTaskProcesses(): ManagedTaskProcessSnapshot[] {
+    return [...this.taskRuntimeLeases.entries()]
+      .flatMap(([taskId, retained]) => {
+        const pid = retained.lease.runtime.pid
+        // A lease can briefly be assigned before runTurn starts.  Do not
+        // publish that idle process as task-bound; retain an unverified lease
+        // only because it may still own an indeterminate live turn.
+        if (!retained.lease.runtime.isActive() && !retained.retainLease) return []
+        if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1) return []
+        return [{
+          taskId,
+          pid,
+          instanceId: retained.lease.instanceId,
+        }]
+      })
+      .sort((left, right) => left.taskId.localeCompare(right.taskId) || left.pid - right.pid)
+  }
+
+  async manualPidKill(
+    taskId: string,
+    pid: number,
+    record: StoredTaskRecord,
+    operation: TerminationOperationSummary,
+  ): Promise<ManualPidKillResult> {
+    const retained = this.taskRuntimeLeases.get(taskId)
+    if (!retained || retained.lease.runtime.pid !== pid || !retained.lease.runtime.forceTerminateForAuthorizedOperation) {
+      return { observed_exit: false }
+    }
+    // PID alone is not a durable identity: an OS can recycle it between the
+    // Java controller's fresh snapshot and this dispatch.  The pool instance
+    // id is created when this exact runtime process is registered and is
+    // persisted on the task, so it is the app-server equivalent of a process
+    // start timestamp.
+    if (operation.expected_process_identity !== appServerProcessIdentity(retained.lease.instanceId)) {
+      return { observed_exit: false }
+    }
+    if (record.app_server_instance_id && record.app_server_instance_id !== retained.lease.instanceId) {
+      return { observed_exit: false }
+    }
+    if (record.thread_id && record.thread_id !== retained.threadId) {
+      return { observed_exit: false }
+    }
+    if (record.turn_id && record.turn_id !== retained.turnId) {
+      return { observed_exit: false }
+    }
+    if (retained.lease.runtime.hasProviderTerminalObserved?.()) {
+      return { observed_exit: false, provider_terminal_observed: true }
+    }
+    // The original execute() call can unwind as close() rejects its pending
+    // RPC.  Retain before signaling so that unwind cannot recycle or release
+    // this lease while the signed operation is still classifying the exit.
+    const retainLeaseBeforeManualDispatch = retained.retainLease
+    retained.retainLease = true
+    let observedExit: boolean | void
+    try {
+      observedExit = await retained.lease.runtime.forceTerminateForAuthorizedOperation(pid)
+    } catch (error) {
+      if (error instanceof AppServerRuntimeError
+          && error.code === 'APP_SERVER_PROVIDER_TERMINAL_OBSERVED') {
+        // The provider event arrived after the preflight above but before the
+        // runtime could signal.  Restore ordinary lease release so the
+        // naturally completed turn can finish its normal cleanup.
+        retained.retainLease = retainLeaseBeforeManualDispatch
+        return { observed_exit: false, provider_terminal_observed: true }
+      }
+      throw error
+    }
+    // An authorized signal dispatch is not proof that the app-server child
+    // exited.  Keep the retained lease for reconciliation unless the runtime
+    // explicitly observed its process exit event.
+    if (observedExit !== true) return { observed_exit: false }
+    retained.lease.runtime.markObservedTerminal?.()
+    retained.lease.release(false)
+    if (this.taskRuntimeLeases.get(taskId) === retained) this.taskRuntimeLeases.delete(taskId)
+    return { observed_exit: true }
   }
 
   async reconcile(options: {
@@ -208,30 +363,34 @@ export class StrictAppServerExecutor implements TaskExecutor {
     const releaseThread = await this.locks.acquire(`thread:${threadId}`, options.signal)
     let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
     try {
+      const retained = this.taskRuntimeLeases.get(options.taskId)
+      if (retained && retained.threadId === threadId && retained.turnId === options.record.turn_id) {
+        const result = await this.reconcileThread(
+          retained.lease.runtime,
+          threadId,
+          options.record.turn_id,
+          context.model,
+          retained.lease.instanceId,
+          context.lane.key,
+        )
+        if (result.status !== 'unknown') {
+          retained.lease.runtime.markObservedTerminal?.()
+          retained.lease.release(retained.lease.runtime.isHealthy())
+          if (this.taskRuntimeLeases.get(options.taskId) === retained) this.taskRuntimeLeases.delete(options.taskId)
+        }
+        return result
+      }
       // Persisted threads are app-server state, not process-local state. Any healthy instance in
       // the same credential/config lane may inspect the thread after a Worker or child restart.
       lease = await this.pool.acquireForThread(context.lane, threadId, options.signal)
-      const thread = await lease.runtime.readThread(threadId, true)
-      const turns = Array.isArray(thread.turns)
-        ? thread.turns.filter(isRecord)
-        : []
-      const turn = turns.find(candidate => readString(candidate.id) === options.record.turn_id)
-      if (!turn) return { status: 'unknown', threadId }
-      const status = reconcileTurnStatus(turn.status)
-      if (status === 'unknown') return { status, threadId, turnId: readString(turn.id) }
-      const assistantText = status === 'completed' ? extractAssistantText(turn) : undefined
-      const capabilityFailure = status === 'completed'
-        ? detectToolCapabilityFailure(assistantText)
-        : undefined
-      return {
-        status: capabilityFailure ? 'failed' : status,
+      return await this.reconcileThread(
+        lease.runtime,
         threadId,
-        turnId: readString(turn.id),
-        assistantText: capabilityFailure ? undefined : assistantText,
-        model: context.model,
-        laneKey: context.lane.key,
-        errorCode: capabilityFailure || (status === 'failed' ? stableAppServerTurnErrorCode(turn.error) : undefined),
-      }
+        options.record.turn_id,
+        context.model,
+        lease.instanceId,
+        context.lane.key,
+      )
     } catch {
       return { status: 'unknown', threadId }
     } finally {
@@ -253,6 +412,38 @@ export class StrictAppServerExecutor implements TaskExecutor {
 
   async drain(timeoutMs: number): Promise<void> {
     await this.pool.drain(timeoutMs)
+  }
+
+  private async reconcileThread(
+    runtime: Awaited<ReturnType<AppServerPool['acquire']>>['runtime'],
+    threadId: string,
+    turnId: string,
+    model: string,
+    instanceId: string,
+    laneKey: string,
+  ): Promise<ReconciliationResult> {
+    const thread = await runtime.readThread(threadId, true)
+    const turns = Array.isArray(thread.turns)
+      ? thread.turns.filter(isRecord)
+      : []
+    const turn = turns.find(candidate => readString(candidate.id) === turnId)
+    if (!turn) return { status: 'unknown', threadId }
+    const status = reconcileTurnStatus(turn.status)
+    if (status === 'unknown') return { status, threadId, turnId: readString(turn.id) }
+    const assistantText = status === 'completed' ? extractAssistantText(turn) : undefined
+    const capabilityFailure = status === 'completed'
+      ? detectToolCapabilityFailure(assistantText)
+      : undefined
+    return {
+      status: capabilityFailure ? 'failed' : status,
+      threadId,
+      turnId: readString(turn.id),
+      assistantText: capabilityFailure ? undefined : assistantText,
+      model,
+      instanceId,
+      laneKey,
+      errorCode: capabilityFailure || (status === 'failed' ? stableAppServerTurnErrorCode(turn.error) : undefined),
+    }
   }
 
   async readDefaultRateLimits(refresh = false): Promise<PoolRateLimitsView> {
@@ -441,6 +632,10 @@ function normalizeTurnStatus(value: unknown): ExecutionResult['status'] {
   return value === 'completed' || value === 'failed' || value === 'interrupted' ? value : 'failed'
 }
 
+function shouldRetainLeaseForUnverifiedTurn(error: unknown): boolean {
+  return error instanceof AppServerRuntimeError && error.turnMayHaveStarted
+}
+
 function preferredTurnFailure(primary: string | undefined, secondary: string | undefined): string | undefined {
   if (primary && primary !== 'APP_SERVER_TURN_FAILED') return primary
   if (secondary && secondary !== 'APP_SERVER_TURN_FAILED') return secondary
@@ -473,4 +668,13 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+/**
+ * Stable, non-secret identity of the exact pool runtime that owns a task.
+ * It supplements the OS PID so a recycled PID cannot satisfy a previously
+ * authorized manual termination operation.
+ */
+export function appServerProcessIdentity(instanceId: string): string {
+  return `app-server-instance:${instanceId}`
 }

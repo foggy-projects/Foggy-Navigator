@@ -203,24 +203,13 @@ if ($SuccessMatches -and $VerifyStatus -eq 0) {
     exit 0
 }
 
-$KillStatus = Invoke-ProcessTree @('kill', '--pid', [string]$PidValue, '--entry', $Entry, '--output', $SnapshotFile)
-$FinalVerifyStatus = Invoke-ProcessTree @('verify', '--pid', [string]$PidValue, '--entry', $Entry, '--output', $SnapshotFile)
 $Reason = if ($SuccessMatches) { 'shutdown_success_with_process_residue' } else { 'shutdown_not_proven' }
-Write-FailedStopLatch $Reason
-try {
-    foreach ($EvidencePath in @($StopFile,$PidFile,$ShutdownSuccessFile,$ShutdownFailureFile)) {
-        Remove-EvidenceFile $EvidencePath
-    }
-} catch {
-    [Console]::Error.WriteLine("Failed to clean non-snapshot shutdown evidence: $($_.Exception.Message)")
+try { Write-FailedStopLatch $Reason } catch {
+    [Console]::Error.WriteLine("Failed to persist shutdown failure latch at $FailedStopFile: $($_.Exception.Message)")
     exit 3
 }
-if ($KillStatus -ne 0 -or $FinalVerifyStatus -ne 0) {
-    [Console]::Error.WriteLine('Worker shutdown left verified process residue; start and update are latched')
-    exit 3
-}
-[Console]::Error.WriteLine("Worker shutdown was not proven graceful; verified process tree was cleaned, but evidence remains at $SnapshotFile pending explicit latch review")
-exit 2
+[Console]::Error.WriteLine("Worker shutdown was not proven graceful; no Worker process was terminated. Lifecycle evidence remains at $SnapshotFile and $FailedStopFile pending an explicit signed termination operation or operator recovery")
+exit 4
 } finally {
     if ($OwnLifecycleLock) {
         $ReleaseStatus = Invoke-LifecycleMarker @(

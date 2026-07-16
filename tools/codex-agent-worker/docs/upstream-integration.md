@@ -11,6 +11,8 @@
 - `GET /api/v1/tasks/:taskId/subscribe`
 - `GET /api/v1/tasks/:taskId/status`
 - `POST /api/v1/tasks/:taskId/abort`
+- `GET /api/v1/processes`
+- `POST /api/v1/processes/:pid/kill`
 - `GET /api/v1/sessions`
 
 `POST /api/v1/query` 是主入口。它会启动一个 Codex 任务，并通过 SSE 持续返回事件。
@@ -109,7 +111,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 | `cwd` | `string` | 否 | 工作目录 |
 | `session_id` | `string` | 否 | 续接已有 Codex thread |
 | `model` | `string` | 否 | 模型名，支持附带思考等级后缀 |
-| `max_turns` | `number` | 否 | 限制最多完成多少个 turn，必须是正整数 |
+| `max_turns` | `number` | 否 | 达到阈值时写入 `TIMEOUT_PENDING_DECISION` 生命周期提示；必须是正整数，不会自动终止 CLI |
 | `api_key` | `string` | 否 | 本次请求覆盖默认鉴权 |
 | `base_url` | `string` | 否 | 本次请求覆盖 OpenAI compatible base URL |
 | `env_vars` | `object` | 否 | 传给 Codex 子进程的额外环境变量 |
@@ -484,9 +486,20 @@ GET /api/v1/tasks/:taskId/status
 `status` 可能取值：
 
 - `running`
+- `cancel_requested`（已受控地请求取消，尚未观察到终态）
 - `completed`
 - `failed`
 - `aborted`
+
+返回中还会按需附加以下兼容字段；旧客户端可以忽略它们：
+
+- `lifecycle_state`：稳定的生命周期枚举，例如 `CANCEL_REQUESTED`
+- `pid`：Worker 已观测到并关联时的 Codex CLI PID；不可得时为 `null`
+- `attention` / `attention_status`：可恢复的观察缺口或待决状态，例如 `PROCESS_UNVERIFIED`、`TIMEOUT_PENDING_DECISION`、`TERMINATION_UNCONFIRMED`
+- `available_actions`：当前可执行的后续动作
+- `termination_operation`：不含签名或 Token 的终止操作摘要及其 `CANCEL_REQUESTED`、`OBSERVED_EXIT` 或 `UNCONFIRMED` 状态
+
+同样的可选字段也会随 `warning` 类型的生命周期 SSE 事件返回。
 
 ### 7.2 取消任务
 
@@ -494,28 +507,61 @@ GET /api/v1/tasks/:taskId/status
 POST /api/v1/tasks/:taskId/abort
 ```
 
-示例返回：
+取消必须带有受控且一次性的终止操作 Header：
+
+```http
+X-Navigator-Termination-Operation: <base64url(JSON)>
+X-Navigator-Termination-Signature: <base64url(HMAC-SHA256(CODEX_WORKER_TOKEN, encodedOperation))>
+```
+
+签名计算使用第一个 Header 的原始 base64url 字符串，不能先重新序列化 JSON。操作 JSON 的 `schema_version` 必须为 `1`，并包含：
+
+- `operation_id`、`task_id`、`worker_id`、`kind`、`origin`
+- `actor_id`、`actor_type`、`authorization_decision_id`
+- `reason_code`、`correlation_id`、`issued_at`、`expires_at`
+- 可选 `expected_pid`、`expected_process_identity`（仅人工 PID 终止使用）
+
+`issued_at` 与 `expires_at` 必须是带时区的 ISO-8601 字符串（例如 `2026-07-16T00:01:00.000Z`），不接受 epoch 毫秒数值。
+
+任务取消只接受 `kind=REMOTE_CANCEL`，且 `origin` 必须为 `UPSTREAM_USER` 或 `UPSTREAM_SYSTEM`。Worker 校验签名、时效、操作 ID 防重放、目标 task 匹配，以及 `worker_id` 与本机 `CODEX_NAVIGATOR_WORKER_ID` 的精确匹配。后者必须是 Navigator PhysicalWorker 资源 ID，不能以 hostname、runtime id 或显示名代替；未配置该 ID 或不匹配时一律拒绝，且不会消费该 operation ID。不能提供已配置的 Worker Token 时，受控终止同样会被拒绝。
+
+每个已验证 operation 在发出 interrupt/kill 前都会以原子 receipt 写入本地持久 ledger；同一 `worker_id + operation_id` 的重放返回 `409`，ledger 不可用或已满返回 `503`，绝不会回退为内存防重放。默认目录为 Worker 包内 `logs/termination-operations/`，可用绝对路径 `CODEX_TERMINATION_OPERATION_LEDGER_DIR` 覆盖。生产部署必须保留并复用该目录；同一 PhysicalWorker ID 不能由多个独立、易失 ledger 的副本同时服务。若需要横向扩展，应给每个物理 Worker 独立 ID/路由，或采用另行验证的共享原子 claim 存储。
+
+示例 ACK（HTTP `202`，非终态）：
 
 ```json
 {
   "task_id": "44beb057-c03b-4aa1-aabf-fffa479114c8",
-  "status": "aborted"
+  "status": "cancel_requested",
+  "lifecycle_state": "CANCEL_REQUESTED",
+  "attention_status": "CANCELLATION_PENDING_CONFIRMATION",
+  "available_actions": ["CONTINUE_WAIT", "QUERY_DIAGNOSTICS", "CANCEL"],
+  "termination_operation": {
+    "operation_id": "op-123",
+    "task_id": "44beb057-c03b-4aa1-aabf-fffa479114c8",
+    "worker_id": "navigator-worker-123",
+    "kind": "REMOTE_CANCEL",
+    "origin": "UPSTREAM_USER",
+    "status": "CANCEL_REQUESTED"
+  }
 }
 ```
 
-取消的是当前运行中的任务，不是删除整个会话历史。
+取消的是当前运行中的任务，不是删除整个会话历史。ACK 只代表取消已发往 Codex runtime；任务、SSE 和 thread reservation 会保留，直到收到 provider 终态或确认目标进程已经退出。只有该实际观察会把任务变为 `aborted` 并释放 reservation。
 
-取消成功后，SSE 流通常会再收到一个终态错误事件：
+### 7.3 人工 PID 终止
 
-```json
-{
-  "type": "error",
-  "task_id": "29cadef9-088d-4dfb-8bbb-2b8d0563c461",
-  "session_id": "019d1b29-2d17-7043-b2dd-e3b89853cda7",
-  "error": "Task aborted",
-  "seq": 2
-}
+```text
+POST /api/v1/processes/:pid/kill
 ```
+
+控制面必须从这个 Worker 的新鲜 `GET /api/v1/processes` 快照中直接读取 `process_identity` 字段，并原样传入 `expected_process_identity`，不得自行拼接或修改。该字段仅在 PID 唯一绑定当前活动任务、且 `started_at` 可规范化为 UTC `YYYY-MM-DDTHH:mm:ss.SSSZ` 时返回；其他进程不返回该字段。
+
+该接口只接受 `kind=MANUAL_PID_KILL` 且 `origin=ADMIN_MANUAL` 的同类受签名 operation；`worker_id` 必须先与本机 `CODEX_NAVIGATOR_WORKER_ID` 精确匹配。`expected_pid` 与 `expected_process_identity` 对该类 operation 都是必填项：后者必须是从**新鲜** `GET /api/v1/processes` 快照取得并原样拼出的 `codex-cli:<pid>:<started_at>`，其中 `started_at` 固定为 UTC `YYYY-MM-DDTHH:mm:ss.SSSZ`。Worker 在发送信号前重新扫描，并要求其计算出的身份与签名值逐字节相同；PID 被复用、创建时间缺失或格式不规范、或身份不一致都会拒绝，绝不会发送 kill 信号。PID 还必须唯一绑定一个当前活动任务，且 operation 的 `task_id` 必须与该任务匹配；未绑定或歧义绑定都会被拒绝。Worker 不会把 kill 命令本身推断为 task 已中止：后续 scan 确认 PID 不存在时才返回 `observed_exit` 并将任务变为 `aborted`；扫描或退出验证失败时返回 `unconfirmed`，任务仍保持 `cancel_requested`。
+
+不要把 `POST /api/v1/tasks/:taskId/abort` 用作人工 PID kill，也不要假设任意进程 kill 会自动取消其关联任务。
+
+当 Worker 收到部署或关闭信号时，它会停止接收新请求，并对活动任务增加 `WORKER_DRAINING_PENDING_DECISION`。该动作不会中止 CLI；Worker 仅在所有活动任务观测到终态后才完成退出。
 
 ## 8. 工作目录 cwd
 
@@ -583,16 +629,17 @@ POST /api/v1/tasks/:taskId/abort
 
 ## 10. 当前限制与注意事项
 
-### 10.1 max_turns 是 worker 侧限制
+### 10.1 max_turns 是 worker 侧待决提示
 
 Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限制由 worker 自己执行。
 
 行为是：
 
 - 每完成一个 `turn.completed` 计一次
-- 当已完成轮数达到上限后，在下一轮开始时主动中止任务
+- 当已完成轮数达到上限后，在下一轮开始时写入 `TIMEOUT_PENDING_DECISION` attention 和生命周期 SSE
+- Worker 不会因此调用 `AbortController`、停止 CLI、释放 thread reservation 或把任务标为终态
 
-因此它能约束多轮代理行为，但不是底层模型原生参数。
+上游需要结束任务时，必须另行发起带签名的 `REMOTE_CANCEL` operation。`max_turns` 因而是人工或控制面决策的提示阈值，而不是底层模型原生的硬中止参数。
 
 ### 10.2 /health 不是完整鉴权可用性检查
 

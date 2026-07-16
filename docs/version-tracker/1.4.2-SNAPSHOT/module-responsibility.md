@@ -120,3 +120,14 @@ P8 必须先完成公共契约和脱敏规则，再实现持久化与访问控�
 | ODR-142-007 旧 Provider 契约 | approved-direct-removal | 取消上游/生产兼容窗口；先迁移或删除全部仓内引用，再直接删除旧 API/SPI/DTO |
 
 credential authority、mapping/grant 权威数据源、Provider state 具体 schema 演进和超大类拆分顺序仍是实施级 Owner 交接点，不得因决策评审完成而虚构为已冻结。
+
+## GOV-004 CLI 生命周期职责增量
+
+| 边界 | 应承担的责任 | 明确禁止 | 运行前提 |
+|---|---|---|---|
+| `navigator-common` + `session-module` | 保存不可伪造的终止 operation/capability、状态迁移、actor/provenance 与观察到的退出证据 | 以“无输出”或注意力超时推断 CLI 已停止；信任调用方自填的授权判断 | 目标库必须先执行受控 migration，rollback 是经批准的破坏性操作而非在线撤销 |
+| Codex/Claude Java Addon | 只为经认证的管理员路径预留人工 PID 操作；把已核验的任务/租户/Worker/操作语义发送到 Worker，并回写严格关联的终态证据 | 普通 owner 直接使用人工 PID kill；将 HTTP 路由当作唯一授权边界 | 管理员身份和 tenant 必须来自可信认证上下文 |
+| Codex SDK Worker | 在签名 operation 后执行取消；保留会话/子进程而非由 watchdog 自动 kill；用 durable receipt 阻止重放 | 因 attention、quiet、watchdog 或正常 shutdown 对活动 CLI 发信号 | 稳定 Worker ID 与持续挂载的 receipt ledger 卷 |
+| Codex App Server Worker | 在签名 operation 后中断或观测退出；在 provider terminal 与手工操作竞争时先建立终态栅栏；用 durable receipt 阻止重放 | 后台 watchdog、idle 或 close 清理隐式终止活动 CLI | 同一 Worker ID 不得跨独立 ledger 卷水平共享；否则需经验证的共享原子 claim 存储 |
+| Claude Worker | 在签名 operation 后执行 cancel/PID 操作，记录安全的生命周期日志并持久化 receipt | 因静默/闲置自动 abort 或 kill；在日志中写入 prompt、凭据或原始敏感异常 | 同 SDK Worker；真实 Claude CLI 行为仍须在可控环境实测 |
+| 运维与验收 | 执行 migration、配置持久 ledger/唯一 Worker identity、跑五态矩阵、发布并验证告警 | 把本地单元测试、隔离 MySQL 或无模型初始化冒充生产验收 | 正式签收必须有目标环境的执行和交付证据 |

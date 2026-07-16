@@ -77,6 +77,27 @@ public class WorkerEvent {
     private Integer retryCount;
 
     /**
+     * Explicit provider/Worker confirmation that this event carries a durable
+     * terminal observation.  A bare {@code error} remains diagnostic only:
+     * transport loss, cancellation acknowledgement, and local SDK cleanup
+     * can all emit an error before the remote task outcome is known.
+     */
+    @JsonProperty("terminal_observed")
+    private Boolean terminalObserved;
+
+    /**
+     * Terminal status asserted only when {@link #terminalObserved} is true.
+     * Error events currently accept FAILED or ABORTED; result events retain
+     * their established COMPLETED semantics for backwards compatibility.
+     */
+    @JsonProperty("terminal_status")
+    private String terminalStatus;
+
+    /** Optional provenance for an observed terminal outcome, e.g. provider event. */
+    @JsonProperty("terminal_source")
+    private String terminalSource;
+
+    /**
      * Codex App Server item identity. It associates text deltas with the
      * completed agent message so client renderers never merge separate items.
      */

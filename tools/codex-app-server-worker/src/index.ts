@@ -98,14 +98,17 @@ export async function bootstrap(
       if (leaseReleased) return true
       if (closing) return closing
       const attempt = (async (): Promise<boolean> => {
-        const serverClose = stopIngress()
         const quiesced = await manager!.shutdown(runtimeConfig.shutdownTimeoutMs)
-        server!.closeAllConnections()
-        await serverClose
         if (!quiesced) {
-          console.error('[codex-app-server] shutdown_not_quiesced lease=retained')
+          // Keep control/status endpoints alive. The manager is draining, so
+          // no new task is accepted, but an operator can still inspect or
+          // explicitly cancel an active task.
+          console.error('[codex-app-server] shutdown_not_quiesced active_task_preserved lease=retained')
           return false
         }
+        const serverClose = stopIngress()
+        server!.closeAllConnections()
+        await serverClose
         await stateLease!.release()
         leaseReleased = true
         return true
@@ -152,6 +155,12 @@ export async function bootstrap(
         }
         if (signalFailure) {
           await writeSignalFailureOutcome(trigger.runDir, runtimeConfig.stateDir, signalFailure)
+        }
+        if (exitCode !== 0) {
+          // A process exit would implicitly kill this Worker's child tree.
+          // Preserve the active CLI and leave an auditable latch instead.
+          exiting = undefined
+          return
         }
         exitProcess(exitCode)
       })()

@@ -116,6 +116,11 @@ export class EventBroadcast {
     return this.closed || this.closing
   }
 
+  /** A failed journal must be replaced before a recovery attempt can emit again. */
+  hasWriteError(): boolean {
+    return this.writeError !== undefined
+  }
+
   getLatestSeq(): number {
     return this.seq
   }

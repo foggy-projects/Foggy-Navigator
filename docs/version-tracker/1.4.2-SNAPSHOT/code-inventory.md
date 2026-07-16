@@ -473,3 +473,14 @@ code_inventory:
 3. 删除使用独立、可回滚提交；不得把多个第二档功能切片混成一个提交。
 4. 任何生产路由或外部契约变化都必须回写版本状态；本授权仅覆盖 dev-only 范围，本规划落档本身不改变生产路由。
 5. 第二档不再以生产流量审计或兼容窗口作为 dev-only 删除 blocker；但静态搜索命中的仓内引用必须全部处理，发现共享/生产资源或上游消费者时必须停止并重新评审。
+
+## GOV-004 实施增量（2026-07-16）
+
+| 模块/目录 | 关键路径 | 本轮职责 | 本地结果与边界 |
+|---|---|---|---|
+| `navigator-common`、`session-module` | `TerminationOperationEntity`、`TerminationOperationCapability`、`TerminationOperationTablesMigration`、termination operation service/repository/controller | 保存服务端签发的终止能力、操作审计、显式状态与观察到的退出证据 | 代码与迁移脚本已完成；目标环境迁移尚未执行，不能据此声明生产审计可用 |
+| `addons/codex-worker-agent`、`addons/claude-worker-agent` | Provider task service 与控制器 | 仅允许管理员/上游管理员发起人工 PID kill；核验 actor、tenant、任务、Worker、操作类型及观察证据后落审计 | 本地正负向回归已覆盖；真实控制面授权与审计查询仍待目标环境验证 |
+| `tools/codex-agent-worker` | `src/termination-operation.ts`、`src/codex/sdk-wrapper.ts` | SDK Worker 的签名终止操作、无自动终止、跨重启 durable receipt replay fence | ledger 依赖稳定 Worker ID 和持久卷；删除或回滚 ledger 会削弱防重放保证 |
+| `tools/codex-app-server-worker` | `src/termination-operation.ts`、`src/task-manager.ts` | App Server Worker 的签名终止操作、终态栅栏与 durable receipt replay fence | 同上；同一 Worker ID 不能在独立卷的多实例间共享，除非另行验证共享原子 claim 存储 |
+| `tools/claude-agent-worker` | `termination_operation.py`、`routes/processes.py` | Claude Worker 的签名取消/PID 操作、无自动终止与 durable receipt replay fence | 同上；实际 Claude CLI 五态矩阵仍待隔离环境执行 |
+| `docs/migration`、`docs/version-tracker/1.4.2-SNAPSHOT` | GOV-004 migration、rollback、workitem、runbook、quality/coverage/acceptance 记录 | 部署前置、回退边界和证据口径 | 隔离 MySQL 正反迁移已验证；正式签收受真实 CLI、目标环境、告警与多实例证据门禁约束 |

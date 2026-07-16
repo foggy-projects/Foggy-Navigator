@@ -22,6 +22,54 @@ export interface CodexCliProcessInfo {
   started_at: string
 }
 
+// This is deliberately stricter than a generally valid ISO-8601 instant.
+// A signed manual-kill operation needs one byte-for-byte representation across
+// the Worker, Java control plane, and a later fresh process scan.
+const CANONICAL_PROCESS_STARTED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/**
+ * Normalizes an OS-reported process start time to the canonical UTC instant
+ * exposed by `/api/v1/processes`: `YYYY-MM-DDTHH:mm:ss.SSSZ`.
+ */
+export function canonicalizeCodexCliProcessStartedAt(value: string): string | undefined {
+  if (!value.trim()) return undefined
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return undefined
+  const canonical = new Date(timestamp).toISOString()
+  return CANONICAL_PROCESS_STARTED_AT.test(canonical) ? canonical : undefined
+}
+
+/**
+ * Returns the language-neutral process identity signed for an authorized
+ * manual kill.  Do not normalize here: a fresh scan must already expose the
+ * exact canonical timestamp that the control plane observed.
+ */
+export function codexCliProcessIdentity(
+  pid: number,
+  startedAt: string,
+): string | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !CANONICAL_PROCESS_STARTED_AT.test(startedAt)) {
+    return undefined
+  }
+  const timestamp = Date.parse(startedAt)
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== startedAt) {
+    return undefined
+  }
+  return `codex-cli:${pid}:${startedAt}`
+}
+
+export function isCanonicalCodexCliProcessIdentity(
+  value: string,
+  expectedPid?: number,
+): boolean {
+  const match = value.match(/^codex-cli:([1-9]\d*):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/)
+  if (!match) return false
+  const pid = Number(match[1])
+  return Number.isSafeInteger(pid)
+    && (expectedPid === undefined || pid === expectedPid)
+    && codexCliProcessIdentity(pid, match[2]) === value
+}
+
 export function extractResumedThreadId(command: string): string | undefined {
   const match = command.match(/\bresume\s+(?:--[^\s]+\s+)*["']?([^\s"']+)/)
   return match?.[1]
@@ -88,7 +136,7 @@ export function buildListProcessesWindowsScript(): string {
     '} | ForEach-Object {',
     '  $startedAt = $null',
     '  if ($_.CreationDate) {',
-    '    $startedAt = ([datetime]$_.CreationDate).ToString("o")',
+    '    $startedAt = ([datetime]$_.CreationDate).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")',
     '  }',
     '  [pscustomobject]@{',
     '    pid = [int]$_.ProcessId',
@@ -119,7 +167,7 @@ async function listProcessesWindows(): Promise<CodexCliProcessInfo[]> {
     pid: Number(entry.pid),
     command: String(entry.command || ''),
     memory_mb: Number(entry.memory_mb || 0),
-    started_at: String(entry.started_at || ''),
+    started_at: canonicalizeCodexCliProcessStartedAt(String(entry.started_at || '')) ?? '',
   }))
 }
 
@@ -139,7 +187,7 @@ function parsePsLine(line: string): CodexCliProcessInfo | null {
     pid: Number(pid),
     command,
     memory_mb: Math.round((Number(rssKb) / 1024) * 10) / 10,
-    started_at: startedAt,
+    started_at: canonicalizeCodexCliProcessStartedAt(startedAt) ?? '',
   }
 }
 

@@ -92,6 +92,11 @@ def map_result(
         "model": model,
         "task_id": task_id,
         "session_id": session_id,
+        # A ResultMessage is the provider's explicit terminal event, unlike
+        # transport closure or local task completion observations.
+        "terminal_observed": True,
+        "terminal_status": "COMPLETED",
+        "terminal_source": "PROVIDER_TERMINAL_EVENT",
     }
 
 
@@ -100,16 +105,32 @@ def map_system(
     subtype: str,
     data: dict[str, Any] | None = None,
     session_id: str | None = None,
+    attention: list[dict[str, Any]] | None = None,
+    attention_status: str | None = None,
+    available_actions: list[str] | None = None,
+    lifecycle_state: str | None = None,
+    termination_operation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Map a ``SystemMessage`` to an SSE dict."""
 
-    return {
+    event: dict[str, Any] = {
         "type": "system",
         "subtype": subtype,
         "data": data,
         "task_id": task_id,
         "session_id": session_id,
     }
+    if attention is not None:
+        event["attention"] = attention
+    if attention_status is not None:
+        event["attention_status"] = attention_status
+    if available_actions is not None:
+        event["available_actions"] = available_actions
+    if lifecycle_state is not None:
+        event["lifecycle_state"] = lifecycle_state
+    if termination_operation is not None:
+        event["termination_operation"] = termination_operation
+    return event
 
 
 def map_permission_request(
@@ -181,15 +202,34 @@ def map_checkpoint(task_id: str, checkpoint_id: str,
     }
 
 
-def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[str, Any]:
-    """Map an error condition to an SSE dict."""
+def map_error(
+    task_id: str,
+    error: str,
+    session_id: str | None = None,
+    *,
+    terminal_observed: bool | None = None,
+    terminal_status: str | None = None,
+    terminal_source: str | None = None,
+) -> dict[str, Any]:
+    """Map an error condition to an SSE dict.
 
-    return {
+    Error events are diagnostic by default.  Callers may add terminal metadata
+    only when they have independent provider or verified-process evidence.
+    """
+
+    event: dict[str, Any] = {
         "type": "error",
         "error": error,
         "task_id": task_id,
         "session_id": session_id,
     }
+    if terminal_observed is not None:
+        event["terminal_observed"] = terminal_observed
+    if terminal_status is not None:
+        event["terminal_status"] = terminal_status
+    if terminal_source is not None:
+        event["terminal_source"] = terminal_source
+    return event
 
 
 def map_sync_checkpoint(

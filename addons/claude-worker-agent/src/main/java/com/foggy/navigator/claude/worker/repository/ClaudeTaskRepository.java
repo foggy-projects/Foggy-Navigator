@@ -1,9 +1,11 @@
 package com.foggy.navigator.claude.worker.repository;
 
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,6 +17,10 @@ import java.util.Optional;
 public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Long> {
 
     Optional<ClaudeTaskEntity> findByTaskId(String taskId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select task from ClaudeTaskEntity task where task.taskId = :taskId")
+    Optional<ClaudeTaskEntity> findByTaskIdForUpdate(@Param("taskId") String taskId);
 
     Optional<ClaudeTaskEntity> findByTaskIdAndUserId(String taskId, String userId);
 

@@ -8,7 +8,10 @@ const IDENTITY_FILE = '.codex-store-identity.json'
 const GENERATION_SENTINEL_FILE = '.codex-store-generation.json'
 const LEASE_FILE = '.codex-store-writer-lease.json'
 const RECOVERY_LOCK_FILE = '.codex-store-writer-lease-recovery.json'
-const STATE_SUBDIRECTORIES = ['tasks', 'events'] as const
+// Every state-owned durable lane receives a generation sentinel.  The
+// termination receipt ledger is included so identity initialization and
+// recovery treat it as a protected durable lane alongside task/event journals.
+const STATE_SUBDIRECTORIES = ['tasks', 'events', 'termination-operations'] as const
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._-]{1,128}$/
 const GENERATION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_STATE_METADATA_BYTES = 16 * 1024
