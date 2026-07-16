@@ -237,6 +237,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         map.put("numTurns", dto.getNumTurns());
         map.put("resultText", dto.getResultText());
         map.put("errorMessage", dto.getErrorMessage());
+        map.put("error", dto.getError());
         map.put("lastAckedSeq", dto.getLastAckedSeq());
         map.put("createdAt", dto.getCreatedAt());
         return map;

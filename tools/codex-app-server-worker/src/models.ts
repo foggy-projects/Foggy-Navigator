@@ -165,6 +165,20 @@ export interface WorkerEvent {
   num_turns?: number
   model?: string
   error?: string
+  error_code?: string
+  error_message?: string
+  error_category?: 'AUTHENTICATION' | 'AUTHORIZATION' | 'CONFIGURATION' | 'NETWORK' | 'RATE_LIMIT' | 'RUNTIME' | 'TIMEOUT' | 'CANCELLED' | 'UNKNOWN'
+  runtime_phase?: 'REQUEST_VALIDATION' | 'TASK_ACCEPTANCE' | 'SESSION_INITIALIZATION' | 'TURN_EXECUTION' | 'TOOL_EXECUTION' | 'EVENT_STREAM' | 'RESULT_PERSISTENCE' | 'TASK_RECONCILIATION' | 'UNKNOWN'
+  recoverable?: boolean
+  diagnostic_ref?: string
+  occurred_at?: string
+  provider_type?: string
+  runtime_type?: string
+  exception_type?: string
+  diagnostic_text?: string
+  provider_status?: string
+  http_status?: number
+  retry_count?: number
   /** Stable text-stream identity for associating an App Server item's deltas and completion. */
   stream_id?: string
   tool_use_id?: string

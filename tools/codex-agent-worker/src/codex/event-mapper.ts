@@ -1,4 +1,5 @@
 import type { WorkerEvent } from '../models.js'
+import { safeSdkError } from '../diagnostics.js'
 
 /**
  * Map Codex SDK response item to WorkerEvent(s)
@@ -105,11 +106,12 @@ export function createErrorEvent(
   error: string,
   seq: number
 ): WorkerEvent {
+  const safeError = safeSdkError(error)
   return {
     type: 'error',
     task_id: taskId,
     session_id: threadId,
-    error,
+    ...safeError,
     seq,
   }
 }

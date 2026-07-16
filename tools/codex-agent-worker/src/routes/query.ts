@@ -18,6 +18,7 @@ import {
 } from '../codex/sdk-wrapper.js'
 import { isNavigatorBusinessMcpEnabled } from '../business-mcp/navigator-business-mcp-server.js'
 import type { WorkerEvent } from '../models.js'
+import { safeSdkError } from '../diagnostics.js'
 
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000
 
@@ -238,7 +239,7 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     const errorData = JSON.stringify({
       type: 'error',
       task_id: taskId,
-      error: 'Failed to initialize task broadcast',
+      ...safeSdkError('Failed to initialize task broadcast'),
       seq: 1,
     })
     res.write(`event: message\ndata: ${errorData}\n\n`)

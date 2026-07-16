@@ -1,6 +1,10 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticInput;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticSanitizer;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorRuntimePhase;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
@@ -41,6 +45,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1182,8 +1187,10 @@ public class CodexStreamRelay {
                 }
                 case "error" -> {
                     closePendingUserInputBeforeTerminal(taskId, sessionId, providerType);
-                    String failure = stableWorkerEventError(event.getError());
-                    publishBuilt(mb.error(failure), workerMessageId(taskId, event));
+                    ErrorEnvelope error = taskService.attachDiagnostic(
+                            taskId, workerErrorEnvelope(event, taskId), workerDiagnosticInput(event));
+                    String failure = error.getErrorCode();
+                    publishBuilt(mb.error(error), workerMessageId(taskId, event));
                     if (event.getSeq() != null) {
                         taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
                                 failure, event.getSeq());
@@ -1539,6 +1546,39 @@ public class CodexStreamRelay {
             return error;
         }
         return "CODEX_WORKER_REMOTE_ERROR";
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return first != null && !first.isBlank() ? first : second;
+    }
+
+    private ErrorEnvelope workerErrorEnvelope(WorkerEvent event, String taskId) {
+        String code = stableWorkerEventError(firstNonBlank(event.getErrorCode(), event.getError()));
+        String message = ErrorDiagnosticSanitizer.sanitize(event.getErrorMessage());
+        if (message == null || message.isBlank()) {
+            message = "Codex 执行失败，可查看诊断信息后重试。";
+        }
+        return ErrorEnvelope.builder()
+                .errorCode(code)
+                .message(message)
+                .category(event.getErrorCategory() != null
+                        ? event.getErrorCategory() : ErrorDiagnosticSanitizer.classify(code))
+                .runtimePhase(event.getRuntimePhase() != null
+                        ? event.getRuntimePhase() : ErrorRuntimePhase.TURN_EXECUTION)
+                .recoverable(event.getRecoverable() != null ? event.getRecoverable() : Boolean.TRUE)
+                .occurredAt(event.getOccurredAt() != null ? event.getOccurredAt() : Instant.now())
+                .taskId(taskId)
+                .build();
+    }
+
+    private ErrorDiagnosticInput workerDiagnosticInput(WorkerEvent event) {
+        return ErrorDiagnosticInput.builder()
+                .exceptionType(event.getExceptionType())
+                .diagnosticText(event.getDiagnosticText())
+                .providerStatus(event.getProviderStatus())
+                .httpStatus(event.getHttpStatus())
+                .retryCount(event.getRetryCount())
+                .build();
     }
 
     private String stableFailureCode(Throwable error, String fallback) {

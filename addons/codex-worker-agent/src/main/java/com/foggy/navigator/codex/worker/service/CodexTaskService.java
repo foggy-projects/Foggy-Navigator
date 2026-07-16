@@ -1,6 +1,8 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticInput;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
@@ -35,6 +37,7 @@ import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -131,6 +134,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Autowired(required = false)
     @Nullable
     private CodexCodingAgentRepository codingAgentRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private ErrorDiagnosticService errorDiagnosticService;
 
     @Autowired
     @Lazy
@@ -945,6 +952,26 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
     }
 
+    /**
+     * Persists the allowlisted diagnostic snapshot before the terminal message
+     * is emitted, then returns the same safe envelope with its opaque reference.
+     */
+    public ErrorEnvelope attachDiagnostic(String taskId,
+                                          ErrorEnvelope envelope,
+                                          ErrorDiagnosticInput input) {
+        if (errorDiagnosticService == null || envelope == null) return envelope;
+        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null) return envelope;
+        envelope.setTaskId(entity.getTaskId());
+        envelope.setProviderType(resolveProviderType(entity));
+        envelope.setRuntimeType(entity.getRuntimeType());
+        if (input != null) input.setWorkerLabel(entity.getWorkerId());
+        String diagnosticRef = errorDiagnosticService.createSnapshotSafely(
+                envelope, input, entity.getSessionId(), entity.getUserId(), entity.getTenantId());
+        envelope.setDiagnosticRef(diagnosticRef);
+        return envelope;
+    }
+
     private void advanceAckSeq(CodexTaskEntity entity, Integer ackSeq) {
         if (ackSeq == null) {
             return;
@@ -1242,6 +1269,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .numTurns(entity.getNumTurns())
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
+                .error(toErrorMap(resolveErrorEnvelope(entity)))
                 .lastAckedSeq(entity.getLastAckedSeq())
                 .lastOutputAt(entity.getLastOutputAt())
                 .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
@@ -1468,9 +1496,34 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
+                .error(resolveErrorEnvelope(entity))
                 .interactionState(deriveInteractionState(entity.getStatus()))
                 .recoverable(recoverable)
                 .build());
+    }
+
+    private ErrorEnvelope resolveErrorEnvelope(CodexTaskEntity entity) {
+        if (errorDiagnosticService == null || entity == null || !"FAILED".equals(entity.getStatus())) {
+            return null;
+        }
+        return errorDiagnosticService.findLatestEnvelope(entity.getTaskId());
+    }
+
+    private Map<String, Object> toErrorMap(ErrorEnvelope error) {
+        if (error == null) return null;
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("errorCode", error.getErrorCode());
+        value.put("message", error.getMessage());
+        value.put("category", error.getCategory());
+        value.put("runtimePhase", error.getRuntimePhase());
+        value.put("recoverable", error.getRecoverable());
+        value.put("diagnosticRef", error.getDiagnosticRef());
+        value.put("occurredAt", error.getOccurredAt());
+        value.put("taskId", error.getTaskId());
+        value.put("providerType", error.getProviderType());
+        value.put("runtimeType", error.getRuntimeType());
+        value.values().removeIf(java.util.Objects::isNull);
+        return value;
     }
 
     private Boolean terminalRecoverability(String status) {

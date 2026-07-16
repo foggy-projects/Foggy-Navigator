@@ -15,6 +15,7 @@ import { TaskStore } from './persistence/task-store.js'
 import { cleanupMaterializedInput, type TaskExecutor } from './app-server/executor.js'
 import { AppServerRuntimeError } from './app-server/runtime.js'
 import { GeneratedImageStore } from './generated-image-store.js'
+import { classifyErrorCode, safeAppServerMessage } from './diagnostics.js'
 import {
   normalizeUserInputAnswers,
   sameRequestId,
@@ -905,6 +906,15 @@ export class TaskManager {
       task_id: taskId,
       session_id: threadId,
       error: code,
+      error_code: code,
+      error_message: safeAppServerMessage(code),
+      error_category: classifyErrorCode(code),
+      runtime_phase: 'TURN_EXECUTION',
+      recoverable: code !== 'TASK_ABORTED',
+      occurred_at: new Date().toISOString(),
+      provider_type: 'CODEX',
+      runtime_type: 'APP_SERVER',
+      provider_status: code,
       subtype: code,
     })
   }
