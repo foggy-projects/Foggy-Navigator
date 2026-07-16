@@ -25,6 +25,16 @@ set +a
 : "${RELEASE_BASE_URL:?RELEASE_BASE_URL is required}"
 OBSUTIL_BIN=${OBSUTIL_BIN:-obsutil}
 command -v "$OBSUTIL_BIN" >/dev/null 2>&1 || { echo "obsutil not found: $OBSUTIL_BIN" >&2; exit 1; }
+OBSUTIL_CONFIG_FILE=${OBSUTIL_CONFIG_FILE:-}
+OBSUTIL_CONFIG_ARGS=()
+if [[ -n $OBSUTIL_CONFIG_FILE ]]; then
+  [[ -f $OBSUTIL_CONFIG_FILE ]] || { echo "obsutil config not found: $OBSUTIL_CONFIG_FILE" >&2; exit 1; }
+  OBSUTIL_CONFIG_ARGS=(-config="$OBSUTIL_CONFIG_FILE")
+fi
+
+obs_copy() {
+  "$OBSUTIL_BIN" cp "$@" "${OBSUTIL_CONFIG_ARGS[@]}"
+}
 
 compare_semver() {
   local left=${1%%[-+]*} right=${2%%[-+]*}
@@ -70,20 +80,20 @@ BUILD_ID="$VERSION+${SHORT_COMMIT:-$(date -u +%Y%m%d%H%M%S)}"
 
 echo '=== Navigator Upstream CLI OBS Upload ==='
 echo "Version: $VERSION"
-"$OBSUTIL_BIN" cp "$WINDOWS_ARCHIVE" "$RELEASE_OBS_BUCKET/$VERSION/$(basename "$WINDOWS_ARCHIVE")" -f
-"$OBSUTIL_BIN" cp "$LINUX_ARCHIVE" "$RELEASE_OBS_BUCKET/$VERSION/$(basename "$LINUX_ARCHIVE")" -f
+obs_copy "$WINDOWS_ARCHIVE" "$RELEASE_OBS_BUCKET/$VERSION/$(basename "$WINDOWS_ARCHIVE")" -f
+obs_copy "$LINUX_ARCHIVE" "$RELEASE_OBS_BUCKET/$VERSION/$(basename "$LINUX_ARCHIVE")" -f
 
 LATEST_PATH="$OUTPUT_DIR/latest.json"
 jq -n --arg version "$VERSION" --arg released "$(date +%F)" --arg buildTimeUtc "$BUILD_TIME_UTC" --arg buildId "$BUILD_ID" --arg gitCommit "$GIT_COMMIT" --argjson gitDirty "$GIT_DIRTY" --arg windows "${VERSION}/$(basename "$WINDOWS_ARCHIVE")" --arg linux "${VERSION}/$(basename "$LINUX_ARCHIVE")" --arg windowsSha "$WINDOWS_SHA" --arg linuxSha "$LINUX_SHA" --argjson features "$FEATURES" '{version:$version,released:$released,buildTimeUtc:$buildTimeUtc,buildId:$buildId,gitCommit:$gitCommit,gitDirty:$gitDirty,features:$features,files:{windows:$windows,linux:$linux},sha256:{windows:$windowsSha,linux:$linuxSha}}' > "$LATEST_PATH"
-"$OBSUTIL_BIN" cp "$LATEST_PATH" "$RELEASE_OBS_BUCKET/latest.json" -f
+obs_copy "$LATEST_PATH" "$RELEASE_OBS_BUCKET/latest.json" -f
 
 WINDOWS_INSTALL="$OUTPUT_DIR/install.ps1"
 LINUX_INSTALL="$OUTPUT_DIR/install.sh"
 sed "s|\$ReleaseBaseUrl = \"__RELEASE_BASE_URL__\"|\$ReleaseBaseUrl = \"$RELEASE_BASE_URL\"|" "$SCRIPT_DIR/remote-install.ps1" > "$WINDOWS_INSTALL"
 sed "s|RELEASE_BASE_URL='__RELEASE_BASE_URL__'|RELEASE_BASE_URL='$RELEASE_BASE_URL'|" "$SCRIPT_DIR/remote-install.sh" > "$LINUX_INSTALL"
 chmod +x "$LINUX_INSTALL"
-"$OBSUTIL_BIN" cp "$WINDOWS_INSTALL" "$RELEASE_OBS_BUCKET/install.ps1" -f
-"$OBSUTIL_BIN" cp "$LINUX_INSTALL" "$RELEASE_OBS_BUCKET/install.sh" -f
+obs_copy "$WINDOWS_INSTALL" "$RELEASE_OBS_BUCKET/install.ps1" -f
+obs_copy "$LINUX_INSTALL" "$RELEASE_OBS_BUCKET/install.sh" -f
 
 if [[ $SKIP_SMOKE == false ]]; then
   TMP_ROOT=$(mktemp -d)
