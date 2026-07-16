@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.2-SNAPSHOT
 ticket: BUG-009
-status: READY_FOR_SIGNOFF
+status: BLOCKED
 canonical: true
 execution_mode: ultra
 approved_by: repository owner
@@ -114,10 +114,11 @@ open_questions: []
   - `bash -n tools/navigator-upstream-cli/dist/bin/navi tools/navigator-upstream-cli/dist/bin/navi-e2e tools/navigator-upstream-cli/dist/install.sh tools/navigator-upstream-cli/dist/remote-install.sh tools/navigator-upstream-cli/dist/package.sh tools/navigator-upstream-cli/dist/upload.sh`：通过。
   - `bash tools/navigator-upstream-cli/dist/package.sh`：通过，离线生成 `navigator-upstream-cli-1.0.21-windows.zip` 和 `navigator-upstream-cli-1.0.21-linux.tar.gz`。
   - 离线安装 smoke：从 Linux TAR.GZ 安装后 `navi version` 输出 `1.0.21`、`upstream --help` 可用、`upstream ask --not-a-real-option` 返回 `2`；Windows ZIP root/bin CMD 包装器均包含 `exit /b %ERRORLEVEL%`。
-- manual_or_experience_evidence: Windows 与 Linux 包均从同一 `1.0.21` SDK JAR 和依赖生成；Linux 安装器只在上游项目根目录写入 gitignored profile，调用 Java 时使用 `exec` 保留退出码。未执行真实 `owner-smoke`，避免访问真实 profile 与上游运行态。
+  - 干净 release worktree（commit `59f277225e966aa1f42fb0ec22d1d6f0ed9bb7dd`、`gitDirty=false`）已生成正式双平台制品；上传前后的远端 `latest.json` 均为 `1.0.20`，确认没有半发布或 metadata 覆盖。
+- manual_or_experience_evidence: Windows 与 Linux 包均从同一 `1.0.21` SDK JAR 和依赖生成；Linux 安装器只在上游项目根目录写入 gitignored profile，调用 Java 时使用 `exec` 保留退出码。未执行真实 `owner-smoke`，避免访问真实 profile 与上游运行态。发布工作目录为 `temp/test-artifacts/BUG-009-release-worktree-20260716`，仅含已推送 commit 和 gitignored release `.env`。
 - deviations: 未改变 Java production 分支，因为该分支已经在 readiness 非 OK 时返回 `2`；本次修复发布入口的退出码穿透缺口并为核心条件增加回归。现有 Windows PowerShell 发布脚本保留作为兼容路径；本次双平台正式发布以新增 WSL `package.sh` / `upload.sh` 为准。
-- residual_risks: 当前 Linux 环境未安装 `cmd.exe`、`powershell` 或 `pwsh`，不能执行 Windows CMD 包装器的端到端 smoke；发布到 Windows 前应以一个已知返回 `2` 的 CLI 调用确认 `%ERRORLEVEL%` 为 `2`。OBS 上传与远端 install smoke 尚待本轮发布完成。
-- readiness: READY_FOR_SIGNOFF
+- residual_risks: 当前 Linux 环境未安装 `cmd.exe`、`powershell` 或 `pwsh`，不能执行 Windows CMD 包装器的端到端 smoke；发布到 Windows 前应以一个已知返回 `2` 的 CLI 调用确认 `%ERRORLEVEL%` 为 `2`。本机无 `obsutil` 可执行文件，且现有 `~/.obsutilconfig` 凭据不被 OBS 接受（Authorization header invalid）；没有可用环境变量凭据。因而不能上传制品或更新远端 `latest.json`，远端 install smoke 未执行。
+- readiness: BLOCKED
 
 ## References
 
