@@ -27,23 +27,6 @@
         <button type="button" class="diagnostic-btn" @click.stop="copyDiagnostic">复制诊断信息</button>
       </div>
       <p v-if="actionMessage" class="diagnostic-status" role="status">{{ actionMessage }}</p>
-      <section v-if="diagnostic" class="diagnostic-panel" aria-label="错误诊断详情">
-        <dl>
-          <template v-for="row in diagnosticRows" :key="row.label">
-            <dt>{{ row.label }}</dt><dd>{{ row.value }}</dd>
-          </template>
-        </dl>
-        <div v-if="diagnostic.publicSharingEnabled" class="share-panel">
-          <button v-if="!activeShare" type="button" class="diagnostic-btn" :disabled="sharing" @click.stop="createShare">
-            {{ sharing ? '生成中...' : `生成临时公开链接（${diagnostic.defaultShareDays || 7} 天）` }}
-          </button>
-          <template v-else>
-            <code class="share-url">{{ absoluteShareUrl }}</code>
-            <button type="button" class="diagnostic-btn" @click.stop="copyShareUrl">复制链接</button>
-            <button type="button" class="diagnostic-btn danger" @click.stop="revokeShare">撤销链接</button>
-          </template>
-        </div>
-      </section>
       <ExecutionReportInline :report-ref="props.reportRef" :digest="props.digest" />
     </div>
     <button
@@ -54,6 +37,44 @@
     >
       {{ reconnecting ? '重连中...' : '重连' }}
     </button>
+    <Teleport to="body">
+      <div
+        v-if="diagnosticDialogOpen"
+        class="diagnostic-modal-backdrop"
+        role="presentation"
+        @click.self="closeDiagnosticDialog"
+      >
+        <section
+          class="diagnostic-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="错误诊断详情"
+        >
+          <header class="diagnostic-modal-header">
+            <div>
+              <p class="diagnostic-modal-eyebrow">ERROR DIAGNOSTIC</p>
+              <h3>错误诊断详情</h3>
+            </div>
+            <button type="button" class="diagnostic-modal-close" aria-label="关闭错误诊断详情" @click="closeDiagnosticDialog">×</button>
+          </header>
+          <dl class="diagnostic-panel">
+            <template v-for="row in diagnosticRows" :key="row.label">
+              <dt>{{ row.label }}</dt><dd>{{ row.value }}</dd>
+            </template>
+          </dl>
+          <div v-if="diagnostic?.publicSharingEnabled" class="share-panel">
+            <button v-if="!activeShare" type="button" class="diagnostic-btn" :disabled="sharing" @click="createShare">
+              {{ sharing ? '生成中...' : `生成临时公开链接（${diagnostic.defaultShareDays || 7} 天）` }}
+            </button>
+            <template v-else>
+              <code class="share-url">{{ absoluteShareUrl }}</code>
+              <button type="button" class="diagnostic-btn" @click="copyShareUrl">复制链接</button>
+              <button type="button" class="diagnostic-btn danger" @click="revokeShare">撤销链接</button>
+            </template>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -84,6 +105,7 @@ const reconnecting = ref(false)
 const loading = ref(false)
 const sharing = ref(false)
 const diagnostic = ref<ErrorDiagnostic>()
+const diagnosticDialogOpen = ref(false)
 const activeShare = ref<ErrorDiagnosticShare>()
 const actionMessage = ref('')
 const diagnosticRef = computed(() => props.errorEnvelope?.diagnosticRef)
@@ -124,11 +146,16 @@ async function loadDiagnostic() {
   actionMessage.value = ''
   try {
     diagnostic.value = await client.getDiagnostic(diagnosticRef.value)
+    diagnosticDialogOpen.value = true
   } catch {
     actionMessage.value = '诊断详情不可用或已过期。'
   } finally {
     loading.value = false
   }
+}
+
+function closeDiagnosticDialog() {
+  diagnosticDialogOpen.value = false
 }
 
 function safeCopyText(): string {
@@ -306,8 +333,14 @@ async function revokeShare() {
 .diagnostic-btn.danger { color: #b42318; }
 .diagnostic-btn:disabled { opacity: .55; cursor: wait; }
 .diagnostic-status { margin: 7px 0 0; color: #754343; font-size: 12px; }
-.diagnostic-panel { margin-top: 10px; padding: 10px; background: rgba(255,255,255,.72); border: 1px solid #f0d4d4; border-radius: 6px; }
-.diagnostic-panel dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 10px; margin: 0; font-size: 12px; }
+.diagnostic-modal-backdrop { position: fixed; z-index: 3000; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(49, 18, 18, .4); backdrop-filter: blur(2px); }
+.diagnostic-modal { width: min(680px, 100%); max-height: min(720px, calc(100vh - 48px)); overflow: auto; padding: 20px; color: #542f2f; background: #fffafa; border: 1px solid #e8b4b4; border-top: 4px solid #d92d20; border-radius: 10px; box-shadow: 0 20px 56px rgba(70, 18, 18, .28); }
+.diagnostic-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #f0d4d4; }
+.diagnostic-modal-eyebrow { margin: 0 0 4px; color: #a65252; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.diagnostic-modal h3 { margin: 0; color: #7f1d1d; font-size: 17px; line-height: 1.35; }
+.diagnostic-modal-close { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; color: #7f1d1d; background: transparent; border: 1px solid #e8b4b4; border-radius: 5px; cursor: pointer; font-size: 23px; line-height: 1; }
+.diagnostic-modal-close:hover { background: #fff0f0; border-color: #d92d20; }
+.diagnostic-panel { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 10px; margin: 16px 0 0; padding: 12px; background: rgba(255,255,255,.72); border: 1px solid #f0d4d4; border-radius: 6px; }
 .diagnostic-panel dt { color: #8b4c4c; font-weight: 600; }
 .diagnostic-panel dd { margin: 0; color: #542f2f; overflow-wrap: anywhere; white-space: pre-wrap; }
 .share-url { max-width: 100%; overflow-wrap: anywhere; padding: 3px 5px; background: #f8eeee; border-radius: 4px; font-size: 11px; }

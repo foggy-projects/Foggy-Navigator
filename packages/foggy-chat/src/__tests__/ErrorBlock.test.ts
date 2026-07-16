@@ -12,6 +12,7 @@ describe('ErrorBlock', () => {
   afterEach(() => {
     configureErrorDiagnosticClient(undefined)
     copyToClipboardMock.mockReset()
+    document.body.replaceChildren()
   })
   it('explains stable worker errors with recovery guidance and keeps diagnostics', () => {
     const wrapper = mount(ErrorBlock, {
@@ -84,8 +85,8 @@ describe('ErrorBlock', () => {
     await Promise.resolve()
 
     expect(getDiagnostic).toHaveBeenCalledWith('diagnostic://dg_abc')
-    expect(wrapper.text()).toContain('deadline exceeded')
-    expect(wrapper.text()).toContain('生成临时公开链接（7 天）')
+    expect(document.body.textContent).toContain('deadline exceeded')
+    expect(document.body.textContent).toContain('生成临时公开链接（7 天）')
   })
 
   it('keeps diagnostic actions inside the error card after loading details', async () => {
@@ -103,7 +104,7 @@ describe('ErrorBlock', () => {
     await Promise.resolve()
 
     expect(wrapper.vm.parentClicks).toBe(0)
-    expect(wrapper.find('.diagnostic-panel').exists()).toBe(true)
+    expect(document.body.querySelector('.diagnostic-modal')).not.toBeNull()
   })
 
   it('uses the shared clipboard fallback and reports the result', async () => {

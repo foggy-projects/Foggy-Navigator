@@ -32,7 +32,7 @@ PC 端失败任务的错误卡片中，“查看错误详情”短暂展开后�
 ## Expected vs Actual
 
 - expected：操作按钮不触发任务面板的聚焦容器；详情加载后稳定保留。HTTP 或 Clipboard API 不可用时使用项目既有的安全降级复制。
-- actual：按钮 click 冒泡到 `TaskPane` 根部的 `@click` 聚焦处理；`ErrorBlock` 直接调用 Clipboard API，未使用已有降级逻辑。
+- actual：按钮 click 冒泡到 `TaskPane` 根部的 `@click` 聚焦处理；`ErrorBlock` 直接调用 Clipboard API，未使用已有降级逻辑。原内联详情还会改变虚拟列表项高度，但该变化不在 `DynamicScrollerItem` 的尺寸依赖中，导致列表按旧尺寸缓存回收组件。
 
 ## Impact Scope
 
@@ -48,9 +48,10 @@ PC 端失败任务的错误卡片中，“查看错误详情”短暂展开后�
 
 | 路径 | 作用 | 修改 |
 |---|---|---|
-| `packages/foggy-chat/src/components/ErrorBlock.vue` | 错误详情与复制操作 | 阻止动作 click 冒泡，复用复制降级 helper |
+| `packages/foggy-chat/src/components/ErrorBlock.vue` | 错误详情与复制操作 | 阻止动作 click 冒泡，复用复制降级 helper，临时改为 Teleport 弹窗 |
 | `packages/foggy-chat/src/utils/clipboard.ts` | HTTP 场景的 Clipboard API 降级 | 复用，不变更安全行为 |
 | `packages/foggy-chat/src/__tests__/ErrorBlock.test.ts` | 错误卡片回归测试 | 补交互和复制结果覆盖 |
+| `packages/foggy-chat/src/components/MessageList.vue` | 虚拟消息列表 | 已识别为根因链路；内联动态内容恢复前需补尺寸依赖/显式重新测量 |
 
 ## Fix Checklist
 
@@ -59,19 +60,27 @@ PC 端失败任务的错误卡片中，“查看错误详情”短暂展开后�
 - [x] 为诊断和分享操作阻止 click 冒泡并指定 button 类型。
 - [x] 为错误卡片接入统一复制 helper。
 - [x] 补齐单元回归并执行相关测试。
+- [x] 临时将详情改为 Teleport 弹窗，脱离虚拟列表项高度计算。
+- [x] 确认原自动收起根因不是延时机制，而是 `DynamicScrollerItem` 未跟踪异步详情导致的尺寸缓存回收。
 
 ## Verification
 
 - `pnpm --filter @foggy/chat test -- ErrorBlock.test.ts`。
-- 手动：点击详情后内容稳定保留；在 HTTP 环境点击复制后显示成功提示。
+- 手动：点击详情后内容在弹窗中稳定保留；在 HTTP 环境点击复制后显示成功提示。
+
+## Root Cause
+
+`MessageList.vue` 将错误卡片放入 `DynamicScrollerItem`，但没有提供 `sizeDependencies` 或由异步详情加载完成触发重新测量。`ErrorBlock` 的 `diagnostic` 是组件内部状态：诊断 GET 完成时原内联 `<section>` 才挂载、列表项高度改变，而虚拟列表仍使用收起时的尺寸缓存并回收该项，组件卸载后其内部展开状态丢失。该链路没有 `setTimeout` 或自动关闭逻辑。
+
+临时弹窗使用 `Teleport to="body"`，不再改变虚拟行高度；后续若恢复内联展示，必须在 `MessageList` 为该项提供可观察的尺寸依赖或调用虚拟列表的重新测量接口。
 
 ## Execution Check-in
 
-- 完成：错误详情、复制与分享按钮均阻止向 `TaskPane` 聚焦容器冒泡，并显式声明 `type="button"`；错误卡片改用 `copyToClipboard`，使 HTTP/Clipboard API 不可用时走 `execCommand` 降级。
+- 完成：错误详情、复制与分享按钮均阻止向 `TaskPane` 聚焦容器冒泡，并显式声明 `type="button"`；错误卡片改用 `copyToClipboard`，使 HTTP/Clipboard API 不可用时走 `execCommand` 降级；详情临时改为 Teleport 弹窗。
 - 变更路径：`packages/foggy-chat/src/components/ErrorBlock.vue`、`packages/foggy-chat/src/__tests__/ErrorBlock.test.ts`。
-- 自动化：`pnpm --filter @foggy/chat test -- ErrorBlock.test.ts` 通过，6 个测试文件共 114 项通过；新增用例覆盖详情展开不冒泡、面板保留，以及统一复制 helper 的成功/失败提示。
+- 自动化：`pnpm --filter @foggy/chat test` 通过，6 个测试文件共 114 项通过；新增用例覆盖详情弹窗不冒泡、弹窗保留，以及统一复制 helper 的成功/失败提示。
 - 构建：`pnpm --filter @foggy/chat build` 与 `pnpm --filter @foggy/navigator-frontend build:check` 通过。运行节点为 v24，和仓库声明的 Node 22 基线不一致，因此保留 engine warning；未将其视为 Node 22 基线证据。
 - 部署：Navigator 前端静态产物已更新；本机 HTTP 响应的 `Last-Modified` 与新 `dist/index.html` 时间一致。
-- 体验：待 PC 端手动验证本 BUG 的两个操作。
+- 体验：待 PC 端手动验证详情弹窗稳定保留及 HTTP 复制。
 - self_check_decision: `self-check-only`；本次为局部 UI 交互修复，单元回归和前端构建已通过。
 - acceptance_readiness: `ready-for-verification`。
