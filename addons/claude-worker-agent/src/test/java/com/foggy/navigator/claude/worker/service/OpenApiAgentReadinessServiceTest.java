@@ -13,6 +13,7 @@ import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
+import com.foggy.navigator.business.agent.service.BizWorkerPoolWorkerSelector;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
@@ -48,6 +49,7 @@ class OpenApiAgentReadinessServiceTest {
     private SkillRegistryService skillRegistryService;
     private ClientAppUserGrantService userGrantService;
     private A2AgentResourceResolver resourceResolver;
+    private BizWorkerPoolWorkerSelector poolWorkerSelector;
     private ClientAppUpstreamRouteService upstreamRouteService;
     private BusinessFunctionRegistryService functionRegistryService;
     private OpenApiAgentRouteService agentRouteService;
@@ -65,6 +67,7 @@ class OpenApiAgentReadinessServiceTest {
         skillRegistryService = mock(SkillRegistryService.class);
         userGrantService = mock(ClientAppUserGrantService.class);
         resourceResolver = mock(A2AgentResourceResolver.class);
+        poolWorkerSelector = mock(BizWorkerPoolWorkerSelector.class);
         upstreamRouteService = mock(ClientAppUpstreamRouteService.class);
         functionRegistryService = mock(BusinessFunctionRegistryService.class);
         agentRouteService = mock(OpenApiAgentRouteService.class);
@@ -81,6 +84,7 @@ class OpenApiAgentReadinessServiceTest {
                 skillRegistryService,
                 userGrantService,
                 resourceResolver,
+                poolWorkerSelector,
                 upstreamRouteService,
                 functionRegistryService,
                 agentRouteService,
@@ -538,6 +542,56 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("http://127.0.0.1:3151/runtime", codexRole.getBaseUrl());
         assertEquals(Boolean.TRUE, codexRole.getExecutionWorker());
         assertEquals(Boolean.FALSE, codexRole.getDirectoryWorker());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_POOL_MEMBERSHIP".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+    }
+
+    @Test
+    void verify_failsBeforeAskWhenDirectoryCodexWorkerIsNotEnabledPoolMember() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_codex");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> new A2AgentResourceResolver.ResolvedAgentResource(
+                        invocation.getArgument(3, String.class), ResourceOwnerType.CLIENT_APP, "capp_1", "capp_1",
+                        "world-sim.bug-coordinator.decision.v1", "pool_codex", ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "usys_1", "WORKER_POOL:UPSTREAM_SYSTEM", "OPENAI_CODEX", null, null, null, null,
+                        "model_codex", "gpt-5.5", null, "AGENT:CLIENT_APP"));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model_codex", "model_codex", null, LlmModelCategory.GENERAL, "gpt-5.5",
+                        "MODEL_CONFIG_DEFAULT", "OPENAI_CODEX", "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user", "worker_not_in_pool", WorkspaceScope.USER_PRIVATE, WorkingDirectoryResolverType.MANAGED,
+                        "/home/sa/workspace/user", List.of("/home/sa/workspace/user"), false,
+                        null, null, null, "WORKING_DIRECTORY:USER_PRIVATE"));
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker_not_in_pool");
+        worker.setCodexConfig(CodexConfig.builder().baseUrl("http://127.0.0.1:3151").model("gpt-5.5").build());
+        when(claudeWorkerRepository.findByWorkerId("worker_not_in_pool")).thenReturn(Optional.of(worker));
+        doThrow(new SecurityException("physical worker is not an enabled pool member: worker_not_in_pool"))
+                .when(poolWorkerSelector).resolveEnabledWorkerId(
+                        "tenant_1", ResourceOwnerType.UPSTREAM_SYSTEM, "usys_1", "pool_codex",
+                        "OPENAI_CODEX", "worker_not_in_pool");
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1", form, credential(), "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        AgentReadinessCheckDTO check = result.getChecks().stream()
+                .filter(item -> "WORKER_POOL_MEMBERSHIP".equals(item.getCode()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("FAIL", check.getStatus());
+        assertEquals("WORKER_POOL_MEMBERSHIP", check.getErrorCode());
+        assertTrue(check.getMessage().contains("not an enabled pool member"));
+        assertTrue(check.getAction().contains("enabled member"));
     }
 
     @Test

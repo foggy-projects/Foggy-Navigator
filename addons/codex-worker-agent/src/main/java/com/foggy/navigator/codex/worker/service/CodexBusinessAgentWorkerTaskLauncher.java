@@ -1,9 +1,6 @@
 package com.foggy.navigator.codex.worker.service;
 
-import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity;
-import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
-import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
-import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
+import com.foggy.navigator.business.agent.service.BizWorkerPoolWorkerSelector;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
@@ -24,8 +21,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorkerTaskLauncher {
 
-    private final BizWorkerPoolMemberRepository poolMemberRepository;
-    private final BizWorkerPoolService bizWorkerPoolService;
+    private final BizWorkerPoolWorkerSelector poolWorkerSelector;
     private final CodexBizTaskProvider codexBizTaskProvider;
 
     @Override
@@ -98,37 +94,13 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
             return physicalWorkerId;
         }
 
-        BizWorkerPoolEntity pool = bizWorkerPoolService.requireAvailablePool(
+        return poolWorkerSelector.resolveEnabledWorkerId(
                 requireText(request.getTenantId(), "tenantId is required"),
                 request.getWorkerPoolOwnerType(),
                 requireText(request.getWorkerPoolOwnerId(), "workerPoolOwnerId is required"),
-                routeId);
-        if (!getWorkerBackend().equals(pool.getWorkerBackend())) {
-            throw new IllegalStateException("worker pool backend mismatch: " + routeId);
-        }
-        List<BizWorkerPoolMemberEntity> enabledMembers = poolMemberRepository
-                .findByPoolIdOrderByCreatedAtAsc(routeId)
-                .stream()
-                .filter(item -> BizWorkerPoolService.STATUS_ENABLED.equals(item.getStatus()))
-                .toList();
-        if (StringUtils.hasText(requestedWorkerId)) {
-            String normalizedWorkerId = requestedWorkerId.trim();
-            return enabledMembers.stream()
-                    .map(BizWorkerPoolMemberEntity::getWorkerId)
-                    .filter(StringUtils::hasText)
-                    .map(String::trim)
-                    .filter(normalizedWorkerId::equals)
-                    .findFirst()
-                    .orElseThrow(() -> new SecurityException(
-                            "physical worker is not an enabled pool member: " + normalizedWorkerId));
-        }
-        return enabledMembers.stream()
-                .map(BizWorkerPoolMemberEntity::getWorkerId)
-                .filter(StringUtils::hasText)
-                .map(String::trim)
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "worker pool has no enabled members: " + routeId));
+                routeId,
+                getWorkerBackend(),
+                requestedWorkerId);
     }
 
     private String resolveCodexAccountKey(BusinessAgentWorkerTaskLaunchRequest request) {

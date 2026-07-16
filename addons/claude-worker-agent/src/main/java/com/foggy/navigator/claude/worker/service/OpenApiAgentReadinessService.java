@@ -16,6 +16,7 @@ import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
+import com.foggy.navigator.business.agent.service.BizWorkerPoolWorkerSelector;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
@@ -72,6 +73,7 @@ public class OpenApiAgentReadinessService {
     private final SkillRegistryService skillRegistryService;
     private final ClientAppUserGrantService userGrantService;
     private final A2AgentResourceResolver resourceResolver;
+    private final BizWorkerPoolWorkerSelector poolWorkerSelector;
     private final ClientAppUpstreamRouteService upstreamRouteService;
     private final BusinessFunctionRegistryService functionRegistryService;
     private final OpenApiAgentRouteService agentRouteService;
@@ -177,6 +179,7 @@ public class OpenApiAgentReadinessService {
         });
         addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0], workspaceResourceRef);
         applyWorkerHostExecutionPreference(result, app, agentResourceRef[0], workspaceResourceRef[0]);
+        addPoolMembershipCheck(result, credential, agentResourceRef[0]);
         addModelWorkerAccessCheck(result);
         addAppServerEndpointRuntimeReadinessCheck(result);
         applyPhysicalWorkerDiagnostic(result, agentResourceRef[0], workspaceResourceRef[0]);
@@ -311,6 +314,37 @@ public class OpenApiAgentReadinessService {
                     sanitize(e.getMessage()),
                     diagnostic.errorCode(),
                     diagnostic.action()));
+        }
+    }
+
+    private void addPoolMembershipCheck(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        if (!isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)
+                || agentResource == null
+                || !StringUtils.hasText(agentResource.workerPoolId())
+                || !StringUtils.hasText(result.getEffectivePhysicalWorkerId())) {
+            return;
+        }
+        try {
+            String workerId = result.getEffectivePhysicalWorkerId().trim();
+            poolWorkerSelector.resolveEnabledWorkerId(
+                    credential.getTenantId(),
+                    agentResource.workerPoolOwnerType(),
+                    agentResource.workerPoolOwnerId(),
+                    agentResource.workerPoolId(),
+                    BACKEND_OPENAI_CODEX,
+                    workerId);
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    "WORKER_POOL_MEMBERSHIP",
+                    "execution physical worker is an enabled pool member: " + workerId));
+        } catch (Exception e) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    "WORKER_POOL_MEMBERSHIP",
+                    sanitize(e.getMessage()),
+                    "WORKER_POOL_MEMBERSHIP",
+                    "Add the resolved execution physical worker to the configured pool as an enabled member, or align the Directory worker binding."));
         }
     }
 

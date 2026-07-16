@@ -4,6 +4,7 @@ import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
+import com.foggy.navigator.business.agent.service.BizWorkerPoolWorkerSelector;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
@@ -42,16 +43,14 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
 
     @Test
     void getWorkerBackendReturnsOpenAiCodex() {
-        CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, bizWorkerPoolService, new CodexBizTaskProvider(codexTaskService));
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
 
         assertEquals(ClientAppModelConfigGrantService.OPENAI_CODEX_BACKEND, launcher.getWorkerBackend());
     }
 
     @Test
     void launchCreatesCodexBizWorkerTaskWithScopedAccount() {
-        CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, bizWorkerPoolService, new CodexBizTaskProvider(codexTaskService));
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         BusinessAgentWorkerTaskLaunchRequest request = fullRequestBuilder()
                 .physicalWorkerId("codex_worker_01")
                 .selectedWorkerId("codex_worker_01")
@@ -112,8 +111,7 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
 
     @Test
     void launchUsesFirstEnabledPoolMemberWhenPhysicalWorkerMissing() {
-        CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, bizWorkerPoolService, new CodexBizTaskProvider(codexTaskService));
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         when(bizWorkerPoolService.requireAvailablePool(
                 "tenant_01", ResourceOwnerType.PLATFORM,
                 "tenant_01", "pool_01"))
@@ -144,8 +142,7 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
 
     @Test
     void resolveWorkerIdSelectsFromPoolWithoutCallingProvider() {
-        CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, bizWorkerPoolService, new CodexBizTaskProvider(codexTaskService));
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         when(bizWorkerPoolService.requireAvailablePool(
                 "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
                 .thenReturn(pool());
@@ -161,8 +158,7 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
 
     @Test
     void launchRejectsPreselectedWorkerThatIsNotEnabledPoolMember() {
-        CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, bizWorkerPoolService, new CodexBizTaskProvider(codexTaskService));
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         when(bizWorkerPoolService.requireAvailablePool(
                 "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
                 .thenReturn(pool());
@@ -182,8 +178,7 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
 
     @Test
     void launchRejectsTaskCreatedOnDifferentWorker() {
-        CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, bizWorkerPoolService, new CodexBizTaskProvider(codexTaskService));
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         when(bizWorkerPoolService.requireAvailablePool(
                 "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
                 .thenReturn(pool());
@@ -231,6 +226,12 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
                 .allowedTools(List.of("business.functions.invoke"))
                 .workerLeaseId("bwl_test_01")
                 .taskScopedToken("task_token_01");
+    }
+
+    private CodexBusinessAgentWorkerTaskLauncher launcher() {
+        return new CodexBusinessAgentWorkerTaskLauncher(
+                new BizWorkerPoolWorkerSelector(bizWorkerPoolService, poolMemberRepository),
+                new CodexBizTaskProvider(codexTaskService));
     }
 
     private BizWorkerPoolEntity pool() {
