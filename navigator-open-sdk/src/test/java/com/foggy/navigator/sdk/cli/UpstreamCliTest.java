@@ -2086,6 +2086,57 @@ class UpstreamCliTest {
     }
 
     @Test
+    void ownerSmokeReturnsNonZeroWhenReadinessFailsDespiteCompleteResources() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_CLIENT_APP_KEY=cak-test
+                NAVI_CLIENT_APP_ACCESS_TOKEN=cat-runtime-secret
+                NAVI_AGENT_CODE=agent-1
+                NAVI_UPSTREAM_USER_ID=u-1
+                NAVI_MODEL_CONFIG_ID=model-env
+                NAVI_DIRECTORY_ID=dir-env
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "overallStatus":"FAIL",
+                  "agentCode":"agent-1",
+                  "upstreamUserId":"u-1",
+                  "effectiveModelConfigId":"model-env",
+                  "effectiveWorkerBackend":"LANGGRAPH_BIZ",
+                  "agentId":"agent-1",
+                  "effectiveDirectoryId":"dir-env",
+                  "effectivePhysicalWorkerId":"worker-1",
+                  "physicalWorkerDiagnostics":[{
+                    "role":"biz",
+                    "physicalWorkerId":"worker-1",
+                    "workerBackend":"LANGGRAPH_BIZ",
+                    "source":"BIZ_WORKER_IDENTITY",
+                    "executionWorker":true
+                  }],
+                  "checks":[{
+                    "code":"WORKER_POOL_MEMBERSHIP",
+                    "status":"FAIL",
+                    "message":"execution worker is not an enabled pool member",
+                    "action":"Add worker-1 as an enabled pool member"
+                  }]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "owner-smoke"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertTrue(output.contains("owner-smoke readiness FAIL"));
+        assertTrue(output.contains("check WORKER_POOL_MEMBERSHIP=FAIL"));
+        assertTrue(output.contains("owner-smoke resources SKIPPED readiness=FAIL"));
+        assertFalse(output.contains("owner-smoke resources FAIL missing="));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void ownerSmokeRequiresDirectoryUnlessExplicitlyDisabled() {
         responseOverride = """
                 {"code":0,"data":{
