@@ -21,10 +21,10 @@
         </span>
       </div>
       <div v-if="diagnosticRef" class="diagnostic-actions">
-        <button class="diagnostic-btn" :disabled="loading" @click="loadDiagnostic">
+        <button type="button" class="diagnostic-btn" :disabled="loading" @click.stop="loadDiagnostic">
           {{ loading ? '读取中...' : '查看错误详情' }}
         </button>
-        <button class="diagnostic-btn" @click="copyDiagnostic">复制诊断信息</button>
+        <button type="button" class="diagnostic-btn" @click.stop="copyDiagnostic">复制诊断信息</button>
       </div>
       <p v-if="actionMessage" class="diagnostic-status" role="status">{{ actionMessage }}</p>
       <section v-if="diagnostic" class="diagnostic-panel" aria-label="错误诊断详情">
@@ -34,13 +34,13 @@
           </template>
         </dl>
         <div v-if="diagnostic.publicSharingEnabled" class="share-panel">
-          <button v-if="!activeShare" class="diagnostic-btn" :disabled="sharing" @click="createShare">
+          <button v-if="!activeShare" type="button" class="diagnostic-btn" :disabled="sharing" @click.stop="createShare">
             {{ sharing ? '生成中...' : `生成临时公开链接（${diagnostic.defaultShareDays || 7} 天）` }}
           </button>
           <template v-else>
             <code class="share-url">{{ absoluteShareUrl }}</code>
-            <button class="diagnostic-btn" @click="copyShareUrl">复制链接</button>
-            <button class="diagnostic-btn danger" @click="revokeShare">撤销链接</button>
+            <button type="button" class="diagnostic-btn" @click.stop="copyShareUrl">复制链接</button>
+            <button type="button" class="diagnostic-btn danger" @click.stop="revokeShare">撤销链接</button>
           </template>
         </div>
       </section>
@@ -63,6 +63,7 @@ import type { ErrorEnvelope } from '@foggy/chat-core'
 import type { ExecutionReportDigest } from '../types/chat'
 import type { ErrorDiagnostic, ErrorDiagnosticShare } from '../types/diagnostics'
 import { presentError } from '../utils/errorPresentation'
+import { copyToClipboard } from '../utils/clipboard'
 import { getErrorDiagnosticClient } from '../utils/errorDiagnostics'
 import ExecutionReportInline from './ExecutionReportInline.vue'
 
@@ -144,10 +145,9 @@ function safeCopyText(): string {
 }
 
 async function copyText(value: string, success: string) {
-  try {
-    await navigator.clipboard.writeText(value)
+  if (await copyToClipboard(value)) {
     actionMessage.value = success
-  } catch {
+  } else {
     actionMessage.value = '复制失败，请手动选择文本。'
   }
 }

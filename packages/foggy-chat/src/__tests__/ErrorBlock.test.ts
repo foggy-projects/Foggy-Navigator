@@ -2,9 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ErrorBlock from '../components/ErrorBlock.vue'
 import { configureErrorDiagnosticClient } from '../utils/errorDiagnostics'
+import { copyToClipboard } from '../utils/clipboard'
+
+vi.mock('../utils/clipboard', () => ({ copyToClipboard: vi.fn() }))
+
+const copyToClipboardMock = vi.mocked(copyToClipboard)
 
 describe('ErrorBlock', () => {
-  afterEach(() => configureErrorDiagnosticClient(undefined))
+  afterEach(() => {
+    configureErrorDiagnosticClient(undefined)
+    copyToClipboardMock.mockReset()
+  })
   it('explains stable worker errors with recovery guidance and keeps diagnostics', () => {
     const wrapper = mount(ErrorBlock, {
       props: {
@@ -78,5 +86,39 @@ describe('ErrorBlock', () => {
     expect(getDiagnostic).toHaveBeenCalledWith('diagnostic://dg_abc')
     expect(wrapper.text()).toContain('deadline exceeded')
     expect(wrapper.text()).toContain('生成临时公开链接（7 天）')
+  })
+
+  it('keeps diagnostic actions inside the error card after loading details', async () => {
+    const getDiagnostic = vi.fn().mockResolvedValue({
+      diagnosticId: 'dg_abc', errorCode: 'CODEX_WORKER_REMOTE_ERROR', safeMessage: '执行进程异常退出',
+    })
+    configureErrorDiagnosticClient({ getDiagnostic, createShare: vi.fn(), revokeShare: vi.fn() })
+    const wrapper = mount({
+      components: { ErrorBlock },
+      data: () => ({ parentClicks: 0 }),
+      template: `<div @click="parentClicks += 1"><ErrorBlock error="CODEX_WORKER_REMOTE_ERROR" :error-envelope="{ errorCode: 'CODEX_WORKER_REMOTE_ERROR', diagnosticRef: 'diagnostic://dg_abc' }" /></div>`,
+    })
+
+    await wrapper.get('button.diagnostic-btn').trigger('click')
+    await Promise.resolve()
+
+    expect(wrapper.vm.parentClicks).toBe(0)
+    expect(wrapper.find('.diagnostic-panel').exists()).toBe(true)
+  })
+
+  it('uses the shared clipboard fallback and reports the result', async () => {
+    copyToClipboardMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    const wrapper = mount(ErrorBlock, { props: {
+      error: 'CODEX_WORKER_REMOTE_ERROR',
+      taskId: 'task-copy',
+      errorEnvelope: { errorCode: 'CODEX_WORKER_REMOTE_ERROR', diagnosticRef: 'diagnostic://dg_abc' },
+    } })
+
+    await wrapper.findAll('button.diagnostic-btn')[1].trigger('click')
+    expect(copyToClipboardMock).toHaveBeenCalledWith(expect.stringContaining('任务 ID: task-copy'))
+    expect(wrapper.text()).toContain('诊断信息已复制。')
+
+    await wrapper.findAll('button.diagnostic-btn')[1].trigger('click')
+    expect(wrapper.text()).toContain('复制失败，请手动选择文本。')
   })
 })
