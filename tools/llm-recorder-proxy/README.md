@@ -40,6 +40,7 @@ Important files:
 - `request_body.pretty.json`: pretty JSON view when the request body is JSON.
 - `request.json`: request metadata with sensitive headers redacted.
 - `websocket_client_messages.jsonl`: decoded WebSocket payloads sent by the worker to the upstream LLM endpoint.
+- `websocket_upstream_messages.jsonl`: decoded WebSocket payloads returned by the upstream LLM endpoint.
 - `response_body.raw`: exact upstream response body bytes.
 - `response.json`: response metadata.
 - `index.jsonl`: per-run request index.
@@ -49,3 +50,13 @@ Run manually:
 ```powershell
 python tools/llm-recorder-proxy/llm_recorder_proxy.py --env-file tools/llm-recorder-proxy/.env.local
 ```
+
+Run the relay regression tests:
+
+```bash
+python3 -m unittest discover -s tools/llm-recorder-proxy/tests -v
+```
+
+For transparent DNS/hosts interception, the incoming Codex path already contains `/v1`. Configure
+the upstream as the origin only, for example `https://codex2.qlfloor.com:8443`, so `/v1/responses`
+is forwarded unchanged.

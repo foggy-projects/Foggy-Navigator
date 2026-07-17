@@ -607,28 +607,153 @@ class RecorderHandler(BaseHTTPRequestHandler):
         client_bytes = 0
         upstream_bytes = initial_upstream_bytes
         deadline = time.monotonic() + timeout
-        sockets = [client_sock, upstream_socket]
+        client_to_upstream = bytearray()
+        upstream_to_client = bytearray()
+        upstream_retry_operation: str | None = None
+        upstream_retry_wait = "write"
+
+        def add_wait_target(
+            sock: socket.socket | ssl.SSLSocket,
+            wait_for: str,
+            readable: set[socket.socket | ssl.SSLSocket],
+            writable: set[socket.socket | ssl.SSLSocket],
+        ) -> None:
+            if wait_for == "read":
+                readable.add(sock)
+            else:
+                writable.add(sock)
+
         while time.monotonic() < deadline:
-            readable, _, exceptional = select.select(sockets, [], sockets, 1.0)
+            read_interest: set[socket.socket | ssl.SSLSocket] = set()
+            write_interest: set[socket.socket | ssl.SSLSocket] = set()
+
+            if upstream_retry_operation:
+                add_wait_target(
+                    upstream_socket,
+                    upstream_retry_wait,
+                    read_interest,
+                    write_interest,
+                )
+            else:
+                if client_to_upstream:
+                    write_interest.add(upstream_socket)
+                if not upstream_to_client:
+                    read_interest.add(upstream_socket)
+
+            if upstream_to_client:
+                write_interest.add(client_sock)
+            if not client_to_upstream:
+                read_interest.add(client_sock)
+
+            pending_ssl_read = False
+            if (
+                not upstream_retry_operation
+                and not upstream_to_client
+                and isinstance(upstream_socket, ssl.SSLSocket)
+                and upstream_socket.pending() > 0
+            ):
+                pending_ssl_read = True
+
+            wait_seconds = min(1.0, max(0.0, deadline - time.monotonic()))
+            readable_list, writable_list, exceptional = select.select(
+                list(read_interest),
+                list(write_interest),
+                [client_sock, upstream_socket],
+                0.0 if pending_ssl_read else wait_seconds,
+            )
             if exceptional:
-                break
-            if not readable:
+                raise ConnectionError("websocket relay socket entered an exceptional state")
+            readable = set(readable_list)
+            writable = set(writable_list)
+            if pending_ssl_read:
+                readable.add(upstream_socket)
+            if not readable and not writable:
                 continue
-            for ready in readable:
+
+            if upstream_retry_operation == "send" and (
+                (upstream_retry_wait == "read" and upstream_socket in readable)
+                or (upstream_retry_wait == "write" and upstream_socket in writable)
+            ):
                 try:
-                    chunk = ready.recv(65536)
-                except (BlockingIOError, ssl.SSLWantReadError):
-                    continue
-                if not chunk:
-                    return client_bytes, upstream_bytes
-                if ready is client_sock:
-                    client_parser.feed(chunk)
-                    upstream_socket.sendall(chunk)
-                    client_bytes += len(chunk)
-                else:
+                    sent = upstream_socket.send(client_to_upstream)
+                    if sent == 0:
+                        return client_bytes, upstream_bytes
+                    del client_to_upstream[:sent]
+                    client_bytes += sent
+                    upstream_retry_operation = None
+                except ssl.SSLWantReadError:
+                    upstream_retry_wait = "read"
+                except (BlockingIOError, ssl.SSLWantWriteError):
+                    upstream_retry_wait = "write"
+
+            if upstream_retry_operation == "recv" and (
+                (upstream_retry_wait == "read" and upstream_socket in readable)
+                or (upstream_retry_wait == "write" and upstream_socket in writable)
+            ):
+                try:
+                    chunk = upstream_socket.recv(65536)
+                    upstream_retry_operation = None
+                    if not chunk:
+                        return client_bytes, upstream_bytes
                     upstream_parser.feed(chunk)
-                    client_sock.sendall(chunk)
-                    upstream_bytes += len(chunk)
+                    upstream_to_client.extend(chunk)
+                except ssl.SSLWantWriteError:
+                    upstream_retry_wait = "write"
+                except (BlockingIOError, ssl.SSLWantReadError):
+                    upstream_retry_wait = "read"
+
+            if not upstream_retry_operation and client_to_upstream and upstream_socket in writable:
+                try:
+                    sent = upstream_socket.send(client_to_upstream)
+                    if sent == 0:
+                        return client_bytes, upstream_bytes
+                    del client_to_upstream[:sent]
+                    client_bytes += sent
+                except ssl.SSLWantReadError:
+                    upstream_retry_operation = "send"
+                    upstream_retry_wait = "read"
+                except (BlockingIOError, ssl.SSLWantWriteError):
+                    upstream_retry_operation = "send"
+                    upstream_retry_wait = "write"
+
+            if upstream_to_client and client_sock in writable:
+                try:
+                    sent = client_sock.send(upstream_to_client)
+                    if sent == 0:
+                        return client_bytes, upstream_bytes
+                    del upstream_to_client[:sent]
+                    upstream_bytes += sent
+                except (BlockingIOError, ssl.SSLWantWriteError, ssl.SSLWantReadError):
+                    pass
+
+            if not client_to_upstream and client_sock in readable:
+                try:
+                    chunk = client_sock.recv(65536)
+                except (BlockingIOError, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                    chunk = None
+                if chunk == b"":
+                    return client_bytes, upstream_bytes
+                if chunk:
+                    client_parser.feed(chunk)
+                    client_to_upstream.extend(chunk)
+
+            if (
+                not upstream_retry_operation
+                and not upstream_to_client
+                and upstream_socket in readable
+            ):
+                try:
+                    chunk = upstream_socket.recv(65536)
+                    if not chunk:
+                        return client_bytes, upstream_bytes
+                    upstream_parser.feed(chunk)
+                    upstream_to_client.extend(chunk)
+                except ssl.SSLWantWriteError:
+                    upstream_retry_operation = "recv"
+                    upstream_retry_wait = "write"
+                except (BlockingIOError, ssl.SSLWantReadError):
+                    upstream_retry_operation = "recv"
+                    upstream_retry_wait = "read"
         return client_bytes, upstream_bytes
 
 
