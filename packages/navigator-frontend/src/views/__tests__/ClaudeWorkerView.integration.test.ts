@@ -338,6 +338,11 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     vi.mocked(claudeWorkerApi.listAwaitingReplyTasks).mockResolvedValue([])
     vi.mocked(claudeWorkerApi.listConversationConfigs).mockResolvedValue([])
     vi.mocked(claudeWorkerApi.deleteConversation).mockResolvedValue(undefined)
+    vi.mocked(claudeWorkerApi.listCodexAppServerProcesses).mockResolvedValue({
+      processes: [],
+      active_task_count: 0,
+      total: 0,
+    })
 
     // Re-setup unified / platform / codingAgent mocks (clearAllMocks resets factory defaults)
     vi.mocked(langgraphWorkerApi.listWorkers).mockResolvedValue([])
@@ -754,11 +759,23 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       active_task_count: 0,
     }
 
-    it('keeps SDK CLI probes independent from an App Server Runtime', async () => {
+    it('includes the managed App Server runtime snapshot beside SDK CLI probes', async () => {
       vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability)
         .mockResolvedValue(appServerAvailability)
       vi.mocked(claudeWorkerApi.listCliProcesses).mockResolvedValue(emptyProcesses)
       vi.mocked(claudeWorkerApi.listCodexCliProcesses).mockResolvedValue(emptyProcesses)
+      vi.mocked(claudeWorkerApi.listCodexAppServerProcesses).mockResolvedValue({
+        processes: [{
+          pid: 3062,
+          command: 'codex-app-server',
+          process_type: 'codex-app-server',
+          is_orphan: false,
+          app_server_endpoint: 'http://127.0.0.1:3062',
+          shared_task_count: 2,
+          foggy_task_ids: ['task-1', 'task-2'],
+        }],
+        active_task_count: 2,
+      } as any)
       vi.mocked(claudeWorkerApi.listGeminiCliProcesses).mockResolvedValue(emptyProcesses)
       const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
       await flushPromises()
@@ -772,10 +789,19 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       expect(claudeWorkerApi.listCodexCliProcesses).toHaveBeenCalledWith('worker-1', {
         suppressErrorMessage: true,
       })
+      expect(claudeWorkerApi.listCodexAppServerProcesses).toHaveBeenCalledWith('worker-1', {
+        suppressErrorMessage: true,
+      })
       expect(claudeWorkerApi.listGeminiCliProcesses).toHaveBeenCalledWith('worker-1', {
         suppressErrorMessage: true,
       })
-      expect(vm.cliProcessEmptyText).toBe('未检测到 CLI 进程')
+      expect(vm.cliProcesses).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          process_type: 'codex-app-server',
+          shared_task_count: 2,
+          foggy_task_ids: ['task-1', 'task-2'],
+        }),
+      ]))
       vm.handleWorkerTabChange('processes')
       await flushPromises()
       expect(codexRuntimeApi.listCodexRuntimes).not.toHaveBeenCalled()
@@ -791,6 +817,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       })
       vi.mocked(claudeWorkerApi.listCliProcesses).mockResolvedValue(emptyProcesses)
       vi.mocked(claudeWorkerApi.listCodexCliProcesses).mockResolvedValue(emptyProcesses)
+      vi.mocked(claudeWorkerApi.listCodexAppServerProcesses).mockResolvedValue(emptyProcesses)
       vi.mocked(claudeWorkerApi.listGeminiCliProcesses).mockResolvedValue(emptyProcesses)
       const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
       await flushPromises()
@@ -801,6 +828,9 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
       expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledWith('worker-1')
       expect(claudeWorkerApi.listCodexCliProcesses).toHaveBeenCalledWith('worker-1', {
+        suppressErrorMessage: true,
+      })
+      expect(claudeWorkerApi.listCodexAppServerProcesses).toHaveBeenCalledWith('worker-1', {
         suppressErrorMessage: true,
       })
       expect(claudeWorkerApi.listGeminiCliProcesses).toHaveBeenCalledWith('worker-1', {
@@ -815,6 +845,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         .mockRejectedValue(new Error('registry unavailable'))
       vi.mocked(claudeWorkerApi.listCliProcesses).mockResolvedValue(emptyProcesses)
       vi.mocked(claudeWorkerApi.listCodexCliProcesses).mockResolvedValue(emptyProcesses)
+      vi.mocked(claudeWorkerApi.listCodexAppServerProcesses).mockResolvedValue(emptyProcesses)
       vi.mocked(claudeWorkerApi.listGeminiCliProcesses).mockResolvedValue(emptyProcesses)
       const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
       await flushPromises()
@@ -825,6 +856,9 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
       expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledWith('worker-1')
       expect(claudeWorkerApi.listCodexCliProcesses).toHaveBeenCalledWith('worker-1', {
+        suppressErrorMessage: true,
+      })
+      expect(claudeWorkerApi.listCodexAppServerProcesses).toHaveBeenCalledWith('worker-1', {
         suppressErrorMessage: true,
       })
       expect(claudeWorkerApi.listGeminiCliProcesses).toHaveBeenCalledWith('worker-1', {
@@ -853,6 +887,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       }) as any
       let resolveClaudeWorker1!: (value: ReturnType<typeof processResult>) => void
       let resolveCodexWorker1!: (value: ReturnType<typeof processResult>) => void
+      let resolveAppServerWorker1!: (value: ReturnType<typeof processResult>) => void
       let resolveGeminiWorker1!: (value: ReturnType<typeof processResult>) => void
       vi.mocked(claudeWorkerApi.listCliProcesses).mockImplementation((workerId) => (
         workerId === 'worker-1'
@@ -862,6 +897,11 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       vi.mocked(claudeWorkerApi.listCodexCliProcesses).mockImplementation((workerId) => (
         workerId === 'worker-1'
           ? new Promise(resolve => { resolveCodexWorker1 = resolve })
+          : Promise.resolve(processResult(workerId))
+      ))
+      vi.mocked(claudeWorkerApi.listCodexAppServerProcesses).mockImplementation((workerId) => (
+        workerId === 'worker-1'
+          ? new Promise(resolve => { resolveAppServerWorker1 = resolve })
           : Promise.resolve(processResult(workerId))
       ))
       vi.mocked(claudeWorkerApi.listGeminiCliProcesses).mockImplementation((workerId) => (
@@ -878,17 +918,18 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       await flushPromises()
 
       expect(vm.selectedWorkerId).toBe('worker-2')
-      expect(vm.cliProcesses).toHaveLength(3)
+      expect(vm.cliProcesses).toHaveLength(4)
       expect(vm.cliProcesses.every((process: { pid: number }) => process.pid === 22)).toBe(true)
 
       resolveClaudeWorker1(processResult('worker-1'))
       resolveCodexWorker1(processResult('worker-1'))
+      resolveAppServerWorker1(processResult('worker-1'))
       resolveGeminiWorker1(processResult('worker-1'))
       await flushPromises()
 
       expect(vm.selectedWorkerId).toBe('worker-2')
       expect(vm.cliProcessEmptyText).toBe('未检测到 CLI 进程')
-      expect(vm.cliProcesses).toHaveLength(3)
+      expect(vm.cliProcesses).toHaveLength(4)
       expect(vm.cliProcesses.every((process: { pid: number }) => process.pid === 22)).toBe(true)
       expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledTimes(2)
       expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledWith('worker-1')

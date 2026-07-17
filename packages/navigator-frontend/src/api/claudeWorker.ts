@@ -109,6 +109,17 @@ export async function listCodexCliProcesses(
   return rx.data
 }
 
+export async function listCodexAppServerProcesses(
+  workerId: string,
+  options?: { suppressErrorMessage?: boolean },
+): Promise<CliProcessListResponse> {
+  const rx = (await client.get(
+    `/codex-app-server-workers/${workerId}/processes`,
+    { suppressErrorMessage: options?.suppressErrorMessage } as any,
+  )) as unknown as RX<CliProcessListResponse>
+  return rx.data
+}
+
 export async function listGeminiCliProcesses(
   workerId: string,
   options?: { suppressErrorMessage?: boolean },

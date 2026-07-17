@@ -549,7 +549,7 @@ export interface CliProcessInfo {
   memory_mb: number
   started_at: string
   is_orphan: boolean
-  process_type?: 'claude' | 'codex' | 'gemini'
+  process_type?: 'claude' | 'codex' | 'codex-app-server' | 'gemini'
   claude_session_id?: string
   codex_thread_id?: string
   gemini_session_id?: string
@@ -561,6 +561,11 @@ export interface CliProcessInfo {
   orphan_first_seen_at?: string
   /** 孤儿进程预计自动杀死时间（ISO-8601）= orphan_first_seen_at + 10 min */
   orphan_auto_kill_at?: string
+  /** App Server runtime endpoint display; never contains its configured path or token. */
+  app_server_endpoint?: string
+  /** Multiple tasks may safely share one App Server PID. */
+  shared_task_count?: number
+  foggy_task_ids?: string[]
 }
 
 /** CLI 进程列表响应 */

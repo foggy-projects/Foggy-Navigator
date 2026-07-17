@@ -632,6 +632,13 @@
                   >
                     <el-tag size="small" type="warning">{{ row.gemini_session_id.slice(0, 8) }}</el-tag>
                   </el-tooltip>
+                  <el-tooltip
+                    v-else-if="row.process_type === 'codex-app-server'"
+                    :content="row.foggy_task_ids?.join(', ') || '尚未绑定 Navigator task'"
+                    placement="top"
+                  >
+                    <el-tag size="small" type="success">共享 · {{ row.shared_task_count || 0 }} 任务</el-tag>
+                  </el-tooltip>
                   <el-tag v-else-if="!row.is_orphan" size="small" type="info">新会话</el-tag>
                   <span v-else>-</span>
                 </template>
@@ -646,7 +653,10 @@
               </el-table-column>
               <el-table-column label="状态" width="160" align="center">
                 <template #default="{ row }">
-                  <template v-if="row.orphan_first_seen_at">
+                  <el-tooltip v-if="row.process_type === 'codex-app-server'" :content="row.app_server_endpoint || '已配置 endpoint'" placement="top">
+                    <el-tag size="small" type="info">共享运行时</el-tag>
+                  </el-tooltip>
+                  <template v-else-if="row.orphan_first_seen_at">
                     <el-tooltip :content="orphanTooltip(row)" placement="top">
                       <el-tag type="danger" size="small" style="cursor:help">
                         孤儿 · {{ orphanCountdown(row) }}
@@ -659,12 +669,17 @@
               </el-table-column>
               <el-table-column label="操作" width="200" align="center">
                 <template #default="{ row }">
-                  <template v-if="row.process_type !== 'codex' && row.process_type !== 'gemini' && row.foggy_task_id">
-                    <el-button text size="small" @click="handleResyncTask(row.foggy_task_id)">重新同步</el-button>
-                    <el-divider direction="vertical" style="margin: 0 4px;" />
+                  <el-tooltip v-if="row.process_type === 'codex-app-server'" content="共享 App Server PID 不能在此按单项终止；请从关联任务执行取消。" placement="top">
+                    <el-tag size="small" type="warning">任务取消</el-tag>
+                  </el-tooltip>
+                  <template v-else>
+                    <template v-if="row.process_type !== 'codex' && row.process_type !== 'gemini' && row.foggy_task_id">
+                      <el-button text size="small" @click="handleResyncTask(row.foggy_task_id)">重新同步</el-button>
+                      <el-divider direction="vertical" style="margin: 0 4px;" />
+                    </template>
+                    <el-button text size="small" @click="handleKillProcess(row, false)">终止</el-button>
+                    <el-button text size="small" type="danger" @click="handleKillProcess(row, true)">强制</el-button>
                   </template>
-                  <el-button text size="small" @click="handleKillProcess(row, false)">终止</el-button>
-                  <el-button text size="small" type="danger" @click="handleKillProcess(row, true)">强制</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -3182,7 +3197,7 @@ async function loadCliProcesses() {
   loadingProcesses.value = true
   try {
     const requests: Array<{
-      type: 'claude' | 'codex' | 'gemini'
+      type: 'claude' | 'codex' | 'codex-app-server' | 'gemini'
       promise: Promise<CliProcessListResponse>
     }> = [
       {
@@ -3198,6 +3213,11 @@ async function loadCliProcesses() {
       })
     }
 
+    requests.push({
+      type: 'codex-app-server',
+      promise: dirApi.listCodexAppServerProcesses(workerId, { suppressErrorMessage: true }),
+    })
+
     if (worker?.geminiBaseUrl?.trim()) {
       requests.push({
         type: 'gemini',
@@ -3210,7 +3230,7 @@ async function loadCliProcesses() {
 
     const merged: CliProcessInfo[] = []
     let activeTaskCount = 0
-    const failedTypes: Array<'claude' | 'codex' | 'gemini'> = []
+    const failedTypes: Array<'claude' | 'codex' | 'codex-app-server' | 'gemini'> = []
 
     results.forEach((result, index) => {
       const request = requests[index]
@@ -3810,13 +3830,15 @@ const platformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
 )
 
-function processTypeLabel(type?: 'claude' | 'codex' | 'gemini'): string {
+function processTypeLabel(type?: 'claude' | 'codex' | 'codex-app-server' | 'gemini'): string {
+  if (type === 'codex-app-server') return 'Codex App Server'
   if (type === 'codex') return 'Codex'
   if (type === 'gemini') return 'Gemini'
   return 'Claude'
 }
 
-function processTypeTagType(type?: 'claude' | 'codex' | 'gemini'): 'success' | 'warning' | 'info' {
+function processTypeTagType(type?: 'claude' | 'codex' | 'codex-app-server' | 'gemini'): 'success' | 'warning' | 'info' {
+  if (type === 'codex-app-server') return 'success'
   if (type === 'codex') return 'success'
   if (type === 'gemini') return 'warning'
   return 'info'
