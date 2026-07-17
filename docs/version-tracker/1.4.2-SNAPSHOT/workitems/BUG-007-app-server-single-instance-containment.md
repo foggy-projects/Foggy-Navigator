@@ -27,13 +27,14 @@ open_questions: []
 
 ## Scope
 
-- in_scope: `tools/codex-app-server-worker` 的 app-server runtime、JSON-RPC 路由、pool lease、executor 安全边界、配置/运行说明和自动化回归。
-- affected_modules: Codex App Server Worker。
+- in_scope: `tools/codex-app-server-worker` 的 app-server runtime、JSON-RPC 路由、pool lease、executor 安全边界、配置/运行说明和自动化回归；补充一个可重复执行的 Navigator API → Java → Codex App Server Worker → 固定 Codex CLI → mock Responses API 全链路 E2E，并将任何真实凭据验证保留为人工、显式 opt-in。
+- affected_modules: Codex App Server Worker、mock LLM service、Navigator E2E 编排与测试入口；Java 仅作为被测链路，除非 E2E 暴露真实契约缺陷，否则不改生产逻辑。
 - external_dependencies: 固定 `@openai/codex` 0.144.3 app-server 协议与源码行为；本项不升级 CLI。
 
 ## Non-Goals
 
 - out_of_scope: 不按 `configModel` 创建物理隔离的 `CODEX_HOME`；不改 Java 模型配置或传参；不改变 Codex Biz Worker 或 SDK Worker。
+- e2e_out_of_scope: 不要求启动 Claude Worker；不把 mock LLM 结果表述为真实供应商工具可用性证明；不写入真实 KEY/JWT 到跟踪文件或持久测试证据；本扩展不部署、不重启已安装 Worker、不发布 OBS 或 latest metadata。
 - implementation_boundary: 原实现阶段不修改或部署到 `~/.codex-app-server-worker`，不修改其中 `.env`，不停止、重启或发布任何运行进程/服务。owner 于 2026-07-16 在实现完成后另行明确授权本机部署、重启和多 Thread 凭据实测；该授权不包含 OBS 发布或生产 soak。
 - validation_boundary: 自动化证明 Worker 路由和隔离契约；本机更新/重启后的双 Thread 凭据 smoke 仅证明本次固定 CLI、当前账户与当前 startup lane 下终端工具可用，不替代更长时间生产观测。
 
@@ -58,6 +59,12 @@ open_questions: []
 - [x] AC-5: runtime 的 active、terminal fence、attention/unverified、stall/abort timer 与 user-input routing 不再是全局单 turn 状态；transport fatal 可一致终止全部相关 contexts。
 - [x] AC-6: drain、crash、health failure、retirement、进程树清理与有未验证 turn 时拒绝关闭的既有 fail-closed 语义不退化。
 - [x] AC-7: README、`.env.example` 和配置测试移除“默认全局串行/可关闭单实例模式”的错误契约，并说明固定 CLI 版本边界与 lane 拒绝语义。
+- [x] AC-8: mock LLM service 支持固定 CLI 0.144.3 实际使用的 `/v1/responses` SSE 与 function-call round trip，脚本 cursor 能跨 `function_call_output` 续接，debug 记录继续脱敏。
+- [x] AC-9: 项目内提供默认无真实 KEY 的隔离 E2E 入口，启动 repo-local mock LLM、Codex App Server Worker 和 Java，通过真实 `POST /api/v1/tasks` 创建任务；临时状态、日志与证据位于 `temp/test-artifacts/bug007-navigator-e2e/`。
+- [x] AC-10: Navigator E2E 证明先执行 rate-limit refresh 后 resident lane 仍正确；两个不同 session/Thread 的任务可重叠、只创建一个 app-server child，且各自 command marker、completion 与 terminal 状态不串台。
+- [x] AC-11: Navigator E2E 覆盖同一 session/Thread 的重叠提交仍安全拒绝或排队串行，并覆盖 targeted cancel/abort 与 `request_user_input`/respond 在并发另一 Thread 时不串台。
+- [x] AC-12: 异 startup lane 请求被稳定拒绝且不替换健康 child；随后原 lane 仍可完成任务，drain/crash 既有 Worker 回归继续通过。
+- [x] AC-13: 默认 runner 主动清除继承的真实供应商凭据，默认测试和 CI 不需要真实 LLM KEY；任何真实供应商验证仍须由 operator 通过受控环境显式执行，不把凭据写入仓库或持久证据。
 
 ## Contract / Data / Security Constraints
 
@@ -75,6 +82,10 @@ open_questions: []
 | AC-4/5 | critical | runtime protocol tests | 交错事件、独立 completion、单 turn abort、并发 user-input request/response/resolved 不串台 |
 | AC-6 | critical | runtime/pool crash and drain suites | crash fan-out、attention fence、drain deadline、process-tree safety 既有测试继续通过并补共享 runtime 场景 |
 | AC-7 | major | config/docs review and tests | 不再暴露错误的全局串行开关语义，固定版本与未部署边界可复核 |
+| AC-8 | critical | mock Responses API contract tests | 真实固定 CLI 可消费的 SSE event、tool call、cursor continuation 与脱敏 debug evidence |
+| AC-9/10 | critical | isolated Navigator API E2E | 真实 Java API 提交、Worker/CLI/mock 链路、并发采样、单 child 与独立 terminal marker evidence |
+| AC-11/12 | critical | isolated lifecycle E2E + Worker regression | 同 Thread 边界、input/cancel affinity、异 lane 后 resident continuity；crash/drain 定向测试不退化 |
+| AC-13 | major | runner/config review | 默认 mock、live 显式 opt-in、secret 不落盘 |
 | full worker | major | module validation | `npm test`、`npm run typecheck`、`npm run build` 的真实命令、计数和 exit code |
 
 ## Bug Context
@@ -102,10 +113,16 @@ open_questions: []
 - 运行与改动面匹配的验证，不得声称未实际运行或失败的检查通过。
 - 完成后填写 `Implementation Result`，逐项更新验收证据，并将状态改为 `READY_FOR_SIGNOFF`；实现会话不得自行设置 `ACCEPTED`。
 
+## Navigator E2E Extension Approval
+
+- replanned_at: 2026-07-16
+- approval_source: repository owner 在本会话明确要求补齐项目内 Codex App Server Worker、Java 与 mock/可选真实 LLM 的 E2E；该消息批准 AC-8 至 AC-13 的新增交付范围。
+- execution_decision: 默认实现 mock Responses API profile；真实 KEY profile 为显式 opt-in。E2E 只管理自己启动且身份已记录的进程，不按端口杀进程，不接管现有安装目录或运行实例。
+
 ## Implementation Result
 
-- implementation_summary: `AppServerRuntime` 改为每个 active turn 独立 context，并按 `threadId`/`turnId`/JSON-RPC request id 路由 notification、terminal、abort 与 `request_user_input`；共享 transport fatal 对所有相关 context fail-closed。`AppServerPool` 改为固定单 child、同 lane 共享 lease、异 lane 稳定拒绝，且以 active lease 计数保护 crash/retire/drain。`AppServerExecutor` 保留同 Thread 全任务 keyed lock，并为共享 PID 的单任务终止增加拒绝边界。2026-07-16 部署后复现进一步发现默认 rate-limit 查询遗漏 Worker 配置的 API key/base URL，会抢先创建错误 startup lane 的唯一 child；`0.3.18` 已让默认限额查询与任务执行使用同一 canonical lane，并将确定性的 pre-turn lane mismatch 以稳定错误码单次终止，避免 `PROCESS_UNVERIFIED` 每秒恢复放大。Java 仍按既有契约传递 modelConfig 凭据，无需改动。
-- changed_paths: `tools/codex-app-server-worker/src/app-server/runtime.ts`; `src/app-server/pool.ts`; `src/app-server/executor.ts`; `src/task-manager.ts`; `src/config.ts`; `src/runtime-capabilities.ts`; `src/version.ts`; `package.json`; `package-lock.json`; `.env.example`; `README.md`; `tests/app-server-runtime.test.ts`; `tests/app-server-pool.test.ts`; `tests/executor-concurrency.test.ts`; `tests/managed-process-snapshot.test.ts`; `tests/rate-limits-pool.test.ts`; `tests/rate-limits-executor.test.ts`; `tests/reconciliation.test.ts`; `tests/config-instance.test.ts`; `tests/helpers.ts`; 本 canonical workitem。
+- implementation_summary: `AppServerRuntime` 改为每个 active turn 独立 context，并按 `threadId`/`turnId`/JSON-RPC request id 路由 notification、terminal、abort 与 `request_user_input`；共享 transport fatal 对所有相关 context fail-closed。`AppServerPool` 改为固定单 child、同 lane 共享 lease、异 lane 稳定拒绝，且以 active lease 计数保护 crash/retire/drain。`AppServerExecutor` 保留同 Thread 全任务 keyed lock，并为共享 PID 的单任务终止增加拒绝边界。2026-07-16 部署后复现进一步发现默认 rate-limit 查询遗漏 Worker 配置的 API key/base URL，会抢先创建错误 startup lane 的唯一 child；`0.3.18` 已让默认限额查询与任务执行使用同一 canonical lane，并将确定性的 pre-turn lane mismatch 以稳定错误码单次终止，避免 `PROCESS_UNVERIFIED` 每秒恢复放大。随后新增项目内 Navigator 公共 HTTP API 全链路 E2E；该 E2E 实际发现 Java 未接受 Worker 权威 `abort_status=aborted` 回执，会把已终止任务错误落入 `TERMINATION_UNCONFIRMED`，现已按稳定回执枚举修复并保持未知值 fail-closed。
+- changed_paths: `tools/codex-app-server-worker/src/app-server/runtime.ts`; `src/app-server/pool.ts`; `src/app-server/executor.ts`; `src/task-manager.ts`; `src/config.ts`; `src/runtime-capabilities.ts`; `src/version.ts`; `package.json`; `package-lock.json`; `.env.example`; `README.md`; `scripts/run-navigator-e2e.sh`; `tests/app-server-runtime.test.ts`; `tests/app-server-pool.test.ts`; `tests/executor-concurrency.test.ts`; `tests/managed-process-snapshot.test.ts`; `tests/rate-limits-pool.test.ts`; `tests/rate-limits-executor.test.ts`; `tests/reconciliation.test.ts`; `tests/config-instance.test.ts`; `tests/helpers.ts`; `tools/mock-llm-service/README.md`; `src/mock_llm/routes/openai.py`; `src/mock_llm/store/script_store.py`; `tests/test_openai_api.py`; `launcher/src/test/java/com/foggy/navigator/launcher/CodexAppServerNavigatorE2ETest.java`; `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexTaskService.java`; `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/service/CodexTaskServiceTest.java`; 本 canonical workitem。
 - tests_and_results:
   - 测试先行（runtime，修复前）：`node --import tsx --test --test-name-pattern='persistent runtime multiplexes|concurrent turns isolate' tests/app-server-runtime.test.ts`，exit 1，2 个新增回归失败，均被旧的 `Codex app-server instance already has an active root turn` 全局限制阻断。
   - 测试先行（executor/process safety，修复前）：`node --import tsx --test --test-name-pattern='single app-server child shares|different write threads|different read-only threads|manual PID termination is rejected' tests/app-server-pool.test.ts tests/executor-concurrency.test.ts tests/managed-process-snapshot.test.ts`，exit 1；不同 Thread 并发用例观察到创建 2 个 runtime，且共享 PID 的单任务终止未在 signal 前拒绝。该命令中的初版 pool 断言设计有误，不作为 pool 红测证据。
@@ -137,10 +154,18 @@ open_questions: []
   - 部署后双 Thread 真实工具 smoke：并发任务 `bug007-live-a-20260716T123523Z` / `bug007-live-b-20260716T123523Z` 均 HTTP 202，采样观察 `max_active=2`、`max_children=1`；两者 terminal/completed，turn id 分别为 `019f6aec-ae94-7c50-a451-d84f24711449` / `019f6aec-aef8-72a3-adc2-badba0ff692e`。每条 SSE 各 35 个事件并实际包含 `tool_use`/`tool_result`；A 流只含 A marker，B 流只含 B marker，独立 session 与 terminal result，无串台。完成后 pool `instances=1, created_total=1, reused_total=4`。
   - 同 Thread 真实串行 smoke：在同一 native session 上，`bug007-same-thread-c-20260716T123523Z` 运行期间重叠接受 D 返回 HTTP 409 `APP_SERVER_THREAD_ACTIVE`；C terminal 后以同一 task id 重试 D 返回 HTTP 202，C/D 再按顺序分别 terminal/completed，child 未替换，pool `reused_total=6`。
   - `request_user_input` 并发隔离 smoke：E Thread `bug007-input-e-20260716T123523Z` 独立进入 `awaiting_input`，F Thread `bug007-input-f-20260716T123523Z` 同时完成。E 的 request id `0` 通过同 task/instance/thread/turn 绑定的 `/respond` 返回 HTTP 200；E 流有 1 个 `user_input_request`、1 个 `user_input_resolved` 和 E terminal result，F 流二者均为 0 且只有 F marker，最终 `active_tasks=0`、`pending_user_inputs=0`、child=1。
-  - 外部 Navigator 多 Thread smoke 未伪造为已执行：当前进程环境没有安全注入的 `NAVIGATOR_TOKEN`，且从本机对 `http://dev-kvm-jdk17-2.foggysource.com/api/v1/tasks` 的无凭据 10 秒探测无响应。聊天中粘贴的 JWT 未写入 shell、仓库或测试产物；需 owner 以环境变量/安全凭据通道注入后再执行 Java/Navigator 入口的双 Thread 测试。
-- manual_or_experience_evidence: owner 已授权并完成保留 lifecycle evidence 的精确身份恢复，将本地安装更新并启动为 0.3.18。当前 Worker ready=true，固定 CLI 0.144.3 compatible=true，单 child 的不同 Thread 并发、同 Thread 拒绝重叠后顺序执行、终端工具事件、completion 与 `request_user_input` 隔离均通过本机真实凭据 smoke。Java 继续使用既有 modelConfig API key/base URL 传参，无需代码更新。外部 Navigator 入口 smoke 尚未执行，原因是没有安全注入凭据且目标地址从本机探测超时。未上传 OBS、未发布 latest metadata、未运行生产 soak，未修改 `.env` 内容。
-- deviations: 实现保持新批准的单 child、多 Thread 并发、同 Thread 串行和异 lane 拒绝边界。自动化命令所属执行环境会在命令返回时清理其后代进程，因此首次直接运行 `start.sh --no-build` 后 Worker 已通过 readiness、但随后被托管环境清理；精确 process-tree verify 返回 `clean,count=0` 后，仅移除对应 stale evidence。最终仍由官方 `start.sh --no-build` 完成启动，但外层放入独立 tmux session `codex-app-server-worker-0318` 以保持生命周期；Worker PID `4148080` 稳定运行。state identity 继续使用既有持久 marker `codex-store-5ea69ced-19e1-4c85-bb68-f8854a81d455`，未手工篡改 identity。公开官方文档未提供跨版本并发保证，结论仅绑定固定 CLI 0.144.3 的真实源码与协议测试。
-- residual_risks: CLI 升级前必须重新验证 keyed request serialization 与 affinity；单 child crash/transport fatal 会影响所有共享 Thread；resident child 存活时不同 startup lane 会按设计拒绝；旧任务 `20260716-e492` 仍以非活动 `PROCESS_UNVERIFIED` 保留并需要独立业务决策；Java/Navigator 入口的真实双 Thread smoke 尚需安全注入 token 且需要目标地址可达，完成前不能宣称 Navigator 端工具丢失已消失；部署后的 Worker instance ID 可能变化，依赖旧 instance affinity 的上游记录必须按现有注册/重绑定机制处理。
+  - mock Responses 红/绿回归：新增测试在实现前对 `POST /v1/responses` 得到 HTTP 404；实现后 `cd tools/mock-llm-service && .venv/bin/pytest -q tests/test_openai_api.py -k 'responses_api'`，exit 0，2 passed、17 deselected。完整 `cd tools/mock-llm-service && .venv/bin/pytest -q`，exit 0，29 passed、1 个 Pydantic deprecation warning。
+  - 固定 CLI 真实协议探针：repo-local Worker 使用 `@openai/codex 0.144.3`、隔离 `CODEX_HOME` 和 mock `/v1/responses` 完成 function call → `function_call_output` → final response round trip；未使用 SDK fallback。
+  - Java 取消确认红/绿回归：Navigator 全链路首次暴露 Worker 已返回权威 `abort_status=aborted`、目标 turn 已 ABORTED，但 Java 仍记录 `TERMINATION_UNCONFIRMED`。新增 `CodexTaskServiceTest#abortTaskAcceptsAppServerAuthoritativeAbortedResponse` 在修复前失败；修复后定向命令 `mvn -pl addons/codex-worker-agent -am -Dtest=CodexTaskServiceTest#abortTaskAcceptsAppServerAuthoritativeAbortedResponse -Dsurefire.failIfNoSpecifiedTests=false test`，exit 0，1/1 passed。完整 `CodexTaskServiceTest` 同形式执行，exit 0，85/85 passed，BUILD SUCCESS。
+  - Navigator 公共 API E2E：`cd tools/codex-app-server-worker && npm run test:e2e:navigator`，exit 0；runner 实际启动隔离 mock LLM、repo-local Worker 0.3.18、固定 CLI 0.144.3 与 Spring Boot/H2，通过 `/api/v1/auth/login`、`POST /api/v1/tasks`、resume、cancel、respond 和 rate-limit route 完成 1 个聚合 E2E（Failures 0、Errors 0、Skipped 0，Maven BUILD SUCCESS）。覆盖不同 Thread 重叠、同 Thread 拒绝重叠后续接、targeted cancel、并发 user-input、异 lane 拒绝后原 lane 连续可用及 rate-limit refresh。
+  - Navigator E2E 证据：`temp/test-artifacts/bug007-navigator-e2e/20260716T143608Z/` 保存 Maven、mock、Worker、build 日志、Surefire XML/TXT 和前后 health。结束 health 为 `ready=true`、`version=0.3.18`、`active_tasks=0`、pool `instances=1, idle=1, created_total=1, reused_total=8, rejected_total=1, retired_total=0, crashes_total=0`；runner 退出后 13062/18200 无 listener。
+  - `0.3.19` 提交前复跑：`cd tools/codex-app-server-worker && npm run test:e2e:navigator`，exit 0；固定 CLI 0.144.3，BUG-007 聚合 E2E 通过、0 failures/errors/skips，Maven reactor `BUILD SUCCESS`，证据目录 `temp/test-artifacts/bug007-navigator-e2e/20260717T051217Z/`。该次仍使用 repo-local 隔离 Worker/CODEX_HOME/mock/H2，不接触已安装 3071 实例；同一 dirty worktree 中另有独立 BUG-010 test 随 Maven 一并执行，但未纳入本项提交。
+  - E2E 扩展后的 Worker 完整回归：`cd tools/codex-app-server-worker && npm test`，exit 0，302 tests、301 passed、1 skipped、0 failed，duration 117484.901103 ms。定向 crash/drain 命令再次 exit 0，3 passed、59 skipped；`npm run typecheck` 与 `npm run build` 均 exit 0。
+  - E2E 调试过程未伪造为通过：先后修正 mock Responses 404、Java HttpClient h2c/uvicorn 422、过早 cancel、不可可靠中断的延迟 response、Worker token、并发采样竞态、Worker 注册瞬时 404、Maven `-rf` 复用陈旧 snapshot，以及 numeric request id 被测试错误编码为 string 后由生产代码以 RX code 600 fail-closed。正式 runner 始终使用完整 `mvn -pl launcher -am` reactor。
+  - 外部 dev Navigator + 真实供应商 smoke 未伪造为本次执行：本次新增自动化使用项目内 Java/H2 和 mock LLM，不写入或读取真实 KEY；它证明 Navigator 后端链路和生命周期隔离，但不证明外部供应商的工具丢失已经消失。
+- manual_or_experience_evidence: owner 先前已授权并完成保留 lifecycle evidence 的精确身份恢复，将本地安装更新并启动为 0.3.18，并完成真实凭据 Worker smoke。本次扩展又通过项目内 Java 的公开 Navigator HTTP API 完成可重复 mock E2E，并实际发现、修复 Java 对 Worker 权威 abort 回执的兼容缺陷。此次 E2E 扩展没有重新部署或重启已安装 Worker，没有修改 `~/.codex-app-server-worker`、其 `.env` 或现有运行进程；未启动 Claude Worker，因为它不在 Codex App Server 执行链路中。
+- deviations: 实现保持新批准的单 child、多 Thread 并发、同 Thread 串行和异 lane 拒绝边界。自动化命令所属执行环境会在命令返回时清理其后代进程，因此此前首次直接运行 `start.sh --no-build` 后 Worker 已通过 readiness、但随后被托管环境清理；精确 process-tree verify 返回 `clean,count=0` 后，仅移除对应 stale evidence。最终仍由官方 `start.sh --no-build` 完成启动，但外层放入独立 tmux session `codex-app-server-worker-0318` 以保持生命周期；state identity 继续使用既有持久 marker，未手工篡改 identity。公开官方文档未提供跨版本并发保证，结论仅绑定固定 CLI 0.144.3 的真实源码与协议测试。没有增加自动化真实供应商 profile：owner 已允许采用 mock 方案，真实凭据验证继续作为人工受控步骤；默认 runner 明确清除继承凭据。
+- residual_risks: CLI 升级前必须重新验证 keyed request serialization 与 affinity；单 child crash/transport fatal 会影响所有共享 Thread；resident child 存活时不同 startup lane 会按设计拒绝；旧任务 `20260716-e492` 仍以非活动 `PROCESS_UNVERIFIED` 保留并需要独立业务决策；本地 mock E2E 不覆盖真实供应商的工具注册/可用性，也不覆盖浏览器错误卡片的视觉渲染，因此仍不能仅凭该测试宣称部署后的 Navigator 工具丢失彻底消失；部署后的 Worker instance ID 可能变化，依赖旧 instance affinity 的上游记录必须按现有注册/重绑定机制处理。
 - readiness: READY_FOR_SIGNOFF；未自行标记 `ACCEPTED`。
 
 ## References

@@ -8,6 +8,7 @@ import { parseModelString, resolveSupportedModelAlias } from '../model-resolutio
 import { EventBroadcast } from '../persistence/event-store.js'
 import { GeneratedImageStore } from '../generated-image-store.js'
 import { syncParentDirectory } from '../persistence/jsonl-durability.js'
+import type { ContextUsageSnapshot } from '../persistence/context-maintenance-store.js'
 import {
   assertCodexHomeIsolation,
   resolveAllowedWorkingPath,
@@ -36,6 +37,7 @@ export type ExecutionCallbacks = {
   onThreadResolved: (threadId: string) => void | Promise<void>
   onExecutionCommitted: (threadId: string) => void | Promise<void>
   onTurnStarted: (threadId: string, turnId: string | undefined) => void | Promise<void>
+  onContextUsage?: (snapshot: ContextUsageSnapshot) => void | Promise<void>
   onUserInputRequest: (request: UserInputServerRequest, runtimeInstanceId: string) => Promise<UserInputWireResponse>
   onUserInputResolved: (
     resolution: { requestId: string | number; threadId: string },
@@ -76,6 +78,13 @@ export type ManualPidKillResult = {
   provider_terminal_observed?: boolean
 }
 
+export type ContextCompactResult = {
+  threadId: string
+  turnId?: string
+  status: 'completed' | 'failed' | 'interrupted'
+  errorCode?: string
+}
+
 /**
  * A deliberately minimal projection of a lease currently owned by a task.
  * It is used only to bind a human-authorized manual PID operation; callers
@@ -113,6 +122,14 @@ export interface TaskExecutor {
     record: StoredTaskRecord,
     operation: TerminationOperationSummary,
   ): Promise<ManualPidKillResult>
+  compactContext?(options: {
+    taskId: string
+    operationId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+    onContextUsage: (snapshot: ContextUsageSnapshot) => void | Promise<void>
+  }): Promise<ContextCompactResult>
 }
 
 type TaskRuntimeLease = {
@@ -128,6 +145,8 @@ export class StrictAppServerExecutor implements TaskExecutor {
   private readonly locks: KeyedExecutionLocks
   /** A retained lease prevents a failed observer from being recycled over a live turn. */
   private readonly taskRuntimeLeases = new Map<string, TaskRuntimeLease>()
+  /** An indeterminate compact turn must keep its exact child/lane leased. */
+  private readonly maintenanceRuntimeLeases = new Map<string, Awaited<ReturnType<AppServerPool['acquire']>>>()
 
   constructor(
     private readonly config: AppConfig,
@@ -199,7 +218,13 @@ export class StrictAppServerExecutor implements TaskExecutor {
           if (turnId) bridge.setRootTurnId(turnId)
           await options.callbacks.onTurnStarted(threadId, turnId)
         },
-        onNotification: notification => bridge.handle(notification),
+        onNotification: notification => {
+          const usage = parseContextUsageNotification(notification)
+          if (usage && options.callbacks.onContextUsage) {
+            persistContextUsage(options.callbacks.onContextUsage, usage)
+          }
+          bridge.handle(notification)
+        },
         onUserInputRequest: request => options.callbacks.onUserInputRequest(request, runtimeInstanceId),
         onUserInputResolved: resolution => options.callbacks.onUserInputResolved(resolution, runtimeInstanceId),
       }).finally(() => {
@@ -255,6 +280,64 @@ export class StrictAppServerExecutor implements TaskExecutor {
       }
       await inputFiles?.cleanup()
       for (const release of releases.reverse()) release()
+    }
+  }
+
+  async compactContext(options: {
+    taskId: string
+    operationId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+    onContextUsage: (snapshot: ContextUsageSnapshot) => void | Promise<void>
+  }): Promise<ContextCompactResult> {
+    const threadId = options.record.thread_id
+    if (!threadId || options.request.session_id && options.request.session_id !== threadId) {
+      throw compactError('APP_SERVER_COMPACT_THREAD_AFFINITY_LOST')
+    }
+    const context = await this.buildContext(options.request)
+    if (options.record.app_server_lane_key && options.record.app_server_lane_key !== context.lane.key) {
+      throw compactError('APP_SERVER_COMPACT_LANE_AFFINITY_LOST')
+    }
+    const releaseThread = await this.locks.acquire(`thread:${threadId}`, options.signal)
+    let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
+    let retain = false
+    try {
+      this.assertCanonicalCwdUnchanged(context.cwd)
+      lease = await this.pool.acquireForThread(context.lane, threadId, options.signal)
+      if (!lease.runtime.compactThread) throw compactError('APP_SERVER_COMPACT_UNSUPPORTED')
+      const result = await lease.runtime.compactThread({
+        threadId,
+        model: context.model,
+        cwd: context.cwd,
+        approvalPolicy: 'never',
+        sandboxMode: options.request.sandbox_mode || 'danger-full-access',
+        codexConfig: context.codexConfig,
+        developerInstructions: options.request.developer_instructions,
+        signal: options.signal,
+        onNotification: notification => {
+          const usage = parseContextUsageNotification(notification)
+          if (usage) persistContextUsage(options.onContextUsage, usage)
+        },
+      })
+      const status = normalizeTurnStatus(result.turn.status)
+      return {
+        threadId,
+        turnId: readString(result.turn.id),
+        status,
+        errorCode: status === 'failed' ? stableAppServerTurnErrorCode(result.turn.error) : undefined,
+      }
+    } catch (error) {
+      retain = error instanceof AppServerRuntimeError
+        && (error.turnMayHaveStarted || lease?.runtime.requiresAttention?.() === true)
+      if (retain && lease) this.maintenanceRuntimeLeases.set(options.operationId, lease)
+      throw error
+    } finally {
+      if (lease && !retain) {
+        lease.runtime.markObservedTerminal?.(threadId)
+        lease.release(lease.runtime.isHealthy())
+      }
+      releaseThread()
     }
   }
 
@@ -416,6 +499,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
     return {
       pool: this.pool.metrics(),
       execution_locks: this.locks.metrics(),
+      retained_context_maintenance: this.maintenanceRuntimeLeases.size,
     }
   }
 
@@ -683,6 +767,55 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+export function parseContextUsageNotification(
+  notification: { method: string; params?: Record<string, unknown> },
+  observedAt = new Date(),
+): ContextUsageSnapshot | undefined {
+  if (notification.method !== 'thread/tokenUsage/updated') return undefined
+  const threadId = readString(notification.params?.threadId)
+  if (!threadId) return undefined
+  const tokenUsage = asRecord(notification.params?.tokenUsage)
+  const last = asRecord(tokenUsage?.last)
+  const lastTotalTokens = readNonNegativeInteger(last?.totalTokens)
+  const modelContextWindow = readNonNegativeInteger(tokenUsage?.modelContextWindow)
+  const remainingTokens = lastTotalTokens !== undefined && modelContextWindow !== undefined
+    ? Math.max(0, modelContextWindow - lastTotalTokens)
+    : undefined
+  return {
+    schema_version: 1,
+    thread_id: threadId,
+    turn_id: readString(notification.params?.turnId),
+    observed_at: observedAt.toISOString(),
+    last_total_tokens: lastTotalTokens,
+    model_context_window: modelContextWindow,
+    remaining_tokens: remainingTokens,
+    status: lastTotalTokens === undefined
+      ? 'unknown'
+      : modelContextWindow === undefined
+        ? 'window_unknown'
+        : 'known',
+  }
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+function persistContextUsage(
+  callback: (snapshot: ContextUsageSnapshot) => void | Promise<void>,
+  snapshot: ContextUsageSnapshot,
+): void {
+  Promise.resolve(callback(snapshot)).catch(() => {
+    console.warn('[codex-app-server] context_usage_persistence_failed')
+  })
+}
+
+function compactError(code: string): Error & { code: string } {
+  const error = new Error(code) as Error & { code: string }
+  error.code = code
+  return error
 }
 
 /**

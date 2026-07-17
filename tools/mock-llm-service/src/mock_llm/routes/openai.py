@@ -1,8 +1,10 @@
 import asyncio
+import json
 import time
 import uuid
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
+from typing import Any, Dict
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from ..models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -140,6 +142,90 @@ async def chat_completions(request: ChatCompletionRequest):
     return response
 
 
+@router.post("/v1/responses")
+async def responses(request: Request):
+    """Minimal OpenAI Responses API used by the pinned Codex CLI E2E profile."""
+    payload: Dict[str, Any] = await request.json()
+    model = str(payload.get("model") or "mock-model")
+    script_match = script_store.match_payload(model, payload) if script_store else None
+    content = (
+        script_match.response.content
+        if script_match
+        else "Mock LLM: No matching scripted Responses API turn found."
+    )
+    response_delay_ms = _response_delay_ms(script_match, None)
+    if response_delay_ms > 0:
+        await asyncio.sleep(response_delay_ms / 1000)
+
+    response_id = _responses_id(script_match)
+    tool_calls = _responses_tool_calls(script_match)
+    events = [_responses_created(response_id)]
+    if tool_calls:
+        events.extend(
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "call_id": tool_call["id"],
+                    "name": tool_call["function"]["name"],
+                    "arguments": _compact_json_string(
+                        tool_call["function"]["arguments"]
+                    ),
+                },
+            }
+            for tool_call in tool_calls
+        )
+    else:
+        events.append(
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": f"msg-{response_id.removeprefix('resp-')}",
+                    "content": [{"type": "output_text", "text": content}],
+                },
+            }
+        )
+    events.append(_responses_completed(response_id))
+
+    if script_match and script_store:
+        script_store.record_request(
+            script_match,
+            model,
+            payload,
+            {
+                "protocol": "responses",
+                "stream": bool(payload.get("stream")),
+                "responseDelayMs": response_delay_ms,
+                "toolCalls": [tc["function"]["name"] for tc in tool_calls],
+                "contentLength": len(content or ""),
+            },
+        )
+
+    if payload.get("stream"):
+        body = _responses_sse(events)
+        return StreamingResponse(
+            iter([body]),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    return JSONResponse(
+        {
+            "id": response_id,
+            "object": "response",
+            "status": "completed",
+            "model": model,
+            "output": [event["item"] for event in events if "item" in event],
+            "usage": _responses_usage(),
+        }
+    )
+
+
 def _estimate_tokens(messages: list) -> int:
     """估算 token 数量"""
     return sum(_content_length(m.content) // 4 for m in messages)
@@ -202,3 +288,56 @@ def _record_debug_request(script_match: ScriptMatch, request: ChatCompletionRequ
         request.model_dump(mode="json", exclude_none=True),
         response_summary,
     )
+
+
+def _responses_id(script_match: ScriptMatch) -> str:
+    if script_match:
+        return f"resp-{script_match.request_hash[:12]}"
+    return f"resp-{uuid.uuid4().hex[:12]}"
+
+
+def _responses_tool_calls(script_match: ScriptMatch) -> list[dict]:
+    if not script_match:
+        return []
+    return [
+        normalize_tool_call(tool_call, index, script_match.cursor)
+        for index, tool_call in enumerate(script_match.response.tool_calls or [])
+    ]
+
+
+def _responses_created(response_id: str) -> dict:
+    return {
+        "type": "response.created",
+        "response": {"id": response_id},
+    }
+
+
+def _responses_completed(response_id: str) -> dict:
+    return {
+        "type": "response.completed",
+        "response": {"id": response_id, "usage": _responses_usage()},
+    }
+
+
+def _responses_usage() -> dict:
+    return {
+        "input_tokens": 0,
+        "input_tokens_details": None,
+        "output_tokens": 0,
+        "output_tokens_details": None,
+        "total_tokens": 0,
+    }
+
+
+def _responses_sse(events: list[dict]) -> str:
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        for event in events
+    )
+
+
+def _compact_json_string(value: str) -> str:
+    try:
+        return json.dumps(json.loads(value), ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, json.JSONDecodeError):
+        return value

@@ -12,6 +12,7 @@ import {
   type PersistentTurnOptions,
 } from '../src/app-server/runtime.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
+import type { StoredTaskRecord } from '../src/models.js'
 import { tempDirectory, testConfig, waitFor } from './helpers.js'
 
 test('different write threads in the same cwd run concurrently on one shared child', async t => {
@@ -77,6 +78,39 @@ test('different read-only threads run concurrently on one shared child', async t
   fixture.controller.complete('parallel-one')
   fixture.controller.complete('parallel-two')
   await Promise.all([first, second])
+})
+
+test('manual compaction waits behind an active turn on the same thread', async t => {
+  const fixture = await createFixture(t)
+  const turn = fixture.execute('same-thread-turn', {
+    prompt: 'one', cwd: fixture.cwd, session_id: 'shared-thread', sandbox_mode: 'read-only',
+  })
+  await waitFor(() => fixture.controller.started.includes('same-thread-turn'))
+  const compact = fixture.compact('same-thread-compact', 'shared-thread', fixture.cwd)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.deepEqual(fixture.controller.started, ['same-thread-turn'])
+
+  fixture.controller.complete('same-thread-turn')
+  await waitFor(() => fixture.controller.started.includes('compact:shared-thread'))
+  fixture.controller.complete('compact:shared-thread')
+  await Promise.all([turn, compact])
+})
+
+test('manual compaction on another thread does not globally block the shared child', async t => {
+  const fixture = await createFixture(t)
+  const turn = fixture.execute('other-thread-turn', {
+    prompt: 'one', cwd: fixture.cwd, session_id: 'thread-one', sandbox_mode: 'read-only',
+  })
+  const compact = fixture.compact('other-thread-compact', 'thread-two', fixture.cwd)
+  await waitFor(() => fixture.controller.started.length === 2)
+  assert.deepEqual(new Set(fixture.controller.started), new Set([
+    'other-thread-turn', 'compact:thread-two',
+  ]))
+  assert.equal(fixture.pool.metrics().created_total, 1)
+
+  fixture.controller.complete('other-thread-turn')
+  fixture.controller.complete('compact:thread-two')
+  await Promise.all([turn, compact])
 })
 
 test('non-retrying provider error forces failed result even if the turn reports completed', async t => {
@@ -306,6 +340,27 @@ async function createFixture(t: test.TestContext) {
           onTurnStarted: () => undefined,
         },
       }),
+    compact: (operationId: string, threadId: string, compactCwd: string) => executor.compactContext({
+      taskId: `task-${operationId}`,
+      operationId,
+      request: {
+        prompt: 'manual compact',
+        cwd: compactCwd,
+        session_id: threadId,
+        sandbox_mode: 'read-only',
+      },
+      record: {
+        schema_version: 1,
+        task_id: `task-${operationId}`,
+        request_hash: 'test',
+        status: 'terminal',
+        thread_id: threadId,
+        created_at: '2026-07-17T00:00:00.000Z',
+        updated_at: '2026-07-17T00:00:00.000Z',
+      } satisfies StoredTaskRecord,
+      signal: new AbortController().signal,
+      onContextUsage: () => undefined,
+    }),
   }
 }
 
@@ -340,6 +395,17 @@ class ControlledRuntime implements PoolRuntimeInstance {
     await this.controller.wait(options.taskId)
     this.active--
     return { threadId, turn: { id: `turn-${options.taskId}`, status: 'completed' } }
+  }
+  async compactThread(
+    options: Parameters<NonNullable<PoolRuntimeInstance['compactThread']>>[0],
+  ): Promise<AppServerTurnResult> {
+    this.active++
+    await this.controller.wait(`compact:${options.threadId}`)
+    this.active--
+    return {
+      threadId: options.threadId,
+      turn: { id: `compact-turn-${options.threadId}`, status: 'completed' },
+    }
   }
   async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
   close(): void { this.healthy = false }

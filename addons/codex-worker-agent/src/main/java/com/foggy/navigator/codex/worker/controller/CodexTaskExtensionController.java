@@ -22,6 +22,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -50,6 +52,9 @@ public class CodexTaskExtensionController {
 
     private static final String SDK_RUNTIME_TYPE = "SDK_EXEC";
     private static final String ARTIFACT_ID_PATTERN = "[a-f0-9]{32}";
+    private static final String OPERATION_ID_PATTERN = "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}";
+    private static final Set<String> TERMINAL_TASK_STATUSES = Set.of(
+            "COMPLETED", "FAILED", "ABORTED");
     private static final Set<String> SAFE_GENERATED_IMAGE_TYPES = Set.of(
             MediaType.IMAGE_PNG_VALUE,
             MediaType.IMAGE_JPEG_VALUE,
@@ -180,6 +185,97 @@ public class CodexTaskExtensionController {
         }
     }
 
+    /** Returns the latest task-bound native token-usage observation from the pinned runtime. */
+    @GetMapping("/{taskId}/context-usage")
+    public RX<Map<String, Object>> getContextUsage(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        CodexTaskEntity task = requireTask(
+                taskId, userId, tenantId, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+        requirePinnedAppServerRuntime(task);
+        requireThread(task);
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+
+        CodexWorkerClient client = pinnedAppServerClient(task);
+        try {
+            Map<String, Object> workerResult = client.getTaskContextUsage(remoteTaskId(task))
+                    .block(Duration.ofSeconds(10));
+            return RX.ok(authoritativeContextResult(task, workerResult));
+        } catch (CodexWorkerClient.WorkerQueryRejectedException e) {
+            return RX.failA(e.getCode());
+        } catch (Exception e) {
+            log.warn("Failed to get Codex context usage: taskId={}, type={}",
+                    taskId, e.getClass().getSimpleName());
+            return RX.failA("CODEX_CONTEXT_USAGE_UNAVAILABLE");
+        }
+    }
+
+    /** Starts one idempotent whole-thread native compaction on the exact pinned runtime. */
+    @PostMapping("/{taskId}/compact-context")
+    public RX<Map<String, Object>> compactContext(
+            @PathVariable String taskId,
+            @RequestBody CompactContextRequest request) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        CodexTaskEntity task = requireTask(
+                taskId, userId, tenantId, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+        requireTerminalTask(task);
+        requirePinnedAppServerRuntime(task);
+        requireThread(task);
+        String operationId = requireOperationId(request);
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+
+        CodexWorkerClient client = pinnedAppServerClient(task);
+        try {
+            Map<String, Object> workerResult = client.compactTaskContext(
+                            remoteTaskId(task), operationId)
+                    .block(Duration.ofMinutes(5));
+            return RX.ok(authoritativeContextResult(task, workerResult));
+        } catch (CodexWorkerClient.WorkerQueryRejectedException e) {
+            return RX.failA(e.getCode());
+        } catch (Exception e) {
+            log.warn("Failed to compact Codex context: taskId={}, operationId={}, type={}",
+                    taskId, operationId, e.getClass().getSimpleName());
+            return RX.failA("CODEX_CONTEXT_COMPACT_UNAVAILABLE");
+        }
+    }
+
+    /** Reads a previously submitted idempotent compaction operation. */
+    @GetMapping("/{taskId}/compact-context/{operationId}")
+    public RX<Map<String, Object>> getCompactContextOperation(
+            @PathVariable String taskId,
+            @PathVariable String operationId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        CodexTaskEntity task = requireTask(
+                taskId, userId, tenantId, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+        requirePinnedAppServerRuntime(task);
+        requireThread(task);
+        if (operationId == null || !operationId.matches(OPERATION_ID_PATTERN)) {
+            throw new IllegalArgumentException("operationId is invalid");
+        }
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+
+        CodexWorkerClient client = pinnedAppServerClient(task);
+        try {
+            Map<String, Object> workerResult = client.getTaskContextCompactOperation(
+                            remoteTaskId(task), operationId)
+                    .block(Duration.ofSeconds(10));
+            return RX.ok(authoritativeContextResult(task, workerResult));
+        } catch (CodexWorkerClient.WorkerQueryRejectedException e) {
+            return RX.failA(e.getCode());
+        } catch (Exception e) {
+            log.warn("Failed to read Codex context compact operation: taskId={}, operationId={}, type={}",
+                    taskId, operationId, e.getClass().getSimpleName());
+            return RX.failA("CODEX_CONTEXT_COMPACT_OPERATION_UNAVAILABLE");
+        }
+    }
+
+    public record CompactContextRequest(String operationId) {}
+
     private CodexTaskEntity requireTask(String taskId,
                                         String userId,
                                         String tenantId,
@@ -209,6 +305,61 @@ public class CodexTaskExtensionController {
                 || !hasText(task.getRuntimeInstanceId())
                 || !hasText(task.getWorkerId())) {
             throw taskNotFound(task.getTaskId());
+        }
+    }
+
+    private void requireTerminalTask(CodexTaskEntity task) {
+        if (!TERMINAL_TASK_STATUSES.contains(task.getStatus())) {
+            throw new IllegalStateException("TASK_NOT_TERMINAL");
+        }
+    }
+
+    private void requireThread(CodexTaskEntity task) {
+        if (!hasText(task.getCodexThreadId())) {
+            throw new IllegalStateException("CODEX_THREAD_NOT_ESTABLISHED");
+        }
+    }
+
+    private String requireOperationId(CompactContextRequest request) {
+        String operationId = request == null ? null : request.operationId();
+        if (operationId == null || !operationId.matches(OPERATION_ID_PATTERN)) {
+            throw new IllegalArgumentException("operationId is invalid");
+        }
+        return operationId;
+    }
+
+    private CodexWorkerClient pinnedAppServerClient(CodexTaskEntity task) {
+        CodexRuntimeBinding runtime = runtimeRegistryService.resolveBoundRuntime(
+                task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
+                task.getRuntimeInstanceId());
+        return clientFactory.getOrCreate(
+                "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
+                runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
+    }
+
+    private String remoteTaskId(CodexTaskEntity task) {
+        return hasText(task.getWorkerTaskId()) ? task.getWorkerTaskId() : task.getTaskId();
+    }
+
+    private Map<String, Object> authoritativeContextResult(
+            CodexTaskEntity task, Map<String, Object> workerResult) {
+        Map<String, Object> result = workerResult == null
+                ? new LinkedHashMap<>()
+                : sanitizeWorkerPayload(workerResult);
+        result.remove("task_id");
+        result.remove("thread_id");
+        renameIfPresent(result, "last_total_tokens", "current_tokens");
+        renameIfPresent(result, "compact_turn_id", "turn_id");
+        renameIfPresent(result, "created_at", "started_at");
+        result.put("taskId", task.getTaskId());
+        result.put("sessionId", task.getSessionId());
+        result.put("codexThreadId", task.getCodexThreadId());
+        return result;
+    }
+
+    private void renameIfPresent(Map<String, Object> result, String source, String target) {
+        if (result.containsKey(source)) {
+            result.put(target, result.remove(source));
         }
     }
 

@@ -1616,6 +1616,51 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void abortTaskAcceptsAppServerAuthoritativeAbortedResponse() {
+        CodexTaskEntity entity = createTask(
+                "task-abort-terminal", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 16, 22, 0));
+        entity.setWorkerTaskId("worker-task-terminal");
+        when(taskRepository.findByTaskId("task-abort-terminal")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to_terminal");
+            operation.setSchemaVersion(1);
+            operation.setTaskId(command.taskId());
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            return operation;
+        });
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
+                .baseUrl("http://worker.example").authToken("worker-token").build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
+        when(workerClient.abortTask(eq("worker-task-terminal"), any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of(
+                        "status", "terminal",
+                        "outcome", "aborted",
+                        "abort_status", "aborted")));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        service.abortTask("task-abort-terminal");
+
+        verify(terminationOperationService).markDispatchStarted("to_terminal");
+        verify(terminationOperationService).markCancelRequested("to_terminal");
+        verify(terminationOperationService, never()).markUnconfirmed(anyString(), anyString());
+        assertNull(entity.getErrorMessage());
+    }
+
+    @Test
     void manualPidKillPersistsAndSignsFreshProcessIdentity() {
         CodexTaskEntity entity = createTask(
                 "task-manual-kill", "session-1", "worker-1", "dir-1", "RUNNING",

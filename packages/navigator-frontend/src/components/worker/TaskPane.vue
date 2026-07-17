@@ -29,6 +29,17 @@
           改动文件
         </el-button>
         <el-button
+          v-if="canShowContextUsage"
+          class="context-usage-button"
+          size="small"
+          text
+          :loading="contextUsageLoading && contextUsageVisible"
+          title="查看 Codex App Server 原生上下文用量并手工压缩"
+          @click.stop="handleShowContextUsage"
+        >
+          上下文
+        </el-button>
+        <el-button
           size="small"
           text
           :loading="copyingConversation"
@@ -262,6 +273,86 @@
     </el-dialog>
 
     <el-dialog
+      v-model="contextUsageVisible"
+      class="context-usage-dialog"
+      title="Codex 上下文用量"
+      width="620px"
+      append-to-body
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="数值来自 app-server 的 thread/tokenUsage/updated；窗口未上报时保持未知，不会按模型名称猜测。"
+      />
+
+      <el-alert
+        v-if="contextUsageError"
+        class="context-usage-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="contextUsageError"
+      />
+
+      <div v-loading="contextUsageLoading" class="context-usage-grid">
+        <div class="context-usage-item">
+          <span>当前上下文</span>
+          <strong>{{ formatContextTokens(contextUsage?.current_tokens) }}</strong>
+        </div>
+        <div class="context-usage-item">
+          <span>模型窗口</span>
+          <strong>{{ contextWindowLabel }}</strong>
+        </div>
+        <div class="context-usage-item">
+          <span>剩余窗口</span>
+          <strong>{{ remainingContextLabel }}</strong>
+        </div>
+        <div class="context-usage-item">
+          <span>观测时间</span>
+          <strong>{{ formatContextObservedAt(contextUsage?.observed_at) }}</strong>
+        </div>
+      </div>
+
+      <div v-if="contextUsage?.model_context_window == null" class="context-window-unknown">
+        窗口未知：当前 Runtime 没有提供 modelContextWindow，因此只展示已观测到的当前 token 数。
+      </div>
+
+      <el-alert
+        v-if="contextCompactResult"
+        class="context-compact-result"
+        :type="contextCompactResult.status === 'completed' ? 'success' : contextCompactResult.status === 'failed' ? 'error' : 'warning'"
+        :closable="false"
+        show-icon
+        :title="contextCompactResultLabel"
+      />
+
+      <div v-if="canCompactContext" class="context-compact-section">
+        <p>
+          手工压缩会对当前 Codex Thread 调用原生 <code>thread/compact/start</code>。
+          仅终态任务可执行；不会自动续发消息，也不会创建新 Thread。
+        </p>
+        <div v-if="contextPendingOperationId" class="context-operation-id">
+          待确认操作：<code>{{ contextPendingOperationId }}</code>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button :loading="contextUsageLoading" @click="loadContextUsage">刷新用量</el-button>
+        <el-button
+          v-if="canCompactContext"
+          class="context-compact-button"
+          type="warning"
+          :loading="contextCompactLoading"
+          @click="handleCompactContext"
+        >
+          {{ contextPendingOperationId ? '重试同一压缩操作' : '压缩当前 Thread' }}
+        </el-button>
+        <el-button type="primary" @click="contextUsageVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
       v-model="messageRecordsVisible"
       title="会话逐条记录"
       width="900px"
@@ -331,12 +422,17 @@ import { computed, ref, watch } from 'vue'
 import { ChatPanel, ErrorBlock } from '@foggy/chat'
 import type { ChatMessage, NavigatorUiAction, UserQuestionAnswers } from '@foggy/chat'
 import { ElMessage } from 'element-plus'
-import { getCodexTaskFileHints } from '@/api/claudeWorker'
+import {
+  compactCodexTaskContext,
+  getCodexTaskContextUsage,
+  getCodexTaskFileHints,
+} from '@/api/claudeWorker'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { SkillInfo } from '@/types'
 import type { SessionFileHintFile, SessionFileHintsResponse } from '@/types/sessionFileHints'
+import type { CodexContextCompactOperation, CodexContextUsage } from '@/types/codexContext'
 import { inferTaskWorkerBackend } from '@/utils/workerBackend'
 import { loadTaskFileHints } from './taskPaneFileHints'
 import NativeSubtaskBar from './NativeSubtaskBar.vue'
@@ -382,6 +478,38 @@ const fileHintsLoading = ref(false)
 const fileHintsResponse = ref<SessionFileHintsResponse | null>(null)
 const fileHintFiles = computed(() => fileHintsResponse.value?.files ?? [])
 const canShowFileHints = computed(() => inferTaskWorkerBackend(props.paneState.task.value) === 'OPENAI_CODEX')
+const contextUsageVisible = ref(false)
+const contextUsageLoading = ref(false)
+const contextUsageError = ref('')
+const contextUsage = ref<CodexContextUsage | null>(null)
+const contextCompactLoading = ref(false)
+const contextCompactResult = ref<CodexContextCompactOperation | null>(null)
+const contextPendingOperationId = ref('')
+const canShowContextUsage = computed(() => {
+  const task = props.paneState.task.value
+  return task?.providerType === 'codex-app-server-worker' && !!task.taskId && !!task.codexThreadId
+})
+const canCompactContext = computed(() => {
+  const status = props.paneState.task.value?.status
+  return canShowContextUsage.value
+    && (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED')
+})
+const contextWindowLabel = computed(() => {
+  const window = contextUsage.value?.model_context_window
+  return window == null ? '窗口未知' : formatContextTokens(window)
+})
+const remainingContextLabel = computed(() => {
+  const remaining = contextUsage.value?.remaining_tokens
+  return remaining == null ? '未知' : formatContextTokens(remaining)
+})
+const contextCompactResultLabel = computed(() => {
+  const result = contextCompactResult.value
+  if (!result) return ''
+  if (result.status === 'completed') return '压缩已完成，已刷新原生上下文用量。'
+  if (result.status === 'failed') return `压缩失败：${result.error_code || 'CONTEXT_COMPACT_FAILED'}`
+  if (result.status === 'unknown') return '压缩结果尚不确定；再次操作会复用同一 operationId 查询/重试。'
+  return '压缩正在执行；再次操作会复用同一 operationId。'
+})
 const messageRecordsVisible = ref(false)
 const messageRecordsLoading = ref(false)
 const messageRecordsError = ref('')
@@ -406,6 +534,77 @@ watch(paneInputScope, () => {
 watch(paneInput, (val) => {
   paneMemory.saveDraft(val)
 })
+
+watch(() => props.paneState.task.value?.taskId, () => {
+  contextUsageVisible.value = false
+  contextUsage.value = null
+  contextUsageError.value = ''
+  contextCompactResult.value = null
+  contextPendingOperationId.value = ''
+})
+
+async function handleShowContextUsage() {
+  contextUsageVisible.value = true
+  await loadContextUsage()
+}
+
+async function loadContextUsage() {
+  const taskId = props.paneState.task.value?.taskId
+  if (!taskId || contextUsageLoading.value) return
+  contextUsageLoading.value = true
+  contextUsageError.value = ''
+  try {
+    contextUsage.value = await getCodexTaskContextUsage(taskId)
+  } catch (error) {
+    contextUsageError.value = error instanceof Error
+      ? error.message
+      : 'CODEX_CONTEXT_USAGE_UNAVAILABLE'
+  } finally {
+    contextUsageLoading.value = false
+  }
+}
+
+async function handleCompactContext() {
+  const taskId = props.paneState.task.value?.taskId
+  if (!taskId || !canCompactContext.value || contextCompactLoading.value) return
+  const operationId = contextPendingOperationId.value || createContextCompactOperationId()
+  contextPendingOperationId.value = operationId
+  contextCompactLoading.value = true
+  try {
+    const result = await compactCodexTaskContext(taskId, operationId)
+    contextCompactResult.value = result
+    if (result.status === 'completed') {
+      contextPendingOperationId.value = ''
+      ElMessage.success('Codex Thread 上下文压缩完成')
+      await loadContextUsage()
+    } else if (result.status === 'failed') {
+      contextPendingOperationId.value = ''
+      ElMessage.error(result.error_code || 'Codex Thread 上下文压缩失败')
+    } else {
+      ElMessage.warning('压缩结果尚未确认，已保留 operationId 供安全重试')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'CODEX_CONTEXT_COMPACT_UNAVAILABLE')
+  } finally {
+    contextCompactLoading.value = false
+  }
+}
+
+function createContextCompactOperationId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `navigator-compact-${uuid}`
+}
+
+function formatContextTokens(value?: number | null): string {
+  return value == null || !Number.isFinite(value) ? '未知' : Math.max(0, value).toLocaleString('zh-CN')
+}
+
+function formatContextObservedAt(value?: string | null): string {
+  if (!value) return '未知'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '未知' : date.toLocaleString('zh-CN', { hour12: false })
+}
 
 function handlePaneHistoryPrev() {
   const text = paneMemory.historyPrev(paneInput.value)
@@ -937,6 +1136,55 @@ function truncate(text: string, maxLen: number) {
 
 .file-hints-alert {
   margin-bottom: 12px;
+}
+
+.context-usage-alert,
+.context-compact-result {
+  margin-top: 12px;
+}
+
+.context-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.context-usage-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+}
+
+.context-usage-item span,
+.context-operation-id {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.context-usage-item strong {
+  color: var(--el-text-color-primary);
+  font-size: 18px;
+}
+
+.context-window-unknown,
+.context-compact-section {
+  margin-top: 14px;
+  color: var(--el-text-color-regular);
+  line-height: 1.6;
+}
+
+.context-compact-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.context-compact-section p {
+  margin: 0 0 8px;
 }
 
 .file-hints-meta {

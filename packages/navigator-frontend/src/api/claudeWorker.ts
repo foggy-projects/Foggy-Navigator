@@ -23,6 +23,7 @@ import {
 } from './unifiedTask'
 import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage, DirectoryMilestone, MilestonePageResult } from '@/types'
 import type { SessionFileHintsResponse } from '@/types/sessionFileHints'
+import type { CodexContextCompactOperation, CodexContextUsage } from '@/types/codexContext'
 import type { UserQuestionAnswers } from '@foggy/chat'
 
 // ===== Worker API =====
@@ -393,6 +394,26 @@ export async function getCodexTaskFileHints(taskId: string): Promise<SessionFile
     `/tasks/${taskId}/file-hints`,
     { suppressErrorMessage: true } as any,
   )) as unknown as RX<SessionFileHintsResponse>
+  return rx.data
+}
+
+export async function getCodexTaskContextUsage(taskId: string): Promise<CodexContextUsage> {
+  const rx = (await client.get(
+    `/tasks/${taskId}/context-usage`,
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<CodexContextUsage>
+  return rx.data
+}
+
+export async function compactCodexTaskContext(
+  taskId: string,
+  operationId: string,
+): Promise<CodexContextCompactOperation> {
+  const rx = (await client.post(
+    `/tasks/${taskId}/compact-context`,
+    { operationId },
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<CodexContextCompactOperation>
   return rx.data
 }
 

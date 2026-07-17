@@ -16,6 +16,11 @@ import { parseModelString, resolveSupportedModelAlias } from './model-resolution
 import { EventBroadcast } from './persistence/event-store.js'
 import { TaskStore } from './persistence/task-store.js'
 import {
+  ContextMaintenanceStore,
+  type ContextCompactOperation,
+  type ContextUsageSnapshot,
+} from './persistence/context-maintenance-store.js'
+import {
   cleanupMaterializedInput,
   type ManagedTaskProcessSnapshot,
   type TaskExecutor,
@@ -52,6 +57,13 @@ export class TaskThreadActiveError extends Error {
   constructor() {
     super('Codex app-server thread already has a nonterminal task')
     this.name = 'TaskThreadActiveError'
+  }
+}
+
+export class ContextMaintenanceError extends Error {
+  constructor(readonly code: string) {
+    super(code)
+    this.name = 'ContextMaintenanceError'
   }
 }
 
@@ -127,15 +139,19 @@ export class TaskManager {
   private readonly blockedThreadReservations = new Set<string>()
   private readonly liveUserInput = new Map<string, LiveUserInputInteraction>()
   private recoveryRun?: Promise<void>
+  private readonly contextMaintenance: ContextMaintenanceStore
 
   constructor(
     private readonly config: AppConfig,
     readonly store: TaskStore,
     private readonly executor: TaskExecutor,
-  ) {}
+  ) {
+    this.contextMaintenance = new ContextMaintenanceStore(config.stateDir)
+  }
 
   async initialize(options: { resume?: boolean } = {}): Promise<void> {
     await this.store.initialize()
+    await this.contextMaintenance.initialize()
     if (options.resume !== false) this.store.verifyEncryptionKey()
     const reservationConflicts = this.rebuildThreadReservations()
     for (const snapshot of this.store.list()) {
@@ -228,6 +244,64 @@ export class TaskManager {
 
   get(taskId: string): StoredTaskRecord | undefined {
     return this.store.get(taskId)
+  }
+
+  getContextUsage(taskId: string): ContextUsageSnapshot | undefined {
+    const record = this.store.get(taskId)
+    if (!record || record.tombstoned_at || !record.thread_id) return undefined
+    return this.contextMaintenance.getUsage(record.thread_id)
+  }
+
+  getContextCompactOperation(taskId: string, operationId: string): ContextCompactOperation | undefined {
+    const operation = this.contextMaintenance.getOperation(operationId)
+    return operation?.task_id === taskId ? operation : undefined
+  }
+
+  async compactContext(taskId: string, operationId: string): Promise<ContextCompactOperation> {
+    return this.withTaskOperation(taskId, async () => {
+      if (!this.isAccepting()) throw new TaskManagerDrainingError()
+      const record = this.store.get(taskId)
+      if (!record || record.tombstoned_at) throw new ContextMaintenanceError('TASK_NOT_FOUND')
+      if (record.status !== 'terminal') throw new ContextMaintenanceError('TASK_NOT_TERMINAL')
+      if (!record.thread_id) throw new ContextMaintenanceError('APP_SERVER_THREAD_NOT_AVAILABLE')
+      const activeOwner = this.threadReservations.get(record.thread_id)
+      if (activeOwner) throw new ContextMaintenanceError('APP_SERVER_THREAD_ACTIVE')
+      const existing = await this.contextMaintenance.startOperation(taskId, record.thread_id, operationId)
+      if (existing.status !== 'running') return existing
+      if (!this.executor.compactContext) {
+        return this.contextMaintenance.updateOperation(operationId, {
+          status: 'failed',
+          error_code: 'APP_SERVER_COMPACT_UNSUPPORTED',
+        })
+      }
+      const controller = new AbortController()
+      try {
+        const result = await this.executor.compactContext({
+          taskId,
+          operationId,
+          request: await this.store.getRequestForMaintenance(taskId),
+          record,
+          signal: controller.signal,
+          onContextUsage: async snapshot => { await this.contextMaintenance.recordUsage(snapshot) },
+        })
+        return this.contextMaintenance.updateOperation(operationId, {
+          status: result.status === 'completed' ? 'completed' : 'failed',
+          compact_turn_id: result.turnId,
+          error_code: result.status === 'completed'
+            ? undefined
+            : result.errorCode || 'APP_SERVER_COMPACT_TURN_FAILED',
+        })
+      } catch (error) {
+        const unknown = error instanceof AppServerRuntimeError && error.turnMayHaveStarted
+        return this.contextMaintenance.updateOperation(operationId, {
+          status: unknown ? 'unknown' : 'failed',
+          compact_turn_id: error instanceof AppServerRuntimeError ? error.turnId : undefined,
+          error_code: readErrorCode(error, unknown
+            ? 'APP_SERVER_COMPACT_RECOVERY_REQUIRED'
+            : 'APP_SERVER_COMPACT_FAILED'),
+        })
+      }
+    })
   }
 
   /**
@@ -992,6 +1066,7 @@ export class TaskManager {
               turn_id: turnId,
             })
           },
+          onContextUsage: async snapshot => { await this.contextMaintenance.recordUsage(snapshot) },
           onUserInputRequest: (request, runtimeInstanceId) => this.awaitUserInput(
             taskId,
             request,
@@ -1530,6 +1605,13 @@ function stableExecutionErrorCode(error: unknown): string {
   ].includes(code)
     ? code
     : 'APP_SERVER_RUNTIME_FAILED'
+}
+
+function readErrorCode(error: unknown, fallback: string): string {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined
+  return typeof code === 'string' && code.trim() ? code : fallback
 }
 
 function isDeterministicNoExecutionFailure(error: unknown): boolean {

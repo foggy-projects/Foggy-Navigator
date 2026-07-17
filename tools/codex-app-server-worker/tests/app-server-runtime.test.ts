@@ -217,6 +217,33 @@ class FakeProcess extends EventEmitter {
         this.send({ method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } } })
       }
     }
+    if (message.method === 'thread/compact/start') {
+      this.send({ id: message.id, result: { turn: { id: 'compact-turn-1', status: 'inProgress' } } })
+      this.send({
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId: this.threadId,
+          turnId: 'other-turn',
+          tokenUsage: { last: { totalTokens: 999 }, modelContextWindow: 1_000 },
+        },
+      })
+      this.send({
+        method: 'turn/completed',
+        params: { threadId: this.threadId, turn: { id: 'other-turn', status: 'completed' } },
+      })
+      this.send({
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId: this.threadId,
+          turnId: 'compact-turn-1',
+          tokenUsage: { last: { totalTokens: 12_345 }, modelContextWindow: 270_000 },
+        },
+      })
+      this.send({
+        method: 'turn/completed',
+        params: { threadId: this.threadId, turn: { id: 'compact-turn-1', status: 'completed' } },
+      })
+    }
     if (message.id === 'server-input-1' && (message.result || message.error)) {
       this.send({
         method: 'serverRequest/resolved',
@@ -1435,6 +1462,39 @@ test('local image mode persists image bytes and emits metadata without base64', 
   const localPath = (imageEvent.data as { local_path: string }).local_path
   assert.deepEqual(fs.readFileSync(localPath), imageBytes)
   assert.equal(fs.statSync(localPath).mode & 0o777, 0o600)
+})
+
+test('manual thread compaction correlates its own terminal turn and usage notification', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true)
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+  })
+  const notifications: JsonMessage[] = []
+  const result = await instance.compactThread({
+    threadId: 'thread-compact',
+    model: 'gpt-5.6-sol',
+    cwd: '/tmp',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    codexConfig: {},
+    signal: new AbortController().signal,
+    onNotification: notification => notifications.push(notification),
+  })
+
+  assert.equal(result.threadId, 'thread-compact')
+  assert.equal(result.turn.id, 'compact-turn-1')
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(notifications.some(notification => notification.params?.turnId === 'other-turn'), false)
+  assert.equal(notifications.some(notification => (
+    notification.method === 'thread/tokenUsage/updated'
+      && notification.params?.turnId === 'compact-turn-1'
+  )), true)
+  assert.deepEqual(received.filter(message => message.method === 'thread/compact/start').map(message => message.params), [
+    { threadId: 'thread-compact' },
+  ])
+  await instance.close()
 })
 
 test('independent package pins the CLI and has no Codex SDK dependency', () => {

@@ -31,6 +31,7 @@ public class CodexWorkerClient {
     public static final String EXPECTED_INSTANCE_HEADER = "X-Codex-Expected-Instance-Id";
     public static final String ACTUAL_INSTANCE_HEADER = "X-Codex-Instance-Id";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String OPERATION_ID_PATTERN = "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}";
     private static final Set<String> USER_INPUT_ERROR_CODES = Set.of(
             "INVALID_USER_INPUT_RESPONSE",
             "TASK_NOT_FOUND",
@@ -543,6 +544,90 @@ public class CodexWorkerClient {
                                     statusCode, userInputErrorCode(statusCode, errorBody))));
                 })
                 .timeout(Duration.ofSeconds(10));
+    }
+
+    /** Reads the latest native app-server token usage observed for one task-bound thread. */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getTaskContextUsage(String taskId) {
+        requireTaskId(taskId);
+        return webClient.get()
+                .uri("/api/v1/tasks/{taskId}/context-usage", taskId)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /** Starts or replays one idempotent whole-thread native compaction operation. */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> compactTaskContext(String taskId, String operationId) {
+        requireTaskId(taskId);
+        if (operationId == null || !operationId.matches(OPERATION_ID_PATTERN)) {
+            return Mono.error(new IllegalArgumentException("operationId is invalid"));
+        }
+        return webClient.post()
+                .uri("/api/v1/tasks/{taskId}/compact-context", taskId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("operation_id", operationId))
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofMinutes(5));
+    }
+
+    /** Reads one durable compaction operation without starting another compact turn. */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getTaskContextCompactOperation(
+            String taskId, String operationId) {
+        requireTaskId(taskId);
+        if (operationId == null || !operationId.matches(OPERATION_ID_PATTERN)) {
+            return Mono.error(new IllegalArgumentException("operationId is invalid"));
+        }
+        return webClient.get()
+                .uri("/api/v1/tasks/{taskId}/compact-context/{operationId}", taskId, operationId)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Mono<Map<String, Object>> workerQueryRejection(
+            int statusCode, Mono<Map> responseBody) {
+        return responseBody
+                .map(value -> (Map<String, Object>) value)
+                .defaultIfEmpty(Map.of())
+                .flatMap(body -> Mono.error(new WorkerQueryRejectedException(
+                        statusCode, workerQueryErrorCode(statusCode, body))));
+    }
+
+    private String workerQueryErrorCode(int statusCode, Map<String, Object> body) {
+        for (String key : List.of("error_code", "error", "code")) {
+            String value = stringValue(body.get(key), null);
+            if (value != null) return value;
+        }
+        return "CODEX_WORKER_REQUEST_REJECTED_" + statusCode;
+    }
+
+    private void requireTaskId(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            throw new IllegalArgumentException("taskId is required");
+        }
     }
 
     private String userInputErrorCode(int statusCode, Map<String, Object> body) {

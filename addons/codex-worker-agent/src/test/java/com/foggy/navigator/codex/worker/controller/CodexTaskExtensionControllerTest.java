@@ -307,6 +307,110 @@ class CodexTaskExtensionControllerTest {
     }
 
     @Test
+    void getContextUsage_ownerUsesPinnedRuntimeAndSanitizesWorkerPayload() {
+        CodexTaskEntity task = appServerTask();
+        task.setCodexThreadId("thread-1");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getTaskContextUsage("worker-task-1")).thenReturn(Mono.just(new LinkedHashMap<>(Map.of(
+                "task_id", "attacker-task",
+                "thread_id", "attacker-thread",
+                "last_total_tokens", 81234,
+                "model_context_window", 270000,
+                "remaining_tokens", 188766,
+                "status", "known",
+                "auth_token", "secret"))));
+
+        RX<Map<String, Object>> response = controller.getContextUsage(TASK_ID);
+
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        assertEquals("session-1", response.getData().get("sessionId"));
+        assertEquals("thread-1", response.getData().get("codexThreadId"));
+        assertEquals(81234, response.getData().get("current_tokens"));
+        assertFalse(response.getData().containsKey("auth_token"));
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        verify(client).getTaskContextUsage("worker-task-1");
+    }
+
+    @Test
+    void compactContext_ownerUsesPinnedRuntimeAndOperationId() {
+        CodexTaskEntity task = appServerTask();
+        task.setCodexThreadId("thread-1");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.compactTaskContext("worker-task-1", "compact-20260717-1"))
+                .thenReturn(Mono.just(new LinkedHashMap<>(Map.of(
+                        "task_id", "worker-task-1",
+                        "operation_id", "compact-20260717-1",
+                        "status", "completed",
+                        "thread_id", "thread-1",
+                        "compact_turn_id", "compact-turn-1"))));
+
+        RX<Map<String, Object>> response = controller.compactContext(
+                TASK_ID, new CodexTaskExtensionController.CompactContextRequest("compact-20260717-1"));
+
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        assertEquals("thread-1", response.getData().get("codexThreadId"));
+        assertEquals("completed", response.getData().get("status"));
+        assertEquals("compact-20260717-1", response.getData().get("operation_id"));
+        assertEquals("compact-turn-1", response.getData().get("turn_id"));
+        assertFalse(response.getData().containsKey("compact_turn_id"));
+        verify(client).compactTaskContext("worker-task-1", "compact-20260717-1");
+    }
+
+    @Test
+    void getCompactContextOperation_ownerReadsPinnedDurableOperation() {
+        CodexTaskEntity task = appServerTask();
+        task.setCodexThreadId("thread-1");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getTaskContextCompactOperation("worker-task-1", "compact-20260717-1"))
+                .thenReturn(Mono.just(new LinkedHashMap<>(Map.of(
+                        "operation_id", "compact-20260717-1",
+                        "status", "completed",
+                        "compact_turn_id", "compact-turn-1"))));
+
+        RX<Map<String, Object>> response = controller.getCompactContextOperation(
+                TASK_ID, "compact-20260717-1");
+
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        assertEquals("thread-1", response.getData().get("codexThreadId"));
+        assertEquals("compact-turn-1", response.getData().get("turn_id"));
+        verify(client).getTaskContextCompactOperation("worker-task-1", "compact-20260717-1");
+    }
+
+    @Test
+    void compactContext_rejectsRunningTaskBeforeResolvingRuntime() {
+        CodexTaskEntity task = appServerTask();
+        task.setStatus("RUNNING");
+        task.setCodexThreadId("thread-1");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> controller.compactContext(TASK_ID,
+                        new CodexTaskExtensionController.CompactContextRequest("compact-20260717-1")));
+
+        assertEquals("TASK_NOT_TERMINAL", error.getMessage());
+        verifyNoInteractions(workerManagementFacade, runtimeRegistryService, clientFactory, client);
+    }
+
+    @Test
     void getGeneratedImage_invalidArtifactIdIsRejectedInsideOwnedTaskBoundary() {
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(appServerTask());

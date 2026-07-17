@@ -145,6 +145,22 @@ export class TaskStore {
     return decryptRequest(record.request_payload, this.encryptionKey)
   }
 
+  /**
+   * Terminal records intentionally drop encrypted request bytes from resident
+   * memory. Context maintenance still needs the original trusted lane/cwd, so
+   * it rereads the encrypted payload from the private task journal without
+   * restoring it to the resident record.
+   */
+  async getRequestForMaintenance(taskId: string): Promise<TaskRequest> {
+    const record = this.records.get(taskId)
+    if (!record || record.tombstoned_at) throw new Error(`Task request payload has been tombstoned: ${taskId}`)
+    if (record.request_payload) return decryptRequest(record.request_payload, this.encryptionKey)
+    const records = readJsonlAndRepair(this.filePath(taskId), isTaskJournalRecord)
+    const payload = records.find(candidate => candidate.request_payload)?.request_payload
+    if (!payload) throw new Error(`Task request payload is missing from journal: ${taskId}`)
+    return decryptRequest(payload, this.encryptionKey)
+  }
+
   verifyEncryptionKey(): void {
     for (const record of this.records.values()) {
       if (record.request_payload) decryptRequest(record.request_payload, this.encryptionKey)

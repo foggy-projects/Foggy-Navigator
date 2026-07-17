@@ -1,12 +1,19 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h, nextTick, ref } from 'vue'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { AipMessageType } from '@foggy/chat'
 import type { ChatMessage } from '@foggy/chat'
 import TaskPane from '../TaskPane.vue'
 import SlashCommandInput from '../SlashCommandInput.vue'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import type { ClaudeTask } from '@/types'
+import { compactCodexTaskContext, getCodexTaskContextUsage } from '@/api/claudeWorker'
+
+vi.mock('@/api/claudeWorker', () => ({
+  getCodexTaskFileHints: vi.fn(),
+  getCodexTaskContextUsage: vi.fn(),
+  compactCodexTaskContext: vi.fn(),
+}))
 
 const ChatPanelStub = defineComponent({
   name: 'ChatPanel',
@@ -34,7 +41,49 @@ const ElInputStub = defineComponent({
   },
 })
 
+const ElButtonStub = defineComponent({
+  name: 'ElButton',
+  props: {
+    disabled: { type: Boolean, default: false },
+    loading: { type: Boolean, default: false },
+  },
+  emits: ['click'],
+  setup(props, { emit, slots, attrs }) {
+    return () => h('button', {
+      ...attrs,
+      disabled: props.disabled || props.loading,
+      onClick: (event: MouseEvent) => emit('click', event),
+    }, slots.default?.())
+  },
+})
+
+const ElDialogStub = defineComponent({
+  name: 'ElDialog',
+  props: {
+    modelValue: { type: Boolean, default: false },
+  },
+  setup(props, { slots, attrs }) {
+    return () => props.modelValue
+      ? h('section', { ...attrs }, [slots.default?.(), slots.footer?.()])
+      : null
+  },
+})
+
+const ElAlertStub = defineComponent({
+  name: 'ElAlert',
+  props: {
+    title: { type: String, default: '' },
+  },
+  setup(props) {
+    return () => h('div', { class: 'el-alert-stub' }, props.title)
+  },
+})
+
 let wrapper: VueWrapper | undefined
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 afterEach(() => {
   wrapper?.unmount()
@@ -47,6 +96,7 @@ function createPaneState(options: {
   status?: ClaudeTask['status']
   messages?: ChatMessage[]
   providerType?: string
+  codexThreadId?: string
 } = {}): TaskPaneState {
   return {
     paneId: 'pane-1',
@@ -57,6 +107,7 @@ function createPaneState(options: {
       directoryId: 'directory-1',
       prompt: 'continue task',
       providerType: options.providerType,
+      codexThreadId: options.codexThreadId,
       status: options.status ?? 'COMPLETED',
       createdAt: '2026-07-10T00:00:00Z',
       updatedAt: '2026-07-10T00:00:00Z',
@@ -96,9 +147,10 @@ function mountTaskPane(paneState: TaskPaneState): VueWrapper {
       stubs: {
         ChatPanel: ChatPanelStub,
         ElInput: ElInputStub,
-        ElButton: true,
-        ElAlert: true,
-        ElDialog: true,
+        ElButton: ElButtonStub,
+        ElAlert: ElAlertStub,
+        ElDialog: ElDialogStub,
+        ElEmpty: true,
         ElTable: true,
         ElTableColumn: true,
         ElTag: true,
@@ -130,6 +182,83 @@ describe('TaskPane continuation input', () => {
     const panelText = document.body.querySelector('.slash-panel')?.textContent
     expect(panelText).toContain('/turns')
     expect(panelText).not.toContain('/model')
+  })
+
+  it('shows native context usage and keeps an unknown window explicit', async () => {
+    vi.mocked(getCodexTaskContextUsage).mockResolvedValue({
+      taskId: 'task-1',
+      sessionId: 'session-1',
+      codexThreadId: 'thread-1',
+      status: 'window_unknown',
+      current_tokens: 81234,
+      model_context_window: null,
+      remaining_tokens: null,
+      observed_at: '2026-07-17T04:00:00.000Z',
+    })
+    wrapper = mountTaskPane(createPaneState({
+      providerType: 'codex-app-server-worker',
+      codexThreadId: 'thread-1',
+    }))
+
+    await wrapper.get('.context-usage-button').trigger('click')
+    await flushPromises()
+
+    expect(getCodexTaskContextUsage).toHaveBeenCalledWith('task-1')
+    expect(wrapper.get('.context-usage-dialog').text()).toContain('81,234')
+    expect(wrapper.get('.context-usage-dialog').text()).toContain('窗口未知')
+    expect(wrapper.get('.context-usage-dialog').text()).toContain('不会按模型名称猜测')
+  })
+
+  it('manually compacts a terminal app-server thread and refreshes native usage', async () => {
+    vi.mocked(getCodexTaskContextUsage)
+      .mockResolvedValueOnce({
+        taskId: 'task-1', sessionId: 'session-1', codexThreadId: 'thread-1',
+        status: 'known', current_tokens: 240000, model_context_window: 270000,
+        remaining_tokens: 30000,
+      })
+      .mockResolvedValueOnce({
+        taskId: 'task-1', sessionId: 'session-1', codexThreadId: 'thread-1',
+        status: 'known', current_tokens: 42000, model_context_window: 270000,
+        remaining_tokens: 228000,
+      })
+    vi.mocked(compactCodexTaskContext).mockResolvedValue({
+      taskId: 'task-1', sessionId: 'session-1', codexThreadId: 'thread-1',
+      operation_id: 'navigator-compact-test', status: 'completed', turn_id: 'compact-turn-1',
+    })
+    wrapper = mountTaskPane(createPaneState({
+      status: 'COMPLETED',
+      providerType: 'codex-app-server-worker',
+      codexThreadId: 'thread-1',
+    }))
+
+    await wrapper.get('.context-usage-button').trigger('click')
+    await flushPromises()
+    await wrapper.get('.context-compact-button').trigger('click')
+    await flushPromises()
+
+    expect(compactCodexTaskContext).toHaveBeenCalledTimes(1)
+    expect(compactCodexTaskContext).toHaveBeenCalledWith(
+      'task-1', expect.stringMatching(/^navigator-compact-/),
+    )
+    expect(getCodexTaskContextUsage).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.context-usage-dialog').text()).toContain('42,000')
+    expect(wrapper.get('.context-compact-result').text()).toContain('压缩已完成')
+  })
+
+  it('does not offer compaction while the task is running', async () => {
+    vi.mocked(getCodexTaskContextUsage).mockResolvedValue({
+      taskId: 'task-1', sessionId: 'session-1', codexThreadId: 'thread-1', status: 'unknown',
+    })
+    wrapper = mountTaskPane(createPaneState({
+      status: 'RUNNING',
+      providerType: 'codex-app-server-worker',
+      codexThreadId: 'thread-1',
+    }))
+
+    await wrapper.get('.context-usage-button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.context-compact-button').exists()).toBe(false)
   })
 
   it('turns a Codex option number into a structured answer instead of resume', async () => {

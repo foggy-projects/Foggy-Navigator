@@ -14,6 +14,7 @@ OpenAI API 兼容的 Mock LLM 服务，用于 Foggy Navigator 的集成测试和
 
 服务启动后：
 - API 端点：`http://localhost:8200/v1/chat/completions`
+- Responses API：`http://localhost:8200/v1/responses`（支持固定 Codex CLI 的 SSE 与 function-call round trip）
 - 管理接口：`http://localhost:8200/admin/responses`
 - 健康检查：`http://localhost:8200/admin/health`
 

@@ -137,6 +137,21 @@ export type PersistentTurnOptions = Omit<
   'env' | 'apiKey' | 'spawnProcess' | 'requestTimeoutMs' | 'onProcessStarted'
 >
 
+export type AppServerCompactOptions = Pick<
+  PersistentTurnOptions,
+  | 'model'
+  | 'cwd'
+  | 'approvalPolicy'
+  | 'sandboxMode'
+  | 'codexConfig'
+  | 'developerInstructions'
+  | 'signal'
+  | 'onNotification'
+> & {
+  threadId: string
+  interruptTimeoutMs?: number
+}
+
 export type AppServerTurnResult = {
   threadId: string
   turn: Record<string, unknown>
@@ -554,6 +569,47 @@ export class AppServerRuntimeInstance {
       // The turn has consumed any authorized-close outcome.  A later manual
       // operation must create fresh evidence rather than inherit this one.
       if (this.activeTurns.size === 0) this.authorizedTermination = undefined
+    }
+  }
+
+  async compactThread(options: AppServerCompactOptions): Promise<AppServerTurnResult> {
+    if (this.requiresAttention()) {
+      throw new AppServerRuntimeError('Codex app-server runtime has an unverified prior turn', {
+        executionCommitted: true,
+        turnMayHaveStarted: true,
+        threadId: options.threadId,
+        code: 'APP_SERVER_PROCESS_UNVERIFIED',
+      })
+    }
+    if (!this.isHealthy()) {
+      throw new AppServerRuntimeError('Codex app-server instance is unavailable', {
+        executionCommitted: false,
+        threadId: options.threadId,
+      })
+    }
+    if (this.activeThreadIds.has(options.threadId)) {
+      throw new AppServerRuntimeError('Codex app-server thread already has an active root turn', {
+        executionCommitted: false,
+        threadId: options.threadId,
+        code: 'APP_SERVER_THREAD_ALREADY_ACTIVE',
+      })
+    }
+    const context: ActiveTurnContext = {
+      id: randomUUID(),
+      threadId: options.threadId,
+      turnRequestIssued: false,
+      providerTerminalObserved: false,
+    }
+    this.activeTurns.add(context)
+    this.activeThreadIds.add(options.threadId)
+    try {
+      return await this.executeCompact(options, context)
+    } finally {
+      this.activeTurns.delete(context)
+      this.activeThreadIds.delete(options.threadId)
+      for (const [requestId, owner] of this.serverRequestOwners) {
+        if (owner === context) this.serverRequestOwners.delete(requestId)
+      }
     }
   }
 
@@ -978,6 +1034,134 @@ export class AppServerRuntimeInstance {
     }
   }
 
+  private async executeCompact(
+    options: AppServerCompactOptions,
+    context: ActiveTurnContext,
+  ): Promise<AppServerTurnResult> {
+    let turnId: string | undefined
+    let requestIssued = false
+    let notificationsReady = false
+    let interruptSent = false
+    let abortTimer: NodeJS.Timeout | undefined
+    const terminal = deferred<Record<string, unknown>>()
+    void terminal.promise.catch(() => undefined)
+    const pending: AppServerNotification[] = []
+    const isMatching = (notification: AppServerNotification): boolean => {
+      if (notification.params?.threadId !== options.threadId || !turnId) return false
+      const notificationTurnId = readString(notification.params.turnId)
+        || readString(asRecord(notification.params.turn)?.id)
+      return notificationTurnId === turnId
+    }
+    const dispatch = (notification: AppServerNotification): void => {
+      if (!isMatching(notification)) return
+      options.onNotification(notification)
+      if (notification.method === 'turn/completed') {
+        context.providerTerminalObserved = true
+        this.observedProviderTerminals.set(context.id, { threadId: options.threadId, turnId })
+        terminal.resolve(asRecord(notification.params?.turn) || {})
+      }
+    }
+    context.onNotification = notification => {
+      if (requestIssued && !notificationsReady) {
+        if (pending.length >= MAX_PENDING_TURN_NOTIFICATIONS) {
+          throw new Error('Codex app-server emitted too many notifications before compact turn correlation')
+        }
+        pending.push(notification)
+        return
+      }
+      dispatch(notification)
+    }
+    context.onFatal = error => terminal.reject(error)
+    const abort = (): void => {
+      if (!requestIssued) {
+        terminal.reject(new AppServerRuntimeError('Codex app-server compaction aborted before start', {
+          executionCommitted: false,
+          threadId: options.threadId,
+          reason: 'aborted',
+        }))
+        return
+      }
+      if (turnId && !interruptSent) {
+        interruptSent = true
+        void this.client.request('turn/interrupt', { threadId: options.threadId, turnId }).catch(error => {
+          this.healthy = false
+          terminal.reject(error)
+        })
+      }
+      if (!abortTimer) {
+        abortTimer = setTimeout(() => {
+          const error = new AppServerRuntimeError(
+            'Codex app-server did not report a terminal compact turn after turn/interrupt',
+            {
+              executionCommitted: true,
+              turnMayHaveStarted: true,
+              threadId: options.threadId,
+              turnId,
+              code: 'APP_SERVER_COMPACT_ABORT_UNCONFIRMED',
+            },
+          )
+          this.markAttention(error, context)
+          terminal.reject(error)
+        }, options.interruptTimeoutMs ?? 5_000)
+      }
+    }
+    options.signal.addEventListener('abort', abort, { once: true })
+    try {
+      throwIfAborted(options.signal, options.threadId)
+      const resumed = await this.client.request('thread/resume', buildThreadParams(options, true))
+      const resumedThreadId = readString(asRecord(resumed.thread)?.id)
+      if (resumedThreadId !== options.threadId) {
+        throw new AppServerRuntimeError('Codex app-server resumed a different thread for compaction', {
+          executionCommitted: false,
+          threadId: options.threadId,
+          reason: 'protocol',
+          code: 'APP_SERVER_COMPACT_THREAD_MISMATCH',
+        })
+      }
+      throwIfAborted(options.signal, options.threadId)
+      requestIssued = true
+      context.turnRequestIssued = true
+      const response = await Promise.race([
+        this.client.request('thread/compact/start', { threadId: options.threadId }),
+        terminal.promise.then(
+          () => new Promise<Record<string, unknown>>(() => undefined),
+          error => Promise.reject(error),
+        ),
+      ])
+      turnId = readString(asRecord(response.turn)?.id)
+      if (!turnId) throw new Error('Codex app-server did not return a compact turn id')
+      context.turnId = turnId
+      notificationsReady = true
+      for (const notification of pending.splice(0)) dispatch(notification)
+      if (options.signal.aborted) abort()
+      const turn = await terminal.promise
+      await this.client.request('thread/unsubscribe', { threadId: options.threadId }, {
+        timeoutMs: THREAD_UNSUBSCRIBE_TIMEOUT_MS,
+        fatalOnTimeout: false,
+      }).catch(() => undefined)
+      return { threadId: options.threadId, turn }
+    } catch (error) {
+      const runtimeError = error instanceof AppServerRuntimeError
+        ? error
+        : new AppServerRuntimeError(readErrorMessage(error), {
+          executionCommitted: requestIssued,
+          turnMayHaveStarted: requestIssued,
+          threadId: options.threadId,
+          turnId,
+          reason: options.signal.aborted ? 'aborted' : 'runtime',
+          cause: error,
+        })
+      if (requiresAttentionError(runtimeError)) this.markAttention(runtimeError, context)
+      else if (requestIssued && this.healthy) this.markFatal(runtimeError)
+      throw runtimeError
+    } finally {
+      if (abortTimer) clearTimeout(abortTimer)
+      options.signal.removeEventListener('abort', abort)
+      context.onNotification = undefined
+      context.onFatal = undefined
+    }
+  }
+
   private markAttention(_error: Error, context: ActiveTurnContext): void {
     this.unverifiedTurns.set(context.id, {
       threadId: context.threadId,
@@ -1053,7 +1237,13 @@ async function loginWithEphemeralApiKey(client: AppServerJsonRpcClient, apiKey: 
   }
 }
 
-function buildThreadParams(options: PersistentTurnOptions, resume: boolean): Record<string, unknown> {
+function buildThreadParams(
+  options: Pick<
+    PersistentTurnOptions,
+    'model' | 'cwd' | 'approvalPolicy' | 'sandboxMode' | 'codexConfig' | 'developerInstructions'
+  > & { threadId?: string },
+  resume: boolean,
+): Record<string, unknown> {
   const params: Record<string, unknown> = {
     model: options.model,
     cwd: options.cwd,

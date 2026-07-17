@@ -209,6 +209,165 @@ async def test_scripted_cursor_tool_call_and_debug_requests(client):
 
 
 @pytest.mark.anyio
+async def test_responses_api_scripted_function_call_matches_codex_sse_contract(client):
+    """固定 Codex CLI 可通过 Responses SSE 消费 scripted function call。"""
+    trace_id = "codex-responses-shell-001"
+    cursor = f"next:{trace_id}:001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "codex-app-server-shell",
+            "turns": [
+                {
+                    "cursor": cursor,
+                    "response": {
+                        "delay_ms": 25,
+                        "tool_calls": [
+                            {
+                                "id": "call_codex_shell_001",
+                                "type": "function",
+                                "function": {
+                                    "name": "shell_command",
+                                    "arguments": {
+                                        "command": f"printf 'MARKER_A\\nnext:{trace_id}:002\\n'",
+                                        "timeout_ms": 10000,
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": "codex-terra",
+            "stream": True,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": f"run command {cursor}"}],
+                }
+            ],
+            "metadata": {"api_key": "must-not-leak"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    events = _parse_responses_sse(response.text)
+    assert [event["type"] for event in events] == [
+        "response.created",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    item = events[1]["item"]
+    assert item == {
+        "type": "function_call",
+        "call_id": "call_codex_shell_001",
+        "name": "shell_command",
+        "arguments": json.dumps(
+            {
+                "command": f"printf 'MARKER_A\\nnext:{trace_id}:002\\n'",
+                "timeout_ms": 10000,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    }
+    assert events[2]["response"]["usage"]["total_tokens"] == 0
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert records[0]["responseSummary"]["protocol"] == "responses"
+    assert records[0]["responseSummary"]["toolCalls"] == ["shell_command"]
+    assert records[0]["request"]["metadata"]["api_key"] == "***"
+
+
+@pytest.mark.anyio
+async def test_responses_api_advances_from_latest_function_call_output_cursor(client):
+    """Responses 后续请求优先使用 function_call_output 中的最新 cursor。"""
+    trace_id = "codex-responses-shell-002"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "codex-app-server-shell-result",
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:002",
+                    "response": {"content": "OK_CODEX_RESPONSES_FINAL"},
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": "codex-terra",
+            "stream": True,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"start next:{trace_id}:001",
+                        }
+                    ],
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_codex_shell_002",
+                    "output": f"Chunk ID: test\nProcess exited with code 0\nFinal output:\nMARKER_B\nnext:{trace_id}:002",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    events = _parse_responses_sse(response.text)
+    assert [event["type"] for event in events] == [
+        "response.created",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert events[1]["item"]["type"] == "message"
+    assert events[1]["item"]["role"] == "assistant"
+    assert events[1]["item"]["content"] == [
+        {"type": "output_text", "text": "OK_CODEX_RESPONSES_FINAL"}
+    ]
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    assert debug.json()[0]["cursor"] == f"next:{trace_id}:002"
+
+
+def _parse_responses_sse(body: str) -> list[dict]:
+    events = []
+    for block in body.split("\n\n"):
+        data_line = next(
+            (line for line in block.splitlines() if line.startswith("data: ")),
+            None,
+        )
+        if data_line:
+            events.append(json.loads(data_line.removeprefix("data: ")))
+    return events
+
+
+@pytest.mark.anyio
 async def test_scripted_cursor_can_start_from_system_message(client):
     """测试系统上下文中的首轮 cursor 可驱动 Java Navi -> BizWorker scripted smoke。"""
     trace_id = "e2e-script-system-cursor-001"

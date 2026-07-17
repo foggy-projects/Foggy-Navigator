@@ -1187,14 +1187,18 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private boolean isCancellationAcknowledged(Map<String, Object> acknowledgement) {
         if (acknowledgement == null) return false;
-        return hasCancellationRequestedValue(acknowledgement.get("status"))
-                || hasCancellationRequestedValue(acknowledgement.get("abort_status"))
-                || hasCancellationRequestedValue(acknowledgement.get("lifecycle_state"))
-                || hasCancellationRequestedValue(acknowledgement.get("lifecycle_status"));
+        return hasCancellationAcknowledgementValue(acknowledgement.get("status"))
+                || hasCancellationAcknowledgementValue(acknowledgement.get("abort_status"))
+                || hasCancellationAcknowledgementValue(acknowledgement.get("lifecycle_state"))
+                || hasCancellationAcknowledgementValue(acknowledgement.get("lifecycle_status"));
     }
 
-    private boolean hasCancellationRequestedValue(Object value) {
-        return value != null && "cancel_requested".equalsIgnoreCase(String.valueOf(value));
+    private boolean hasCancellationAcknowledgementValue(Object value) {
+        if (value == null) return false;
+        return switch (String.valueOf(value).toLowerCase(Locale.ROOT)) {
+            case "cancel_requested", "abort_pending", "aborted", "already_terminal" -> true;
+            default -> false;
+        };
     }
 
     private boolean isDefinitiveTerminationRejection(Throwable error) {
@@ -1299,9 +1303,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private void markCancellationAttention(CodexTaskEntity entity, String attentionCode) {
         String previousStatus = entity.getStatus();
-        if (!isTerminalStatus(previousStatus)) {
-            entity.setStatus("CANCEL_REQUESTED");
-        }
+        if (isTerminalStatus(previousStatus)) return;
+        entity.setStatus("CANCEL_REQUESTED");
         entity.setErrorMessage(attentionCode);
         persistTask(entity);
         if (!previousStatus.equals(entity.getStatus())) {

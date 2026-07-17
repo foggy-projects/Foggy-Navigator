@@ -275,6 +275,74 @@ class CodexWorkerClientTest {
     }
 
     @Test
+    void contextUsageUsesTaskBoundWorkerPathAndRequiresInstanceProof() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.getTaskContextUsage("worker-task-9")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("GET", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/context-usage", server.path());
+            assertEquals("thread-1", response.get("thread_id"));
+            assertEquals(81234, response.get("current_tokens"));
+            assertEquals("instance-a", server.expectedInstanceId());
+        }
+    }
+
+    @Test
+    void compactTaskContextUsesOperationIdAndPreservesWorkerResult() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.compactTaskContext(
+                            "worker-task-9", "compact-20260717-1")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("POST", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/compact-context", server.path());
+            Map<String, Object> body = objectMapper.readValue(server.body(), new TypeReference<>() {});
+            assertEquals("compact-20260717-1", body.get("operation_id"));
+            assertEquals("completed", response.get("status"));
+            assertEquals("compact-turn-1", response.get("turn_id"));
+            assertEquals("instance-a", server.expectedInstanceId());
+        }
+    }
+
+    @Test
+    void getCompactOperationUsesTaskBoundOperationPathAndRequiresInstanceProof() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.getTaskContextCompactOperation(
+                            "worker-task-9", "compact-20260717-1")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("GET", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/compact-context/compact-20260717-1", server.path());
+            assertEquals("completed", response.get("status"));
+            assertEquals("compact-turn-1", response.get("compact_turn_id"));
+            assertEquals("instance-a", server.expectedInstanceId());
+        }
+    }
+
+    @Test
+    void compactTaskContextPropagatesStableWorkerConflictCode() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.compactReturns(409, "APP_SERVER_THREAD_ACTIVE");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            CodexWorkerClient.WorkerQueryRejectedException error = assertThrows(
+                    CodexWorkerClient.WorkerQueryRejectedException.class,
+                    () -> client.compactTaskContext("worker-task-9", "compact-20260717-1")
+                            .block(Duration.ofSeconds(5)));
+
+            assertEquals(409, error.getStatusCode());
+            assertEquals("APP_SERVER_THREAD_ACTIVE", error.getCode());
+        }
+    }
+
+    @Test
     void abortTaskNormalizesTerminationOperationPendingConflictAsCancellationPending() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             server.abortReturnsTerminationOperationPendingConflict();
@@ -399,6 +467,8 @@ class CodexWorkerClientTest {
         private volatile int respondStatus = 200;
         private volatile String respondErrorCode;
         private volatile int deleteStatus = 200;
+        private volatile int compactStatus = 200;
+        private volatile String compactErrorCode;
         private volatile String actualInstanceId = "instance-a";
 
         private CaptureServer(HttpServer server) {
@@ -445,6 +515,46 @@ class CodexWorkerClientTest {
                     byte[] response = "event: message\ndata: sync\n\n".getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
                     exchange.sendResponseHeaders(200, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().endsWith("/context-usage")) {
+                    byte[] response = ("{\"task_id\":\"worker-task-9\","
+                            + "\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\","
+                            + "\"current_tokens\":81234,\"model_context_window\":270000,"
+                            + "\"remaining_tokens\":188766,\"state\":\"known\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().contains("/compact-context/")) {
+                    byte[] response = ("{\"task_id\":\"worker-task-9\","
+                            + "\"operation_id\":\"compact-20260717-1\","
+                            + "\"status\":\"completed\","
+                            + "\"thread_id\":\"thread-1\","
+                            + "\"compact_turn_id\":\"compact-turn-1\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().endsWith("/compact-context")) {
+                    String responseJson = capture.compactErrorCode != null
+                            ? "{\"error\":\"" + capture.compactErrorCode + "\"}"
+                            : "{\"task_id\":\"worker-task-9\","
+                                    + "\"operation_id\":\"compact-20260717-1\","
+                                    + "\"status\":\"completed\","
+                                    + "\"thread_id\":\"thread-1\","
+                                    + "\"turn_id\":\"compact-turn-1\"}";
+                    byte[] response = responseJson.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(capture.compactStatus, response.length);
                     exchange.getResponseBody().write(response);
                     exchange.close();
                     return;
@@ -603,6 +713,11 @@ class CodexWorkerClientTest {
 
         void deleteReturns(int status) {
             deleteStatus = status;
+        }
+
+        void compactReturns(int status, String errorCode) {
+            compactStatus = status;
+            compactErrorCode = errorCode;
         }
 
         @Override

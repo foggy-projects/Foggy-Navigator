@@ -52,6 +52,7 @@ export interface PoolRuntimeInstance {
     turnId?: string,
   ): boolean | void | Promise<boolean | void>
   runTurn(options: PersistentTurnOptions): ReturnType<AppServerRuntimeInstance['runTurn']>
+  compactThread?(options: Parameters<AppServerRuntimeInstance['compactThread']>[0]): ReturnType<AppServerRuntimeInstance['compactThread']>
   readThread(threadId: string, includeTurns?: boolean): Promise<Record<string, unknown>>
   listLoadedThreads?(): Promise<string[]>
   interruptTurn?(threadId: string, turnId: string): Promise<void>

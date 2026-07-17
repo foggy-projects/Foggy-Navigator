@@ -8,6 +8,7 @@ import {
 } from '../persistence/task-store.js'
 import { resolveRuntimeReadiness } from '../runtime-capabilities.js'
 import {
+  ContextMaintenanceError,
   TaskManager,
   TaskManagerDrainingError,
   TaskQueueFullError,
@@ -15,6 +16,7 @@ import {
   UserInputResponseError,
   toPublicTask,
 } from '../task-manager.js'
+import { ContextCompactOperationConflictError } from '../persistence/context-maintenance-store.js'
 import { UserInputResponseValidationError } from '../app-server/user-input.js'
 import {
   resolveSupportedModelAlias,
@@ -130,6 +132,65 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
       return
     }
     res.json(toPublicTask(record))
+  })
+
+  router.get('/api/v1/tasks/:taskId/context-usage', (req, res) => {
+    const taskId = single(req.params.taskId)
+    const record = manager.get(taskId)
+    if (!record || record.tombstoned_at) {
+      res.status(404).json({ error: 'TASK_NOT_FOUND' })
+      return
+    }
+    const usage = manager.getContextUsage(taskId)
+    res.json(usage || {
+      schema_version: 1,
+      thread_id: record.thread_id,
+      observed_at: null,
+      status: 'unknown',
+    })
+  })
+
+  router.post('/api/v1/tasks/:taskId/compact-context', async (req, res, next) => {
+    try {
+      const operationId = readCompactOperationId(req.body)
+      if (!operationId) {
+        res.status(400).json({ error: 'INVALID_CONTEXT_COMPACT_OPERATION_ID' })
+        return
+      }
+      const operation = await manager.compactContext(single(req.params.taskId), operationId)
+      res.status(operation.status === 'running' || operation.status === 'unknown' ? 202 : 200).json(operation)
+    } catch (error) {
+      if (error instanceof ContextMaintenanceError) {
+        const status = error.code === 'TASK_NOT_FOUND' ? 404
+          : error.code === 'APP_SERVER_THREAD_ACTIVE' || error.code === 'TASK_NOT_TERMINAL' ? 409
+            : 422
+        res.status(status).json({ error: error.code })
+        return
+      }
+      if (error instanceof ContextCompactOperationConflictError) {
+        res.status(409).json({ error: error.code })
+        return
+      }
+      if (error instanceof TaskManagerDrainingError) {
+        res.status(503).json({ error: error.code })
+        return
+      }
+      next(error)
+    }
+  })
+
+  router.get('/api/v1/tasks/:taskId/compact-context/:operationId', (req, res) => {
+    const taskId = single(req.params.taskId)
+    if (!manager.get(taskId)) {
+      res.status(404).json({ error: 'TASK_NOT_FOUND' })
+      return
+    }
+    const operation = manager.getContextCompactOperation(taskId, single(req.params.operationId))
+    if (!operation) {
+      res.status(404).json({ error: 'CONTEXT_COMPACT_OPERATION_NOT_FOUND' })
+      return
+    }
+    res.status(operation.status === 'running' || operation.status === 'unknown' ? 202 : 200).json(operation)
   })
 
   router.get('/api/v1/processes', async (_req, res) => {
@@ -457,4 +518,12 @@ function validateUserInputResponseBody(value: unknown): { request_id: string | n
       || (typeof requestId === 'number' && Number.isSafeInteger(requestId)))) return undefined
   if (!body.answers || typeof body.answers !== 'object' || Array.isArray(body.answers)) return undefined
   return { request_id: requestId, answers: body.answers }
+}
+
+function readCompactOperationId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const body = value as Record<string, unknown>
+  if (Object.keys(body).some(key => key !== 'operation_id')) return undefined
+  const operationId = typeof body.operation_id === 'string' ? body.operation_id.trim() : ''
+  return IDEMPOTENCY_KEY_PATTERN.test(operationId) ? operationId : undefined
 }

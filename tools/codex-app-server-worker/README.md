@@ -152,6 +152,13 @@ credentials, tokens, or other secrets are discarded at the Worker boundary.
 8. Run `npm install`, `npm test`, `npm run typecheck`, and `npm run build`.
 9. Run `npm run verify:schema` whenever the pinned CLI or app-server protocol changes.
 
+The opt-in Navigator regression can be run with `npm run test:e2e:navigator`. It builds and starts
+only repo-local Worker code, an isolated `CODEX_HOME`/state tree, the mock Responses API, and a
+Spring Boot/H2 test application. It exercises the public Navigator task APIs and writes evidence to
+`temp/test-artifacts/bug007-navigator-e2e/`. The runner refuses occupied ports, terminates only the
+process groups it created, unsets inherited provider credentials, and does not use or modify the
+installed `~/.codex-app-server-worker`. Claude Worker is not part of this Codex execution path.
+
 Default port: `3062`. The service reports degraded readiness and rejects task creation when the
 encryption key, usable cwd allowlist, or isolated `CODEX_HOME` is absent, the CLI is
 unavailable, or its version differs from `0.144.3`. An allowlist whose roots are missing, offline,

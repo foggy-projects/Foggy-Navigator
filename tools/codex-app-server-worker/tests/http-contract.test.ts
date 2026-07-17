@@ -48,6 +48,9 @@ test('instance affinity guard rejects every task route before manager access', a
     ['/api/v1/tasks/task-1/generated-images/0123456789abcdef0123456789abcdef', { headers }],
     ['/api/v1/tasks/task-1/abort', { method: 'POST', headers }],
     ['/api/v1/tasks/task-1/respond', { method: 'POST', headers, body: JSON.stringify({ request_id: 'r', answers: {} }) }],
+    ['/api/v1/tasks/task-1/context-usage', { headers }],
+    ['/api/v1/tasks/task-1/compact-context', { method: 'POST', headers, body: JSON.stringify({ operation_id: 'op-1' }) }],
+    ['/api/v1/tasks/task-1/compact-context/op-1', { headers }],
     ['/api/v1/tasks/task-1', { method: 'DELETE', headers }],
     ['/api/v1/processes', { headers }],
   ]
@@ -143,6 +146,53 @@ test('managed process snapshots expose only fixed task-bound app-server identity
   assert.equal(executor.snapshotCalls, 1)
   assert.equal(executor.executeCalls, 0)
   assert.equal(executor.manualPidKillCalls, 0)
+})
+
+test('task-bound context compaction is idempotent and publishes the latest native usage snapshot', async t => {
+  const stateDir = await tempDirectory('codex-app-context-maintenance-http-')
+  const config = testConfig(stateDir)
+  const executor = new ContextMaintenanceExecutor()
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const accepted = await postTask(baseUrl, 'context-maintenance-task', { prompt: 'seed thread' })
+  assert.equal(accepted.response.status, 202)
+  await waitFor(() => manager.get('context-maintenance-task')?.status === 'terminal')
+  const compact = async () => fetch(`${baseUrl}/api/v1/tasks/context-maintenance-task/compact-context`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation_id: 'compact-op-1' }),
+  })
+  const first = await compact()
+  assert.equal(first.status, 200)
+  const firstBody = await first.json() as Record<string, unknown>
+  assert.equal(firstBody.status, 'completed', JSON.stringify({ firstBody, compactCalls: executor.compactCalls }))
+  const replay = await compact()
+  assert.equal(replay.status, 200)
+  assert.equal(executor.compactCalls, 1)
+
+  const usage = await fetch(`${baseUrl}/api/v1/tasks/context-maintenance-task/context-usage`, {
+    headers: authHeaders(),
+  })
+  assert.equal(usage.status, 200)
+  assert.deepEqual(await usage.json(), {
+    schema_version: 1,
+    thread_id: 'thread-test',
+    turn_id: 'compact-turn-test',
+    observed_at: '2026-07-17T00:00:00.000Z',
+    last_total_tokens: 12000,
+    model_context_window: 270000,
+    remaining_tokens: 258000,
+    status: 'known',
+  })
 })
 
 test('generated images are served through an authenticated task route and removed with the tombstone', async t => {
@@ -1438,6 +1488,31 @@ class ProviderTerminalManualRaceExecutor implements TaskExecutor {
     // signed PID request still owns that gate.
     await Promise.resolve()
     return { observed_exit: false, provider_terminal_observed: true }
+  }
+}
+
+class ContextMaintenanceExecutor extends FakeExecutor {
+  compactCalls = 0
+
+  async compactContext(
+    options: Parameters<NonNullable<TaskExecutor['compactContext']>>[0],
+  ): Promise<Awaited<ReturnType<NonNullable<TaskExecutor['compactContext']>>>> {
+    this.compactCalls++
+    await options.onContextUsage({
+      schema_version: 1,
+      thread_id: options.record.thread_id!,
+      turn_id: 'compact-turn-test',
+      observed_at: '2026-07-17T00:00:00.000Z',
+      last_total_tokens: 12_000,
+      model_context_window: 270_000,
+      remaining_tokens: 258_000,
+      status: 'known',
+    })
+    return {
+      threadId: options.record.thread_id!,
+      turnId: 'compact-turn-test',
+      status: 'completed',
+    }
   }
 }
 

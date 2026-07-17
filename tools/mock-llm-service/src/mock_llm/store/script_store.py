@@ -102,8 +102,18 @@ class ScriptStore:
         }
 
     def match(self, model: str, messages: List[ChatMessage]) -> Optional[ScriptMatch]:
+        payload = {"model": model, "messages": _messages_to_data(messages)}
+        return self.match_payload(model, payload, extract_latest_cursor(messages))
+
+    def match_payload(
+        self,
+        model: str,
+        payload: Dict[str, Any],
+        cursor: Optional[str] = None,
+    ) -> Optional[ScriptMatch]:
+        """Match a scripted response from an arbitrary provider request payload."""
         self._purge_expired()
-        cursor = extract_latest_cursor(messages)
+        cursor = cursor or _find_cursor(payload)
         if not cursor:
             return None
         trace_id, turn_index = parse_cursor(cursor)
@@ -118,7 +128,7 @@ class ScriptStore:
         turn = turns[min(hit_count, len(turns) - 1)]
         self._cursor_match_counts[cursor_key] = hit_count + 1
 
-        request_hash = hash_request({"model": model, "messages": _messages_to_data(messages)})
+        request_hash = hash_request(payload)
         seen_key = f"{trace_id}|{cursor}|{request_hash}"
         repeated = seen_key in self._seen_requests
         self._seen_requests.add(seen_key)
