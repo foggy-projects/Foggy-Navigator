@@ -120,6 +120,8 @@ GOV-004 的 Java 控制面与 Claude、Codex SDK、Codex app-server 三条 Worke
 | [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) | Open SDK 测试编译、JUnit 5 与跨平台 clean 基线 | P1 | closed |
 | [BUG-003](./workitems/BUG-003-tenantless-session-owner-access-regression.md) | 无租户账号访问自有 Session 被 ownership 门禁误拒绝 | P3 | ready-for-verification |
 | [BUG-004](./workitems/BUG-004-blank-tenant-task-ownership-regression.md) | 空字符串 tenant 导致新建 Task 无法读取 | P3 | ready-for-verification |
+| [BUG-010](./workitems/BUG-010-session-forward-app-server-runtime-affinity.md) | NEW_SESSION 转发误绑定 legacy SDK runtime | P3 | READY_FOR_SIGNOFF |
+| [BUG-013](./workitems/BUG-013-codex-app-server-long-thread-tool-loss.md) | Codex App Server 长 Thread 工具退化、原生压缩与历史分支 | P3 | NEEDS_REPLAN |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | 超大类、模块边界和 Provider 状态 schema 渐进治理 | P6 | planned |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | 低风险孤儿文件、未引用导出和失效文档 | P4 | planned |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring dev-only 完整功能切片移除 | P5 | in-progress |
@@ -236,6 +238,10 @@ GOV-004 的 Java 控制面与 Claude、Codex SDK、Codex app-server 三条 Worke
 - [BUG-002 Open SDK clean test 基线](./workitems/BUG-002-open-sdk-clean-test-baseline.md)
 - [BUG-003 无租户 Session owner 访问回归](./workitems/BUG-003-tenantless-session-owner-access-regression.md)
 - [BUG-004 空 tenant Task ownership 回归](./workitems/BUG-004-blank-tenant-task-ownership-regression.md)
+- [BUG-010 NEW_SESSION 转发 App Server runtime affinity](./workitems/BUG-010-session-forward-app-server-runtime-affinity.md)
+- [BUG-010 红绿测试证据](./evidence/BUG-010-session-forward-app-server-runtime-affinity.md)
+- [BUG-013 Codex App Server 长 Thread 工具退化与原生压缩](./workitems/BUG-013-codex-app-server-long-thread-tool-loss.md)
+- [BUG-013 运行态与固定 CLI 证据](./evidence/BUG-013-codex-app-server-long-thread-tool-loss-20260717.md)
 - [OPT-002 核心代码可维护性](./workitems/OPT-002-core-code-maintainability.md)
 - [CLEAN-001 低风险孤儿清理](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)
 - [CLEAN-002 Monitoring 退役](./workitems/CLEAN-002-monitoring-retirement.md)
