@@ -58,6 +58,13 @@ external_enablement: no
 - 修复后 404 进入未确认分支：任务保持 `CANCEL_REQUESTED`，attention/error 为 `TERMINATION_UNCONFIRMED`，operation 标记为 unconfirmed，等待可关联的 Provider 终态或人工对账；不得恢复 `RUNNING`，也不得伪造 `ABORTED`。400/401/403 等明确的请求、鉴权或 capability 拒绝仍保留 `TERMINATION_REJECTED` 并恢复请求前状态。
 - 回归先在旧实现上复现 `expected CANCEL_REQUESTED but was RUNNING`，修复后 404 未确认与 403 明确拒绝两条定向测试均通过；完整 `CodexTaskServiceTest` 为 90 tests、0 failure/error/skip，`mvn -pl addons/codex-worker-agent -am -Dsurefire.failIfNoSpecifiedTests=false test` 为 `BUILD SUCCESS`，Codex addon 400 tests、0 failure/error/skip。该修复属于 Java 控制面，不需要重新发布未变化的 Codex Worker；目标环境必须部署/重启 Java 后，现场行为才会改变。
 
+### `dev-kvm-jdk17-2` 部署与现场复测
+
+- `2026-07-17` 将目标机 `/home/sa/Foggy-Navigator` 从 `b07ad012` fast-forward 到 `2b6ff748`；仅保留目标机既有未跟踪 `.codex/`，源码 worktree 无其他脏改动。目标机使用 JDK 17 与 Maven 3.9.9 执行 `mvn package -pl launcher -am -DskipTests`，结果为 `BUILD SUCCESS`；生成 Jar 的 `git.branch=main`、`git.commit.id.abbrev=2b6ff74`、`git.dirty=false`。
+- 已确认旧 Java PID `3917196` 的 cwd 为 `/home/sa/Foggy-Navigator`，先发送 `SIGTERM` 并在 2 秒内观察到退出，再通过仓库 `scripts/start-launcher.sh --skip-build` 启动新 PID `4013667`。重启未停止或更新任何 Codex Worker；`http://127.0.0.1:8112/actuator/health` 返回 application 与 DB `UP`。
+- 修复部署前，`GET /api/v1/tasks/20260717-d03c` 为 `RUNNING / TERMINATION_REJECTED`。部署后再次调用显式取消，接口返回 HTTP 200 与 `Task cancelled`，任务立即变为 `CANCEL_REQUESTED / TERMINATION_UNCONFIRMED`；在 0、2、5、10 秒及后续复查中均保持该状态，没有恢复 `RUNNING`，也没有伪造 `ABORTED`。
+- 重启前正在活动的 app-server 任务 `20260717-508a` 在重启后继续为 `RUNNING` 且 `updatedAt` 继续推进，说明本次 Java 部署没有把该 Worker 任务改成终态。以上只证明该 404 取消分类缺陷在目标环境修复，不解除 GOV-004 的真实 CLI 五态、目标 DB migration/rollback、告警送达和多实例 replay 验收 blocker。
+
 ### 已实施行为
 
 1. Java 在派发任何显式终止前以独立事务写入 `TerminationOperation v1`。记录 operation ID、task/session/provider task、owner、worker、kind/origin、actor、授权决定、reason、correlation、预期 PID/process identity、dispatch 与 observed result；查询接口按 task owner 过滤。`CANCEL_REQUESTED` 或 Worker ACK 仅说明请求已接受，不能把任务改为 `ABORTED`。
