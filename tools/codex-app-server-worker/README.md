@@ -146,6 +146,9 @@ credentials, tokens, or other secrets are discarded at the Worker boundary.
 5. Configure at least one absolute root in `CODEX_APP_SERVER_ALLOWED_CWDS`. Release installers
    populate this only for a fresh `.env`; source-based setup remains explicit.
 6. Set `CODEX_HOME` to an isolated service directory that is not shared with the SDK Worker.
+   Local Codex Memories are global to that home rather than scoped by Navigator user, tenant,
+   Session, or project. A Worker with Memories enabled must therefore be treated as one shared
+   trust domain; use separate Workers and `CODEX_HOME` directories when those boundaries differ.
 7. Keep `CODEX_APP_SERVER_IMAGE_GENERATION_MODE=disabled` for coding sessions. Use `local` only for
    explicit image-generation experiments; optionally set an absolute output directory and a byte
    limit up to 25 MiB. The defaults are `<state-dir>/generated-images` and 16 MiB.
@@ -168,7 +171,10 @@ be used on loopback or a trusted network because it grants unauthenticated full 
 
 The release installer performs steps 1, 2, 4 and 5 for a fresh installation: it generates the
 state key once, creates `<install-dir>/codex-home`, writes the platform cwd defaults, and leaves
-the Worker token plus `OPENAI_API_KEY` empty. Existing `.env` bytes are preserved on update.
+the Worker token plus `OPENAI_API_KEY` empty. If that Codex home has no `config.toml`, the installer
+also enables local Memories with generation and use active. An existing `config.toml` is preserved
+byte for byte so an operator's explicit enable/disable choice and provider configuration always win.
+Existing `.env` bytes are preserved on update.
 
 ## Operations
 
@@ -260,7 +266,9 @@ curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-wo
 
 The bootstrap validates product/schema, relative artifact path, byte length, and SHA-256 before it
 runs any package code. A fresh installation remains stopped, but its state key and isolated
-`CODEX_HOME` are already initialized; start it after reviewing the generated `.env`. Re-running the same command upgrades an existing installation by
+`CODEX_HOME` are already initialized, including a default Memories configuration when no prior
+`config.toml` exists; start it after reviewing the generated `.env` and shared-memory trust boundary.
+Re-running the same command upgrades an existing installation by
 calling its already-installed updater, preserving lifecycle and rollback protections. The shell
 bootstrap supports Linux only; macOS remains unsupported.
 

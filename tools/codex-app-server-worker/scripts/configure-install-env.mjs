@@ -7,6 +7,19 @@ import dotenv from 'dotenv'
 const ALLOWED_CWDS_KEY = 'CODEX_APP_SERVER_ALLOWED_CWDS'
 const STATE_KEY = 'CODEX_APP_SERVER_STATE_KEY'
 const CODEX_HOME_KEY = 'CODEX_HOME'
+const DEFAULT_CODEX_CONFIG = [
+  '# Generated for a fresh Codex App Server Worker installation.',
+  '# This CODEX_HOME is a shared memory trust domain; use separate Workers for separate users or tenants.',
+  '',
+  '[features]',
+  'memories = true',
+  '',
+  '[memories]',
+  'generate_memories = true',
+  'use_memories = true',
+  'disable_on_external_context = false',
+  '',
+].join('\n')
 
 export function configureFreshInstallEnv(envFile, allowedCwds = '') {
   if (!path.isAbsolute(envFile)) throw new Error('env file path must be absolute')
@@ -28,7 +41,24 @@ export function configureFreshInstallEnv(envFile, allowedCwds = '') {
   fs.chmodSync(envFile, 0o600)
   fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 })
   fs.chmodSync(codexHome, 0o700)
+  initializeCodexHomeConfig(codexHome)
   return { allowedCwds, codexHome }
+}
+
+function initializeCodexHomeConfig(codexHome) {
+  const configFile = path.join(codexHome, 'config.toml')
+  let descriptor
+  try {
+    descriptor = fs.openSync(configFile, 'wx', 0o600)
+    fs.writeFileSync(descriptor, DEFAULT_CODEX_CONFIG, 'utf8')
+    fs.fsyncSync(descriptor)
+  } catch (error) {
+    if (error?.code === 'EEXIST') return
+    throw error
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
+  }
+  fs.chmodSync(configFile, 0o600)
 }
 
 function requireSingleAssignment(source, parsed, key, envFile) {

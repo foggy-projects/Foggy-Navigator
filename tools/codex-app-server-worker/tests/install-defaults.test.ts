@@ -33,11 +33,38 @@ test('fresh-install env writer generates stable state and home defaults without 
   assert.equal(parsed.CODEX_HOME, path.join(root, 'codex-home'))
   assert.equal(parsed.OPENAI_API_KEY, '')
   assert.equal(fs.statSync(parsed.CODEX_HOME!).isDirectory(), true)
+  const configFile = path.join(parsed.CODEX_HOME!, 'config.toml')
+  const memoryConfig = fs.readFileSync(configFile, 'utf8')
+  assert.match(memoryConfig, /^\[features\]\nmemories = true$/m)
+  assert.match(memoryConfig, /^\[memories\]\ngenerate_memories = true\nuse_memories = true\ndisable_on_external_context = false$/m)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(configFile).mode & 0o777, 0o600)
 
   configureFreshInstallEnv(envFile, allowedCwds)
   const repeated = dotenv.parse(fs.readFileSync(envFile, 'utf8'))
   assert.equal(repeated.CODEX_APP_SERVER_STATE_KEY, parsed.CODEX_APP_SERVER_STATE_KEY)
   assert.equal(repeated.CODEX_HOME, parsed.CODEX_HOME)
+  assert.equal(fs.readFileSync(configFile, 'utf8'), memoryConfig)
+})
+
+test('fresh-install env writer preserves an operator-owned Codex config byte for byte', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-install-existing-config-'))
+  const envFile = path.join(root, '.env')
+  const codexHome = path.join(root, 'existing-codex-home')
+  const configFile = path.join(codexHome, 'config.toml')
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.mkdirSync(codexHome, { recursive: true })
+  const operatorConfig = Buffer.from('[features]\r\nmemories = false\r\n\r\n[model_providers.custom]\r\nname = "operator"\r\n', 'utf8')
+  fs.writeFileSync(configFile, operatorConfig)
+  fs.writeFileSync(envFile, [
+    'CODEX_APP_SERVER_STATE_KEY=',
+    'CODEX_APP_SERVER_ALLOWED_CWDS=',
+    `CODEX_HOME=${codexHome}`,
+    '',
+  ].join('\n'))
+
+  configureFreshInstallEnv(envFile, '/')
+
+  assert.deepEqual(fs.readFileSync(configFile), operatorConfig)
 })
 
 test('fresh-install env writer fails closed on a malformed template or value', t => {
@@ -72,6 +99,9 @@ test('installer applies all platform defaults only when creating .env', {
   assert.equal(freshEnv.CODEX_HOME, path.join(freshInstall, 'codex-home'))
   assert.equal(freshEnv.OPENAI_API_KEY, '')
   assert.equal(fs.statSync(freshEnv.CODEX_HOME!).isDirectory(), true)
+  const freshConfig = fs.readFileSync(path.join(freshEnv.CODEX_HOME!, 'config.toml'), 'utf8')
+  assert.match(freshConfig, /^\[features\]\nmemories = true$/m)
+  assert.match(freshConfig, /^\[memories\]\ngenerate_memories = true\nuse_memories = true\ndisable_on_external_context = false$/m)
 
   fs.mkdirSync(existingInstall, { recursive: true })
   const existingBytes = Buffer.from('# operator-owned\r\nCODEX_APP_SERVER_ALLOWED_CWDS=X:\\\r\n', 'utf8')
