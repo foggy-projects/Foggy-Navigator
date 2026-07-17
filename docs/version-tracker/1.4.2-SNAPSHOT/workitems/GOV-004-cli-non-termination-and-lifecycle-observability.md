@@ -43,6 +43,14 @@ external_enablement: no
 
 ## 已实施收口与证据边界（2026-07-16）
 
+## 本机 Codex SDK Worker 修复部署（2026-07-17）
+
+- 针对本机已安装 SDK Worker 执行 `npm run package:release -- --platform all --smoke full`。结果为 208 tests：207 passed、1 skipped、0 failed；`typecheck`、`build` 和归档候选 `/health` smoke 均通过。Linux 归档 `codex-worker-1.0.16-linux.tar.gz` 的 SHA-256 为 `1faff3d591baf7c42c63ebc4d950e8eea23ec710b8600ae4dd33e38fdf812a03`。
+- 使用归档内 `install.sh --upgrade` 安装到 `~/.codex-worker`，安装器已备份并恢复既有 `.env`，保留 `logs/`（包括终止 operation ledger）。既有本机配置端口为 3053；安装后在该端口启动，`/health` 返回 `status=ok`、`ready=true`、`version=1.0.16`、`active_tasks=0`、Codex SDK `0.144.1` compatible。未执行模型请求或任何外部/生产路由操作。
+- 原先运行在 3051 的当前仓库开发 Worker 已按其安全 quiescence gate 重启，`/health` 同样返回 `ready=true`、`version=1.0.16`、`active_tasks=0` 和 compatible SDK；它与已安装的 3053 Worker 保持原有的独立端口配置。
+- 已检查已安装的 `dist/codex/thread-process-watchdog.js`：其记录 `reconciled lifecycle observations` 和 `PROCESS_UNVERIFIED`，不含 watchdog `abortTask(...)` 调用。此前日志中原生任务 `8893e658-3ba5-47aa-b459-625925d328ce` 的旧版 `reconciled stale execution state` / 自动 abort 记录是本次修复的直接本机证据。
+- 历史 Navigator 任务 `20260717-d30f` 没有可用的原生 Worker 终态记录；本次部署不得把它伪造为 `ABORTED`。其最终展示状态仍需由具备任务审计权限的控制面按对账流程单独裁定。本机部署不改变 `verification-blocked`、不构成真实 CLI 五态或生产验收。
+
 ### 已实施行为
 
 1. Java 在派发任何显式终止前以独立事务写入 `TerminationOperation v1`。记录 operation ID、task/session/provider task、owner、worker、kind/origin、actor、授权决定、reason、correlation、预期 PID/process identity、dispatch 与 observed result；查询接口按 task owner 过滤。`CANCEL_REQUESTED` 或 Worker ACK 仅说明请求已接受，不能把任务改为 `ABORTED`。
