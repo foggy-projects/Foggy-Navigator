@@ -27,12 +27,24 @@ Use the narrowest lane that can perform the action:
 | Runtime credential | ClientApp key-secret / access token | runtime-token exchange, readiness, owner-smoke, ask, messages, live smoke | modelConfig create, grant, binding, worker-host apply |
 | Break-glass admin | operator/admin env only | cross-owner repair, migration, emergency revocation | normal provisioning |
 
+## Worker Role Selection
+
+Choose the route by the resource being changed, not by the provider model backend:
+
+| Situation | Supported route | Do not do |
+| --- | --- | --- |
+| Existing Physical Worker with Codex | Run `worker-host verify`, then `worker-host update --worker-id <physicalWorkerId>`. Set Codex under `workers.claudeCode` through `codexConfig` (for example `http://127.0.0.1:3151`). | Do not set `workers.codex.workerId`, register a direct `OPENAI_CODEX` identity, or add it to a WorkerPool. |
+| New WorkerHost | Run `worker-host verify`, then `worker-host apply` with the upstream-admin lane. `apply` can create a Physical Worker when no worker ID is supplied. | Do not use `apply` when an existing worker must be preserved. |
+| LangGraph Biz role | Define `workers.biz` in the WorkerHost manifest. It registers a `LANGGRAPH_BIZ` Biz Worker identity when applied or updated. | Do not use this Biz identity route for Codex. |
+
+`UPSTREAM_SYSTEM/<upstreamSystemId>` is the Physical Worker owner context. `OPENAI_CODEX` is a model/capability backend, not a second Biz Worker identity. `worker-pool register-worker` and `add-member` are legacy compatibility commands and must not onboard Codex.
+
 ## Standard Closure Order
 
 1. Confirm target upstream system, tenant, ClientApp, agentCode, upstreamUserId, modelConfigId, directoryId, and boundary constraints.
 2. Verify profile files are gitignored before writing credentials.
 3. Run or review `worker-host verify` on the local manifest.
-4. Run `worker-host apply --write-profile` only with an upstream-admin lane.
+4. For a new WorkerHost, run `worker-host apply --write-profile`; for an existing Physical Worker, run `worker-host update --worker-id <physicalWorkerId> --write-profile`. Use only an upstream-admin lane.
 5. Create or update modelConfig through the correct lane; use an actually supported `modelName`.
 6. Sync/register the Agent under the current ClientApp or upstream owner.
 7. Bind default model, default workspace, and worker where required.
@@ -49,7 +61,7 @@ Use the narrowest lane that can perform the action:
 For readiness or owner-smoke failures, check these in order:
 
 - `MODEL_CONFIG_GRANT`: modelConfig tenant / owner mismatch, missing grant, or Agent default model variant not allowed.
-- `WORKER_HOST_ROLE_ROUTING`: Biz worker should resolve from `BIZ_WORKER_IDENTITY`, not a workspace fallback.
+- `WORKER_HOST_ROLE_ROUTING`: Biz resolves from `BIZ_WORKER_IDENTITY`; Codex resolves as `claudeCode.codexConfig` on the existing Physical Worker, not as a direct `OPENAI_CODEX` identity or WorkerPool member.
 - `WORKSPACE_RESOURCE`: directory owner/tenant/ClientApp mismatch, disabled directory, or wrong workspace scope.
 - `FILE_TOOL_ROOT_ALIGNMENT`: Biz worker file root must align with the effective directory.
 - `BUSINESS_FUNCTION_UPSTREAM_ROUTE`: use a local mock route for local smoke when real upstream access is out of scope.

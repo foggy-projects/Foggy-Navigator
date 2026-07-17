@@ -275,6 +275,61 @@ class UpstreamCliTest {
     }
 
     @Test
+    void workerHelpDistinguishesExistingCodexPhysicalWorkersFromWorkerPoolCompatibility() {
+        int rootCode = run(new String[]{"upstream", "--help"}, Map.of());
+        String rootOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, rootCode);
+        assertTrue(rootOutput.contains("Do not use these commands to onboard OPENAI_CODEX"));
+        assertTrue(rootOutput.contains("existing Physical Worker, use worker-host verify then update"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int workerHostCode = run(new String[]{"upstream", "worker-host", "--help"}, Map.of());
+        String workerHostOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, workerHostCode);
+        assertTrue(workerHostOutput.contains("existing Physical Worker only"));
+        assertTrue(workerHostOutput.contains("Codex is Navi-routed through claudeCode.codexConfig"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int workerPoolCode = run(new String[]{"upstream", "worker-pool", "--help"}, Map.of());
+        String workerPoolOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, workerPoolCode);
+        assertTrue(workerPoolOutput.contains("not for OPENAI_CODEX or OPENAI_CODEX_APP_SERVER"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void workerPoolRegisterWorkerRejectsDirectCodexIdentitiesBeforeRequest() throws Exception {
+        for (String workerBackend : List.of("OPENAI_CODEX", "OPENAI_CODEX_APP_SERVER")) {
+            Path identityFile = tempDir.resolve("worker-identity-" + workerBackend + ".json");
+            Files.writeString(identityFile, """
+                    {
+                      "workerId": "codex-direct",
+                      "workerBackend": "%s",
+                      "baseUrl": "http://127.0.0.1:3151"
+                    }
+                    """.formatted(workerBackend), StandardCharsets.UTF_8);
+
+            int code = run(new String[]{"upstream", "worker-pool", "register-worker",
+                    "--file", identityFile.toString()}, env(
+                    "NAVI_BASE_URL", baseUrl(),
+                    "NAVI_ADMIN_API_KEY", "naa-secret-admin-key"));
+
+            assertEquals(2, code, workerBackend);
+            assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("does not support " + workerBackend));
+            assertTrue(requestPaths.isEmpty(), workerBackend);
+            stdout.reset();
+            stderr.reset();
+        }
+    }
+
+    @Test
     void configCheckMasksSecretsAndRequiresIgnoredProfile() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navi-upstream.env\n", StandardCharsets.UTF_8);
         Files.writeString(tempDir.resolve(".navi-upstream.env"),
@@ -3729,7 +3784,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("worker-host apply/update/verify/install"));
         assertTrue(output.contains("worker list/create/get/update/delete/health/processes/kill"));
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
-        assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
+        assertTrue(output.contains("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-get/system-create/system-update/system-test"));
         assertTrue(output.contains("[--max-turns <n>]"));
         assertTrue(output.contains("[--allowed-tools <csv>]"));

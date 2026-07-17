@@ -309,7 +309,8 @@ public class UpstreamCli {
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
         out.println("Commands: config check, auth login, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
-        out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
+        out.println("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status. Do not use these commands to onboard OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
+        out.println("For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
@@ -465,7 +466,9 @@ public class UpstreamCli {
         out.println("  verify --file <json>");
         out.println("  install --file <json> [--install-shell auto|powershell|bash|wsl] [--wsl-user <user>] [--wsl-distro <name>] [--timeout-seconds <seconds>] [--no-start] [--dry-run]");
         out.println("WorkerHost is the normal upstream bootstrap entry; worker and worker-pool commands remain low-level compatibility commands.");
-        out.println("Codex is Navi-routed through claudeCode.codexConfig; workers.codex.workerId/direct OPENAI_CODEX identity is not supported yet.");
+        out.println("apply creates a Physical Worker only when no worker id is supplied; use it only for a new WorkerHost.");
+        out.println("update is for an existing Physical Worker only; it requires --worker-id or NAVI_WORKER_ID and cannot create one.");
+        out.println("Codex is Navi-routed through claudeCode.codexConfig; workers.codex.workerId and direct OPENAI_CODEX/OPENAI_CODEX_APP_SERVER identities are unsupported.");
         return 0;
     }
 
@@ -485,7 +488,8 @@ public class UpstreamCli {
 
     private int workerPoolUsage() {
         out.println("Usage: navi upstream worker-pool <command> [options]");
-        out.println("Internal compatibility commands. Normal upstream bootstrap should use worker + directory + model + agent; WorkerPool is a Navigator routing artifact.");
+        out.println("Legacy internal compatibility commands. WorkerPool is a Navigator routing artifact, not for OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
+        out.println("Use worker-host verify then update for an existing Physical Worker; apply only for a new WorkerHost.");
         out.println("Commands: list, create, register-worker, add-member, status");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  create --file <json> [--target-tenant-id <tenantId>] [--write-profile]");
@@ -1723,11 +1727,17 @@ public class UpstreamCli {
     }
 
     private int workerPoolRegisterWorker(CliArguments args) throws Exception {
+        Map<String, Object> workerIdentity = readJsonMap(requiredOption(args, "file", "biz worker identity json file"));
+        String workerBackend = valueOrEmpty(workerIdentity.get("workerBackend"));
+        if (isSubscriptionWorkerBackend(workerBackend)) {
+            throw new UpstreamCliException("worker-pool register-worker does not support " + workerBackend
+                    + "; configure Codex through worker-host verify then worker-host update --worker-id <physicalWorkerId>"
+                    + " (use apply only for a new WorkerHost)");
+        }
         if (args.flag("write-profile")) {
             config.assertProfileWritable();
         }
-        Map<String, Object> worker = upstreamAdminApi().registerUpstreamWorkerIdentity(
-                readJsonMap(requiredOption(args, "file", "biz worker identity json file")));
+        Map<String, Object> worker = upstreamAdminApi().registerUpstreamWorkerIdentity(workerIdentity);
         if (args.flag("write-profile")) {
             config.writeProfileValue("NAVI_BIZ_WORKER_ID", valueOrEmpty(worker != null ? worker.get("workerId") : null));
         }
