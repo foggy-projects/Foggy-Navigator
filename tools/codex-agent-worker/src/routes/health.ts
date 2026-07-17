@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express'
 import fs from 'fs'
 import os from 'os'
-import path from 'path'
 import { Codex } from '@openai/codex-sdk'
 import { config } from '../config.js'
 import {
@@ -12,6 +11,7 @@ import { isTaskExecutionActive, type HealthResponse } from '../models.js'
 import { resolveCodexSdkRuntimeStatus } from '../runtime-requirements.js'
 import { APP_VERSION } from '../version.js'
 import { resolveExternalModeState } from '../external-mode.js'
+import { pathApiFor } from '../path-guards.js'
 
 const router = Router()
 
@@ -47,6 +47,27 @@ export function resolveCodexBizReadiness(
   }
 }
 
+export function resolveCodexHomeAuthReadiness(
+  codexHome: string,
+  codexHomeSource: NonNullable<HealthResponse['codex_home_source']>,
+  apiKey: string | undefined,
+  authFileExists: (filePath: string) => boolean = fs.existsSync,
+): Pick<HealthResponse,
+  'codex_home_source'
+  | 'codex_home_auth_configured'
+  | 'codex_auth_configured'
+  | 'codex_auth_mode'
+> {
+  const authJsonExists = authFileExists(pathApiFor(codexHome).join(codexHome, 'auth.json'))
+  const codexAuthMode = resolveCodexAuthMode(apiKey, authJsonExists)
+  return {
+    codex_home_source: codexHomeSource,
+    codex_home_auth_configured: authJsonExists,
+    codex_auth_configured: codexAuthMode !== 'none',
+    codex_auth_mode: codexAuthMode,
+  }
+}
+
 export function resolveNavigatorWorkerCredentialReadiness(
   workerId: string,
   credentialConfigured: boolean,
@@ -63,8 +84,11 @@ router.get('/health', (_req: Request, res: Response) => {
   const activeTasks = Array.from(taskRegistry.values())
     .filter(t => isTaskExecutionActive(t.status)).length
 
-  const authJsonExists = fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'))
-  const codexAuthMode = resolveCodexAuthMode(config.openaiApiKey || undefined, authJsonExists)
+  const codexHomeAuth = resolveCodexHomeAuthReadiness(
+    config.codexHome,
+    config.codexHomeSource,
+    config.openaiApiKey || undefined,
+  )
   const codexSdkAvailable = checkCodexSdkAvailable(() => new Codex({
     apiKey: config.openaiApiKey || undefined,
   }))
@@ -96,8 +120,7 @@ router.get('/health', (_req: Request, res: Response) => {
     codex_sdk_version: codexSdkStatus.installedVersion,
     codex_sdk_minimum_version: codexSdkStatus.minimumVersion,
     codex_sdk_compatible: codexSdkStatus.compatible,
-    codex_auth_configured: codexAuthMode !== 'none',
-    codex_auth_mode: codexAuthMode,
+    ...codexHomeAuth,
     ...codexBizReadiness,
   }
 

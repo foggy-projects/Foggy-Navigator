@@ -110,6 +110,9 @@ if ($envAutoUpdateSdk) {
     $env:CODEX_WORKER_AUTO_UPDATE_SDK = $envAutoUpdateSdk
 }
 Import-DotEnv -Path $ResolvedDotEnvPath
+# Generic CODEX_HOME belongs to the launching shell. The SDK Worker uses
+# CODEX_WORKER_CODEX_HOME (or the current user's .codex) as its owned default.
+Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
 $PORT = if ($envPort) {
     $envPort.Trim()
 } elseif ($env:CODEX_WORKER_PORT) {

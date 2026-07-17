@@ -190,18 +190,24 @@ async function runFullSmoke(outputDir, version) {
     if (install.status !== 0) throw new Error(`Candidate npm ci failed with exit code ${install.status}`)
     const port = await availablePort()
     const home = path.join(tempRoot, 'home')
+    const expectedCodexHome = path.join(home, '.codex')
+    const hostileCodexHome = path.join(tempRoot, 'foreign-app-server-codex-home')
     fs.mkdirSync(home, { recursive: true })
+    fs.mkdirSync(expectedCodexHome, { recursive: true })
+    fs.writeFileSync(path.join(expectedCodexHome, 'auth.json'), '{"test":"release-smoke-only"}\n', { mode: 0o600 })
     child = spawn(process.execPath, ['dist/index.js'], {
       cwd: candidateDir,
       env: {
         ...process.env,
         HOME: home,
         USERPROFILE: home,
-        CODEX_HOME: path.join(home, '.codex'),
+        CODEX_HOME: hostileCodexHome,
+        CODEX_WORKER_CODEX_HOME: '',
         CODEX_WORKER_HOST: '127.0.0.1',
         CODEX_WORKER_PORT: String(port),
         CODEX_WORKER_TOKEN: '',
         OPENAI_API_KEY: '',
+        CODEX_API_KEY: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -209,7 +215,23 @@ async function runFullSmoke(outputDir, version) {
     child.stderr.on('data', chunk => { logs += chunk.toString() })
     const health = await waitForHealth(`http://127.0.0.1:${port}`, 15_000)
     if (health.version !== version) throw new Error(`Candidate health version ${health.version} does not match ${version}`)
-    return { platform, healthStatus: health.status, version: health.version }
+    if (health.codex_home_source !== 'user_default') {
+      throw new Error(`Candidate health reported unexpected Codex Home source: ${health.codex_home_source}`)
+    }
+    if (health.codex_home_auth_configured !== true || health.codex_auth_mode !== 'codex_login') {
+      throw new Error('Candidate health did not resolve auth.json from the isolated user default Codex Home')
+    }
+    const serializedHealth = JSON.stringify(health)
+    if (serializedHealth.includes(expectedCodexHome) || serializedHealth.includes(hostileCodexHome)) {
+      throw new Error('Candidate health leaked an effective or hostile Codex Home path')
+    }
+    return {
+      platform,
+      healthStatus: health.status,
+      version: health.version,
+      codexHomeSource: health.codex_home_source,
+      codexHomeAuthConfigured: health.codex_home_auth_configured,
+    }
   } catch (error) {
     const detail = logs.trim() ? `\nCandidate logs:\n${logs.slice(-4_000)}` : ''
     throw new Error(`${error instanceof Error ? error.message : String(error)}${detail}`)

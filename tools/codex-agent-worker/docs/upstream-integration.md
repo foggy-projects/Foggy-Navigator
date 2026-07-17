@@ -45,7 +45,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 
 #### 订阅模式
 
-适用于机器已经执行过 Codex 登录，本机存在 `~/.codex/auth.json`。
+适用于机器已经执行过 Codex 登录，有效的 SDK Worker 默认 Codex Home 中存在 `auth.json`。该 Home 可由绝对路径 `CODEX_WORKER_CODEX_HOME` 专门配置；未配置时固定使用当前 Worker 运行用户的 `$HOME/.codex`。
 
 上游调用时：
 
@@ -91,13 +91,17 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 
 1. 请求体里的 `api_key`
 2. 服务端环境变量 `OPENAI_API_KEY`
-3. 本机 `~/.codex/auth.json`
+3. `CODEX_WORKER_CODEX_HOME/auth.json`；未配置专属变量时为当前运行用户的 `~/.codex/auth.json`
 
 建议：
 
 - 如果上游要严格控制租户级鉴权，用每次请求传 `api_key`
 - 如果是单租户部署，用服务端 `.env`
 - 如果是本机开发联调，优先用订阅模式
+
+SDK Worker 不读取继承环境或 `.env` 中的 generic `CODEX_HOME` 作为配置源。旧部署若曾用 `CODEX_HOME` 指定 SDK Worker 登录态，必须迁移为绝对路径 `CODEX_WORKER_CODEX_HOME`；否则 Worker 会回到当前运行用户的 `~/.codex`。启动脚本会在加载 `.env` 后清除 generic `CODEX_HOME`，运行时也会为每个 Codex CLI 子进程显式写入本次请求的有效 `CODEX_HOME`，避免 app-server Worker 或其他 Codex shell 的 Home 串入 SDK Worker。
+
+`CODEX_WORKER_CODEX_HOME` 是 Worker 控制面配置，不会转发给模型可控的 CLI/Shell 环境，也不应通过请求体 `env_vars` 传入。上游仍只应使用 `codex_home_key` 选择受管 scoped Home，不应提交真实 Home 路径。
 
 ## 3. 主接口: POST /api/v1/query
 
@@ -193,11 +197,11 @@ CODEX_ALLOWED_CWDS=/home/sa/workspace
 }
 ```
 
-`codex_home_key` 是 worker 本地 scoped home key；上游业务系统不应直接拼接 `CODEX_HOME` 路径。修改 `CODEX_BIZ_HOME_ROOT` 后需要重启 worker 进程。`GET /health` 只返回是否配置了 root，不返回真实路径。
+`codex_home_key` 是 worker 本地 scoped home key；上游业务系统不应直接拼接 `CODEX_HOME` 路径。修改 `CODEX_BIZ_HOME_ROOT` 或 `CODEX_WORKER_CODEX_HOME` 后需要重启 worker 进程。`GET /health` 只返回安全的来源和 readiness 字段，不返回真实路径。
 
-当请求没有显式 `api_key`，且 worker 也没有有效 `OPENAI_API_KEY` 时，scoped home 会使用 worker 默认 Codex home 中的 `auth.json` 作为登录态种子。worker 只复制 `auth.json`，不会在日志、health 或 SSE 事件中输出该文件内容或真实 scoped home 路径。
+当请求没有显式 `api_key`，且 worker 也没有有效 `OPENAI_API_KEY` 时，scoped home 会使用 SDK Worker 的有效默认 Codex Home（`CODEX_WORKER_CODEX_HOME`，缺省为当前用户 `~/.codex`）中的 `auth.json` 作为登录态种子。worker 只复制 `auth.json`，不会在日志、health 或 SSE 事件中输出该文件内容、默认 Home 或真实 scoped Home 路径。
 
-为避免过期环境变量污染 Codex CLI，worker 会在启动 Codex 子进程前同步处理 `OPENAI_API_KEY` 和 `CODEX_API_KEY`：存在有效 key 时写入有效值；不存在有效 key 时从子进程环境中移除这两个变量，让 Codex login/auth.json 路径生效。
+为避免过期环境变量污染 Codex CLI，worker 会在启动 Codex 子进程前同步处理 `OPENAI_API_KEY`、`CODEX_API_KEY` 和 `CODEX_HOME`：存在有效 key 时写入有效值；不存在有效 key 时从子进程环境中移除前两个变量；`CODEX_HOME` 则始终被大小写不敏感地替换为本次请求的有效默认或 scoped Home。
 
 Codex Biz route 在 Navigator 侧使用 `providerType=codex-biz-worker`。它可以复用 `workerBackend=OPENAI_CODEX` 的 `modelConfigId`，但不会暴露为独立可发现 Agent，也不会走 LangGraph BizWorker root-skill 路由。
 
@@ -356,6 +360,8 @@ SSE 返回里拿到：
 ```
 
 这会调用 SDK 的 `resumeThread(session_id, ...)`，而不是新开线程。
+
+如果 `session_id` 在本次请求解析出的有效 Codex Home 中不存在，Worker 会返回稳定错误码 `CODEX_THREAD_NOT_FOUND`，安全消息为“Codex 会话在当前 Worker Home 中不存在”。这通常表示会话原本属于另一个运行用户、另一个 `CODEX_WORKER_CODEX_HOME`，或另一个 `codex_home_key`；上游不应将它误判为 provider stream 已正常结束，也不应自动改用其他 Home 重试。
 
 ### 5.2 /api/v1/sessions 的作用
 
@@ -655,6 +661,8 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 
 - `codex_auth_configured`
 - `codex_auth_mode`
+- `codex_home_source`
+- `codex_home_auth_configured`
 - `codex_biz_home_root_configured`
 - `codex_biz_scoped_home_ready`
 
@@ -664,7 +672,7 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 - `codex_login`
 - `none`
 
-`codex_biz_home_root_configured` 和 `codex_biz_scoped_home_ready` 只表示 `CODEX_BIZ_HOME_ROOT` 是否已配置，不返回真实路径。
+`codex_home_source` 只可能为 `worker_config` 或 `user_default`，分别表示使用专属 `CODEX_WORKER_CODEX_HOME` 或当前运行用户的默认 `~/.codex`；`codex_home_auth_configured` 表示该有效默认 Home 下是否存在 `auth.json`。这些字段以及 `codex_biz_home_root_configured`、`codex_biz_scoped_home_ready` 均不返回真实路径。
 
 ### 10.3 会话列表不是持久化数据库
 
@@ -684,7 +692,7 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 
 - worker 不传 `api_key`
 - `.env` 的 `OPENAI_API_KEY` 留空
-- 本机先完成 Codex 登录
+- 本机先完成 Codex 登录；需要非默认位置时配置绝对路径 `CODEX_WORKER_CODEX_HOME`
 - 上游保存 `task_id` 和 `session_id`
 
 ### 11.2 服务化部署

@@ -37,6 +37,9 @@ load_env_file() {
 
 # Load .env before starting so this worker directory overrides inherited CODEX_* variables.
 load_env_file ".env"
+# Generic CODEX_HOME belongs to the launching shell, not necessarily this SDK Worker.
+# The runtime resolves CODEX_WORKER_CODEX_HOME (or $HOME/.codex) explicitly per task.
+unset CODEX_HOME
 PORT="${CODEX_WORKER_PORT:-3051}"
 
 echo "========================================"

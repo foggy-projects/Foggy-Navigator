@@ -37,6 +37,8 @@ load_env_file() {
 }
 
 load_env_file ".env"
+# Do not let an app-server or another Codex shell donate its generic Home to this Worker.
+unset CODEX_HOME
 PORT="${CODEX_WORKER_PORT:-3051}"
 
 echo "========================================"

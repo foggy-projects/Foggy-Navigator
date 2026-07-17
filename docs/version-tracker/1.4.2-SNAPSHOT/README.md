@@ -122,6 +122,7 @@ GOV-004 的 Java 控制面与 Claude、Codex SDK、Codex app-server 三条 Worke
 | [BUG-004](./workitems/BUG-004-blank-tenant-task-ownership-regression.md) | 空字符串 tenant 导致新建 Task 无法读取 | P3 | ready-for-verification |
 | [BUG-010](./workitems/BUG-010-session-forward-app-server-runtime-affinity.md) | NEW_SESSION 转发误绑定 legacy SDK runtime | P3 | READY_FOR_SIGNOFF |
 | [BUG-013](./workitems/BUG-013-codex-app-server-long-thread-tool-loss.md) | Codex App Server 长 Thread 工具退化、原生压缩与历史分支 | P3 | NEEDS_REPLAN |
+| [BUG-016](./workitems/BUG-016-sdk-worker-codex-home-isolation.md) | Codex SDK Worker 默认 Home 被上游 shell 环境污染 | P2 | READY_FOR_SIGNOFF |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | 超大类、模块边界和 Provider 状态 schema 渐进治理 | P6 | planned |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | 低风险孤儿文件、未引用导出和失效文档 | P4 | planned |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring dev-only 完整功能切片移除 | P5 | in-progress |
@@ -241,6 +242,7 @@ GOV-004 的 Java 控制面与 Claude、Codex SDK、Codex app-server 三条 Worke
 - [BUG-010 NEW_SESSION 转发 App Server runtime affinity](./workitems/BUG-010-session-forward-app-server-runtime-affinity.md)
 - [BUG-010 红绿测试证据](./evidence/BUG-010-session-forward-app-server-runtime-affinity.md)
 - [BUG-013 Codex App Server 长 Thread 工具退化与原生压缩](./workitems/BUG-013-codex-app-server-long-thread-tool-loss.md)
+- [BUG-016 Codex SDK Worker CODEX_HOME 隔离](./workitems/BUG-016-sdk-worker-codex-home-isolation.md)
 - [BUG-013 运行态与固定 CLI 证据](./evidence/BUG-013-codex-app-server-long-thread-tool-loss-20260717.md)
 - [OPT-002 核心代码可维护性](./workitems/OPT-002-core-code-maintainability.md)
 - [CLEAN-001 低风险孤儿清理](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)

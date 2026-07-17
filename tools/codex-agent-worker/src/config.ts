@@ -1,12 +1,24 @@
 import dotenv from 'dotenv'
+import os from 'node:os'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { isAbsolutePlatformPath, normalizePlatformPath } from './path-guards.js'
+import { isAbsolutePlatformPath, normalizePlatformPath, pathApiFor } from './path-guards.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
 
+// The Worker may be launched from another Codex runtime, and dotenv reloads the
+// same file after shell launchers have sanitized it. Keep the generic setting
+// out of the Worker process itself; only CODEX_WORKER_CODEX_HOME is authoritative.
+for (const key of Object.keys(process.env)) {
+  if (key.toUpperCase() === 'CODEX_HOME') {
+    delete process.env[key]
+  }
+}
+
 const VALID_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error'])
+
+export type CodexHomeSource = 'worker_config' | 'user_default'
 
 export interface AppConfig {
   port: number
@@ -23,6 +35,10 @@ export interface AppConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error'
   /** Root directory for per-account/actor CODEX_HOME folders. Empty disables codex_home_key requests. */
   codexBizHomeRoot: string
+  /** Effective default Codex Home used for every request without codex_home_key. */
+  codexHome: string
+  /** Safe provenance for health diagnostics; never contains the actual path. */
+  codexHomeSource: CodexHomeSource
   /** Navigator gateway base URL used by the built-in business MCP bridge. */
   navigatorWorkerGatewayBaseUrl: string
   /**
@@ -171,6 +187,31 @@ function parseOptionalAbsolutePath(rawValue: string | undefined, field: string):
     throw new Error(`${field} must be an absolute path`)
   }
   return normalizePlatformPath(value)
+}
+
+export function resolveWorkerCodexHome(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = os.homedir(),
+): { codexHome: string; codexHomeSource: CodexHomeSource } {
+  const configured = parseOptionalAbsolutePath(
+    env.CODEX_WORKER_CODEX_HOME,
+    'CODEX_WORKER_CODEX_HOME',
+  )
+  if (configured) {
+    return {
+      codexHome: configured,
+      codexHomeSource: 'worker_config',
+    }
+  }
+
+  const normalizedHomeDir = homeDir.trim()
+  if (!isAbsolutePlatformPath(normalizedHomeDir)) {
+    throw new Error('User home directory must be an absolute path')
+  }
+  return {
+    codexHome: normalizePlatformPath(pathApiFor(normalizedHomeDir).join(normalizedHomeDir, '.codex')),
+    codexHomeSource: 'user_default',
+  }
 }
 
 function parseHttpUrl(rawValue: string | undefined, field: string, fallback: string): string {
@@ -322,8 +363,12 @@ function parseModelAliases(rawValue: string | undefined): Record<string, string>
   return merged
 }
 
-export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+export function createConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = os.homedir(),
+): AppConfig {
   const openaiApiKey = parseApiKey(getOptionalEnvFromEnv(env, 'OPENAI_API_KEY'))
+  const codexHome = resolveWorkerCodexHome(env, homeDir)
   const navigatorWorkerId = parseOptionalWorkerIdentityValue(
     env.CODEX_NAVIGATOR_WORKER_ID,
     'CODEX_NAVIGATOR_WORKER_ID',
@@ -366,6 +411,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     logLevel: parseLogLevel(env.CODEX_LOG_LEVEL),
     codexBizHomeRoot: parseOptionalAbsolutePath(env.CODEX_BIZ_HOME_ROOT, 'CODEX_BIZ_HOME_ROOT'),
+    ...codexHome,
     navigatorWorkerGatewayBaseUrl: parseHttpUrl(
       env.CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL || env.NAVIGATOR_WORKER_GATEWAY_BASE_URL,
       'CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL',

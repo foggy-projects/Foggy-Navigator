@@ -26,6 +26,37 @@ test('createConfig normalizes placeholder api key and valid defaults', () => {
   assert.equal(config.threadProcessMissingGraceMs, 10_000)
 })
 
+test('createConfig ignores ambient CODEX_HOME and defaults to the current user Codex home', () => {
+  const config = createConfig({
+    CODEX_HOME: '/foreign/app-server/codex-home',
+  }, '/home/worker-user')
+
+  assert.equal(config.codexHome, '/home/worker-user/.codex')
+  assert.equal(config.codexHomeSource, 'user_default')
+})
+
+test('createConfig accepts only the dedicated absolute CODEX_WORKER_CODEX_HOME override', () => {
+  const config = createConfig({
+    CODEX_HOME: '/foreign/app-server/codex-home',
+    CODEX_WORKER_CODEX_HOME: '/var/lib/foggy/codex-sdk-home',
+  }, '/home/worker-user')
+
+  assert.equal(config.codexHome, '/var/lib/foggy/codex-sdk-home')
+  assert.equal(config.codexHomeSource, 'worker_config')
+  assert.throws(() => createConfig({
+    CODEX_WORKER_CODEX_HOME: 'relative/codex-home',
+  }, '/home/worker-user'), /CODEX_WORKER_CODEX_HOME must be an absolute path/)
+})
+
+test('createConfig derives a Windows default Codex home with Windows path semantics', () => {
+  const config = createConfig({
+    CODEX_HOME: 'D:\\foreign\\app-server-home',
+  }, 'C:\\Users\\worker-user')
+
+  assert.equal(config.codexHome, 'C:\\Users\\worker-user\\.codex')
+  assert.equal(config.codexHomeSource, 'user_default')
+})
+
 test('createConfig parses the explicit external switch and rejects ambiguous values', () => {
   assert.equal(createConfig({ CODEX_WORKER_EXTERNAL_ENABLED: 'true' }).externalEnabled, true)
   assert.throws(() => createConfig({

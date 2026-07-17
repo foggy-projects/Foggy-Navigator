@@ -41,6 +41,8 @@ function Import-DotEnv {
 }
 
 Import-DotEnv -Path ".env"
+# Prevent another Codex runtime's generic Home from crossing the Worker boundary.
+Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
 $PORT = if ($env:CODEX_WORKER_PORT) { $env:CODEX_WORKER_PORT.Trim() } else { "3051" }
 
 Write-Host "========================================" -ForegroundColor Cyan

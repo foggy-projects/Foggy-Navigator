@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ThreadItem } from '@openai/codex-sdk'
+import { config as appConfig } from '../src/config.ts'
 import {
   applyResolvedReasoningEffort,
   assertNavigatorBusinessMcpCredentialIsolation,
@@ -445,6 +446,7 @@ test('buildCodexTaskEnv pins effective OpenAI settings into child env', () => {
     {
       effectiveApiKey: 'sk-effective',
       effectiveBaseUrl: 'https://api.example.com/v1',
+      codexHome: 'D:\\Users\\worker-user\\.codex',
       taskId: 'task-2',
       threadId: 'thread-2',
     }
@@ -463,28 +465,30 @@ test('buildCodexTaskEnv strips Worker control credentials case-insensitively', (
   const env = buildCodexTaskEnv(
     {
       Codex_Worker_Token: 'inbound-secret',
+      CODEX_WORKER_CODEX_HOME: '/dedicated/worker-control-home',
       CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
       Codex_Navigator_Worker_Credential: 'bwc_secret',
       navigator_task_scoped_token: 'btt_stale',
       NAVIGATOR_WORKER_LEASE_ID: 'lease-1',
       SAFE_VALUE: 'kept',
     },
-    { taskId: 'task-secret-boundary' },
+    { codexHome: '/home/worker-user/.codex', taskId: 'task-secret-boundary' },
   )
 
   assert.equal(env.Codex_Worker_Token, undefined)
+  assert.equal(env.CODEX_WORKER_CODEX_HOME, undefined)
   assert.equal(env.CODEX_NAVIGATOR_WORKER_ID, undefined)
   assert.equal(env.Codex_Navigator_Worker_Credential, undefined)
   assert.equal(env.navigator_task_scoped_token, undefined)
   assert.equal(env.NAVIGATOR_WORKER_LEASE_ID, undefined)
   assert.equal(env.SAFE_VALUE, 'kept')
-  assert.doesNotMatch(JSON.stringify(env), /inbound-secret|bwc_secret|btt_stale|lease-1/)
+  assert.doesNotMatch(JSON.stringify(env), /inbound-secret|worker-control-home|bwc_secret|btt_stale|lease-1/)
 })
 
 test('Navigator business MCP injects only the current task token after generic env filtering', () => {
   const env = buildCodexTaskEnv(
     { NAVIGATOR_TASK_SCOPED_TOKEN: 'btt_stale' },
-    { taskId: 'task-current-token' },
+    { codexHome: '/home/worker-user/.codex', taskId: 'task-current-token' },
   )
   const mcpEnv = buildNavigatorBusinessMcpEnv(
     {
@@ -611,11 +615,32 @@ test('resolveCodexHome requires CODEX_BIZ_HOME_ROOT for scoped homes', () => {
   assert.equal(resolveCodexHome(undefined, ''), undefined)
 })
 
-test('resolveDefaultCodexHome uses CODEX_HOME or user home fallback', () => {
+test('resolveDefaultCodexHome uses only the dedicated Worker override or user home fallback', () => {
   const configuredHome = path.join(os.tmpdir(), 'custom-codex')
+  const foreignHome = path.join(os.tmpdir(), 'foreign-app-server-home')
   const userHome = path.join(os.tmpdir(), 'worker-home')
-  assert.equal(resolveDefaultCodexHome({ CODEX_HOME: configuredHome }, userHome), path.resolve(configuredHome))
-  assert.equal(resolveDefaultCodexHome({}, userHome), path.resolve(path.join(userHome, '.codex')))
+  assert.equal(resolveDefaultCodexHome({
+    CODEX_HOME: foreignHome,
+    CODEX_WORKER_CODEX_HOME: configuredHome,
+  }, userHome), path.resolve(configuredHome))
+  assert.equal(resolveDefaultCodexHome({ CODEX_HOME: foreignHome }, userHome), path.resolve(path.join(userHome, '.codex')))
+})
+
+test('buildCodexTaskEnv replaces stale CODEX_HOME keys case-insensitively', () => {
+  const env = buildCodexTaskEnv(
+    {
+      Codex_Home: 'D:\\foreign\\app-server-home',
+      SAFE_VALUE: 'kept',
+    },
+    {
+      codexHome: 'D:\\Users\\worker-user\\.codex',
+      taskId: 'task-home-isolation',
+    },
+  )
+
+  assert.equal(env.Codex_Home, undefined)
+  assert.equal(env.CODEX_HOME, 'D:\\Users\\worker-user\\.codex')
+  assert.equal(env.SAFE_VALUE, 'kept')
 })
 
 test('resolveNavigatorBusinessMcpServerPath follows sdk wrapper module extension', () => {
@@ -804,8 +829,6 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
     ],
   }))
 
-  const previousCodexHome = process.env.CODEX_HOME
-  process.env.CODEX_HOME = codexHome
   const createdOptions: Array<Record<string, any>> = []
   const startedThreadOptions: Array<Record<string, any>> = []
   const resumedThreadOptions: Array<Record<string, any>> = []
@@ -867,7 +890,9 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
 
   const dependencies = {
     codexFactory,
-    prepareResumeToolsModelCatalog,
+    prepareResumeToolsModelCatalog: (options: Parameters<typeof prepareResumeToolsModelCatalog>[0]) => (
+      prepareResumeToolsModelCatalog({ ...options, defaultCodexHome: codexHome })
+    ),
     snapshotCodexCliPids: async () => new Set<number>(),
     detectSpawnedCodexPid: async () => undefined,
   }
@@ -915,6 +940,8 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
     assert.deepEqual(resumedThreadOptions, startedThreadOptions)
     assert.equal(createdOptions[0]?.config?.model_catalog_json, undefined)
     assert.equal(typeof createdOptions[1]?.config?.model_catalog_json, 'string')
+    assert.equal(createdOptions[0]?.env?.CODEX_HOME, appConfig.codexHome)
+    assert.equal(createdOptions[1]?.env?.CODEX_HOME, appConfig.codexHome)
     assert.equal(createdOptions[0]?.config?.model_reasoning_effort, undefined)
     assert.equal(createdOptions[1]?.config?.model_reasoning_effort, undefined)
     assert.equal(compatibilityCatalogs[0]?.models[0]?.use_responses_lite, false)
@@ -923,8 +950,6 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
     assert.equal(createdOptions[1]?.config?.developer_instructions, 'keep the current developer instructions')
     await assert.rejects(fs.access(createdOptions[1]?.config?.model_catalog_json), { code: 'ENOENT' })
   } finally {
-    if (previousCodexHome === undefined) delete process.env.CODEX_HOME
-    else process.env.CODEX_HOME = previousCodexHome
     taskBroadcasts.delete('task-shell-first')
     taskBroadcasts.delete('task-shell-resume')
     taskRegistry.delete('task-shell-first')

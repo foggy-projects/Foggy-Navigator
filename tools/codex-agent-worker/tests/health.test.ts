@@ -1,9 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {
   checkCodexSdkAvailable,
   resolveCodexAuthMode,
   resolveCodexBizReadiness,
+  resolveCodexHomeAuthReadiness,
   resolveNavigatorWorkerCredentialReadiness,
   resolveWorkerHealthStatus,
 } from '../src/routes/health.ts'
@@ -41,6 +45,32 @@ test('resolveCodexBizReadiness exposes only non-sensitive scoped home state', ()
     codex_biz_home_root_configured: false,
     codex_biz_scoped_home_ready: false,
   })
+})
+
+test('Codex auth health uses the effective default home without exposing its path', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-health-home-'))
+  const codexHome = path.join(root, 'configured-codex-home')
+  fs.mkdirSync(codexHome, { recursive: true })
+  fs.writeFileSync(path.join(codexHome, 'auth.json'), '{"token":"fake-test-value"}')
+
+  try {
+    const login = resolveCodexHomeAuthReadiness(codexHome, 'worker_config', '')
+    assert.deepEqual(login, {
+      codex_home_source: 'worker_config',
+      codex_home_auth_configured: true,
+      codex_auth_configured: true,
+      codex_auth_mode: 'codex_login',
+    })
+    assert.doesNotMatch(JSON.stringify(login), new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+
+    const apiKey = resolveCodexHomeAuthReadiness(path.join(root, 'missing'), 'user_default', 'sk-test')
+    assert.equal(apiKey.codex_home_auth_configured, false)
+    assert.equal(apiKey.codex_auth_configured, true)
+    assert.equal(apiKey.codex_auth_mode, 'api_key')
+    assert.equal(apiKey.codex_home_source, 'user_default')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('configured Navigator Worker credential keeps Codex Worker unready without exposing it', () => {

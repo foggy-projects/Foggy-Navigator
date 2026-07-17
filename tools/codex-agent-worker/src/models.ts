@@ -181,6 +181,8 @@ export interface HealthResponse {
   codex_sdk_compatible: boolean
   codex_auth_configured?: boolean
   codex_auth_mode?: 'api_key' | 'codex_login' | 'none'
+  codex_home_source?: 'worker_config' | 'user_default'
+  codex_home_auth_configured?: boolean
   codex_biz_home_root_configured?: boolean
   codex_biz_scoped_home_ready?: boolean
 }

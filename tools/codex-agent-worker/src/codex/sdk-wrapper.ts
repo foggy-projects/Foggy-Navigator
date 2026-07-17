@@ -7,7 +7,7 @@ import path from 'node:path'
 import { Codex } from '@openai/codex-sdk'
 import type { CodexOptions, Input, ThreadOptions, ThreadItem } from '@openai/codex-sdk'
 import fs from 'node:fs/promises'
-import { config } from '../config.js'
+import { config, resolveWorkerCodexHome } from '../config.js'
 import {
   isTaskExecutionActive,
   isTaskTerminal,
@@ -78,6 +78,7 @@ export const CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY =
 
 const CODEX_TASK_BLOCKED_WORKER_ENV_KEYS = [
   'CODEX_WORKER_TOKEN',
+  'CODEX_WORKER_CODEX_HOME',
   'CODEX_NAVIGATOR_WORKER_ID',
   'CODEX_NAVIGATOR_WORKER_CREDENTIAL',
   'NAVIGATOR_TASK_SCOPED_TOKEN',
@@ -359,7 +360,7 @@ export function buildCodexTaskEnv(
   options: {
     effectiveApiKey?: string
     effectiveBaseUrl?: string
-    codexHome?: string
+    codexHome: string
     taskId: string
     threadId?: string
   }
@@ -371,9 +372,7 @@ export function buildCodexTaskEnv(
   setEnvKeyCaseInsensitive(envSource, 'OPENAI_API_KEY', options.effectiveApiKey)
   setEnvKeyCaseInsensitive(envSource, 'CODEX_API_KEY', options.effectiveApiKey)
   setEnvKeyCaseInsensitive(envSource, 'OPENAI_BASE_URL', options.effectiveBaseUrl)
-  if (options.codexHome) {
-    envSource.CODEX_HOME = options.codexHome
-  }
+  setEnvKeyCaseInsensitive(envSource, 'CODEX_HOME', options.codexHome)
   envSource.FOGGY_CODEX_TASK_ID = options.taskId
   if (options.threadId) {
     envSource.FOGGY_CODEX_THREAD_ID = options.threadId
@@ -435,12 +434,11 @@ export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeR
     .replace(/^_+|_+$/g, '')
     .slice(0, 80) || 'codex-home'
   const digest = createHash('sha256').update(key).digest('hex').slice(0, 16)
-  return path.join(codexBizHomeRoot, `${safePrefix}-${digest}`)
+  return pathApiFor(codexBizHomeRoot).join(codexBizHomeRoot, `${safePrefix}-${digest}`)
 }
 
 export function resolveDefaultCodexHome(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
-  const configured = env.CODEX_HOME?.trim()
-  return path.resolve(configured || path.join(homeDir, '.codex'))
+  return resolveWorkerCodexHome(env, homeDir).codexHome
 }
 
 type CodexCachedModel = {
@@ -1310,18 +1308,19 @@ export async function runQuery(
     // 2. 订阅模式：不传 apiKey，SDK 通过 Codex CLI 自动读取 ~/.codex/auth.json
     const effectiveApiKey = apiKey || config.openaiApiKey || undefined
     const effectiveBaseUrl = baseUrl || config.openaiBaseUrl || undefined
-    const codexHome = resolveCodexHome(runOptions.codexHomeKey)
-    if (codexHome) {
-      await fs.mkdir(codexHome, { recursive: true })
+    const scopedCodexHome = resolveCodexHome(runOptions.codexHomeKey)
+    const effectiveCodexHome = scopedCodexHome || config.codexHome
+    if (scopedCodexHome) {
+      await fs.mkdir(scopedCodexHome, { recursive: true })
       if (!effectiveApiKey) {
-        await seedCodexHomeAuthIfAvailable(codexHome)
+        await seedCodexHomeAuthIfAvailable(scopedCodexHome, config.codexHome)
       }
     }
     const codexOptions: CodexOptions = {
       env: buildCodexTaskEnv(process.env, {
         effectiveApiKey,
         effectiveBaseUrl,
-        codexHome,
+        codexHome: effectiveCodexHome,
         taskId,
         threadId,
       }),
@@ -1333,7 +1332,7 @@ export async function runQuery(
       codexOptions.baseUrl = effectiveBaseUrl
     }
     console.log(
-      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${effectiveReasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(codexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
+      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${effectiveReasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(scopedCodexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
     )
 
     // Codex CLI 配置项默认值 + envVars 覆盖
@@ -1368,7 +1367,8 @@ export async function runQuery(
       )({
         taskId,
         model: effectiveModel,
-        codexHome,
+        codexHome: scopedCodexHome,
+        defaultCodexHome: config.codexHome,
       })
       if (generatedResumeModelCatalogPath) {
         codexConfig.model_catalog_json = generatedResumeModelCatalogPath
@@ -1400,8 +1400,8 @@ export async function runQuery(
       Object.assign(codexOptions.env as Record<string, string>, navigatorBusinessMcpEnv)
     }
     let sdkNavigatorBusinessMcpConfig = navigatorBusinessMcpConfig
-    if (navigatorBusinessMcpConfig && codexHome) {
-      await ensureNavigatorBusinessMcpHomeConfig(codexHome, navigatorBusinessMcpConfig)
+    if (navigatorBusinessMcpConfig && scopedCodexHome) {
+      await ensureNavigatorBusinessMcpHomeConfig(scopedCodexHome, navigatorBusinessMcpConfig)
       sdkNavigatorBusinessMcpConfig = undefined
       console.log(`[codex] navigator_business_mcp task=${taskId} mode=codex_home_config`)
     } else if (navigatorBusinessMcpConfig) {

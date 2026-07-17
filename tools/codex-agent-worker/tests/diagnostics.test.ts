@@ -16,3 +16,15 @@ test('diagnostic sanitizer returns only a stable code for arbitrary runtime text
   assert.equal(result, 'CODEX_AUTH_REQUIRED')
   assert.doesNotMatch(result || '', /abc123|example\.com|user@|10\.1\.2\.3/)
 })
+
+test('missing Codex rollout is classified as a safe thread-not-found diagnostic', () => {
+  const result = safeSdkError(new Error(
+    'no rollout found for thread id 019f65d8-5896-7391-95d6-196d2f721f3c',
+  ))
+
+  assert.equal(result.error_code, 'CODEX_THREAD_NOT_FOUND')
+  assert.equal(result.error_category, 'CONFIGURATION')
+  assert.equal(result.error_message, 'Codex 会话在当前 Worker Home 中不存在')
+  assert.equal(result.diagnostic_text, 'CODEX_THREAD_NOT_FOUND')
+  assert.doesNotMatch(JSON.stringify(result), /019f65d8-5896-7391-95d6-196d2f721f3c/)
+})

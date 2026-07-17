@@ -47,7 +47,7 @@ export function safeSdkError(raw: unknown): SafeWorkerError {
 export function classifyErrorCode(code: string): ErrorCategory {
   if (/(?:AUTH|UNAUTHORIZED|CREDENTIAL|LOGIN)/.test(code)) return 'AUTHENTICATION'
   if (/(?:FORBIDDEN|PERMISSION|DENIED)/.test(code)) return 'AUTHORIZATION'
-  if (/(?:CONFIG|MODEL_UNSUPPORTED|NOT_CONFIGURED|INVALID_REQUEST)/.test(code)) return 'CONFIGURATION'
+  if (/(?:CONFIG|MODEL_UNSUPPORTED|NOT_CONFIGURED|INVALID_REQUEST|THREAD_NOT_FOUND)/.test(code)) return 'CONFIGURATION'
   if (/(?:RATE_LIMIT|QUOTA|TOO_MANY)/.test(code)) return 'RATE_LIMIT'
   if (/(?:TIMEOUT|TIMED_OUT)/.test(code)) return 'TIMEOUT'
   if (/(?:CANCEL|ABORT)/.test(code)) return 'CANCELLED'
@@ -66,6 +66,7 @@ export function sanitizeDiagnostic(value: string): string | undefined {
 function stableSdkErrorCode(text: string): string {
   const normalized = text.toLowerCase()
   if (/^codex_stream_unconfirmed$/.test(normalized)) return 'CODEX_STREAM_UNCONFIRMED'
+  if (/no rollout found for thread id/i.test(text)) return 'CODEX_THREAD_NOT_FOUND'
   if (/rate.?limit|quota|too many requests|\b429\b/.test(normalized)) return 'CODEX_RATE_LIMITED'
   if (/timed?\s*out|deadline/.test(normalized)) return 'CODEX_TURN_TIMEOUT'
   if (/unauthoriz|authentication|login|required|credential|bearer|api[_-]?key|token|secret|password|\b401\b/.test(normalized)) return 'CODEX_AUTH_REQUIRED'
@@ -84,6 +85,7 @@ function safeMessage(code: string): string {
     case 'CODEX_TURN_CANCELLED': return 'Codex 本轮执行已取消'
     case 'CODEX_WORKER_NETWORK_ERROR': return 'Codex Worker 与运行时连接异常'
     case 'CODEX_STREAM_UNCONFIRMED': return 'Codex 运行时报告了待核验错误，任务状态尚未终态'
+    case 'CODEX_THREAD_NOT_FOUND': return 'Codex 会话在当前 Worker Home 中不存在'
     default: return 'Codex 执行进程异常退出'
   }
 }

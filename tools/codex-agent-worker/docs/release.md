@@ -33,6 +33,11 @@ npm run test:resume-shell
 Only run the live query smoke when model execution or resume behavior requires it and credentials
 and a test Worker are intentionally provided.
 
+The packaged-candidate health smoke starts the Worker with a hostile generic `CODEX_HOME`, places
+a fake `auth.json` only under the isolated test user's default `.codex`, and requires the safe
+`codex_home_source` / `codex_home_auth_configured` fields to prove correct resolution without
+leaking either path. It never reads a developer's real Codex login.
+
 ## Publish to OBS
 
 Configure `RELEASE_OBS_BUCKET` and `RELEASE_BASE_URL` in the environment or the ignored Worker
