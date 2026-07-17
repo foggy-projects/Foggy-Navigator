@@ -27,7 +27,7 @@ Options:
   --worker-dir <path>       Worker install dir, default /home/navigator/.langgraph-biz-worker
   --user <user>             Worker Linux user, default navigator
   --env-file <file>         Env file inside worker dir, default .env
-  --sync-source             Sync repo src/ and pyproject.toml before start
+  --sync-source             Sync current runtime source, metadata and bundled Skills before start
   --distro <name>           Run the action in another WSL distro via wsl.exe
   --help                    Show this help
 EOF
@@ -96,6 +96,37 @@ if [ -n "$DISTRO" ] && [ "$LOCAL_ONLY" -eq 0 ]; then
   }
 
   LOCAL_SCRIPT="$(readlink -f "$0")"
+  run_remote_action() {
+    local remote_action="$1"
+    local remote_args=("$remote_action" "--port" "$PORT" "--worker-dir" "$WSL_WORKER_DIR" "--user" "$WSL_USER" "--env-file" "$ENV_FILE" "--local-only")
+
+    {
+      cat <<'REMOTE_RUN_SCRIPT'
+set -euo pipefail
+tmp_script="$(mktemp /tmp/restart-wsl-3161.XXXXXX.sh)"
+cleanup() {
+  rm -f "$tmp_script"
+}
+trap cleanup EXIT
+base64 -d > "$tmp_script" <<'REMOTE_RUN_LOCAL_SCRIPT_B64'
+REMOTE_RUN_SCRIPT
+      base64 "$LOCAL_SCRIPT"
+      cat <<'REMOTE_RUN_SCRIPT'
+REMOTE_RUN_LOCAL_SCRIPT_B64
+chmod +x "$tmp_script"
+"$tmp_script" "$@"
+REMOTE_RUN_SCRIPT
+    } | "$WSL_EXE" -d "$DISTRO" --cd / -- bash -s -- "${remote_args[@]}"
+  }
+
+  REMOTE_ACTION="$ACTION"
+  # Do not replace files while a remote Worker is serving requests. The normal
+  # restart path first stops it, then installs the current checkout and starts it.
+  if [ "$SYNC_SOURCE" -eq 1 ] && [ "$ACTION" = "restart" ]; then
+    run_remote_action stop
+    REMOTE_ACTION="start"
+  fi
+
   if [ "$SYNC_SOURCE" -eq 1 ] && { [ "$ACTION" = "start" ] || [ "$ACTION" = "restart" ]; }; then
     echo "Syncing LangGraph Biz Worker source to $DISTRO:$WSL_WORKER_DIR"
     {
@@ -105,41 +136,53 @@ worker_dir="$1"
 worker_user="$2"
 test -d "$worker_dir"
 tmp_archive="$(mktemp /tmp/langgraph-biz-worker-src.XXXXXX.tar)"
+tmp_stage="$(mktemp -d /tmp/langgraph-biz-worker-stage.XXXXXX)"
 cleanup() {
-  rm -f "$tmp_archive"
+  rm -rf "$tmp_archive" "$tmp_stage"
 }
 trap cleanup EXIT
 base64 -d > "$tmp_archive" <<'REMOTE_SYNC_ARCHIVE'
 REMOTE_SYNC_SCRIPT
-      tar -C "$SCRIPT_DIR" -cf - src pyproject.toml | base64
+      tar -C "$SCRIPT_DIR" -cf - src pyproject.toml .env.example README.md docs skills/builtin | base64
       cat <<'REMOTE_SYNC_SCRIPT'
 REMOTE_SYNC_ARCHIVE
-tar -C "$worker_dir" -xf "$tmp_archive"
+tar -C "$tmp_stage" -xf "$tmp_archive"
+test -d "$tmp_stage/src"
+test -f "$tmp_stage/pyproject.toml"
+test -d "$tmp_stage/skills/builtin"
+rm -rf "$worker_dir/src" "$worker_dir/docs" "$worker_dir/skills/builtin"
+cp -a "$tmp_stage/src" "$worker_dir/src"
+cp -a "$tmp_stage/pyproject.toml" "$tmp_stage/.env.example" "$tmp_stage/README.md" "$worker_dir/"
+cp -a "$tmp_stage/docs" "$worker_dir/docs"
+mkdir -p "$worker_dir/skills"
+cp -a "$tmp_stage/skills/builtin" "$worker_dir/skills/builtin"
 if [ "$(id -u)" -eq 0 ] && [ -n "$worker_user" ]; then
-  chown -R "$worker_user":"$worker_user" "$worker_dir/src" "$worker_dir/pyproject.toml" 2>/dev/null || true
+  chown -R "$worker_user":"$worker_user" "$worker_dir/src" "$worker_dir/pyproject.toml" "$worker_dir/.env.example" "$worker_dir/README.md" "$worker_dir/docs" "$worker_dir/skills/builtin" 2>/dev/null || true
+fi
+
+if [ -x "$worker_dir/.venv/bin/python" ]; then
+  python_bin="$worker_dir/.venv/bin/python"
+elif [ -x "$worker_dir/.venv-wsl/bin/python" ]; then
+  python_bin="$worker_dir/.venv-wsl/bin/python"
+else
+  python_bin="python3"
+fi
+
+install_editable() {
+  cd "$worker_dir"
+  "$python_bin" -m pip install -e .
+}
+
+if [ -n "$worker_user" ] && [ "$(id -un)" != "$worker_user" ] && [ "$(id -u)" -eq 0 ]; then
+  runuser -u "$worker_user" -- bash -lc 'cd "$1"; "$2" -m pip install -e .' bash "$worker_dir" "$python_bin"
+else
+  install_editable
 fi
 REMOTE_SYNC_SCRIPT
     } | "$WSL_EXE" -d "$DISTRO" --cd / -- bash -s -- "$WSL_WORKER_DIR" "$WSL_USER"
   fi
 
-  REMOTE_ARGS=("$ACTION" "--port" "$PORT" "--worker-dir" "$WSL_WORKER_DIR" "--user" "$WSL_USER" "--env-file" "$ENV_FILE" "--local-only")
-  {
-    cat <<'REMOTE_RUN_SCRIPT'
-set -euo pipefail
-tmp_script="$(mktemp /tmp/restart-wsl-3161.XXXXXX.sh)"
-cleanup() {
-  rm -f "$tmp_script"
-}
-trap cleanup EXIT
-base64 -d > "$tmp_script" <<'REMOTE_RUN_LOCAL_SCRIPT_B64'
-REMOTE_RUN_SCRIPT
-    base64 "$LOCAL_SCRIPT"
-    cat <<'REMOTE_RUN_SCRIPT'
-REMOTE_RUN_LOCAL_SCRIPT_B64
-chmod +x "$tmp_script"
-"$tmp_script" "$@"
-REMOTE_RUN_SCRIPT
-  } | "$WSL_EXE" -d "$DISTRO" --cd / -- bash -s -- "${REMOTE_ARGS[@]}"
+  run_remote_action "$REMOTE_ACTION"
   exit $?
 fi
 
@@ -197,8 +240,26 @@ sync_source() {
   test -d "$WSL_WORKER_DIR/src"
 
   echo "Syncing LangGraph Biz Worker source to $WSL_WORKER_DIR"
-  run_as_worker_user "$WSL_USER" rsync -a "$SCRIPT_DIR/src/" "$WSL_WORKER_DIR/src/"
+  run_as_worker_user "$WSL_USER" rsync -a --delete "$SCRIPT_DIR/src/" "$WSL_WORKER_DIR/src/"
   run_as_worker_user "$WSL_USER" rsync -a "$SCRIPT_DIR/pyproject.toml" "$WSL_WORKER_DIR/pyproject.toml"
+  run_as_worker_user "$WSL_USER" rsync -a "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/README.md" "$WSL_WORKER_DIR/"
+  run_as_worker_user "$WSL_USER" rsync -a --delete "$SCRIPT_DIR/docs/" "$WSL_WORKER_DIR/docs/"
+  run_as_worker_user "$WSL_USER" mkdir -p "$WSL_WORKER_DIR/skills"
+  run_as_worker_user "$WSL_USER" rsync -a --delete "$SCRIPT_DIR/skills/builtin/" "$WSL_WORKER_DIR/skills/builtin/"
+
+  run_as_worker_user "$WSL_USER" bash -lc '
+set -euo pipefail
+worker_dir="$1"
+cd "$worker_dir"
+if [ -x ".venv/bin/python" ]; then
+  python_bin=".venv/bin/python"
+elif [ -x ".venv-wsl/bin/python" ]; then
+  python_bin=".venv-wsl/bin/python"
+else
+  python_bin="python3"
+fi
+"$python_bin" -m pip install -e .
+' bash "$WSL_WORKER_DIR"
 }
 
 start_worker() {

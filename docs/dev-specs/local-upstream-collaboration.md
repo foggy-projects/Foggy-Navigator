@@ -49,7 +49,8 @@ Linux/WSL 本机栈优先使用：
 ```bash
 scripts/local-dev-stack.sh status
 scripts/local-dev-stack.sh restart --skip-build
-scripts/local-dev-stack.sh restart --skip-build --sync-wsl-biz-source
+scripts/local-dev-stack.sh restart --skip-build  # 默认同步当前 LangGraph Biz Worker 到 WSL 3161
+scripts/local-dev-stack.sh restart --skip-build --no-sync-wsl-biz-source
 ```
 
 Windows 本机栈优先使用：
@@ -61,6 +62,10 @@ powershell -ExecutionPolicy Bypass -File scripts/local-dev-stack.ps1 restart -Sk
 ```
 
 `scripts/start-launcher.ps1` 在未设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` 时会默认指向 `http://127.0.0.1:3161`。`application.yml` 自身默认值是 `http://localhost:3061`，`scripts/start-launcher.sh` 不会覆盖该变量。需要固定联调目标时，显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL`。
+
+Linux/WSL 的 `local-dev-stack.sh start|restart` 默认将当前仓库的 LangGraph Biz Worker runtime source、`pyproject.toml`、内置 Skills 和文档同步到目标 WSL Worker，并以目标 Worker 的 Python 环境运行 `pip install -e .`，再启动 3161。它保留目标 `.env`、public Skills、日志和状态目录；`stop` 与 `status` 不会同步。`--no-sync-wsl-biz-source` 可仅重启已安装内容，旧的 `--sync-wsl-biz-source` 仍可使用但已是默认行为。
+
+Claude 与 Codex Worker 均由该 Linux 脚本直接从当前仓库的 `tools/` 源码目录启动，因此重启本身已经使用当前 checkout；它不会升级全局 Claude/Codex CLI 或 OBS 发布版。`codex-biz-worker` 是 Codex Worker 上的业务路由，并非独立的 WSL 服务。
 
 ## dev-kvm-x3 发布
 

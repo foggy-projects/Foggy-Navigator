@@ -15,7 +15,9 @@ NO_CODEX=0
 NO_GEMINI=0
 NO_LOCAL_BIZ=0
 NO_WSL_BIZ=0
-SYNC_WSL_BIZ_SOURCE=0
+# start/restart normally mean "run the current checkout". The separately
+# installed WSL Biz Worker therefore receives a source sync unless opted out.
+SYNC_WSL_BIZ_SOURCE=1
 WSL_BIZ_DISTRO="Ubuntu-24.04"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +37,8 @@ Options:
   --no-gemini               Skip Gemini worker
   --no-local-biz            Skip local LangGraph Biz worker on 3061
   --no-wsl-biz              Skip WSL LangGraph Biz worker on 3161
-  --sync-wsl-biz-source     Sync repo source to WSL biz worker before start
+  --no-sync-wsl-biz-source  Restart WSL biz worker without syncing this checkout
+  --sync-wsl-biz-source     Explicitly sync repo source to WSL biz worker (default; retained for compatibility)
   --wsl-biz-distro <name>   Restart/status the 3161 worker in another WSL distro, default Ubuntu-24.04
   --wsl-biz-current         Restart/status the 3161 worker in the current WSL distro
   --help                    Show this help
@@ -78,6 +81,10 @@ while [ $# -gt 0 ]; do
       ;;
     --sync-wsl-biz-source|-SyncWslBizSource)
       SYNC_WSL_BIZ_SOURCE=1
+      shift
+      ;;
+    --no-sync-wsl-biz-source|-NoSyncWslBizSource)
+      SYNC_WSL_BIZ_SOURCE=0
       shift
       ;;
     --wsl-biz-distro)
@@ -303,7 +310,7 @@ start_local_biz_worker() {
 invoke_wsl_biz() {
   local action="$1"
   local args=("$action" "--port" "$WSL_BIZ_PORT")
-  if [ "$SYNC_WSL_BIZ_SOURCE" -eq 1 ]; then
+  if [ "$SYNC_WSL_BIZ_SOURCE" -eq 1 ] && { [ "$action" = "start" ] || [ "$action" = "restart" ]; }; then
     args+=("--sync-source")
   fi
   if [ -n "$WSL_BIZ_DISTRO" ]; then
