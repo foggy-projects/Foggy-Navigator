@@ -51,6 +51,13 @@ external_enablement: no
 - 已检查已安装的 `dist/codex/thread-process-watchdog.js`：其记录 `reconciled lifecycle observations` 和 `PROCESS_UNVERIFIED`，不含 watchdog `abortTask(...)` 调用。此前日志中原生任务 `8893e658-3ba5-47aa-b459-625925d328ce` 的旧版 `reconciled stale execution state` / 自动 abort 记录是本次修复的直接本机证据。
 - 历史 Navigator 任务 `20260717-d30f` 没有可用的原生 Worker 终态记录；本次部署不得把它伪造为 `ABORTED`。其最终展示状态仍需由具备任务审计权限的控制面按对账流程单独裁定。本机部署不改变 `verification-blocked`、不构成真实 CLI 五态或生产验收。
 
+## Java 404 终止结果分类修复（2026-07-17）
+
+- 现场任务 `20260717-d03c` 在显式取消后仍显示 `RUNNING / TERMINATION_REJECTED`。控制面绑定的 Worker 原生任务为 `8893e658-3ba5-47aa-b459-625925d328ce`；该原生任务来自 Worker 重启前的旧 registry，当前 Worker abort 路由返回 `404 TASK_NOT_FOUND`。取消接口仍返回 HTTP 200 和 `Task cancelled`，但随后查询可见任务被恢复为 `RUNNING`，因此该成功文案不能作为已取消或已退出证据。
+- 根因是 Java 将除 408/429 外的全部 Worker 4xx 都归类为 definitive rejection。对 404 而言，这只能证明当前路由到的 Worker 没有对应原生任务状态，可能来自重启、路由漂移或内存 registry 丢失；它不能证明 CLI 已退出，也不是鉴权或 capability 契约拒绝。
+- 修复后 404 进入未确认分支：任务保持 `CANCEL_REQUESTED`，attention/error 为 `TERMINATION_UNCONFIRMED`，operation 标记为 unconfirmed，等待可关联的 Provider 终态或人工对账；不得恢复 `RUNNING`，也不得伪造 `ABORTED`。400/401/403 等明确的请求、鉴权或 capability 拒绝仍保留 `TERMINATION_REJECTED` 并恢复请求前状态。
+- 回归先在旧实现上复现 `expected CANCEL_REQUESTED but was RUNNING`，修复后 404 未确认与 403 明确拒绝两条定向测试均通过；完整 `CodexTaskServiceTest` 为 90 tests、0 failure/error/skip，`mvn -pl addons/codex-worker-agent -am -Dsurefire.failIfNoSpecifiedTests=false test` 为 `BUILD SUCCESS`，Codex addon 400 tests、0 failure/error/skip。该修复属于 Java 控制面，不需要重新发布未变化的 Codex Worker；目标环境必须部署/重启 Java 后，现场行为才会改变。
+
 ### 已实施行为
 
 1. Java 在派发任何显式终止前以独立事务写入 `TerminationOperation v1`。记录 operation ID、task/session/provider task、owner、worker、kind/origin、actor、授权决定、reason、correlation、预期 PID/process identity、dispatch 与 observed result；查询接口按 task owner 过滤。`CANCEL_REQUESTED` 或 Worker ACK 仅说明请求已接受，不能把任务改为 `ABORTED`。
@@ -77,7 +84,8 @@ Worker receipt 是本地防重放围栏而不是分布式 ledger。它只在同�
 | Codex app-server operation/replay 定向矩阵 | 30 passed | 覆盖 state-dir receipt、route/task contract、手工 PID 观察和 replay；safe init/idle-close smoke 使用 `codex-cli 0.144.4` 且没有模型请求。 |
 | Claude operation/replay 定向矩阵 | 16 passed | 覆盖 capability、receipt、restart 和 fail-closed；当前环境没有 Claude CLI。 |
 | Java final reactor | `mvn -pl addons/codex-worker-agent,addons/claude-worker-agent -am -Dsurefire.failIfNoSpecifiedTests=false test` 为 `BUILD SUCCESS` | 这是本地 Java 回归；真实目标部署、真实 CLI、告警和生产批准不在命令范围。 |
-| `CodexTaskServiceTest` | 84 tests，0 failure/error/skip | 覆盖 Java service 的 operation/终态关联回归；不是跨 Worker 运行态观察。 |
+| `CodexTaskServiceTest` | 90 tests，0 failure/error/skip | 覆盖 Java service 的 operation/终态关联回归，包括 Worker 404 保持 `CANCEL_REQUESTED / TERMINATION_UNCONFIRMED` 与 403 明确拒绝恢复原状态；不是跨 Worker 运行态观察。 |
+| Codex Worker Agent reactor（2026-07-17） | `mvn -pl addons/codex-worker-agent -am -Dsurefire.failIfNoSpecifiedTests=false test` 为 `BUILD SUCCESS`；Codex addon 400 tests，0 failure/error/skip | 覆盖本次 Java 修复及其依赖模块本地回归；目标环境部署与现场复测仍是独立步骤。 |
 | Isolated Docker MySQL migration | forward、索引/结构断言、rollback 均通过 | 未连接目标数据库，未运行目标环境 `ddl-auto=validate`。 |
 
 ### 尚未得到、且必须补齐的证据

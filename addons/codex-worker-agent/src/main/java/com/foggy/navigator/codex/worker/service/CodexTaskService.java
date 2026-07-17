@@ -1211,7 +1211,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
             if (current instanceof WebClientResponseException responseException) {
                 int status = responseException.getStatusCode().value();
-                return status >= 400 && status < 500 && status != 408 && status != 429;
+                // A Worker 404 can mean restart, routing drift, or loss of its
+                // in-memory native-task registry. It does not prove that the
+                // managed CLI exited, so cancellation must remain unconfirmed.
+                return status >= 400 && status < 500
+                        && status != 404 && status != 408 && status != 429;
             }
         }
         return false;

@@ -45,6 +45,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
@@ -1614,6 +1615,100 @@ class CodexTaskServiceTest {
                 StandardCharsets.UTF_8);
         assertTrue(payload.contains("\"correlation_id\":\"remote-cancel:"));
         verify(streamRelay, never()).abortAndReconcileTask(any());
+    }
+
+    @Test
+    void abortTaskKeepsCancelRequestedWhenWorkerNoLongerHasNativeTask() {
+        CodexTaskEntity entity = createTask(
+                "task-missing-native", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 17, 16, 0));
+        entity.setWorkerTaskId("worker-task-missing");
+        when(taskRepository.findByTaskId("task-missing-native")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to_missing_native");
+            operation.setSchemaVersion(1);
+            operation.setTaskId(command.taskId());
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            return operation;
+        });
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
+                .baseUrl("http://worker.example").authToken("worker-token").build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
+        WebClientResponseException notFound = WebClientResponseException.create(
+                404, "Not Found", null,
+                "{\"error\":\"TASK_NOT_FOUND\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+        when(workerClient.abortTask(eq("worker-task-missing"), any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.error(notFound));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        service.abortTask("task-missing-native");
+
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        assertEquals("TERMINATION_UNCONFIRMED", entity.getErrorMessage());
+        verify(terminationOperationService).markUnconfirmed(eq("to_missing_native"), anyString());
+        verify(terminationOperationService, never()).markRejected(anyString(), anyString());
+        verify(terminationOperationService, never()).markCancelRequested(anyString());
+    }
+
+    @Test
+    void abortTaskRestoresRunningWhenWorkerDefinitivelyRejectsAuthorization() {
+        CodexTaskEntity entity = createTask(
+                "task-rejected", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 17, 16, 10));
+        entity.setWorkerTaskId("worker-task-rejected");
+        when(taskRepository.findByTaskId("task-rejected")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to_rejected");
+            operation.setSchemaVersion(1);
+            operation.setTaskId(command.taskId());
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            return operation;
+        });
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
+                .baseUrl("http://worker.example").authToken("worker-token").build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
+        WebClientResponseException forbidden = WebClientResponseException.create(
+                403, "Forbidden", null,
+                "{\"error\":\"TERMINATION_CAPABILITY_REJECTED\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+        when(workerClient.abortTask(eq("worker-task-rejected"), any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.error(forbidden));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        service.abortTask("task-rejected");
+
+        assertEquals("RUNNING", entity.getStatus());
+        assertEquals("TERMINATION_REJECTED", entity.getErrorMessage());
+        verify(terminationOperationService).markRejected(eq("to_rejected"), anyString());
+        verify(terminationOperationService, never()).markUnconfirmed(anyString(), anyString());
+        verify(terminationOperationService, never()).markCancelRequested(anyString());
     }
 
     @Test
