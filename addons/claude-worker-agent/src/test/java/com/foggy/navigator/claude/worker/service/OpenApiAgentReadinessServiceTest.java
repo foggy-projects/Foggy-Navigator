@@ -543,12 +543,16 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals(Boolean.TRUE, codexRole.getExecutionWorker());
         assertEquals(Boolean.FALSE, codexRole.getDirectoryWorker());
         assertTrue(result.getChecks().stream().anyMatch(check ->
-                "WORKER_POOL_MEMBERSHIP".equals(check.getCode())
+                "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
                         && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().noneMatch(check ->
+                "WORKER_POOL_MEMBERSHIP".equals(check.getCode())));
+        verify(poolWorkerSelector, never()).resolveEnabledWorkerId(
+                anyString(), any(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
-    void verify_failsBeforeAskWhenDirectoryCodexWorkerIsNotEnabledPoolMember() {
+    void verify_keepsPoolMembershipCheckForCodexRouteWithoutWorkerHostCodexConfig() {
         AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
         form.setUpstreamUserId("private_1");
         form.setModelConfigId("model_codex");
@@ -573,7 +577,6 @@ class OpenApiAgentReadinessServiceTest {
                         null, null, null, "WORKING_DIRECTORY:USER_PRIVATE"));
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId("worker_not_in_pool");
-        worker.setCodexConfig(CodexConfig.builder().baseUrl("http://127.0.0.1:3151").model("gpt-5.5").build());
         when(claudeWorkerRepository.findByWorkerId("worker_not_in_pool")).thenReturn(Optional.of(worker));
         doThrow(new SecurityException("physical worker is not an enabled pool member: worker_not_in_pool"))
                 .when(poolWorkerSelector).resolveEnabledWorkerId(

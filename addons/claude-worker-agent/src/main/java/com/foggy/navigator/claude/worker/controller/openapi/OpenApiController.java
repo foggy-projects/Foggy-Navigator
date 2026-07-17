@@ -91,6 +91,7 @@ public class OpenApiController {
             ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER;
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
+    private static final String SOURCE_CLAUDE_WORKER_CODEX_CONFIG = "CLAUDE_WORKER_CODEX_CONFIG";
     private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
     private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
             TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
@@ -741,6 +742,10 @@ public class OpenApiController {
         if ((isBackend(workerBackend, BACKEND_OPENAI_CODEX)
                 || isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER))
                 && StringUtils.hasText(workspaceWorkerId)) {
+            if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                    && hasClaudeCodexConfig(workspaceWorkerId)) {
+                return new OwnerAwareLaunchWorker(workspaceWorkerId, SOURCE_CLAUDE_WORKER_CODEX_CONFIG);
+            }
             return new OwnerAwareLaunchWorker(workspaceWorkerId, workspaceWorkerSource);
         }
         if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)) {
@@ -791,6 +796,9 @@ public class OpenApiController {
         String workerBackend = firstNonBlank(
                 modelResource != null ? modelResource.workerBackend() : null,
                 agentResource != null ? agentResource.workerBackend() : null);
+        boolean directCodexPhysicalWorkerRoute = isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                && SOURCE_CLAUDE_WORKER_CODEX_CONFIG.equals(stringValue(metadata.get("workerSource")))
+                && StringUtils.hasText(physicalWorkerId);
         return BusinessAgentWorkerTaskLaunchRequest.builder()
                 .tenantId(tenantId)
                 .actorUserId(actorUserId)
@@ -800,9 +808,13 @@ public class OpenApiController {
                 .upstreamUserId(upstreamUserId)
                 .agentId(agentId)
                 .skillId(skillId)
-                .workerPoolId(routeId)
-                .workerPoolOwnerType(agentResource != null ? agentResource.workerPoolOwnerType() : null)
-                .workerPoolOwnerId(agentResource != null ? agentResource.workerPoolOwnerId() : null)
+                .workerPoolId(directCodexPhysicalWorkerRoute ? physicalWorkerId : routeId)
+                .workerPoolOwnerType(directCodexPhysicalWorkerRoute
+                        ? null
+                        : agentResource != null ? agentResource.workerPoolOwnerType() : null)
+                .workerPoolOwnerId(directCodexPhysicalWorkerRoute
+                        ? null
+                        : agentResource != null ? agentResource.workerPoolOwnerId() : null)
                 .physicalWorkerId(physicalWorkerId)
                 .workerBackend(workerBackend)
                 .modelConfigId(modelResource != null ? modelResource.modelConfigId() : null)
@@ -811,6 +823,17 @@ public class OpenApiController {
                 .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
                 .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)
                 .build();
+    }
+
+    private boolean hasClaudeCodexConfig(String workerId) {
+        if (!StringUtils.hasText(workerId)) {
+            return false;
+        }
+        return workerRepository.findByWorkerId(workerId.trim())
+                .map(ClaudeWorkerEntity::getCodexConfig)
+                .map(config -> config.getBaseUrl())
+                .filter(StringUtils::hasText)
+                .isPresent();
     }
 
     private record OwnerAwareLaunchWorker(String workerId, String workerSource) {

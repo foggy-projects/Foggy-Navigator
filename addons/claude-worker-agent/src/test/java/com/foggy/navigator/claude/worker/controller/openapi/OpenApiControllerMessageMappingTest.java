@@ -26,6 +26,8 @@ import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
 import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.service.*;
@@ -46,6 +48,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -2273,6 +2276,73 @@ class OpenApiControllerMessageMappingTest {
                 controller, "FAILED", "codex-app-server-worker", null, "opaque failure"));
         assertEquals("RUNTIME", failureStageMethod.invoke(
                 controller, "FAILED", null, "OPENAI_CODEX_APP_SERVER", "opaque failure"));
+    }
+
+    @Test
+    void codexWorkerHostConfigUsesDirectPhysicalWorkerSelectionInsteadOfPoolMembership() throws Exception {
+        OpenApiController controller = newController();
+        Field workerRepositoryField = OpenApiController.class.getDeclaredField("workerRepository");
+        workerRepositoryField.setAccessible(true);
+        ClaudeWorkerRepository workerRepository = (ClaudeWorkerRepository) workerRepositoryField.get(controller);
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("workspace-worker");
+        worker.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://127.0.0.1:3151")
+                .model("gpt-5.5")
+                .build());
+        when(workerRepository.findByWorkerId("workspace-worker")).thenReturn(Optional.of(worker));
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-codex", ResourceOwnerType.CLIENT_APP, "app-1", "app-1",
+                        "agent-codex", "pool-codex", ResourceOwnerType.UPSTREAM_SYSTEM, "sim-1",
+                        "WORKER_POOL:UPSTREAM_SYSTEM", "OPENAI_CODEX", null,
+                        null, null, null, "model-codex", "gpt-5.5", "dir-codex", "AGENT:CLIENT_APP");
+        A2AgentResourceResolver.ResolvedModelResource modelResource =
+                new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-codex", "model-codex", null, LlmModelCategory.GENERAL, "gpt-5.5",
+                        "MODEL_CONFIG_DEFAULT", "OPENAI_CODEX", "MODEL_CONFIG_GRANT");
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource =
+                new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-codex", "workspace-worker", WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED, "/workspace/codex", List.of("/workspace/codex"),
+                        false, null, null, null, "WORKING_DIRECTORY:USER_PRIVATE");
+
+        Method resolveMethod = OpenApiController.class.getDeclaredMethod(
+                "resolveOwnerAwareLaunchWorker",
+                String.class, String.class, A2AgentResourceResolver.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                A2AgentResourceResolver.ResolvedModelResource.class,
+                A2AgentResourceResolver.ResolvedWorkspaceResource.class);
+        resolveMethod.setAccessible(true);
+        Object launchWorker = resolveMethod.invoke(
+                controller, "tenant-1", "app-1", mock(A2AgentResourceResolver.class),
+                agentResource, modelResource, workspaceResource);
+        Method workerIdAccessor = launchWorker.getClass().getDeclaredMethod("workerId");
+        Method workerSourceAccessor = launchWorker.getClass().getDeclaredMethod("workerSource");
+        workerIdAccessor.setAccessible(true);
+        workerSourceAccessor.setAccessible(true);
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("workerId", workerIdAccessor.invoke(launchWorker));
+        metadata.put("workerSource", workerSourceAccessor.invoke(launchWorker));
+
+        Method selectionMethod = OpenApiController.class.getDeclaredMethod(
+                "buildOpenApiWorkerSelectionRequest",
+                String.class, String.class, String.class, String.class, String.class, String.class, String.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                A2AgentResourceResolver.ResolvedModelResource.class,
+                A2AgentResourceResolver.ResolvedWorkspaceResource.class,
+                Map.class);
+        selectionMethod.setAccessible(true);
+        BusinessAgentWorkerTaskLaunchRequest request = (BusinessAgentWorkerTaskLaunchRequest) selectionMethod.invoke(
+                controller, "tenant-1", "app-1", "app-1", "upstream-a", "agent-codex", "skill-codex", "ctx-1",
+                agentResource, modelResource, workspaceResource, metadata);
+
+        assertEquals("workspace-worker", request.getPhysicalWorkerId());
+        assertEquals("workspace-worker", request.getWorkerPoolId());
+        assertNull(request.getWorkerPoolOwnerType());
+        assertNull(request.getWorkerPoolOwnerId());
+        assertEquals("CLAUDE_WORKER_CODEX_CONFIG", metadata.get("workerSource"));
     }
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)

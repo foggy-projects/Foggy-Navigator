@@ -63,10 +63,14 @@ management:
   endpoints:
     web:
       exposure:
-        include: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:health,beans,metrics}
+        include: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:health,beans,metrics,info}
   endpoint:
     health:
       show-details: ${MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS:always}
+  info:
+    git:
+      # Full mode is safe because the generated git.properties is explicitly allowlisted in launcher/pom.xml.
+      mode: full
   metrics:
     tags:
       application: foggy-navigator

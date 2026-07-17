@@ -179,11 +179,11 @@ public class OpenApiAgentReadinessService {
         });
         addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0], workspaceResourceRef);
         applyWorkerHostExecutionPreference(result, app, agentResourceRef[0], workspaceResourceRef[0]);
-        addPoolMembershipCheck(result, credential, agentResourceRef[0]);
         addModelWorkerAccessCheck(result);
         addAppServerEndpointRuntimeReadinessCheck(result);
         applyPhysicalWorkerDiagnostic(result, agentResourceRef[0], workspaceResourceRef[0]);
         addWorkerHostRoleRoutingCheck(result);
+        addPoolMembershipCheck(result, credential, agentResourceRef[0]);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
         addBusinessFunctionAdapterChecks(result, credential);
         addOwnerAwareRuntimeResourceCheck(result);
@@ -324,7 +324,8 @@ public class OpenApiAgentReadinessService {
         if (!isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)
                 || agentResource == null
                 || !StringUtils.hasText(agentResource.workerPoolId())
-                || !StringUtils.hasText(result.getEffectivePhysicalWorkerId())) {
+                || !StringUtils.hasText(result.getEffectivePhysicalWorkerId())
+                || isDirectCodexPhysicalWorkerRoute(result)) {
             return;
         }
         try {
@@ -1064,6 +1065,18 @@ public class OpenApiAgentReadinessService {
         } else if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_LANGGRAPH_BIZ)) {
             addExpectedExecutionRoleCheck(result, ROLE_BIZ, SOURCE_BIZ_WORKER_IDENTITY);
         }
+    }
+
+    private boolean isDirectCodexPhysicalWorkerRoute(AgentReadinessDTO result) {
+        if (!isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)) {
+            return false;
+        }
+        return result.getPhysicalWorkerDiagnostics() != null
+                && result.getPhysicalWorkerDiagnostics().stream().anyMatch(diagnostic -> diagnostic != null
+                        && Boolean.TRUE.equals(diagnostic.getExecutionWorker())
+                        && ROLE_CODEX.equals(diagnostic.getRole())
+                        && SOURCE_CLAUDE_CODEX_CONFIG.equals(diagnostic.getSource())
+                        && sameText(result.getEffectivePhysicalWorkerId(), diagnostic.getPhysicalWorkerId()));
     }
 
     private boolean hasPhysicalRoutingContext(AgentReadinessDTO result) {

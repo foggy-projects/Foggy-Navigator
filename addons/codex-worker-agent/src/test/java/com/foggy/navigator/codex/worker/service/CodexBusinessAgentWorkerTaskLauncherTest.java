@@ -157,6 +157,20 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
     }
 
     @Test
+    void resolveWorkerIdUsesDirectPhysicalWorkerWhenPoolOwnerIsAbsent() {
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
+        BusinessAgentWorkerTaskLaunchRequest request = fullRequestBuilder()
+                .workerPoolId("codex_worker_direct")
+                .workerPoolOwnerType(null)
+                .workerPoolOwnerId(null)
+                .physicalWorkerId("codex_worker_direct")
+                .build();
+
+        assertEquals("codex_worker_direct", launcher.resolveWorkerId(request));
+        verifyNoInteractions(bizWorkerPoolService, poolMemberRepository, codexTaskService);
+    }
+
+    @Test
     void launchRejectsPreselectedWorkerThatIsNotEnabledPoolMember() {
         CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         when(bizWorkerPoolService.requireAvailablePool(
