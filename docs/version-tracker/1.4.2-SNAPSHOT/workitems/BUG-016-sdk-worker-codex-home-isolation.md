@@ -169,10 +169,17 @@ open_questions: []
   - packaged-candidate smoke 仅在隔离临时用户的 `$HOME/.codex/auth.json` 写入假登录态，并同时注入 hostile generic `CODEX_HOME`；health 仍从 `user_default` Home 解析到登录态，且 smoke 显式拒绝返回体包含正确或 hostile Home 路径。
   - Linux/macOS tar 与 Windows zip 均包含 `codex-agent-worker@1.0.17`；未发现可用的 `pwsh` 或 `powershell`，因此 Windows 启动脚本采用静态顺序契约、跨平台路径单测和生成 archive 验证，未宣称 Windows 本机运行态已执行。
   - 未运行付费/真实模型 resume smoke；本任务未读取、复制或修改真实 `/home/sa/.codex`、`/home/sa/.codex-app-server-worker/codex-home` 中的认证或 rollout 数据。
-  - 未停止、重启、安装、升级或发布任何 Worker；未上传 OBS。`tools/codex-app-server-worker` 的既存用户脏改保持原状，本事项没有对其打包或追加修改。
+  - 实现验证阶段未停止、重启、安装、升级或发布任何 Worker；后续在用户单独授权后仅发布 SDK Worker 1.0.17。`tools/codex-app-server-worker` 的既存用户脏改保持原状，本事项没有对其打包、提交或发布。
+- release_and_publish_evidence:
+  - source commit `e78d5817dbe365819b9b09bee2d5dd3efe49cdf9` 已推送至 `origin/main`；发布前 `tools/codex-agent-worker` 子目录 clean，且 `HEAD` 与 upstream 完全一致。
+  - `npm run publish:obs` 首次在任何对象上传前失败，因为 Linux 默认 `~/.obsutilconfig` 是占位配置；远端 `latest.json` 当时仍为 1.0.16。随后通过临时适配器让 Linux `obsutil` 显式读取本机既有 Windows 用户配置，未改发布脚本、未输出凭据，也未使用 `--allow-dirty`、`--allow-unpushed` 或 `--allow-same-version`。
+  - SDK Worker 1.0.17 已成功上传并由发布脚本回读验证；远端 `latest.json` 为 `product=codex-agent-worker`、`schemaVersion=1`、`version=1.0.17`、`gitCommit=e78d5817dbe365819b9b09bee2d5dd3efe49cdf9`。
+  - 独立下载复核通过：Linux/macOS 均为 160399 bytes、SHA-256 `8f7c6cf9415e0b49e076f175ac8862836cb659c867a12f938c42ba5cbe78be11`；Windows 为 661231 bytes、SHA-256 `6c183e62a22cf96f2b0e8fe8dfb355061aa691b7c219d784086be65eaf7e6d41`。
+  - 远端 `install.sh`、`install.ps1`、`1.0.17/release-evidence.json` 与本地生成资产逐字节一致。
+  - 未停止、重启或重装任何运行实例；未发布 codex-app-server Worker。
 - deviations: none
 - residual_risks:
-  - 当前运行中的 3051/3053 或已安装 `/home/sa/.codex-worker` 实例尚未应用 1.0.17 候选；部署前仍保持旧进程行为，安装/重启需要独立授权和进程归属复核。
+  - 当前运行中的 3051/3053 或已安装 `/home/sa/.codex-worker` 实例尚未应用已发布的 1.0.17；在用户重新执行安装脚本并按其流程重启前仍保持旧进程行为。
   - Windows 真实 PowerShell 启动链尚需在 Windows 目标机补一次运行态 smoke；当前证据为静态契约、Windows path/env 单测与可校验 archive。
   - 有意依赖 generic `CODEX_HOME` 自定义 SDK Worker 登录态的旧部署必须迁移为 `CODEX_WORKER_CODEX_HOME`；这是已批准的兼容性变化。
   - 本修复不改变 GOV-004 的 provider 非终态 observation 规则；其他原因导致的 `Codex SDK stream ended without a provider terminal observation` 仍会按原契约保持 active/attention。
