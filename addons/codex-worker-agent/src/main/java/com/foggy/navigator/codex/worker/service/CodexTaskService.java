@@ -33,6 +33,7 @@ import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
@@ -274,6 +275,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (existingSessionId != null && !existingSessionId.isBlank()) {
             validateExistingSession(userId, existingSessionId);
             validateExistingSessionProvider(existingSessionId, effectiveProviderType);
+            if (form.isInitializeRuntimeAffinity()) {
+                validatePreallocatedSessionForRuntimeInitialization(
+                        existingSessionId, userId, tenantId, effectiveProviderType);
+            }
         }
         normalizeAndValidateCodexBizHomeKey(form, effectiveProviderType);
 
@@ -331,7 +336,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setCodexThreadId(form.getCodexThreadId());
         applyRuntimeBinding(entity, resolveRuntimeBinding(
                 form.getWorkerId(), entity.getModel(), effectiveProviderType, taskId, existingSessionId,
-                runtimeRequirements(form, effectiveProviderType)));
+                runtimeRequirements(form, effectiveProviderType), form.isInitializeRuntimeAffinity()));
 
         persistTask(entity);
         log.info("Created Codex task: taskId={}, providerType={}, workerId={}, sessionId={}",
@@ -1606,6 +1611,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setCodexThreadId((String) params.get("codexThreadId"));
         form.setProviderType(effectiveProviderType);
+        form.setInitializeRuntimeAffinity(
+                InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(params));
         if (isCodexBizProvider(form.getProviderType())) {
             applyCodexBizParams(form, params);
         }
@@ -2223,8 +2230,16 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private CodexRuntimeBinding resolveRuntimeBinding(String workerId, String model, String providerType,
                                                        String routingKey, String existingSessionId,
                                                        Set<String> requiredFeatures) {
+        return resolveRuntimeBinding(
+                workerId, model, providerType, routingKey, existingSessionId, requiredFeatures, false);
+    }
+
+    private CodexRuntimeBinding resolveRuntimeBinding(String workerId, String model, String providerType,
+                                                       String routingKey, String existingSessionId,
+                                                       Set<String> requiredFeatures,
+                                                       boolean initializeRuntimeAffinity) {
         boolean appServerProvider = isCodexAppServerProvider(providerType);
-        if (existingSessionId != null && !existingSessionId.isBlank()) {
+        if (existingSessionId != null && !existingSessionId.isBlank() && !initializeRuntimeAffinity) {
             CodexRuntimeBinding sessionBinding = resolveExistingSessionBinding(existingSessionId, workerId);
             if (sessionBinding != null) {
                 validateProviderRuntimeBinding(providerType, sessionBinding);
@@ -2253,6 +2268,29 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 workerId, model, providerType, routingKey, requiredFeatures);
         validateProviderRuntimeBinding(providerType, binding);
         return binding;
+    }
+
+    private void validatePreallocatedSessionForRuntimeInitialization(
+            String sessionId, String userId, String tenantId, String providerType) {
+        if (sessionEntityRepository == null) {
+            throw new IllegalStateException("Session repository is unavailable for runtime affinity initialization");
+        }
+        SessionEntity session = sessionEntityRepository.findByIdAndUserIdForUpdate(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Session not found or access denied: " + sessionId));
+        if (!java.util.Objects.equals(tenantId, session.getTenantId())) {
+            throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
+        }
+        validateSessionProviderAffinity(session, providerType);
+        boolean hasProviderState = !ProviderStateCodec.parseObject(session.getProviderStateJson()).isEmpty();
+        boolean hasProviderTask = taskRepository.findFirstBySessionIdOrderByCreatedAtDesc(sessionId).isPresent();
+        boolean hasUnifiedTask = sessionTaskRepository != null
+                && !sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId).isEmpty();
+        if (firstNonBlank(session.getCurrentWorkerId(), session.getLatestTaskId()) != null
+                || hasProviderState || hasProviderTask || hasUnifiedTask) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INITIALIZATION_REJECTED",
+                    "Runtime affinity can only be initialized for a pristine preallocated session");
+        }
     }
 
     private Set<String> runtimeRequirements(CodexTaskCreateCommand form, String providerType) {

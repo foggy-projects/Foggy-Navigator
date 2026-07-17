@@ -18,6 +18,7 @@ import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRelationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -343,7 +345,13 @@ class SessionForwardServiceTest {
         when(sessionMessageRepository.findById("msg-1")).thenReturn(Optional.of(sourceMessage));
         when(sessionManager.createSession(any())).thenReturn("session-child-b");
         when(sessionRepository.findById("session-child-b")).thenReturn(Optional.of(createdSession));
-        when(agentSubmitPipeline.submit(any())).thenReturn(AgentTaskSubmitResult.of(null, createdTask));
+        when(agentSubmitPipeline.submit(any())).thenAnswer(invocation -> {
+            assertNull(createdSession.getCurrentWorkerId(),
+                    "new sessions must not advertise legacy Worker affinity before the first provider task binds runtime");
+            AgentTaskSubmitRequest submitRequest = invocation.getArgument(0);
+            assertTrue(submitRequest.isInitializeRuntimeAffinity());
+            return AgentTaskSubmitResult.of(null, createdTask);
+        });
         when(sessionRelationRepository.save(any())).thenAnswer(invocation -> {
             SessionRelationEntity relation = invocation.getArgument(0);
             relation.setId(100L);

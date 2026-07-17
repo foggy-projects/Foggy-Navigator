@@ -1,5 +1,6 @@
 package com.foggy.navigator.session.service;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.Data;
 
@@ -78,4 +79,8 @@ public class TaskDispatchRequest {
 
     /** 是否为 resume 操作 */
     private boolean resume;
+
+    /** 仅供可信服务端链路初始化预创建 Session 的首任务运行时亲和性。 */
+    @JsonIgnore
+    private boolean initializeRuntimeAffinity;
 }

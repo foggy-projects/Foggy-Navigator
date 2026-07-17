@@ -11,6 +11,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import lombok.extern.slf4j.Slf4j;
@@ -87,6 +88,9 @@ final class TaskOperationRouter {
         TaskCommandProvider provider = findTaskCommandProviderByType(providerType)
                 .orElseThrow(() -> new IllegalArgumentException("Provider not available: " + providerType));
         Map<String, Object> params = TaskDispatchRequestParams.toCommonParams(request);
+        if (request.isInitializeRuntimeAffinity()) {
+            InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(params);
+        }
         DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
         log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
                 providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());

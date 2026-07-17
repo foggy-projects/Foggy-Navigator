@@ -39,4 +39,5 @@ public class CodexTaskCreateCommand {
     private Boolean networkAccessEnabled;
     private String webSearchMode;
     private List<String> additionalDirectories;
+    private boolean initializeRuntimeAffinity;
 }

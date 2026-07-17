@@ -642,6 +642,7 @@ public class TaskDispatchFacade {
                 .context(request.getContext())
                 .metadata(metadata.isEmpty() ? null : metadata)
                 .contextAlias(contextAlias)
+                .initializeRuntimeAffinity(request.isInitializeRuntimeAffinity())
                 .build();
     }
 

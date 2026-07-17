@@ -119,7 +119,8 @@ public class SessionForwardService {
 
         SessionEntity targetSession = sessionRepository.findById(targetSessionId)
                 .orElseThrow(() -> new IllegalStateException("Created session not found: " + targetSessionId));
-        targetSession.setCurrentWorkerId(blankToNull(request.getWorkerId()));
+        // The first provider task establishes Worker/runtime affinity atomically. Pre-seeding
+        // currentWorkerId here makes a new app-server session look like a legacy SDK session.
         targetSession.setCurrentDirectoryId(blankToNull(request.getDirectoryId()));
         targetSession.setMilestoneId(targetMilestoneId);
         targetSession.setLatestModel(blankToNull(request.getModel()));
@@ -139,6 +140,7 @@ public class SessionForwardService {
                 .agentTeamsConfigId(request.getAgentTeamsConfigId())
                 .agentTeamsJson(request.getAgentTeamsJson())
                 .images(parseImagesList(request.getImages()))
+                .initializeRuntimeAffinity(true)
                 .build();
 
         AgentResolveContext context = buildContext(userId, tenantId, targetSessionId, request.getModelConfigId());
@@ -279,6 +281,7 @@ public class SessionForwardService {
                 .context(request.getContext())
                 .metadata(request.getMetadata())
                 .contextAlias(request.getContextAlias())
+                .initializeRuntimeAffinity(request.isInitializeRuntimeAffinity())
                 .build();
     }
 

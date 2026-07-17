@@ -10,6 +10,7 @@ import com.foggy.navigator.codex.worker.model.dto.CodexAppServerEndpointSyncDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.form.CodexAppServerEndpointForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
+import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.codex.worker.service.CodexAppServerEndpointService;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.common.entity.LlmModelConfigEntity;
@@ -25,6 +26,7 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
+import com.foggy.navigator.session.repository.SessionRepository;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -95,6 +97,8 @@ class CodexAppServerNavigatorE2ETest {
     @Autowired private LlmModelConfigRepository modelRepository;
     @Autowired private SessionTaskRepository sessionTaskRepository;
     @Autowired private SessionMessageRepository sessionMessageRepository;
+    @Autowired private SessionRepository sessionRepository;
+    @Autowired private CodexTaskRepository codexTaskRepository;
     @Autowired private CredentialEncryptor credentialEncryptor;
     @Autowired private CodexAppServerEndpointService endpointService;
     @Autowired private CodexRuntimeRegistryService runtimeRegistryService;
@@ -174,6 +178,49 @@ class CodexAppServerNavigatorE2ETest {
         userInputResponseDoesNotCrossThreads();
         mismatchedLaneDoesNotReplaceHealthyChild();
         rateLimitProbeKeepsResidentChildHealthy();
+    }
+
+    @Test
+    void forwardToNewSessionKeepsAppServerRuntimeAffinity() throws Exception {
+        String sourceTrace = trace("forward-source");
+        registerFinal(sourceTrace, 0, "SOURCE_" + sourceTrace);
+        JsonNode sourceTask = createTask(sourceTrace, MODEL_ID, null, false);
+        JsonNode sourceCompleted = awaitTask(sourceTask.path("taskId").asText(), "COMPLETED");
+        String sourceMessageId = awaitAssistantMessageId(sourceTask.path("taskId").asText());
+
+        String targetTrace = trace("forward-target");
+        registerFinal(targetTrace, 0, "RESULT_" + targetTrace);
+        JsonNode forward = postNavigator("/api/v1/session-relations/forward", Map.of(
+                "sourceSessionId", sourceCompleted.path("sessionId").asText(),
+                "sourceMessageId", sourceMessageId,
+                "targetMode", "NEW_SESSION",
+                "workerId", workerId,
+                "directoryId", DIRECTORY_ID,
+                "cwd", CWD,
+                "prompt", "BUG-010 E2E " + targetTrace + " next:" + targetTrace + ":001",
+                "model", MODEL,
+                "modelConfigId", MODEL_ID,
+                "permissionMode", "bypassPermissions"
+        ));
+
+        assertThat(forward.path("code").asInt()).as(forward.toPrettyString()).isEqualTo(200);
+        assertThat(forward.at("/data/targetMode").asText()).isEqualTo("NEW_SESSION");
+        assertThat(forward.at("/data/relationId").asLong()).isPositive();
+        JsonNode forwardedTask = forward.at("/data/task");
+        assertThat(forwardedTask.path("providerType").asText()).isEqualTo(PROVIDER);
+        JsonNode completed = awaitTask(forwardedTask.path("taskId").asText(), "COMPLETED");
+        assertThat(completed.path("resultText").asText()).contains("RESULT_" + targetTrace);
+
+        var persistedTask = codexTaskRepository.findByTaskId(forwardedTask.path("taskId").asText()).orElseThrow();
+        assertThat(persistedTask.getRuntimeType()).isEqualTo("APP_SERVER");
+        assertThat(persistedTask.getRuntimeId()).isEqualTo(runtime.getRuntimeId());
+        assertThat(persistedTask.getRuntimeRevision()).isEqualTo(runtime.getRevision());
+
+        var targetSession = sessionRepository.findById(forward.at("/data/targetSessionId").asText()).orElseThrow();
+        assertThat(targetSession.getProviderType()).isEqualTo(PROVIDER);
+        assertThat(targetSession.getCurrentWorkerId()).isEqualTo(workerId);
+        assertThat(targetSession.getCurrentDirectoryId()).isEqualTo(DIRECTORY_ID);
+        assertThat(targetSession.getLatestTaskId()).isEqualTo(forwardedTask.path("taskId").asText());
     }
 
     private void differentThreadsShareOneChildWithoutCrossTalk() throws Exception {

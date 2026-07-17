@@ -26,6 +26,7 @@ import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
@@ -2246,6 +2247,105 @@ class CodexTaskServiceTest {
         assertEquals(binding, resolved);
         verify(runtimeRegistryService).validateBoundRuntimeCapabilities(
                 binding, "codex-terra:ultra", Set.of("attachments"));
+        verify(runtimeRegistryService, never()).selectForNewTask(
+                anyString(), any(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void preallocatedAppServerSessionInitializesRuntimeAffinityOnFirstProviderTask() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-preallocated");
+        session.setUserId("user-1");
+        session.setTenantId("tenant-1");
+        when(sessionEntityRepository.findById("session-preallocated")).thenReturn(Optional.of(session));
+        when(sessionEntityRepository.findByIdAndUserIdForUpdate("session-preallocated", "user-1"))
+                .thenReturn(Optional.of(session));
+        when(taskRepository.findFirstBySessionIdOrderByCreatedAtDesc("session-preallocated"))
+                .thenReturn(Optional.empty());
+        when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc("session-preallocated"))
+                .thenReturn(List.of());
+
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("workerId", "worker-1");
+        params.put("sessionId", "session-preallocated");
+        params.put("prompt", "continue in a new branch");
+        params.put("model", "codex-terra:ultra");
+        params.put("providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(params);
+
+        DispatchTaskDTO task = service.createTaskDirectForProvider(
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, params, "user-1", "tenant-1");
+
+        assertEquals("session-preallocated", task.getSessionId());
+        assertNotNull(savedTask[0]);
+        assertEquals(CodexRuntimeType.APP_SERVER.name(), savedTask[0].getRuntimeType());
+        assertEquals("app-main", savedTask[0].getRuntimeId());
+        assertEquals(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, session.getProviderType());
+        assertEquals("worker-1", session.getCurrentWorkerId());
+        assertEquals(savedTask[0].getTaskId(), session.getLatestTaskId());
+        verify(runtimeRegistryService).selectForNewTask(
+                eq("worker-1"), eq("codex-terra:ultra"),
+                eq(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE), anyString(), eq(Set.of()));
+    }
+
+    @Test
+    void runtimeAffinityInitializationRejectsNonPristineSession() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-used");
+        session.setUserId("user-1");
+        session.setTenantId("tenant-1");
+        session.setCurrentWorkerId("worker-1");
+        when(sessionEntityRepository.findById("session-used")).thenReturn(Optional.of(session));
+        when(sessionEntityRepository.findByIdAndUserIdForUpdate("session-used", "user-1"))
+                .thenReturn(Optional.of(session));
+        when(taskRepository.findFirstBySessionIdOrderByCreatedAtDesc("session-used"))
+                .thenReturn(Optional.empty());
+        when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc("session-used"))
+                .thenReturn(List.of());
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("workerId", "worker-1");
+        params.put("sessionId", "session-used");
+        params.put("prompt", "continue");
+        params.put("model", "codex-terra:ultra");
+        params.put("providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(params);
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.createTaskDirectForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        params, "user-1", "tenant-1"));
+
+        assertEquals("CODEX_RUNTIME_AFFINITY_INITIALIZATION_REJECTED", error.getCode());
+        verify(runtimeRegistryService, never()).selectForNewTask(
+                anyString(), any(), anyString(), anyString(), any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void ordinaryAppServerContinuationWithoutAffinityStillFailsClosed() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-missing-affinity");
+        when(sessionEntityRepository.findById("session-missing-affinity"))
+                .thenReturn(Optional.of(session));
+        when(taskRepository.findFirstBySessionIdOrderByCreatedAtDesc("session-missing-affinity"))
+                .thenReturn(Optional.empty());
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> ReflectionTestUtils.invokeMethod(
+                        service, "resolveRuntimeBinding", "worker-1", "codex-terra:ultra",
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-new",
+                        "session-missing-affinity", Set.of()));
+
+        assertEquals("CODEX_RUNTIME_AFFINITY_MISSING", error.getCode());
         verify(runtimeRegistryService, never()).selectForNewTask(
                 anyString(), any(), anyString(), anyString(), any());
     }
