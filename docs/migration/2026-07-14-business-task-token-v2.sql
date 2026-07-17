@@ -36,6 +36,62 @@ BEGIN
     END IF;
 END //
 
+DROP PROCEDURE IF EXISTS gov142_ensure_index //
+CREATE PROCEDURE gov142_ensure_index(
+    IN target_table VARCHAR(64),
+    IN target_index VARCHAR(64),
+    IN index_columns TEXT
+)
+BEGIN
+    DECLARE index_count INT DEFAULT 0;
+    SELECT COUNT(*) INTO index_count
+      FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = target_table
+       AND INDEX_NAME = target_index;
+
+    IF index_count = 0 THEN
+        SET @gov142_sql = CONCAT(
+            'ALTER TABLE `', REPLACE(target_table, '`', '``'),
+            '` ADD INDEX `', REPLACE(target_index, '`', '``'), '` (', index_columns, ')'
+        );
+        PREPARE gov142_statement FROM @gov142_sql;
+        EXECUTE gov142_statement;
+        DEALLOCATE PREPARE gov142_statement;
+    END IF;
+END //
+
+DROP PROCEDURE IF EXISTS gov142_ensure_unique_single_column_index //
+CREATE PROCEDURE gov142_ensure_unique_single_column_index(
+    IN target_table VARCHAR(64),
+    IN target_index VARCHAR(64),
+    IN target_column VARCHAR(64)
+)
+BEGIN
+    DECLARE index_count INT DEFAULT 0;
+    SELECT COUNT(*) INTO index_count
+      FROM (
+          SELECT INDEX_NAME
+            FROM INFORMATION_SCHEMA.STATISTICS
+           WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = target_table
+             AND NON_UNIQUE = 0
+           GROUP BY INDEX_NAME
+          HAVING COUNT(*) = 1
+             AND MAX(COLUMN_NAME) = target_column
+      ) existing_unique_indexes;
+
+    IF index_count = 0 THEN
+        SET @gov142_sql = CONCAT(
+            'ALTER TABLE `', REPLACE(target_table, '`', '``'),
+            '` ADD UNIQUE INDEX `', REPLACE(target_index, '`', '``'), '` (`', REPLACE(target_column, '`', '``'), '`)'
+        );
+        PREPARE gov142_statement FROM @gov142_sql;
+        EXECUTE gov142_statement;
+        DEALLOCATE PREPARE gov142_statement;
+    END IF;
+END //
+
 DELIMITER ;
 
 CALL gov142_ensure_column('business_task_scoped_token', 'row_version', 'BIGINT NOT NULL DEFAULT 0');
@@ -59,6 +115,10 @@ UPDATE business_task_scoped_token
    SET issued_at = COALESCE(created_at, CURRENT_TIMESTAMP(6))
  WHERE issued_at IS NULL;
 
+UPDATE business_task_scoped_token
+   SET row_version = 0
+ WHERE row_version IS NULL;
+
 ALTER TABLE business_task_scoped_token
     MODIFY COLUMN row_version BIGINT NOT NULL DEFAULT 0,
     MODIFY COLUMN token_version INT NOT NULL DEFAULT 1,
@@ -68,7 +128,13 @@ ALTER TABLE business_task_scoped_token
     MODIFY COLUMN function_scope_json LONGTEXT NOT NULL,
     MODIFY COLUMN issued_at DATETIME(6) NOT NULL;
 
+CALL gov142_ensure_index('business_task_scoped_token', 'idx_biz_token_task', '`task_id`');
+CALL gov142_ensure_index('business_task_scoped_token', 'idx_biz_token_tenant_worker_task', '`tenant_id`, `worker_task_id`');
+CALL gov142_ensure_unique_single_column_index('business_task_scoped_token', 'uk_biz_token_token_id', 'token_id');
+
 DROP PROCEDURE IF EXISTS gov142_ensure_column;
+DROP PROCEDURE IF EXISTS gov142_ensure_index;
+DROP PROCEDURE IF EXISTS gov142_ensure_unique_single_column_index;
 
 -- Operational follow-up:
 -- 1. Restart with ddl-auto=validate and confirm schema validation passes.
