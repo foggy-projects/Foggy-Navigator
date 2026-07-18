@@ -88,6 +88,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private static final String AGENT_ID = CODEX_PROVIDER_TYPE;
     private static final String USER_INPUT_STATE_KEY = "codexPendingInteraction";
     private static final String USER_INPUT_METHOD = "item/tool/requestUserInput";
+    private static final List<String> ACTIVE_RESUME_STATUSES =
+            List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED");
+    private static final Duration RESUME_RECONCILIATION_TIMEOUT = Duration.ofSeconds(5);
     private static final int MAX_USER_INPUT_QUESTIONS = 3;
     private static final String STALE_TURN_INTERRUPT_KIND = "STALE_TURN_INTERRUPT";
     private static final String STALE_TURN_CLEANUP_ORIGIN = "UPSTREAM_USER";
@@ -192,12 +195,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = CodexStaleTaskRepairedException.class)
     public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
         return resumeTaskForProvider(CODEX_PROVIDER_TYPE, userId, tenantId, params);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = CodexStaleTaskRepairedException.class)
     public DispatchTaskDTO resumeTaskForProvider(String expectedProviderType,
                                                   String userId,
                                                   String tenantId,
@@ -259,14 +262,201 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType)) {
             throw new IllegalArgumentException("Codex 会话不存在或不属于该 Worker: " + form.getCodexThreadId());
         }
-        if (taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
-                form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType,
-                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"))) {
+        Optional<CodexTaskEntity> activeTask = taskRepository
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                        form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType,
+                        ACTIVE_RESUME_STATUSES);
+        if (activeTask.isPresent()) {
+            if (repairStaleResumeTaskIfVerifiedAbsent(activeTask.get())) {
+                throw new CodexStaleTaskRepairedException();
+            }
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
         DispatchTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
         return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
+    }
+
+    private boolean repairStaleResumeTaskIfVerifiedAbsent(CodexTaskEntity activeTask) {
+        if (!supportsSdkResumeReconciliation(activeTask)
+                || sessionTaskRepository == null || sessionEntityRepository == null) {
+            return false;
+        }
+        String workerTaskId = stringValue(activeTask.getWorkerTaskId());
+        if (workerTaskId == null) {
+            return false;
+        }
+
+        CodexWorkerClient client;
+        try {
+            client = terminationClient(activeTask);
+        } catch (RuntimeException error) {
+            log.warn(
+                    "Keeping Codex resume guard because the bound Worker client is unavailable: taskId={}, workerId={}, errorType={}",
+                    activeTask.getTaskId(), activeTask.getWorkerId(), error.getClass().getSimpleName());
+            return false;
+        }
+        try {
+            client.getTaskStatus(workerTaskId).block(RESUME_RECONCILIATION_TIMEOUT);
+            return false;
+        } catch (RuntimeException error) {
+            WebClientResponseException responseError = findWorkerResponseError(error);
+            if (responseError == null || responseError.getStatusCode().value() != 404) {
+                log.warn(
+                        "Keeping Codex resume guard after inconclusive Worker status probe: taskId={}, workerId={}, errorType={}, httpStatus={}",
+                        activeTask.getTaskId(), activeTask.getWorkerId(), error.getClass().getSimpleName(),
+                        responseError != null ? responseError.getStatusCode().value() : null);
+                return false;
+            }
+        }
+
+        Map<String, Object> processSnapshot;
+        try {
+            processSnapshot = client.listCliProcesses().block(RESUME_RECONCILIATION_TIMEOUT);
+        } catch (RuntimeException error) {
+            WebClientResponseException responseError = findWorkerResponseError(error);
+            log.warn(
+                    "Keeping Codex resume guard after inconclusive Worker process probe: taskId={}, workerId={}, errorType={}, httpStatus={}",
+                    activeTask.getTaskId(), activeTask.getWorkerId(), error.getClass().getSimpleName(),
+                    responseError != null ? responseError.getStatusCode().value() : null);
+            return false;
+        }
+        if (!processSnapshotConfirmsTaskAbsent(
+                processSnapshot, workerTaskId, stringValue(activeTask.getCodexThreadId()))) {
+            log.warn(
+                    "Keeping Codex resume guard because Worker process snapshot did not prove absence: taskId={}, workerId={}",
+                    activeTask.getTaskId(), activeTask.getWorkerId());
+            return false;
+        }
+
+        resolvePendingInteractionForStaleTask(activeTask);
+        String previousStatus = activeTask.getStatus();
+        activeTask.setStatus("FAILED");
+        activeTask.setErrorMessage(CodexStaleTaskRepairedException.CODE);
+        persistTask(activeTask);
+        publishStatusChange(activeTask, previousStatus);
+        log.warn(
+                "Repaired stale Codex resume guard after Worker task and CLI absence were verified: taskId={}, workerId={}, previousStatus={}",
+                activeTask.getTaskId(), activeTask.getWorkerId(), previousStatus);
+        return true;
+    }
+
+    private boolean supportsSdkResumeReconciliation(CodexTaskEntity task) {
+        String providerType = resolveProviderType(task);
+        return CodexRuntimeType.SDK_EXEC.name().equals(task.getRuntimeType())
+                && (CODEX_PROVIDER_TYPE.equals(providerType) || CODEX_BIZ_PROVIDER_TYPE.equals(providerType));
+    }
+
+    private boolean processSnapshotConfirmsTaskAbsent(Map<String, Object> snapshot,
+                                                      String workerTaskId,
+                                                      String codexThreadId) {
+        if (snapshot == null || workerTaskId == null) {
+            return false;
+        }
+        Object processValue = snapshot.get("processes");
+        if (!(processValue instanceof List<?> processes)) {
+            return false;
+        }
+        Integer total = exactNonNegativeInteger(snapshot.get("total"));
+        Integer activeTaskCount = exactNonNegativeInteger(snapshot.get("active_task_count"));
+        if (total == null || total != processes.size() || activeTaskCount == null) {
+            return false;
+        }
+
+        Set<Integer> observedPids = new LinkedHashSet<>();
+        for (Object processValueItem : processes) {
+            if (!(processValueItem instanceof Map<?, ?> process)) {
+                return false;
+            }
+            Integer pid = exactPositiveInteger(process.get("pid"));
+            if (pid == null || !observedPids.add(pid)
+                    || !"codex".equals(process.get("command"))
+                    || !"codex".equals(process.get("process_type"))
+                    || !isFiniteNonNegativeNumber(process.get("memory_mb"))
+                    || !(process.get("is_orphan") instanceof Boolean orphan)) {
+                return false;
+            }
+            String observedTaskId = processIdentifier(process, "foggy_task_id");
+            String observedThreadId = processIdentifier(process, "codex_thread_id");
+            if (observedTaskId == null && process.containsKey("foggy_task_id")) {
+                return false;
+            }
+            if (observedThreadId == null && process.containsKey("codex_thread_id")) {
+                return false;
+            }
+            if (workerTaskId.equals(observedTaskId)
+                    || (codexThreadId != null && codexThreadId.equals(observedThreadId))) {
+                return false;
+            }
+            if (orphan) {
+                // An orphan without a recoverable thread identity may still be
+                // the old CLI after a Worker restart, so absence is ambiguous.
+                if (observedTaskId != null || observedThreadId == null) {
+                    return false;
+                }
+            } else if (observedTaskId == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String processIdentifier(Map<?, ?> process, String field) {
+        Object value = process.get(field);
+        if (!(value instanceof String identifier)
+                || identifier.isBlank()
+                || identifier.length() > 256
+                || !identifier.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")) {
+            return null;
+        }
+        return identifier;
+    }
+
+    private Integer exactPositiveInteger(Object value) {
+        Integer number = exactNonNegativeInteger(value);
+        return number != null && number > 0 ? number : null;
+    }
+
+    private Integer exactNonNegativeInteger(Object value) {
+        if (!(value instanceof Number number)) {
+            return null;
+        }
+        double decimal = number.doubleValue();
+        long integer = number.longValue();
+        if (!Double.isFinite(decimal) || decimal != integer
+                || integer < 0 || integer > Integer.MAX_VALUE) {
+            return null;
+        }
+        return (int) integer;
+    }
+
+    private boolean isFiniteNonNegativeNumber(Object value) {
+        if (!(value instanceof Number number)) {
+            return false;
+        }
+        double decimal = number.doubleValue();
+        return Double.isFinite(decimal) && decimal >= 0;
+    }
+
+    private WebClientResponseException findWorkerResponseError(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof WebClientResponseException responseError) {
+                return responseError;
+            }
+        }
+        return null;
+    }
+
+    private void resolvePendingInteractionForStaleTask(CodexTaskEntity task) {
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskIdForUpdate(task.getTaskId()).orElse(null);
+        if (sessionTask == null) {
+            return;
+        }
+        Map<String, Object> pending = pendingUserInput(sessionTask);
+        if (!pending.isEmpty() && !"RESOLVED".equals(stringValue(pending.get("state")))) {
+            markPendingResolved(sessionTask, task, pending, "stale_task_repaired");
+        }
     }
 
     private DispatchTaskDTO createAndStartTask(String userId, String tenantId,

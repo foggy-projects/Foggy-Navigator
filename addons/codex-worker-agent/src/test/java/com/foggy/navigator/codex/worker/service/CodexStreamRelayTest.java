@@ -139,6 +139,44 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void manualReconnectReconcilesRemoteAbortBeforeResubscribing() {
+        CodexTaskEntity entity = stubAppServerTask("SUBSCRIBED");
+        entity.setWorkerTaskId("worker-task-9");
+        entity.setCodexThreadId("thread-9");
+        when(client.getTaskStatus("worker-task-9")).thenReturn(Mono.just(Map.of(
+                "task_id", "worker-task-9",
+                "status", "terminal",
+                "outcome", "aborted",
+                "thread_id", "thread-9")));
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(client).getTaskStatus("worker-task-9");
+        verify(taskService).reconcileAbortedTask("local-task-1", "worker-task-9", "thread-9");
+        verify(client, never()).subscribeToTask(any(), anyInt());
+    }
+
+    @Test
+    void manualReconnectKeepsCompletedStatusRecoverableUntilFinalSse() {
+        CodexTaskEntity entity = stubAppServerTask("SUBSCRIBED");
+        entity.setWorkerTaskId("worker-task-9");
+        when(client.getTaskStatus("worker-task-9")).thenReturn(Mono.just(Map.of(
+                "task_id", "worker-task-9",
+                "status", "terminal",
+                "outcome", "completed",
+                "thread_id", "thread-9")));
+        when(client.subscribeToTask("worker-task-9", 0)).thenReturn(Flux.never());
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(client).getTaskStatus("worker-task-9");
+        verify(client).subscribeToTask("worker-task-9", 0);
+        verify(taskService, never()).completeTask(
+                eq("local-task-1"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+    }
+
+    @Test
     void userInputRequestPublishesDurableConfirmationRequest() throws Exception {
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId("local-task-1");

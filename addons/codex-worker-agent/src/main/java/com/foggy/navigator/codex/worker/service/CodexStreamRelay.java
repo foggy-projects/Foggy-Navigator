@@ -328,6 +328,8 @@ public class CodexStreamRelay {
             workerId = entity.getWorkerId();
             CodexRuntimeBinding runtime = resolveRuntimeBinding(entity);
             CodexWorkerClient client = getCodexClient(entity, runtime);
+            AtomicReference<String> detectedModel = new AtomicReference<>();
+            AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(entity.getCodexThreadId());
             if (entity.getWorkerTaskId() == null || entity.getWorkerTaskId().isBlank()) {
                 if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
                         && "ABORTED_BEFORE_ACCEPT".equals(entity.getRuntimeAcceptanceState())) {
@@ -358,8 +360,17 @@ public class CodexStreamRelay {
                         .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
             }
 
-            AtomicReference<String> detectedModel = new AtomicReference<>();
-            AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(entity.getCodexThreadId());
+            // A user-triggered reconnect is also a chance to obtain explicit remote
+            // terminal evidence. Do not infer an outcome from a missing stream: only
+            // failed/aborted status responses are reconciled here; completed still
+            // needs its durable final SSE payload.
+            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
+                    && reconcileAppServerTerminal(entity, sessionId, resolveTaskProviderType(taskId),
+                    detectedModel, detectedCodexThreadId)) {
+                clearStreamTracking(taskId);
+                return;
+            }
+
             String providerType = resolveTaskProviderType(taskId);
 
             AtomicInteger seqTracker = lastAckedSeq.get(taskId);

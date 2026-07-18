@@ -43,6 +43,12 @@ public interface CodexTaskRepository extends JpaRepository<CodexTaskEntity, Long
             String codexThreadId, String workerId, String userId,
             String providerType, List<String> statuses);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<CodexTaskEntity>
+    findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+            String codexThreadId, String workerId, String userId,
+            String providerType, List<String> statuses);
+
     Optional<CodexTaskEntity> findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeOrderByCreatedAtDesc(
             String codexThreadId, String workerId, String userId, String providerType);
 

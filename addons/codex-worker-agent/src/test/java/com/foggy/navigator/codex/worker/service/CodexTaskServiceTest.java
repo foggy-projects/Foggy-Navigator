@@ -2929,6 +2929,321 @@ class CodexTaskServiceTest {
         when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"})
+    void resumeTaskRepairsVerifiedAbsentSdkTaskAndRequestsRetry(String status) {
+        CodexTaskEntity staleTask = stubActiveResumeTask(status, "worker-task-stale");
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+        WebClientResponseException notFound = workerStatusError(404, "Not Found");
+        lenient().when(workerClient.getTaskStatus("worker-task-stale")).thenReturn(Mono.error(notFound));
+        lenient().when(workerClient.listCliProcesses()).thenReturn(Mono.just(Map.of(
+                "processes", List.of(), "active_task_count", 0, "total", 0)));
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        CodexStaleTaskRepairedException error = assertThrows(CodexStaleTaskRepairedException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("CODEX_STALE_TASK_REPAIRED"));
+        assertEquals("FAILED", staleTask.getStatus());
+        assertEquals("CODEX_STALE_TASK_REPAIRED", staleTask.getErrorMessage());
+        verify(workerClient).getTaskStatus("worker-task-stale");
+        verify(workerClient).listCliProcesses();
+        verify(taskRepository).save(argThat((CodexTaskEntity entity) ->
+                "task-stale".equals(entity.getTaskId())
+                        && "FAILED".equals(entity.getStatus())
+                        && "CODEX_STALE_TASK_REPAIRED".equals(entity.getErrorMessage())));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "task-stale".equals(entity.getTaskId())
+                        && "FAILED".equals(entity.getStatus())
+                        && "CODEX_STALE_TASK_REPAIRED".equals(entity.getErrorMessage())));
+        verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
+                "session-1".equals(entity.getId())
+                        && "AWAITING_REPLY".equals(entity.getInteractionState())));
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-stale".equals(event.getTaskId())
+                        && status.equals(event.getPreviousStatus())
+                        && "FAILED".equals(event.getStatus())
+                        && Boolean.TRUE.equals(event.getRecoverable())));
+        verifyNoInteractions(terminationOperationService);
+    }
+
+    @Test
+    void resumeTaskResolvesPendingInputWhenRepairingVerifiedAbsentTask() {
+        CodexTaskEntity staleTask = stubActiveResumeTask("AWAITING_INPUT", "worker-task-stale");
+        SessionTaskEntity sessionTask = new SessionTaskEntity();
+        sessionTask.setTaskId("task-stale");
+        sessionTask.setSessionId("session-1");
+        sessionTask.setUserId("user-1");
+        sessionTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        sessionTask.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                null, CodexTaskService.CODEX_PROVIDER_TYPE, "codexPendingInteraction",
+                pendingState(pendingInputProjection(false), "PENDING")));
+        when(sessionTaskRepository.findByTaskId("task-stale")).thenReturn(Optional.of(sessionTask));
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(CodexStaleTaskRepairedException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertEquals("FAILED", staleTask.getStatus());
+        assertTrue(sessionTask.getTaskStateJson().contains("\"state\":\"RESOLVED\""));
+        assertTrue(sessionTask.getTaskStateJson().contains("\"resolved_reason\":\"stale_task_repaired\""));
+    }
+
+    @Test
+    void resumeTaskRepairsVerifiedAbsentCodexBizSdkTask() {
+        CodexTaskEntity staleTask = stubActiveResumeTask(
+                "RUNNING", "worker-task-stale", CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                CodexRuntimeType.SDK_EXEC.name());
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(CodexStaleTaskRepairedException.class,
+                () -> service.resumeTaskForProvider(
+                        CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                        "user-1", "tenant-1", resumeParams()));
+
+        assertEquals("FAILED", staleTask.getStatus());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenWorkerStillReportsTaskActive() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-active");
+        lenient().when(workerClient.getTaskStatus("worker-task-active")).thenReturn(Mono.just(Map.of(
+                "task_id", "worker-task-active", "status", "running")));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(workerClient).getTaskStatus("worker-task-active");
+        verify(workerClient, never()).listCliProcesses();
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenWorkerStatusProbeFails() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-unavailable");
+        WebClientResponseException unavailable = workerStatusError(503, "Service Unavailable");
+        lenient().when(workerClient.getTaskStatus("worker-task-unavailable"))
+                .thenReturn(Mono.error(unavailable));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(workerClient).getTaskStatus("worker-task-unavailable");
+        verify(workerClient, never()).listCliProcesses();
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenProcessSnapshotContainsUnidentifiedOrphan() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-stale");
+        lenient().when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        lenient().when(workerClient.listCliProcesses()).thenReturn(Mono.just(Map.of(
+                "processes", List.of(Map.of(
+                        "pid", 4123, "command", "codex", "memory_mb", 8,
+                        "process_type", "codex", "is_orphan", true)),
+                "active_task_count", 0, "total", 1)));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(workerClient).getTaskStatus("worker-task-stale");
+        verify(workerClient).listCliProcesses();
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenProcessSnapshotStillContainsWorkerTask() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-stale");
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of(
+                workerProcess(4123, false, "worker-task-stale", "thread-other")))));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenProcessSnapshotStillContainsThread() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-stale");
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of(
+                workerProcess(4123, false, "worker-task-other", "thread-1")))));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenProcessProbeFailsAfterStatus404() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-stale");
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses())
+                .thenReturn(Mono.error(workerStatusError(503, "Service Unavailable")));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWhenProcessSnapshotIsMalformed() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("RUNNING", "worker-task-stale");
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(Map.of(
+                "processes", List.of(), "active_task_count", 0, "total", 1)));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskAllowsAttributableOrphanFromDifferentThreadWhenTargetIsAbsent() {
+        CodexTaskEntity staleTask = stubActiveResumeTask("RUNNING", "worker-task-stale");
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of(
+                workerProcess(4123, true, null, "thread-other")))));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(CodexStaleTaskRepairedException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertEquals("FAILED", staleTask.getStatus());
+    }
+
+    @Test
+    void resumeTaskDoesNotProbeAppServerRuntime() {
+        CodexTaskEntity activeTask = stubActiveResumeTask(
+                "RUNNING", "worker-task-active", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTaskForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        "user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("RUNNING", activeTask.getStatus());
+        verifyNoInteractions(workerClient);
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskKeepsGuardWithoutPersistedWorkerTaskId() {
+        CodexTaskEntity activeTask = stubActiveResumeTask("AWAITING_INPUT", null);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        assertEquals("AWAITING_INPUT", activeTask.getStatus());
+        verifyNoInteractions(workerClient);
+        verify(taskRepository, never()).save(any());
+    }
+
+    private CodexTaskEntity stubActiveResumeTask(String status, String workerTaskId) {
+        return stubActiveResumeTask(status, workerTaskId, CodexTaskService.CODEX_PROVIDER_TYPE,
+                CodexRuntimeType.SDK_EXEC.name());
+    }
+
+    private CodexTaskEntity stubActiveResumeTask(String status, String workerTaskId,
+                                                 String providerType, String runtimeType) {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setTenantId("tenant-1");
+        session.setProviderType(providerType);
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        CodexTaskEntity task = createTask(
+                "task-stale", "session-1", "worker-1", "dir-1", status,
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        task.setTenantId("tenant-1");
+        task.setProviderType(providerType);
+        task.setRuntimeType(runtimeType);
+        task.setWorkerTaskId(workerTaskId);
+        task.setCodexThreadId("thread-1");
+
+        lenient().when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+                "thread-1", "worker-1", "user-1", providerType)).thenReturn(true);
+        lenient().when(taskRepository
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                        "thread-1", "worker-1", "user-1", providerType,
+                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(Optional.of(task));
+        lenient().when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        lenient().when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        return task;
+    }
+
+    private Map<String, Object> processSnapshot(List<Map<String, Object>> processes) {
+        return Map.of("processes", processes, "active_task_count", 0, "total", processes.size());
+    }
+
+    private Map<String, Object> workerProcess(int pid, boolean orphan,
+                                              String workerTaskId, String codexThreadId) {
+        Map<String, Object> process = new LinkedHashMap<>();
+        process.put("pid", pid);
+        process.put("command", "codex");
+        process.put("memory_mb", 8);
+        process.put("process_type", "codex");
+        process.put("is_orphan", orphan);
+        if (workerTaskId != null) process.put("foggy_task_id", workerTaskId);
+        if (codexThreadId != null) process.put("codex_thread_id", codexThreadId);
+        return process;
+    }
+
+    private Map<String, Object> resumeParams() {
+        return Map.of("workerId", "worker-1", "sessionId", "session-1", "prompt", "continue");
+    }
+
+    private WebClientResponseException workerStatusError(int status, String statusText) {
+        return WebClientResponseException.create(status, statusText, null,
+                "{\"error\":\"worker probe failed\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+    }
+
     @Test
     void resumeTaskRejectsThreadAwaitingUserInputAfterSessionLock() {
         SessionEntity session = new SessionEntity();
