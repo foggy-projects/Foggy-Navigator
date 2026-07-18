@@ -1,5 +1,6 @@
 package com.foggy.navigator.auth.config;
 
+import com.foggy.navigator.spi.agent.TaskStateRepairedException;
 import com.foggyframework.core.ex.RX;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -10,6 +11,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class GlobalExceptionHandlerTest {
 
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+    @Test
+    void handleTaskStateRepairedExceptionReturnsActionableBusinessError() {
+        ResponseEntity<RX<?>> response = handler.handleTaskStateRepairedException(
+                new TestTaskStateRepairedException(
+                        "TASK_STATE_REPAIRED: 残留运行状态已自动修复，请重新尝试"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(600, response.getBody().getCode());
+        assertEquals("B600", response.getBody().getExCode());
+        assertEquals("TASK_STATE_REPAIRED: 残留运行状态已自动修复，请重新尝试",
+                response.getBody().getMsg());
+    }
 
     @Test
     void handleExRuntimeException_preservesBusinessEnvelope() {
@@ -52,5 +66,11 @@ class GlobalExceptionHandlerTest {
                 new SecurityException("Not authorized to update this sharing key"));
 
         assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+    }
+
+    private static final class TestTaskStateRepairedException extends TaskStateRepairedException {
+        private TestTaskStateRepairedException(String message) {
+            super(message);
+        }
     }
 }

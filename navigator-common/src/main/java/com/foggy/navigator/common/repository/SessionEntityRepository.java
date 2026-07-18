@@ -13,7 +13,26 @@ import java.util.Optional;
 
 public interface SessionEntityRepository extends JpaRepository<SessionEntity, String> {
 
+    interface ResumeStateView {
+        String getId();
+        String getProviderStateJson();
+        String getLatestTaskId();
+    }
+
     Optional<SessionEntity> findByIdAndUserId(String id, String userId);
+
+    @Query("SELECT s.id AS id, s.providerStateJson AS providerStateJson, " +
+           "s.latestTaskId AS latestTaskId " +
+           "FROM SessionEntity s WHERE s.id = :id AND s.userId = :userId")
+    Optional<ResumeStateView> findResumeStateByIdAndUserId(@Param("id") String id,
+                                                           @Param("userId") String userId);
+
+    @Query(value = "SELECT s.id AS id, s.provider_state_json AS providerStateJson, " +
+                   "s.latest_task_id AS latestTaskId " +
+                   "FROM sessions s WHERE s.id = :id AND s.user_id = :userId FOR UPDATE",
+            nativeQuery = true)
+    Optional<ResumeStateView> findResumeStateByIdAndUserIdForUpdate(@Param("id") String id,
+                                                                    @Param("userId") String userId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM SessionEntity s WHERE s.id = :id AND s.userId = :userId")

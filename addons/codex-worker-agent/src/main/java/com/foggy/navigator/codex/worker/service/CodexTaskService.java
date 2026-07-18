@@ -43,15 +43,19 @@ import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.session.service.TerminationOperationService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -148,6 +152,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Nullable
     private SessionEntityRepository sessionEntityRepository;
 
+    @PersistenceContext
+    @Nullable
+    private EntityManager entityManager;
+
     @Autowired(required = false)
     @Nullable
     private NativeSubtaskStateRepository nativeSubtaskStateRepository;
@@ -195,12 +203,14 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     @Override
-    @Transactional(noRollbackFor = CodexStaleTaskRepairedException.class)
+    @Transactional(isolation = Isolation.READ_COMMITTED,
+            noRollbackFor = CodexStaleTaskRepairedException.class)
     public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
         return resumeTaskForProvider(CODEX_PROVIDER_TYPE, userId, tenantId, params);
     }
 
-    @Transactional(noRollbackFor = CodexStaleTaskRepairedException.class)
+    @Transactional(isolation = Isolation.READ_COMMITTED,
+            noRollbackFor = CodexStaleTaskRepairedException.class)
     public DispatchTaskDTO resumeTaskForProvider(String expectedProviderType,
                                                   String userId,
                                                   String tenantId,
@@ -226,13 +236,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
         // codexThreadId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
         String sessionId = (String) params.get("sessionId");
-        if (sessionId != null && !sessionId.isBlank() && sessionEntityRepository != null) {
-            String codexThreadId = ProviderStateCodec.readStringOrNull(
-                    sessionEntityRepository.findById(sessionId)
-                            .map(SessionEntity::getProviderStateJson).orElse(null),
-                    ProviderStateCodec.FIELD_CODEX_THREAD_ID);
-            form.setCodexThreadId(codexThreadId);
-        }
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("resume 操作必须指定 sessionId");
         }
@@ -241,14 +244,28 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
 
         workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
-        validateExistingSession(userId, sessionId);
-        lockExistingSessionForResume(userId, sessionId);
-        if (sessionEntityRepository != null) {
-            String lockedCodexThreadId = ProviderStateCodec.readStringOrNull(
-                    sessionEntityRepository.findById(sessionId)
-                            .map(SessionEntity::getProviderStateJson).orElse(null),
-                    ProviderStateCodec.FIELD_CODEX_THREAD_ID);
-            form.setCodexThreadId(lockedCodexThreadId);
+        ResumeSessionState observedSession = observeResumeState(userId, sessionId);
+        form.setCodexThreadId(observedSession.codexThreadId());
+        ResumeTaskFence taskFence = lockResumeTaskFence(
+                sessionId, observedSession.codexThreadId(), form.getWorkerId(), userId,
+                effectiveProviderType);
+        String activeTaskSessionId = taskFence.activeTask()
+                .map(CodexTaskEntity::getSessionId)
+                .map(this::stringValue)
+                .orElse(null);
+        ResumeSessionState lockedSession = lockResumeSessions(
+                userId, sessionId, activeTaskSessionId);
+        if (!Objects.equals(observedSession.codexThreadId(), lockedSession.codexThreadId())
+                || !Objects.equals(observedSession.latestTaskId(), lockedSession.latestTaskId())) {
+            throw resumeStateChanged();
+        }
+        form.setCodexThreadId(lockedSession.codexThreadId());
+
+        if (taskFence.activeTask().isPresent()) {
+            if (repairStaleResumeTaskIfVerifiedAbsent(taskFence.activeTask().get())) {
+                throw new CodexStaleTaskRepairedException();
+            }
+            throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
         if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
@@ -258,24 +275,204 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
         }
 
-        if (!taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
-                form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType)) {
+        if (!taskFence.hasHistoricalTask()) {
             throw new IllegalArgumentException("Codex 会话不存在或不属于该 Worker: " + form.getCodexThreadId());
-        }
-        Optional<CodexTaskEntity> activeTask = taskRepository
-                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
-                        form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType,
-                        ACTIVE_RESUME_STATUSES);
-        if (activeTask.isPresent()) {
-            if (repairStaleResumeTaskIfVerifiedAbsent(activeTask.get())) {
-                throw new CodexStaleTaskRepairedException();
-            }
-            throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
         DispatchTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
         return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
     }
+
+    private ResumeTaskFence lockResumeTaskFence(String sessionId,
+                                                String codexThreadId,
+                                                String workerId,
+                                                String userId,
+                                                String providerType) {
+        String activeTaskId = firstResumeTaskId(taskRepository.findActiveResumeTaskIds(
+                sessionId, codexThreadId, workerId, userId, providerType,
+                ACTIVE_RESUME_STATUSES, PageRequest.of(0, 1)));
+        if (activeTaskId != null) {
+            return new ResumeTaskFence(Optional.of(lockActiveResumeTask(
+                    activeTaskId, sessionId, codexThreadId, workerId, userId, providerType)), true);
+        }
+
+        String observedAnchorTaskId = observeResumeAnchorTaskId(
+                sessionId, codexThreadId, workerId, userId, providerType);
+        if (observedAnchorTaskId == null) {
+            return new ResumeTaskFence(Optional.empty(), false);
+        }
+        CodexTaskEntity lockedAnchor = taskRepository.findByTaskIdForUpdate(observedAnchorTaskId)
+                .orElseThrow(this::resumeStateChanged);
+        if (!matchesResumeAnchor(
+                lockedAnchor, sessionId, codexThreadId, workerId, userId, providerType)) {
+            throw resumeStateChanged();
+        }
+
+        String currentAnchorTaskId = observeResumeAnchorTaskId(
+                sessionId, codexThreadId, workerId, userId, providerType);
+        if (!Objects.equals(observedAnchorTaskId, currentAnchorTaskId)) {
+            throw resumeStateChanged();
+        }
+        String currentActiveTaskId = firstResumeTaskId(taskRepository.findActiveResumeTaskIds(
+                sessionId, codexThreadId, workerId, userId, providerType,
+                ACTIVE_RESUME_STATUSES, PageRequest.of(0, 1)));
+        if (currentActiveTaskId == null) {
+            return new ResumeTaskFence(Optional.empty(), true);
+        }
+        if (!Objects.equals(currentActiveTaskId, observedAnchorTaskId)
+                || !ACTIVE_RESUME_STATUSES.contains(lockedAnchor.getStatus())
+                || !matchesActiveResumeScope(
+                        lockedAnchor, sessionId, codexThreadId, workerId, userId, providerType)) {
+            throw resumeStateChanged();
+        }
+        return new ResumeTaskFence(Optional.of(lockedAnchor), true);
+    }
+
+    private CodexTaskEntity lockActiveResumeTask(String taskId,
+                                                  String sessionId,
+                                                  String codexThreadId,
+                                                  String workerId,
+                                                  String userId,
+                                                  String providerType) {
+        CodexTaskEntity lockedTask = taskRepository.findByTaskIdForUpdate(taskId)
+                .orElseThrow(this::resumeStateChanged);
+        throwIfStaleRepairAlreadyCommitted(lockedTask);
+        if (!ACTIVE_RESUME_STATUSES.contains(lockedTask.getStatus())
+                || !matchesActiveResumeScope(
+                        lockedTask, sessionId, codexThreadId, workerId, userId, providerType)) {
+            throw resumeStateChanged();
+        }
+        return lockedTask;
+    }
+
+    private void throwIfStaleRepairAlreadyCommitted(CodexTaskEntity task) {
+        if ("FAILED".equals(task.getStatus())
+                && CodexStaleTaskRepairedException.CODE.equals(task.getErrorMessage())) {
+            throw new CodexStaleTaskRepairedException();
+        }
+    }
+
+    private boolean matchesActiveResumeScope(CodexTaskEntity task,
+                                             String sessionId,
+                                             String codexThreadId,
+                                             String workerId,
+                                             String userId,
+                                             String providerType) {
+        boolean sameSession = Objects.equals(sessionId, task.getSessionId())
+                && Objects.equals(userId, task.getUserId());
+        boolean sameThread = codexThreadId != null
+                && Objects.equals(codexThreadId, task.getCodexThreadId())
+                && matchesResumeOwner(task, workerId, userId, providerType);
+        return sameSession || sameThread;
+    }
+
+    private boolean matchesResumeAnchor(CodexTaskEntity task,
+                                        String sessionId,
+                                        String codexThreadId,
+                                        String workerId,
+                                        String userId,
+                                        String providerType) {
+        if (codexThreadId == null) {
+            return Objects.equals(sessionId, task.getSessionId())
+                    && Objects.equals(userId, task.getUserId());
+        }
+        return Objects.equals(codexThreadId, task.getCodexThreadId())
+                && matchesResumeOwner(task, workerId, userId, providerType);
+    }
+
+    private boolean matchesResumeOwner(CodexTaskEntity task,
+                                       String workerId,
+                                       String userId,
+                                       String providerType) {
+        return Objects.equals(workerId, task.getWorkerId())
+                && Objects.equals(userId, task.getUserId())
+                && Objects.equals(providerType, resolveProviderType(task));
+    }
+
+    private String observeResumeAnchorTaskId(String sessionId,
+                                             String codexThreadId,
+                                             String workerId,
+                                             String userId,
+                                             String providerType) {
+        List<String> taskIds = codexThreadId != null
+                ? taskRepository.findLatestResumeThreadTaskIds(
+                        codexThreadId, workerId, userId, providerType, PageRequest.of(0, 1))
+                : taskRepository.findLatestResumeSessionTaskIds(
+                        sessionId, userId, PageRequest.of(0, 1));
+        return firstResumeTaskId(taskIds);
+    }
+
+    private String firstResumeTaskId(List<String> taskIds) {
+        return taskIds == null || taskIds.isEmpty() ? null : stringValue(taskIds.get(0));
+    }
+
+    private ResumeSessionState observeResumeState(String userId, String sessionId) {
+        if (sessionEntityRepository == null) {
+            validateExistingSession(userId, sessionId);
+            return new ResumeSessionState(null, null);
+        }
+        SessionEntityRepository.ResumeStateView state = sessionEntityRepository
+                .findResumeStateByIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Session not found or access denied: " + sessionId));
+        return resumeSessionState(state);
+    }
+
+    private ResumeSessionState lockResumeState(String userId, String sessionId) {
+        if (sessionEntityRepository == null) {
+            validateExistingSession(userId, sessionId);
+            return new ResumeSessionState(null, null);
+        }
+        SessionEntityRepository.ResumeStateView state = sessionEntityRepository
+                .findResumeStateByIdAndUserIdForUpdate(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Session not found or access denied: " + sessionId));
+        refreshManagedResumeSession(sessionId);
+        return resumeSessionState(state);
+    }
+
+    private ResumeSessionState lockResumeSessions(String userId,
+                                                   String requestedSessionId,
+                                                   String activeTaskSessionId) {
+        if (activeTaskSessionId == null || activeTaskSessionId.equals(requestedSessionId)) {
+            return lockResumeState(userId, requestedSessionId);
+        }
+        // A same-thread active task may belong to another Navigator Session. Repairing it
+        // updates that owner projection, so lock both rows in a stable order after the Task row.
+        if (requestedSessionId.compareTo(activeTaskSessionId) < 0) {
+            ResumeSessionState requestedState = lockResumeState(userId, requestedSessionId);
+            lockResumeState(userId, activeTaskSessionId);
+            return requestedState;
+        }
+        lockResumeState(userId, activeTaskSessionId);
+        return lockResumeState(userId, requestedSessionId);
+    }
+
+    private void refreshManagedResumeSession(String sessionId) {
+        if (entityManager == null) {
+            return;
+        }
+        SessionEntity managedSession = entityManager.find(SessionEntity.class, sessionId);
+        if (managedSession != null) {
+            entityManager.refresh(managedSession);
+        }
+    }
+
+    private ResumeSessionState resumeSessionState(SessionEntityRepository.ResumeStateView state) {
+        return new ResumeSessionState(
+                ProviderStateCodec.readStringOrNull(
+                        state.getProviderStateJson(), ProviderStateCodec.FIELD_CODEX_THREAD_ID),
+                stringValue(state.getLatestTaskId()));
+    }
+
+    private IllegalStateException resumeStateChanged() {
+        return new IllegalStateException(
+                "CODEX_RESUME_STATE_CHANGED: 会话或任务运行状态在恢复期间发生变化，请重新尝试");
+    }
+
+    private record ResumeTaskFence(Optional<CodexTaskEntity> activeTask, boolean hasHistoricalTask) {}
+
+    private record ResumeSessionState(String codexThreadId, String latestTaskId) {}
 
     private boolean repairStaleResumeTaskIfVerifiedAbsent(CodexTaskEntity activeTask) {
         if (!supportsSdkResumeReconciliation(activeTask)
@@ -333,12 +530,34 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         String previousStatus = activeTask.getStatus();
         activeTask.setStatus("FAILED");
         activeTask.setErrorMessage(CodexStaleTaskRepairedException.CODE);
-        persistTask(activeTask);
+        persistRepairedResumeTask(activeTask);
         publishStatusChange(activeTask, previousStatus);
         log.warn(
                 "Repaired stale Codex resume guard after Worker task and CLI absence were verified: taskId={}, workerId={}, previousStatus={}",
                 activeTask.getTaskId(), activeTask.getWorkerId(), previousStatus);
         return true;
+    }
+
+    private void persistRepairedResumeTask(CodexTaskEntity task) {
+        CodexTaskEntity saved = taskRepository.save(task);
+        syncSessionTask(saved);
+        syncRepairedResumeSessionProjection(saved);
+    }
+
+    private void syncRepairedResumeSessionProjection(CodexTaskEntity task) {
+        if (sessionEntityRepository == null
+                || task.getSessionId() == null || task.getSessionId().isBlank()) {
+            return;
+        }
+        SessionEntity session = sessionEntityRepository.findById(task.getSessionId()).orElse(null);
+        if (session == null || !Objects.equals(stringValue(session.getLatestTaskId()), task.getTaskId())) {
+            return;
+        }
+        // The repair may race with rewind or runtime migration. Only the terminal UI state
+        // belongs to this transition; provider, worker, thread and latest-task affinity stay intact.
+        session.setInteractionState(deriveInteractionState(task.getStatus()));
+        session.setLastActivityAt(LocalDateTime.now());
+        sessionEntityRepository.save(session);
     }
 
     private boolean supportsSdkResumeReconciliation(CodexTaskEntity task) {
@@ -3651,13 +3870,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             }
         }
         throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
-    }
-
-    private void lockExistingSessionForResume(String userId, String sessionId) {
-        if (sessionEntityRepository == null) return;
-        sessionEntityRepository.findByIdAndUserIdForUpdate(sessionId, userId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Session not found or access denied: " + sessionId));
     }
 
     @Override

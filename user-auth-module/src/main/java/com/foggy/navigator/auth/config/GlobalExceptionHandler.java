@@ -1,5 +1,6 @@
 package com.foggy.navigator.auth.config;
 
+import com.foggy.navigator.spi.agent.TaskStateRepairedException;
 import com.foggyframework.core.ex.ExRuntimeException;
 import com.foggyframework.core.ex.ExRuntimeExceptionImpl;
 import com.foggyframework.core.ex.RX;
@@ -18,6 +19,17 @@ import java.util.Locale;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /**
+     * A task command may durably repair stale state and still require a user retry.
+     */
+    @ExceptionHandler(TaskStateRepairedException.class)
+    public ResponseEntity<RX<?>> handleTaskStateRepairedException(TaskStateRepairedException ex) {
+        log.warn("Task state repaired; client retry required: {}", ex.getMessage());
+
+        RX<?> rx = RX.failB(ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(rx);
+    }
 
     /**
      * 处理 RX.throwA/B/C 抛出的业务异常

@@ -25,6 +25,8 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
+import com.foggy.navigator.session.service.SessionForwardService;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
@@ -45,16 +47,21 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import jakarta.persistence.EntityManager;
 import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TimeZone;
@@ -88,6 +95,39 @@ class CodexTaskServiceTest {
         assertNotNull(method.getAnnotation(Transactional.class));
     }
 
+    @Test
+    void resumeTaskCommitsStaleRepairExceptionButRollsBackOtherRuntimeFailures() throws Exception {
+        var attributeSource = new AnnotationTransactionAttributeSource();
+        var methods = List.of(
+                CodexTaskService.class.getMethod(
+                        "resumeTask", String.class, String.class, Map.class),
+                CodexTaskService.class.getMethod(
+                        "resumeTaskForProvider", String.class, String.class, String.class, Map.class));
+
+        for (var method : methods) {
+            var transaction = attributeSource.getTransactionAttribute(method, CodexTaskService.class);
+            assertNotNull(transaction, method.getName());
+            assertEquals(TransactionDefinition.ISOLATION_READ_COMMITTED,
+                    transaction.getIsolationLevel(), method.getName());
+            assertFalse(transaction.rollbackOn(new CodexStaleTaskRepairedException()), method.getName());
+            assertTrue(transaction.rollbackOn(new IllegalStateException("other failure")), method.getName());
+        }
+    }
+
+    @Test
+    void sessionForwardCommitsTaskStateRepairAtReadCommittedIsolation() throws Exception {
+        var method = SessionForwardService.class.getMethod(
+                "forwardToNewSession", SessionForwardCreateRequest.class, String.class, String.class);
+        var transaction = new AnnotationTransactionAttributeSource()
+                .getTransactionAttribute(method, SessionForwardService.class);
+
+        assertNotNull(transaction);
+        assertEquals(TransactionDefinition.ISOLATION_READ_COMMITTED,
+                transaction.getIsolationLevel());
+        assertFalse(transaction.rollbackOn(new CodexStaleTaskRepairedException()));
+        assertTrue(transaction.rollbackOn(new IllegalStateException("other failure")));
+    }
+
     @Mock
     private CodexTaskRepository taskRepository;
     @Mock
@@ -102,6 +142,8 @@ class CodexTaskServiceTest {
     private SessionTaskRepository sessionTaskRepository;
     @Mock
     private SessionEntityRepository sessionEntityRepository;
+    @Mock
+    private EntityManager entityManager;
     @Mock
     private NativeSubtaskStateRepository nativeSubtaskStateRepository;
     @Mock
@@ -130,6 +172,7 @@ class CodexTaskServiceTest {
         ReflectionTestUtils.setField(service, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
+        ReflectionTestUtils.setField(service, "entityManager", entityManager);
         ReflectionTestUtils.setField(service, "nativeSubtaskStateRepository", nativeSubtaskStateRepository);
         ReflectionTestUtils.setField(service, "codingAgentRepository", codingAgentRepository);
         ReflectionTestUtils.setField(service, "streamRelay", streamRelay);
@@ -147,13 +190,18 @@ class CodexTaskServiceTest {
             session.setId(invocation.getArgument(0));
             return Optional.of(session);
         });
+        lenient().when(sessionEntityRepository.findResumeStateByIdAndUserId(anyString(), anyString()))
+                .thenAnswer(invocation -> sessionEntityRepository.findById(invocation.getArgument(0))
+                        .filter(session -> Objects.equals(session.getUserId(), invocation.getArgument(1)))
+                        .map(this::resumeStateView));
+        lenient().when(sessionEntityRepository.findResumeStateByIdAndUserIdForUpdate(
+                        anyString(), anyString()))
+                .thenAnswer(invocation -> sessionEntityRepository.findById(invocation.getArgument(0))
+                        .filter(session -> Objects.equals(session.getUserId(), invocation.getArgument(1)))
+                        .map(this::resumeStateView));
         lenient().when(sessionEntityRepository.findByIdAndUserIdForUpdate(anyString(), anyString()))
-                .thenAnswer(invocation -> {
-                    SessionEntity session = new SessionEntity();
-                    session.setId(invocation.getArgument(0));
-                    session.setUserId(invocation.getArgument(1));
-                    return Optional.of(session);
-                });
+                .thenAnswer(invocation -> sessionEntityRepository.findById(invocation.getArgument(0))
+                        .filter(session -> Objects.equals(session.getUserId(), invocation.getArgument(1))));
         lenient().when(sessionEntityRepository.save(any(SessionEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(runtimeRegistryService.selectForNewTask(
@@ -860,20 +908,15 @@ class CodexTaskServiceTest {
             return savedTask[0];
         });
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
-                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
-                .thenReturn(true);
-        when(taskRepository
-                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
-                        "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(Optional.empty());
         // providerStateJson 中存储 codexThreadId（resume 从此恢复）
         SessionEntity sessionWithState = new SessionEntity();
         sessionWithState.setId("session-1");
         sessionWithState.setUserId("user-1");
         sessionWithState.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        sessionWithState.setLatestTaskId("task-history");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(sessionWithState));
+        stubHistoricalResumeTask(
+                "task-history", "session-1", "thread-1", CodexTaskService.CODEX_PROVIDER_TYPE);
 
         DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
                 "workerId", "worker-1",
@@ -889,7 +932,8 @@ class CodexTaskServiceTest {
         assertEquals("RUNNING", result.getStatus());
 
         verify(sessionManager).addMessage(eq("session-1"), any(Message.class));
-        verify(sessionEntityRepository).findByIdAndUserIdForUpdate("session-1", "user-1");
+        verify(taskRepository).findByTaskIdForUpdate("task-history");
+        verify(sessionEntityRepository).findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
         verify(taskRepository).save(argThat((CodexTaskEntity entity) ->
                 "session-1".equals(entity.getSessionId())
                         && "thread-1".equals(entity.getCodexThreadId())
@@ -931,15 +975,19 @@ class CodexTaskServiceTest {
         session.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         session.setProviderStateJson("{\"codexThreadId\":\"thread-cross-provider\"}");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(taskRepository.findLatestResumeThreadTaskIds(
+                "thread-cross-provider", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE, PageRequest.of(0, 1)))
+                .thenReturn(List.of());
         assertThrows(IllegalArgumentException.class,
                 () -> service.resumeTask("user-1", "tenant-1", Map.of(
                         "workerId", "worker-1",
                         "sessionId", "session-1",
                         "prompt", "continue")));
 
-        verify(taskRepository).existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+        verify(taskRepository).findLatestResumeThreadTaskIds(
                 "thread-cross-provider", "worker-1", "user-1",
-                CodexTaskService.CODEX_PROVIDER_TYPE);
+                CodexTaskService.CODEX_PROVIDER_TYPE, PageRequest.of(0, 1));
         verify(taskRepository, never()).save(any());
     }
 
@@ -2198,21 +2246,16 @@ class CodexTaskServiceTest {
             return savedTask[0];
         });
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
-                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
-                .thenReturn(true);
-        when(taskRepository
-                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
-                        "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(Optional.empty());
         SessionEntity existingSession = new SessionEntity();
         existingSession.setId("session-1");
         existingSession.setUserId("user-1");
         existingSession.setAgentId("agent-codex-1");
         existingSession.setProviderType("codex-worker");
         existingSession.setProviderStateJson("{\"schemaVersion\":1,\"providerType\":\"codex-worker\",\"codexThreadId\":\"thread-1\"}");
+        existingSession.setLatestTaskId("task-history");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(existingSession));
+        stubHistoricalResumeTask(
+                "task-history", "session-1", "thread-1", CodexTaskService.CODEX_PROVIDER_TYPE);
 
         DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
                 "workerId", "worker-1",
@@ -2973,6 +3016,161 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void resumeTaskRepairsOlderTaskWithoutRewindingNewerSessionProjection() {
+        LocalDateTime projectedActivity = LocalDateTime.of(2026, 7, 18, 15, 0);
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setTenantId("tenant-1");
+        session.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        session.setCurrentWorkerId("worker-new");
+        session.setCurrentDirectoryId("dir-new");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-current\",\"custom\":\"keep\"}");
+        session.setLatestTaskId("task-newer");
+        session.setInteractionState("PROCESSING");
+        session.setLastActivityAt(projectedActivity);
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        CodexTaskEntity staleTask = createTask(
+                "task-old", "session-1", "worker-1", "dir-old", "RUNNING",
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        staleTask.setTenantId("tenant-1");
+        staleTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        staleTask.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        staleTask.setWorkerTaskId("worker-task-old");
+        staleTask.setCodexThreadId("thread-old");
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", "thread-current", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-old"));
+        doReturn(Optional.of(staleTask)).when(taskRepository).findByTaskIdForUpdate("task-old");
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("worker-task-old"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(CodexStaleTaskRepairedException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertEquals("FAILED", staleTask.getStatus());
+        assertEquals(CodexStaleTaskRepairedException.CODE, staleTask.getErrorMessage());
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "task-old".equals(entity.getTaskId())
+                        && "FAILED".equals(entity.getStatus())
+                        && CodexStaleTaskRepairedException.CODE.equals(entity.getErrorMessage())));
+        verify(sessionEntityRepository, never()).save(any(SessionEntity.class));
+        assertEquals("task-newer", session.getLatestTaskId());
+        assertEquals("PROCESSING", session.getInteractionState());
+        assertEquals(projectedActivity, session.getLastActivityAt());
+        assertEquals(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, session.getProviderType());
+        assertEquals("worker-new", session.getCurrentWorkerId());
+        assertEquals("dir-new", session.getCurrentDirectoryId());
+        assertEquals("{\"codexThreadId\":\"thread-current\",\"custom\":\"keep\"}",
+                session.getProviderStateJson());
+    }
+
+    @Test
+    void resumeTaskRepairsLatestTaskWithoutReconstructingSessionAffinity() {
+        LocalDateTime projectedActivity = LocalDateTime.of(2026, 7, 17, 12, 0);
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setTenantId("tenant-1");
+        session.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        session.setCurrentWorkerId("worker-current");
+        session.setCurrentDirectoryId("dir-current");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-current\",\"custom\":\"keep\"}");
+        session.setLatestTaskId("task-old");
+        session.setInteractionState("PROCESSING");
+        session.setLastActivityAt(projectedActivity);
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        CodexTaskEntity staleTask = createTask(
+                "task-old", "session-1", "worker-1", "dir-old", "RUNNING",
+                LocalDateTime.of(2026, 7, 17, 10, 0));
+        staleTask.setTenantId("tenant-1");
+        staleTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        staleTask.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        staleTask.setWorkerTaskId("worker-task-old");
+        staleTask.setCodexThreadId("thread-old");
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", "thread-current", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-old"));
+        doReturn(Optional.of(staleTask)).when(taskRepository).findByTaskIdForUpdate("task-old");
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("worker-task-old"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(CodexStaleTaskRepairedException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertEquals("AWAITING_REPLY", session.getInteractionState());
+        assertTrue(session.getLastActivityAt().isAfter(projectedActivity));
+        assertEquals("task-old", session.getLatestTaskId());
+        assertEquals(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, session.getProviderType());
+        assertEquals("worker-current", session.getCurrentWorkerId());
+        assertEquals("dir-current", session.getCurrentDirectoryId());
+        assertEquals("{\"codexThreadId\":\"thread-current\",\"custom\":\"keep\"}",
+                session.getProviderStateJson());
+        verify(sessionEntityRepository).save(session);
+    }
+
+    @Test
+    void resumeTaskAllowsUserRetryAfterPreviouslyRepairedTaskBecomesHistoricalAnchor() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setTenantId("tenant-1");
+        session.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        session.setLatestTaskId("task-repaired");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        CodexTaskEntity repairedTask = stubHistoricalResumeTask(
+                "task-repaired", "session-1", "thread-1", CodexTaskService.CODEX_PROVIDER_TYPE);
+        repairedTask.setStatus("FAILED");
+        repairedTask.setErrorMessage(CodexStaleTaskRepairedException.CODE);
+
+        DispatchTaskDTO result = service.resumeTask(
+                "user-1", "tenant-1", resumeParams());
+
+        assertEquals("RUNNING", result.getStatus());
+        assertEquals("session-1", result.getSessionId());
+        assertEquals("thread-1", result.getCodexThreadId());
+        assertNotEquals("task-repaired", result.getTaskId());
+        assertEquals("FAILED", repairedTask.getStatus());
+        assertEquals(CodexStaleTaskRepairedException.CODE, repairedTask.getErrorMessage());
+        verify(taskRepository).findByTaskIdForUpdate("task-repaired");
+        verifyNoInteractions(workerClient);
+    }
+
+    @Test
     void resumeTaskResolvesPendingInputWhenRepairingVerifiedAbsentTask() {
         CodexTaskEntity staleTask = stubActiveResumeTask("AWAITING_INPUT", "worker-task-stale");
         SessionTaskEntity sessionTask = new SessionTaskEntity();
@@ -3194,6 +3392,7 @@ class CodexTaskServiceTest {
         session.setTenantId("tenant-1");
         session.setProviderType(providerType);
         session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        session.setLatestTaskId("task-stale");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
 
         CodexTaskEntity task = createTask(
@@ -3205,13 +3404,12 @@ class CodexTaskServiceTest {
         task.setWorkerTaskId(workerTaskId);
         task.setCodexThreadId("thread-1");
 
-        lenient().when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
-                "thread-1", "worker-1", "user-1", providerType)).thenReturn(true);
-        lenient().when(taskRepository
-                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
-                        "thread-1", "worker-1", "user-1", providerType,
-                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(Optional.of(task));
+        lenient().when(taskRepository.findActiveResumeTaskIds(
+                        "session-1", "thread-1", "worker-1", "user-1", providerType,
+                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                        PageRequest.of(0, 1)))
+                .thenReturn(List.of("task-stale"));
+        doReturn(Optional.of(task)).when(taskRepository).findByTaskIdForUpdate("task-stale");
         lenient().when(workerManagementFacade.getCodexConfig("worker-1"))
                 .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
                         .authToken("worker-token").build());
@@ -3219,6 +3417,62 @@ class CodexTaskServiceTest {
                 "worker-1:codex", "http://worker.example", "worker-token"))
                 .thenReturn(workerClient);
         return task;
+    }
+
+    private CodexTaskEntity stubHistoricalResumeTask(String taskId,
+                                                      String sessionId,
+                                                      String codexThreadId,
+                                                      String providerType) {
+        CodexTaskEntity task = createTask(
+                taskId, sessionId, "worker-1", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 7, 17, 16, 0));
+        task.setProviderType(providerType);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setCodexThreadId(codexThreadId);
+
+        lenient().when(taskRepository.findActiveResumeTaskIds(
+                        sessionId, codexThreadId, "worker-1", "user-1", providerType,
+                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                        PageRequest.of(0, 1)))
+                .thenReturn(List.of());
+        if (codexThreadId == null) {
+            lenient().when(taskRepository.findLatestResumeSessionTaskIds(
+                            sessionId, "user-1", PageRequest.of(0, 1)))
+                    .thenReturn(List.of(taskId));
+        } else {
+            lenient().when(taskRepository.findLatestResumeThreadTaskIds(
+                            codexThreadId, "worker-1", "user-1", providerType,
+                            PageRequest.of(0, 1)))
+                    .thenReturn(List.of(taskId));
+        }
+        doReturn(Optional.of(task)).when(taskRepository).findByTaskIdForUpdate(taskId);
+        return task;
+    }
+
+    private SessionEntityRepository.ResumeStateView resumeStateView(SessionEntity session) {
+        return resumeStateView(
+                session.getId(), session.getProviderStateJson(), session.getLatestTaskId());
+    }
+
+    private SessionEntityRepository.ResumeStateView resumeStateView(String sessionId,
+                                                                    String providerStateJson,
+                                                                    String latestTaskId) {
+        return new SessionEntityRepository.ResumeStateView() {
+            @Override
+            public String getId() {
+                return sessionId;
+            }
+
+            @Override
+            public String getProviderStateJson() {
+                return providerStateJson;
+            }
+
+            @Override
+            public String getLatestTaskId() {
+                return latestTaskId;
+            }
+        };
     }
 
     private Map<String, Object> processSnapshot(List<Map<String, Object>> processes) {
@@ -3249,26 +3503,26 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void resumeTaskRejectsThreadAwaitingUserInputAfterSessionLock() {
+    void resumeTaskLocksActiveTaskBeforeSessionWhenThreadAwaitsUserInput() {
         SessionEntity session = new SessionEntity();
         session.setId("session-1");
         session.setUserId("user-1");
         session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        session.setLatestTaskId("task-input");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
-                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
-                .thenReturn(true);
+        when(entityManager.find(SessionEntity.class, "session-1")).thenReturn(session);
         CodexTaskEntity activeTask = createTask(
                 "task-input", "session-1", "worker-1", "dir-1", "AWAITING_INPUT",
                 LocalDateTime.of(2026, 7, 17, 17, 0));
         activeTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         activeTask.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
         activeTask.setCodexThreadId("thread-1");
-        when(taskRepository
-                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
-                        "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(Optional.of(activeTask));
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", "thread-1", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-input"));
+        doReturn(Optional.of(activeTask)).when(taskRepository).findByTaskIdForUpdate("task-input");
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 () -> service.resumeTask("user-1", "tenant-1", Map.of(
@@ -3277,7 +3531,232 @@ class CodexTaskServiceTest {
                         "prompt", "continue")));
 
         assertTrue(error.getMessage().contains("正在运行"));
-        verify(sessionEntityRepository).findByIdAndUserIdForUpdate("session-1", "user-1");
+        var lockOrder = org.mockito.Mockito.inOrder(taskRepository, sessionEntityRepository);
+        lockOrder.verify(taskRepository).findByTaskIdForUpdate("task-input");
+        lockOrder.verify(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
+        verify(entityManager).refresh(session);
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskGuardsActiveTaskFromAnotherSessionOnSameThread() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        session.setLatestTaskId("task-history");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+        SessionEntity activeSession = new SessionEntity();
+        activeSession.setId("session-2");
+        activeSession.setUserId("user-1");
+        activeSession.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        activeSession.setLatestTaskId("task-cross-session");
+        when(sessionEntityRepository.findById("session-2")).thenReturn(Optional.of(activeSession));
+        CodexTaskEntity activeTask = createTask(
+                "task-cross-session", "session-2", "worker-1", "dir-1", "AWAITING_INPUT",
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        activeTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        activeTask.setCodexThreadId("thread-1");
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", "thread-1", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-cross-session"));
+        doReturn(Optional.of(activeTask)).when(taskRepository)
+                .findByTaskIdForUpdate("task-cross-session");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        var lockOrder = org.mockito.Mockito.inOrder(taskRepository, sessionEntityRepository);
+        lockOrder.verify(taskRepository).findByTaskIdForUpdate("task-cross-session");
+        lockOrder.verify(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
+        lockOrder.verify(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-2", "user-1");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskLocksOwnerSessionBeforeRequestedSessionWhenOwnerSortsFirst() {
+        SessionEntity requestedSession = new SessionEntity();
+        requestedSession.setId("session-2");
+        requestedSession.setUserId("user-1");
+        requestedSession.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        requestedSession.setLatestTaskId("task-history");
+        when(sessionEntityRepository.findById("session-2"))
+                .thenReturn(Optional.of(requestedSession));
+        SessionEntity ownerSession = new SessionEntity();
+        ownerSession.setId("session-1");
+        ownerSession.setUserId("user-1");
+        ownerSession.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        ownerSession.setLatestTaskId("task-cross-session");
+        when(sessionEntityRepository.findById("session-1"))
+                .thenReturn(Optional.of(ownerSession));
+
+        CodexTaskEntity activeTask = createTask(
+                "task-cross-session", "session-1", "worker-1", "dir-1", "AWAITING_INPUT",
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        activeTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        activeTask.setCodexThreadId("thread-1");
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-2", "thread-1", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-cross-session"));
+        doReturn(Optional.of(activeTask)).when(taskRepository)
+                .findByTaskIdForUpdate("task-cross-session");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", Map.of(
+                        "workerId", "worker-1",
+                        "sessionId", "session-2",
+                        "prompt", "continue")));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        var lockOrder = org.mockito.Mockito.inOrder(taskRepository, sessionEntityRepository);
+        lockOrder.verify(taskRepository).findByTaskIdForUpdate("task-cross-session");
+        lockOrder.verify(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
+        lockOrder.verify(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-2", "user-1");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskGuardsSameSessionActiveTaskWhenNativeThreadWasCleared() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setProviderStateJson(null);
+        session.setLatestTaskId("task-active");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        CodexTaskEntity activeTask = createTask(
+                "task-active", "session-1", "worker-other", "dir-1", "AWAITING_INPUT",
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        activeTask.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        activeTask.setCodexThreadId("thread-before-rewind");
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", null, "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-active"));
+        doReturn(Optional.of(activeTask)).when(taskRepository).findByTaskIdForUpdate("task-active");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        verify(taskRepository).findByTaskIdForUpdate("task-active");
+        verify(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskRequiresRetryWhenAnotherRequestAlreadyRepairedActiveTask() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        session.setLatestTaskId("task-repaired");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        CodexTaskEntity repairedTask = createTask(
+                "task-repaired", "session-1", "worker-1", "dir-1", "FAILED",
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        repairedTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        repairedTask.setCodexThreadId("thread-1");
+        repairedTask.setErrorMessage(CodexStaleTaskRepairedException.CODE);
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", "thread-1", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1))).thenReturn(List.of("task-repaired"));
+        doReturn(Optional.of(repairedTask)).when(taskRepository)
+                .findByTaskIdForUpdate("task-repaired");
+
+        CodexStaleTaskRepairedException error = assertThrows(
+                CodexStaleTaskRepairedException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains(CodexStaleTaskRepairedException.CODE));
+        verify(sessionEntityRepository, never())
+                .findResumeStateByIdAndUserIdForUpdate(anyString(), anyString());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskRejectsWhenSessionThreadChangesBeforeSessionLock() {
+        stubHistoricalResumeTask(
+                "task-history", "session-1", "thread-1", CodexTaskService.CODEX_PROVIDER_TYPE);
+        doReturn(Optional.of(resumeStateView(
+                "session-1", "{\"codexThreadId\":\"thread-1\"}", "task-history")))
+                .when(sessionEntityRepository)
+                .findResumeStateByIdAndUserId("session-1", "user-1");
+        doReturn(Optional.of(resumeStateView(
+                "session-1", "{\"codexThreadId\":\"thread-2\"}", "task-history")))
+                .when(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("CODEX_RESUME_STATE_CHANGED"));
+        verify(taskRepository).findByTaskIdForUpdate("task-history");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskRejectsWhenSessionLatestTaskChangesBeforeSessionLock() {
+        stubHistoricalResumeTask(
+                "task-history", "session-1", "thread-1", CodexTaskService.CODEX_PROVIDER_TYPE);
+        doReturn(Optional.of(resumeStateView(
+                "session-1", "{\"codexThreadId\":\"thread-1\"}", "task-history")))
+                .when(sessionEntityRepository)
+                .findResumeStateByIdAndUserId("session-1", "user-1");
+        doReturn(Optional.of(resumeStateView(
+                "session-1", "{\"codexThreadId\":\"thread-1\"}", "task-concurrent")))
+                .when(sessionEntityRepository)
+                .findResumeStateByIdAndUserIdForUpdate("session-1", "user-1");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("CODEX_RESUME_STATE_CHANGED"));
+        verify(taskRepository).findByTaskIdForUpdate("task-history");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void resumeTaskRejectsWhenNewActiveTaskAppearsAfterHistoricalAnchorLock() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        session.setLatestTaskId("task-history");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+        stubHistoricalResumeTask(
+                "task-history", "session-1", "thread-1", CodexTaskService.CODEX_PROVIDER_TYPE);
+
+        when(taskRepository.findActiveResumeTaskIds(
+                "session-1", "thread-1", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"),
+                PageRequest.of(0, 1)))
+                .thenReturn(List.of(), List.of("task-concurrent"));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", resumeParams()));
+
+        assertTrue(error.getMessage().contains("CODEX_RESUME_STATE_CHANGED"));
+        verify(taskRepository).findByTaskIdForUpdate("task-history");
+        verify(taskRepository, never()).findByTaskIdForUpdate("task-concurrent");
+        verify(sessionEntityRepository, never())
+                .findResumeStateByIdAndUserIdForUpdate(anyString(), anyString());
         verify(taskRepository, never()).save(any());
     }
 

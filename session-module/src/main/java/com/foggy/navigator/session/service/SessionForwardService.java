@@ -24,9 +24,11 @@ import com.foggy.navigator.session.repository.SessionRelationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
+import com.foggy.navigator.spi.agent.TaskStateRepairedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
@@ -54,7 +56,8 @@ public class SessionForwardService {
     private final AgentSubmitPipeline agentSubmitPipeline;
     private final SessionTaskResourceAccessService resourceAccessService;
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED,
+            noRollbackFor = TaskStateRepairedException.class)
     public SessionForwardCreateResponse forwardToNewSession(
             SessionForwardCreateRequest request,
             String userId,

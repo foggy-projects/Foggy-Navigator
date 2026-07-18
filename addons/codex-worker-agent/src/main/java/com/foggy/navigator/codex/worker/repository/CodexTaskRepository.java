@@ -43,11 +43,41 @@ public interface CodexTaskRepository extends JpaRepository<CodexTaskEntity, Long
             String codexThreadId, String workerId, String userId,
             String providerType, List<String> statuses);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    Optional<CodexTaskEntity>
-    findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
-            String codexThreadId, String workerId, String userId,
-            String providerType, List<String> statuses);
+    @Query("select task.taskId from CodexTaskEntity task " +
+           "where task.status in :statuses and " +
+           "((task.sessionId = :sessionId and task.userId = :userId) or " +
+           "(:codexThreadId is not null and task.codexThreadId = :codexThreadId " +
+           "and task.workerId = :workerId and task.userId = :userId " +
+           "and task.providerType = :providerType)) " +
+           "order by task.id desc")
+    List<String> findActiveResumeTaskIds(
+            @Param("sessionId") String sessionId,
+            @Param("codexThreadId") String codexThreadId,
+            @Param("workerId") String workerId,
+            @Param("userId") String userId,
+            @Param("providerType") String providerType,
+            @Param("statuses") List<String> statuses,
+            Pageable pageable);
+
+    @Query("select task.taskId from CodexTaskEntity task " +
+           "where task.codexThreadId = :codexThreadId " +
+           "and task.workerId = :workerId and task.userId = :userId " +
+           "and task.providerType = :providerType " +
+           "order by task.id desc")
+    List<String> findLatestResumeThreadTaskIds(
+            @Param("codexThreadId") String codexThreadId,
+            @Param("workerId") String workerId,
+            @Param("userId") String userId,
+            @Param("providerType") String providerType,
+            Pageable pageable);
+
+    @Query("select task.taskId from CodexTaskEntity task " +
+           "where task.sessionId = :sessionId and task.userId = :userId " +
+           "order by task.id desc")
+    List<String> findLatestResumeSessionTaskIds(
+            @Param("sessionId") String sessionId,
+            @Param("userId") String userId,
+            Pageable pageable);
 
     Optional<CodexTaskEntity> findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeOrderByCreatedAtDesc(
             String codexThreadId, String workerId, String userId, String providerType);
