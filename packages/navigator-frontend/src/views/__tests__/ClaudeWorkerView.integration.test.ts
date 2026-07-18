@@ -828,6 +828,44 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       wrapper.unmount()
     })
 
+    it('sends the fresh Navigator task binding when terminating a Codex CLI process', async () => {
+      vi.mocked(claudeWorkerApi.killCodexCliProcess).mockResolvedValue({
+        pid: 2418783,
+        status: 'killed',
+        message: 'observed exit',
+      })
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await vm.handleKillProcess({
+        pid: 2418783,
+        process_type: 'codex',
+        foggy_task_id: 'task-codex-1',
+      }, false)
+
+      expect(claudeWorkerApi.killCodexCliProcess).toHaveBeenCalledWith(
+        'worker-1', 2418783, 'task-codex-1', false,
+      )
+      wrapper.unmount()
+    })
+
+    it('does not offer a termination request for an unbound Codex CLI PID', async () => {
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await vm.handleKillProcess({ pid: 2418783, process_type: 'codex' }, false)
+
+      expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+      expect(claudeWorkerApi.killCodexCliProcess).not.toHaveBeenCalled()
+      expect(ElMessage.warning).toHaveBeenCalledWith('该 Codex CLI 进程未绑定 Navigator task，无法安全终止')
+      wrapper.unmount()
+    })
+
     it('keeps the legacy probes when the runtime registry is empty', async () => {
       vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockResolvedValue({
         appServerManaged: false,

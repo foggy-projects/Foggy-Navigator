@@ -3288,6 +3288,10 @@ async function loadCliProcesses() {
 
 async function handleKillProcess(processInfo: CliProcessInfo, force = false) {
   if (!selectedWorkerId.value) return
+  if (processInfo.process_type === 'codex' && !processInfo.foggy_task_id) {
+    ElMessage.warning('该 Codex CLI 进程未绑定 Navigator task，无法安全终止')
+    return
+  }
   const action = force ? '强制终止' : '终止'
   const typeLabel = `${processTypeLabel(processInfo.process_type)} CLI`
   try {
@@ -3301,7 +3305,12 @@ async function handleKillProcess(processInfo: CliProcessInfo, force = false) {
   }
   try {
     const result = processInfo.process_type === 'codex'
-      ? await dirApi.killCodexCliProcess(selectedWorkerId.value, processInfo.pid, force)
+      ? await dirApi.killCodexCliProcess(
+          selectedWorkerId.value,
+          processInfo.pid,
+          processInfo.foggy_task_id!,
+          force,
+        )
       : processInfo.process_type === 'gemini'
         ? await dirApi.killGeminiCliProcess(selectedWorkerId.value, processInfo.pid, force)
         : await dirApi.killCliProcess(selectedWorkerId.value, processInfo.pid, force)

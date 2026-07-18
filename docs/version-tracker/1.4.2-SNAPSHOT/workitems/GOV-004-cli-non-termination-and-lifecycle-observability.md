@@ -58,6 +58,12 @@ external_enablement: no
 - 修复后 404 进入未确认分支：任务保持 `CANCEL_REQUESTED`，attention/error 为 `TERMINATION_UNCONFIRMED`，operation 标记为 unconfirmed，等待可关联的 Provider 终态或人工对账；不得恢复 `RUNNING`，也不得伪造 `ABORTED`。400/401/403 等明确的请求、鉴权或 capability 拒绝仍保留 `TERMINATION_REJECTED` 并恢复请求前状态。
 - 回归先在旧实现上复现 `expected CANCEL_REQUESTED but was RUNNING`，修复后 404 未确认与 403 明确拒绝两条定向测试均通过；完整 `CodexTaskServiceTest` 为 90 tests、0 failure/error/skip，`mvn -pl addons/codex-worker-agent -am -Dsurefire.failIfNoSpecifiedTests=false test` 为 `BUILD SUCCESS`，Codex addon 400 tests、0 failure/error/skip。该修复属于 Java 控制面，不需要重新发布未变化的 Codex Worker；目标环境必须部署/重启 Java 后，现场行为才会改变。
 
+## 管理台 Codex PID 终止 task 绑定修复（2026-07-17）
+
+- 管理台的普通 Codex CLI 进程行已有 Worker 快照提供的 `foggy_task_id`，但此前 `POST /codex-workers/{workerId}/processes/{pid}/kill` 只发送 `{ force }`，漏掉控制面为签发受审计 `MANUAL_PID_KILL` operation 所必需的 `taskId`。因此请求在能力签发前被拒绝，提示“显式 PID 终止必须提供 taskId”。
+- 前端现在提交 `{ force, taskId }`，其中 `taskId` 仅取当前进程新鲜快照的 `foggy_task_id`；未绑定 Navigator task 的 Codex PID 在浏览器端拒绝，不尝试让服务端按 PID 推断归属。共享 `codex-app-server` 行继续仅显示任务取消提示，不提供 PID kill。
+- 已新增前端回归，覆盖绑定 task 的 Codex kill 参数与未绑定 PID 的拒绝。`packages/navigator-frontend/node_modules/.bin/vue-tsc -p tsconfig.app.json --noEmit` 在 Node `18.19.1` 下通过；定向 Vitest 被 Vite 7 的 `crypto.hash is not a function` 阻断，测试尚未收集。需要 Node `22.23.1` 加 Corepack/pnpm 的前端环境重跑该定向测试和 `bash scripts/build-frontend.sh`；本次不改变本工作项的 `verification-blocked` 状态。
+
 ### `dev-kvm-jdk17-2` 部署与现场复测
 
 - `2026-07-17` 将目标机 `/home/sa/Foggy-Navigator` 从 `b07ad012` fast-forward 到 `2b6ff748`；仅保留目标机既有未跟踪 `.codex/`，源码 worktree 无其他脏改动。目标机使用 JDK 17 与 Maven 3.9.9 执行 `mvn package -pl launcher -am -DskipTests`，结果为 `BUILD SUCCESS`；生成 Jar 的 `git.branch=main`、`git.commit.id.abbrev=2b6ff74`、`git.dirty=false`。

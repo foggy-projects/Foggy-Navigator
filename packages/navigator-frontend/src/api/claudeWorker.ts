@@ -146,11 +146,12 @@ export async function killCliProcess(
 export async function killCodexCliProcess(
   workerId: string,
   pid: number,
+  taskId: string,
   force = false,
 ): Promise<KillProcessResponse> {
   const rx = (await client.post(
     `/codex-workers/${workerId}/processes/${pid}/kill`,
-    { force },
+    { force, taskId },
   )) as unknown as RX<KillProcessResponse>
   return rx.data
 }
