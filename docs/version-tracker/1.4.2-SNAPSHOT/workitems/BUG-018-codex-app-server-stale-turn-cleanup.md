@@ -113,10 +113,10 @@ open_questions: []
   - `docs/version-tracker/1.4.2-SNAPSHOT`: 本 work item 与版本索引。
 - tests_and_results:
   - `mvn test -pl session-module,addons/codex-worker-agent -am -Dtest=TerminationOperationServiceTest,CodexWorkerClientTest,CodexTaskExtensionControllerTest,CodexTaskServiceTest -Dsurefire.failIfNoSpecifiedTests=false` — PASS；159 tests，0 failures/errors/skips（session 8；Codex control plane 151）。
-  - `npm test`（`tools/codex-app-server-worker`）— PASS；332 passed、1 skipped、0 failed（含 stale-turn cleanup protocol/lease/HTTP tests）。
-  - `npm run typecheck && npm run build`（`tools/codex-app-server-worker`）— PASS。
+  - Node `22.23.1`：`npm test`（`tools/codex-app-server-worker`）— PASS；332 passed、1 skipped、0 failed（含 stale-turn cleanup protocol/lease/HTTP tests）；`npm run typecheck`、`npm run build` — PASS。
+  - Node `22.23.1`：`npm run type-check` 与 `npm test -- src/views/__tests__/ClaudeWorkerView.integration.test.ts`（`packages/navigator-frontend`）— PASS；focused 40/40。
   - `bash scripts/build-frontend.sh`（Node `22.23.1`、pnpm `10.34.5`）— PASS；navigator frontend 257、chat 114、mobile 59、widget 31 tests passed，构建通过。
-  - `git diff --check` — PASS。
+  - `git diff --check` 与 `git diff --cached --check` — PASS。
 - manual_or_experience_evidence: not-run；未部署、未触碰用户原会话或 `~/.codex-app-server-worker`。部署后由授权操作者在原错误 Task 上执行“清理遗留运行”，成功后再点“继续”。
 - deviations: 无产品/架构范围偏离。验证 shell 初始为 Node 18 且没有 pnpm；切换到项目冻结的 Node `22.23.1` / pnpm `10.34.5` 后全量前端基线通过。
 - residual_risks: 原错误会话的 live cleanup/resume 仍待部署后用户验证；app-server CLI 升级前必须重新执行协议回归。未观察到 exact terminal 的任何情况保持 fail-closed 和 lease 保留。
