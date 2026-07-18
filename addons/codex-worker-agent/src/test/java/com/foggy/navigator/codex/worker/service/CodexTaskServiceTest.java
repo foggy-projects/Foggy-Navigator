@@ -39,6 +39,8 @@ import com.foggy.navigator.session.service.TerminationOperationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -861,10 +863,11 @@ class CodexTaskServiceTest {
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
                 "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
-                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(false);
+        when(taskRepository
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                        "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
+                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(Optional.empty());
         // providerStateJson 中存储 codexThreadId（resume 从此恢复）
         SessionEntity sessionWithState = new SessionEntity();
         sessionWithState.setId("session-1");
@@ -2198,10 +2201,11 @@ class CodexTaskServiceTest {
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
                 "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
-                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(false);
+        when(taskRepository
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                        "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
+                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(Optional.empty());
         SessionEntity existingSession = new SessionEntity();
         existingSession.setId("session-1");
         existingSession.setUserId("user-1");
@@ -3254,10 +3258,17 @@ class CodexTaskServiceTest {
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
                 "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
-                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
-                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
-                .thenReturn(true);
+        CodexTaskEntity activeTask = createTask(
+                "task-input", "session-1", "worker-1", "dir-1", "AWAITING_INPUT",
+                LocalDateTime.of(2026, 7, 17, 17, 0));
+        activeTask.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        activeTask.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        activeTask.setCodexThreadId("thread-1");
+        when(taskRepository
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                        "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
+                        List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(Optional.of(activeTask));
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 () -> service.resumeTask("user-1", "tenant-1", Map.of(
