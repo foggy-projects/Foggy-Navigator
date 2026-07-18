@@ -41,7 +41,7 @@ class RateLimitRuntime implements PoolRuntimeInstance {
   }
 }
 
-test('pool keeps one TTL and singleflight cache per lane', async () => {
+test('quota reads do not create a child and reuse one only after a real task establishes the lane', async () => {
   const stateDir = await tempDirectory('codex-rate-limit-pool-')
   let now = 1_000
   const runtimes: RateLimitRuntime[] = []
@@ -62,9 +62,17 @@ test('pool keeps one TTL and singleflight cache per lane', async () => {
     pool.readRateLimits(lane, true),
   ])
   assert.deepEqual(first, concurrent)
+  assert.equal(first.state, 'UNKNOWN')
+  assert.equal(first.error_code, 'RATE_LIMITS_SOURCE_UNAVAILABLE')
+  assert.equal(runtimes.length, 0)
+  assert.equal(pool.metrics().instances, 0)
+  assert.equal(pool.metrics().creating, 0)
+
+  const lease = await pool.acquire(lane)
+  lease.release()
   assert.equal(runtimes.length, 1)
-  assert.equal(runtimes[0]?.reads, 1)
-  assert.equal((await pool.readRateLimits(lane)).limits[0]?.primary?.used_percent, 25)
+  assert.equal(runtimes[0]?.reads, 0)
+  assert.equal((await pool.readRateLimits(lane, true)).limits[0]?.primary?.used_percent, 25)
   assert.equal(runtimes[0]?.reads, 1)
 
   now += 60_001
@@ -91,15 +99,22 @@ test('quota reads reuse the resident lane and cannot replace it with an incompat
   const limitedLane = testLane('lane-limited')
   const availableLane = testLane('lane-available')
 
+  const beforeTask = await pool.readRateLimits(limitedLane, true)
+  assert.equal(beforeTask.state, 'UNKNOWN')
+  assert.equal(beforeTask.error_code, 'RATE_LIMITS_SOURCE_UNAVAILABLE')
+  assert.equal(runtimes.size, 0)
+
+  const lease = await pool.acquire(limitedLane)
+  lease.release()
   assert.equal((await pool.readRateLimits(limitedLane, true)).state, 'LIMIT_REACHED')
   const incompatible = await pool.readRateLimits(availableLane, true)
   assert.equal(incompatible.state, 'UNKNOWN')
   assert.equal(incompatible.error_code, 'RATE_LIMITS_SOURCE_UNAVAILABLE')
   assert.equal(runtimes.size, 1)
 
-  const lease = await pool.acquire(limitedLane)
-  assert.equal(lease.runtime, runtimes.get('lane-limited'))
-  lease.release()
+  const reused = await pool.acquire(limitedLane)
+  assert.equal(reused.runtime, runtimes.get('lane-limited'))
+  reused.release()
   assert.equal(pool.metrics().rejected_total, 0)
   assert.equal(pool.metrics().acquire_timeouts_total, 0)
   await pool.drain(1_000)
@@ -114,6 +129,8 @@ test('pool retries when an update invalidates an in-flight quota read', async ()
   })
   const lane = testLane('lane-inflight-update')
 
+  const lease = await pool.acquire(lane)
+  lease.release()
   await pool.readRateLimits(lane, true)
   let releaseRead!: () => void
   runtime!.nextReadGate = new Promise<void>(resolve => { releaseRead = resolve })

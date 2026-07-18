@@ -172,12 +172,31 @@ class CodexAppServerNavigatorE2ETest {
 
     @Test
     void navigatorApiPreservesSingleChildThreadIsolationAndLaneContinuity() throws Exception {
+        rateLimitProbeDoesNotCreateChildBeforeFirstTask();
         differentThreadsShareOneChildWithoutCrossTalk();
         sameThreadRejectsOverlapAndResumesAfterTerminal();
         targetedCancelDoesNotAbortSiblingTurn();
         userInputResponseDoesNotCrossThreads();
         mismatchedLaneDoesNotReplaceHealthyChild();
         rateLimitProbeKeepsResidentChildHealthy();
+    }
+
+    private void rateLimitProbeDoesNotCreateChildBeforeFirstTask() throws Exception {
+        JsonNode before = workerHealth();
+        assertThat(before.at("/runtime_metrics/pool/instances").asInt()).isZero();
+        assertThat(before.at("/runtime_metrics/pool/created_total").asInt()).isZero();
+
+        JsonNode rateLimits = getNavigator("/api/v1/codex-runtimes/" + runtime.getRuntimeId()
+                + "/revisions/" + runtime.getRevision() + "/rate-limits?refresh=true");
+        assertThat(rateLimits.path("code").asInt()).isEqualTo(200);
+        assertThat(rateLimits.at("/data/state").asText()).isEqualTo("UNKNOWN");
+        assertThat(rateLimits.at("/data/errorCode").asText())
+                .isEqualTo("RATE_LIMITS_SOURCE_UNAVAILABLE");
+
+        JsonNode after = workerHealth();
+        assertThat(after.at("/runtime_metrics/pool/instances").asInt()).isZero();
+        assertThat(after.at("/runtime_metrics/pool/creating").asInt()).isZero();
+        assertThat(after.at("/runtime_metrics/pool/created_total").asInt()).isZero();
     }
 
     @Test

@@ -102,8 +102,8 @@ assert_port_free "$WORKER_PORT"
 
 WORKER_VERSION=$(node -p "require('$WORKER_DIR/package.json').version")
 CLI_VERSION=$(node -p "require('$WORKER_DIR/node_modules/@openai/codex/package.json').version")
-[[ "$WORKER_VERSION" == "0.3.19" ]] || {
-  echo "BUG-007 Navigator E2E requires Worker 0.3.19, found $WORKER_VERSION" >&2
+[[ "$WORKER_VERSION" == "0.3.21" ]] || {
+  echo "BUG-007 Navigator E2E requires Worker 0.3.21, found $WORKER_VERSION" >&2
   exit 1
 }
 [[ "$CLI_VERSION" == "0.144.3" ]] || {

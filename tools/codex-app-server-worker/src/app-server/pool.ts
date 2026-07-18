@@ -393,7 +393,9 @@ export class AppServerPool {
   private async refreshRateLimits(lane: AppServerLane): Promise<PoolRateLimitsView> {
     const attemptedAt = this.now()
     try {
-      const source = await this.ensureRateLimitsSource(lane)
+      // Quota reads are control-plane observations. They must never establish
+      // the singleton startup lane; only a real task acquisition may do that.
+      const source = this.findRateLimitsSource(lane.key)
       if (!source || !source.runtime.readAccountRateLimits) {
         return this.rateLimitsFailure(lane.key, 'RATE_LIMITS_SOURCE_UNAVAILABLE', attemptedAt)
       }
@@ -450,27 +452,6 @@ export class AppServerPool {
     }
     this.rateLimitsCache.set(laneKey, entry)
     return entry
-  }
-
-  private async ensureRateLimitsSource(lane: AppServerLane): Promise<InstanceRecord | undefined> {
-    const existing = this.findRateLimitsSource(lane.key)
-    if (existing) return existing
-    if (this.draining || this.hasIncompatibleResidentLane(lane.key) || !this.canCreate()) return undefined
-    const controller = new AbortController()
-    this.reserveCreation(lane.key, controller)
-    try {
-      const runtime = await this.factory(lane, controller.signal)
-      if (this.draining) {
-        this.trackRuntimeClose(runtime, this.remainingDrainMs())
-        return undefined
-      }
-      const record = this.registerRuntime(lane.key, runtime)
-      this.schedulePump()
-      return record
-    } finally {
-      this.finishCreation(lane.key, controller)
-      this.schedulePump()
-    }
   }
 
   private findRateLimitsSource(laneKey: string): InstanceRecord | undefined {
