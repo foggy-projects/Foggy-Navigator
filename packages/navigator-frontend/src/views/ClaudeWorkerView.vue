@@ -7189,21 +7189,39 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
   if (!pane) return
   try {
     await reconnectTaskUnified(taskId)
-    pane.reconnectSse()
     await pane.syncTaskStatus({ force: true })
-    // Clear the reconnectable flag on the error message
-    const errorMsg = pane.chatState.messages.value.find(
-      (m) => m.reconnectable && (m.raw as Record<string, unknown>)?.taskId === taskId,
+    const recoveryMessage = pane.chatState.messages.value.find(
+      (m) => (m.raw as Record<string, unknown>)?.subtype === 'reconnect_pending'
+        && (m.raw as Record<string, unknown>)?.taskId === taskId,
     )
-    if (errorMsg) {
-      errorMsg.reconnectable = false
+    const reconciledStatus = pane.task.value?.status
+    if (reconciledStatus === 'COMPLETED' || reconciledStatus === 'FAILED' || reconciledStatus === 'ABORTED') {
+      if (recoveryMessage) {
+        recoveryMessage.reconnectable = false
+        recoveryMessage.content = reconciledStatus === 'ABORTED'
+          ? '任务已中止，运行已停止。'
+          : reconciledStatus === 'FAILED'
+            ? '任务执行失败，已停止运行。'
+            : '任务已完成。'
+        recoveryMessage.raw = {
+          ...(recoveryMessage.raw as Record<string, unknown>),
+          subtype: 'reconciled_terminal',
+          taskId,
+          terminalStatus: reconciledStatus,
+        }
+      }
+      if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+      return
     }
+
+    pane.reconnectSse()
+    if (recoveryMessage) recoveryMessage.reconnectable = false
     pane.chatState.messages.value.push({
       id: `reconnect-${Date.now()}`,
       type: 'STATE_SYNC' as AipMessageType,
       sender: 'system',
       content: '正在重连并同步任务...',
-      raw: { subtype: 'reconnected' },
+      raw: { subtype: 'reconnected', taskId },
       timestamp: Date.now(),
     })
     if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)

@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.2-SNAPSHOT
 ticket: BUG-018
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 approved_by: repository owner
@@ -19,8 +19,8 @@ open_questions: []
 
 ## Scope
 
-- in_scope: `addons/codex-worker-agent` 的 App Server 手动重连预对账；`packages/foggy-chat-core` 对 `STATE_SYNC` 恢复字段的保留；`packages/foggy-chat` 的恢复卡片、文案和回归测试；版本工作项索引。
-- affected_modules: `addons/codex-worker-agent`、`packages/foggy-chat-core`、`packages/foggy-chat`。
+- in_scope: `addons/codex-worker-agent` 的 App Server 手动重连预对账；`packages/foggy-chat-core` 对 `STATE_SYNC` 恢复字段的保留；`packages/foggy-chat` 的恢复卡片、文案和回归测试；`packages/navigator-frontend` 在重查后按终态收敛恢复卡片；版本工作项索引。
+- affected_modules: `addons/codex-worker-agent`、`packages/foggy-chat-core`、`packages/foggy-chat`、`packages/navigator-frontend`。
 
 ## Non-Goals
 
@@ -38,11 +38,12 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: App Server 手动重连在订阅 SSE 前查询已绑定的远端任务状态；远端 `aborted` 或 `failed` 时写入对应本地终态，且不再订阅。
-- [ ] AC-2: 远端 `completed` 但 status 无结果正文时不伪造成功；非终态、异常、无响应或 task id 不匹配时继续保持本地活跃与恢复路径。
-- [ ] AC-3: `STATE_SYNC` 的 `reconnect_pending` 保留 `raw.taskId` 与 `reconnectable`，渲染为错误说明卡片与“重新查询任务状态”按钮；点击仍沿用既有 taskId 重连事件。
-- [ ] AC-4: 普通 ERROR 重连按钮文案和其他 STATE_SYNC（审批、等待、压缩、普通状态）不回归。
-- [ ] AC-5: 定向 Java/前端测试、类型检查或构建实际执行，命令和结果记录在本工作项。
+- [x] AC-1: App Server 手动重连在订阅 SSE 前查询已绑定的远端任务状态；远端 `aborted` 或 `failed` 时写入对应本地终态，且不再订阅。
+- [x] AC-2: 远端 `completed` 但 status 无结果正文时不伪造成功；非终态、异常、无响应或 task id 不匹配时继续保持本地活跃与恢复路径。
+- [x] AC-3: `STATE_SYNC` 的 `reconnect_pending` 保留 `raw.taskId` 与 `reconnectable`，渲染为错误说明卡片与“重新查询任务状态”按钮；点击仍沿用既有 taskId 重连事件。
+- [x] AC-4: 普通 ERROR 重连按钮文案和其他 STATE_SYNC（审批、等待、压缩、普通状态）不回归。
+- [x] AC-5: 定向 Java/前端测试、类型检查或构建实际执行，命令和结果记录在本工作项。
+- [x] AC-6: 前端重查后若任务已为 `COMPLETED`、`FAILED` 或 `ABORTED`，不再打开 pane SSE 或追加“正在重连并同步任务...”；同一 task 的 `reconnect_pending` 卡片改为对应终态文案并移除 CTA。
 
 ## Contract / Security Constraints
 
@@ -57,6 +58,7 @@ open_questions: []
 |---|---|
 | App Server terminal preflight | `CodexStreamRelayTest` 覆盖 aborted/failed 与非终态 fail-closed 行为 |
 | Recovery UX | `MessageList`/`ErrorBlock` 回归覆盖可见 CTA、taskId 和既有按钮文案 |
+| Terminal reconnect presentation | `ClaudeWorkerView` 集成测试覆盖终态卡片替换、不重连 SSE、不追加进行中状态 |
 | Integration compatibility | 受影响 Maven module 测试及前端定向测试、typecheck/build |
 | Hygiene | `git diff --check`，不提交、不推送、不发布 |
 
@@ -67,7 +69,7 @@ open_questions: []
 
 ## Implementation Result
 
-- implementation_summary: App Server 的 `reconnectTask` 在已恢复 `workerTaskId` 后、订阅 SSE 前查询绑定运行时任务状态；明确 `aborted`/`failed` 复用既有受控终态写入，`completed` 保持等待最终 SSE。聊天状态保留 `STATE_SYNC/reconnect_pending` 的 `raw` 与 `reconnectable`，消息列表用错误说明卡片呈现，并以“重新查询任务状态”触发既有 reconnect 事件。
+- implementation_summary: App Server 的 `reconnectTask` 在已恢复 `workerTaskId` 后、订阅 SSE 前查询绑定运行时任务状态；明确 `aborted`/`failed` 复用既有受控终态写入，`completed` 保持等待最终 SSE。聊天状态保留 `STATE_SYNC/reconnect_pending` 的 `raw` 与 `reconnectable`，消息列表用错误说明卡片呈现，并以“重新查询任务状态”触发既有 reconnect 事件。前端点击后先强制刷新任务；若已终态，原地改写该 task 的恢复卡片且不重连 SSE 或追加进行中状态。
 - changed_paths:
   - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexStreamRelay.java`
   - `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/service/CodexStreamRelayTest.java`
@@ -75,13 +77,19 @@ open_questions: []
   - `packages/foggy-chat/src/components/ErrorBlock.vue`
   - `packages/foggy-chat/src/components/MessageList.vue`
   - `packages/foggy-chat/src/__tests__/interactionCards.test.ts`
+  - `packages/navigator-frontend/src/views/ClaudeWorkerView.vue`
+  - `packages/navigator-frontend/src/views/__tests__/ClaudeWorkerView.integration.test.ts`
 - tests_and_results:
   - `mvn -B -pl addons/codex-worker-agent -am -Dtest=CodexStreamRelayTest -Dsurefire.failIfNoSpecifiedTests=false test`: passed, `CodexStreamRelayTest` 44/44; reactor 8/8 SUCCESS (2026-07-18).
   - 初始新增回归在实现前按预期失败：未调用 `getTaskStatus` 而直接 `subscribeToTask`；实施后定向测试通过。
-  - 前端定向 Vitest、typecheck/build: not run. 当前 Linux shell 是 Node `v18.19.1` 且无 pnpm；发现的 Windows Node 为 `v22.22.0`，低于仓库要求 `>=22.23.1 <23`，未使用不合规运行时。
+  - `corepack pnpm --filter @foggy/navigator-frontend exec vitest run src/views/__tests__/ClaudeWorkerView.integration.test.ts`: passed, 43/43 (2026-07-18, Node `v22.23.1`, pnpm `10.34.5`).
+  - `corepack pnpm --filter @foggy/navigator-frontend run type-check`: passed (2026-07-18).
+  - `bash scripts/build-frontend.sh`: passed (2026-07-18, Node `v22.23.1`, pnpm `10.34.5`); canonical typecheck/test/build matrix completed. Build emitted only existing chunk-size and test-stub warnings.
 - manual_or_experience_evidence: 源码审查确认当前 `ClaudeWorkerView` 的既有 reconnect 事件会以 `raw.taskId` 路由；本切片不修改该处已有未提交文件。
-- deviations: 前端验证因缺少符合版本约束的 Node/pnpm 环境尚未执行；未部署、未重启、未提交、未推送、未发布。
+- additional_ui_reconciliation: 2026-07-18 现场复现确认：服务端已将任务收敛为 `ABORTED` 后，旧前端仍无条件调用 `reconnectSse()` 并追加“正在重连并同步任务...”。本切片改为先强制刷新任务，终态时原地替换同 task 的恢复卡片并停止该 UI 重连流。
+- deviations: 未部署、未重启、未提交、未推送、未发布。
 - residual_risks:
   - 远端 `completed` 缺少结果正文时仍保守停留在可恢复态，依赖 SSE 重放或再次重连。
-  - 需要在 Node `22.23.1` 与 pnpm `10.34.5` 环境执行前端测试与 `bash scripts/build-frontend.sh` 后，才能进入 `READY_FOR_SIGNOFF`。
-- readiness: ULTRA_EXECUTING
+  - 现有历史中的旧恢复卡片只有在用户点击“重新查询任务状态”并收到终态刷新时才会在当前前端内存中被替换；本切片不回写历史消息。
+  - 尚未部署到远程 Java 服务，需在发布该前端后进行一次页面人工复验。
+- readiness: READY_FOR_SIGNOFF

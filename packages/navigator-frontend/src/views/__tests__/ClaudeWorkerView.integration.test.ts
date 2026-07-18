@@ -1595,6 +1595,49 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       return { wrapper, vm, pane: vm.panes[0] }
     }
 
+    it('replaces a reconnect-pending card with the reconciled terminal result without reopening SSE', async () => {
+      const reconnectableTask: ClaudeTask = {
+        ...mockAppServerTerminalTask,
+        status: 'RUNNING',
+      }
+      const { wrapper, vm, pane } = await openTerminalAppServerPane()
+      pane.task.value.status = 'RUNNING'
+      pane.chatState.messages.value.push({
+        id: 'reconnect-pending-1',
+        type: 'STATE_SYNC',
+        sender: 'system',
+        content: 'CODEX_RUNTIME_RESULT_UNKNOWN',
+        reconnectable: true,
+        raw: { subtype: 'reconnect_pending', taskId: reconnectableTask.taskId },
+        timestamp: Date.now(),
+      })
+      const reconnectSse = vi.spyOn(pane, 'reconnectSse')
+      const syncTaskStatus = vi.spyOn(pane, 'syncTaskStatus').mockImplementation(async () => {
+        pane.task.value.status = 'ABORTED'
+      })
+
+      await vm.handlePaneReconnect(pane.paneId, reconnectableTask.taskId)
+      await flushPromises()
+
+      expect(unifiedTaskApi.reconnectTaskUnified).toHaveBeenCalledWith(reconnectableTask.taskId)
+      expect(syncTaskStatus).toHaveBeenCalledWith({ force: true })
+      expect(pane.task.value.status).toBe('ABORTED')
+      expect(reconnectSse).not.toHaveBeenCalled()
+      expect(pane.chatState.messages.value).toContainEqual(expect.objectContaining({
+        content: '任务已中止，运行已停止。',
+        reconnectable: false,
+        raw: expect.objectContaining({
+          subtype: 'reconciled_terminal',
+          taskId: reconnectableTask.taskId,
+          terminalStatus: 'ABORTED',
+        }),
+      }))
+      expect(pane.chatState.messages.value.some(
+        (message: { content: string }) => message.content === '正在重连并同步任务...',
+      )).toBe(false)
+      wrapper.unmount()
+    })
+
     it('shows cleanup only after the server marks the terminal task eligible', async () => {
       vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: true })
       const { wrapper } = await openTerminalAppServerPane()
