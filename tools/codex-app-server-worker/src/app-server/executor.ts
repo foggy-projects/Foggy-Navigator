@@ -10,6 +10,12 @@ import { GeneratedImageStore } from '../generated-image-store.js'
 import { syncParentDirectory } from '../persistence/jsonl-durability.js'
 import type { ContextUsageSnapshot } from '../persistence/context-maintenance-store.js'
 import {
+  StaleTurnCleanupError,
+  isTerminalStaleTurnStatus,
+  type StaleTurnCleanupResult,
+  type StaleTurnStatus,
+} from '../stale-turn-cleanup.js'
+import {
   assertCodexHomeIsolation,
   resolveAllowedWorkingPath,
   resolveContainedHomePath,
@@ -122,6 +128,12 @@ export interface TaskExecutor {
     record: StoredTaskRecord,
     operation: TerminationOperationSummary,
   ): Promise<ManualPidKillResult>
+  cleanupStaleTurn?(options: {
+    taskId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+  }): Promise<StaleTurnCleanupResult>
   compactContext?(options: {
     taskId: string
     operationId: string
@@ -134,10 +146,28 @@ export interface TaskExecutor {
 
 type TaskRuntimeLease = {
   lease: Awaited<ReturnType<AppServerPool['acquire']>>
+  laneKey: string
   threadId?: string
   turnId?: string
   turnActive: boolean
   retainLease: boolean
+}
+
+type RetainedStaleTurnCleanupLease = {
+  lease: Awaited<ReturnType<AppServerPool['acquire']>>
+  threadId: string
+  turnId: string
+  laneKey: string
+}
+
+type StaleTurnCleanupTiming = {
+  rereadTimeoutMs: number
+  rereadIntervalMs: number
+}
+
+const DEFAULT_STALE_TURN_CLEANUP_TIMING: StaleTurnCleanupTiming = {
+  rereadTimeoutMs: 2_000,
+  rereadIntervalMs: 50,
 }
 
 export class StrictAppServerExecutor implements TaskExecutor {
@@ -147,11 +177,18 @@ export class StrictAppServerExecutor implements TaskExecutor {
   private readonly taskRuntimeLeases = new Map<string, TaskRuntimeLease>()
   /** An indeterminate compact turn must keep its exact child/lane leased. */
   private readonly maintenanceRuntimeLeases = new Map<string, Awaited<ReturnType<AppServerPool['acquire']>>>()
+  /**
+   * If an interrupt is dispatched but its result cannot be observed, keep the
+   * exact lease out of normal pool retirement. Calling close() on a shared
+   * app-server child could otherwise terminate unrelated Threads.
+   */
+  private readonly staleTurnCleanupLeases = new Map<string, RetainedStaleTurnCleanupLease>()
 
   constructor(
     private readonly config: AppConfig,
     pool?: AppServerPool,
     locks?: KeyedExecutionLocks,
+    private readonly staleTurnCleanupTiming: StaleTurnCleanupTiming = DEFAULT_STALE_TURN_CLEANUP_TIMING,
   ) {
     this.pool = pool || new AppServerPool(config)
     this.locks = locks || new KeyedExecutionLocks()
@@ -178,7 +215,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         ? await this.pool.acquireForThread(context.lane, options.request.session_id, options.signal)
         : await this.pool.acquire(context.lane, options.signal)
       const runtimeInstanceId = lease.instanceId
-      taskRuntime = { lease, turnActive: false, retainLease: false }
+      taskRuntime = { lease, laneKey: context.lane.key, turnActive: false, retainLease: false }
       this.taskRuntimeLeases.set(options.taskId, taskRuntime)
       await options.callbacks.onInstanceResolved(runtimeInstanceId, context.lane.key)
       const bridge = new AppServerEventBridge({
@@ -352,6 +389,160 @@ export class StrictAppServerExecutor implements TaskExecutor {
     return 'requested'
   }
 
+  async cleanupStaleTurn(options: {
+    taskId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+  }): Promise<StaleTurnCleanupResult> {
+    const threadId = options.record.thread_id
+    const turnId = options.record.turn_id
+    const persistedLaneKey = options.record.app_server_lane_key
+    if (!threadId || !turnId || !persistedLaneKey) {
+      throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_BINDING_MISSING', 409)
+    }
+
+    const context = await this.buildContext(options.request)
+    if (persistedLaneKey !== context.lane.key) {
+      throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_LANE_AFFINITY_MISMATCH', 409)
+    }
+
+    const releaseThread = await this.locks.acquire(`thread:${threadId}`, options.signal)
+    let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
+    let retainLease = false
+    let terminalObserved = false
+    try {
+      this.assertCanonicalCwdUnchanged(context.cwd)
+      const retainedCleanupLease = this.staleTurnCleanupLeases.get(options.taskId)
+      const retainedTaskLease = this.taskRuntimeLeases.get(options.taskId)
+      if (retainedCleanupLease && retainedTaskLease && retainedCleanupLease.lease !== retainedTaskLease.lease) {
+        // Two distinct retained children for one logical task is an ownership
+        // ambiguity. Never choose one by preference or acquire another child.
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+      }
+      if (retainedCleanupLease) {
+        if (retainedCleanupLease.threadId !== threadId
+            || retainedCleanupLease.turnId !== turnId
+            || retainedCleanupLease.laneKey !== context.lane.key) {
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+        }
+        lease = retainedCleanupLease.lease
+      } else if (retainedTaskLease) {
+        // The original execute() path deliberately retains this lease when a
+        // turn is unverified. In a one-child pool a runtime that requires
+        // attention is not reusable, so reacquiring here could only queue
+        // behind the very lease that owns the stale turn. Reuse it only when
+        // all persisted native-affinity fields still describe that exact turn.
+        if (!retainedTaskLease.retainLease
+            || retainedTaskLease.threadId !== threadId
+            || retainedTaskLease.turnId !== turnId
+            || retainedTaskLease.laneKey !== context.lane.key
+            || (options.record.app_server_instance_id
+              && options.record.app_server_instance_id !== retainedTaskLease.lease.instanceId)) {
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+        }
+        lease = retainedTaskLease.lease
+      } else {
+        try {
+          lease = await this.pool.acquireForThread(context.lane, threadId, options.signal)
+        } catch {
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+        }
+      }
+
+      let turn: StaleTurnStatus
+      try {
+        turn = await this.readExactStaleTurn(lease.runtime, threadId, turnId)
+      } catch (error) {
+        // Nothing short of an exact terminal observation permits the child to
+        // be released.  This also covers a protocol-affinity failure: closing
+        // a shared child while its native state is ambiguous could interrupt a
+        // different Thread.
+        retainLease = true
+        if (error instanceof StaleTurnCleanupError) throw error
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_READ_UNAVAILABLE', 503)
+      }
+      if (isTerminalStaleTurnStatus(turn)) {
+        terminalObserved = true
+        return { status: 'already_terminal' }
+      }
+      // readExactStaleTurn rejects all other values, but retain defensively if
+      // a future protocol extension reaches this branch.
+      if (turn !== 'inProgress') {
+        retainLease = true
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_TURN_STATUS_UNKNOWN', 409)
+      }
+      if (!lease.runtime.interruptTurn) {
+        // The exact turn was confirmed active. An unavailable interrupt is
+        // therefore an indeterminate outcome, not a safe point to retire the
+        // shared child.
+        retainLease = true
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_INTERRUPT_UNAVAILABLE', 503)
+      }
+
+      try {
+        await lease.runtime.interruptTurn(threadId, turnId)
+      } catch {
+        retainLease = true
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_INTERRUPT_UNAVAILABLE', 503)
+      }
+
+      const timeoutMs = Math.max(1, this.staleTurnCleanupTiming.rereadTimeoutMs)
+      const intervalMs = Math.max(1, this.staleTurnCleanupTiming.rereadIntervalMs)
+      const deadline = Date.now() + timeoutMs
+      while (true) {
+        try {
+          turn = await this.readExactStaleTurn(lease.runtime, threadId, turnId)
+        } catch (error) {
+          retainLease = true
+          if (error instanceof StaleTurnCleanupError) throw error
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_READ_UNAVAILABLE', 503)
+        }
+        if (isTerminalStaleTurnStatus(turn)) {
+          terminalObserved = true
+          return { status: 'cleaned' }
+        }
+        if (turn !== 'inProgress') {
+          retainLease = true
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_TURN_STATUS_UNKNOWN', 409)
+        }
+        if (Date.now() >= deadline) {
+          retainLease = true
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_REREAD_TIMEOUT', 503)
+        }
+        await delay(Math.min(intervalMs, Math.max(1, deadline - Date.now())))
+      }
+    } finally {
+      // A normal return is possible only after one of the two exact terminal
+      // reads above. Keep the lease if future edits add another exit path.
+      if (lease && !terminalObserved) retainLease = true
+      if (lease && retainLease) {
+        // Preserve the original retained-task ownership if this cleanup was
+        // able to reuse it. It remains the authoritative lease until an exact
+        // native terminal observation arrives; a retry will select it again.
+        if (this.taskRuntimeLeases.get(options.taskId)?.lease !== lease) {
+          this.staleTurnCleanupLeases.set(options.taskId, {
+            lease,
+            threadId,
+            turnId,
+            laneKey: context.lane.key,
+          })
+        }
+      } else if (lease) {
+        // Do not turn a merely logical task terminal state into a provider
+        // terminal observation. This call is safe only after exact pre-read
+        // or post-interrupt re-read proof for this Thread and Turn.
+        lease.runtime.markObservedTerminal?.(threadId, turnId)
+        lease.release(lease.runtime.isHealthy())
+        const retainedCleanupLease = this.staleTurnCleanupLeases.get(options.taskId)
+        if (retainedCleanupLease?.lease === lease) this.staleTurnCleanupLeases.delete(options.taskId)
+        const retainedTaskLease = this.taskRuntimeLeases.get(options.taskId)
+        if (retainedTaskLease?.lease === lease) this.taskRuntimeLeases.delete(options.taskId)
+      }
+      releaseThread()
+    }
+  }
+
   /**
    * Returns only task-owned, retained runtime leases.  It never probes the
    * operating system or touches the app-server transport, so taking this
@@ -500,6 +691,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
       pool: this.pool.metrics(),
       execution_locks: this.locks.metrics(),
       retained_context_maintenance: this.maintenanceRuntimeLeases.size,
+      retained_stale_turn_cleanup: this.staleTurnCleanupLeases.size,
     }
   }
 
@@ -541,6 +733,25 @@ export class StrictAppServerExecutor implements TaskExecutor {
       laneKey,
       errorCode: capabilityFailure || (status === 'failed' ? stableAppServerTurnErrorCode(turn.error) : undefined),
     }
+  }
+
+  private async readExactStaleTurn(
+    runtime: Awaited<ReturnType<AppServerPool['acquire']>>['runtime'],
+    threadId: string,
+    turnId: string,
+  ): Promise<StaleTurnStatus> {
+    const thread = await runtime.readThread(threadId, true)
+    if (readString(thread.id) !== threadId) {
+      throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_THREAD_AFFINITY_MISMATCH', 409)
+    }
+    const turns = Array.isArray(thread.turns) ? thread.turns.filter(isRecord) : []
+    const turn = turns.find(candidate => readString(candidate.id) === turnId)
+    if (!turn) throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_TURN_NOT_FOUND', 409)
+    const status = readString(turn.status)
+    if (status === 'inProgress' || status === 'completed' || status === 'failed' || status === 'interrupted') {
+      return status
+    }
+    throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_TURN_STATUS_UNKNOWN', 409)
   }
 
   async readDefaultRateLimits(refresh = false): Promise<PoolRateLimitsView> {
@@ -767,6 +978,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, timeoutMs))
 }
 
 export function parseContextUsageNotification(

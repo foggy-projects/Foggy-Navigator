@@ -18,8 +18,10 @@ import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -211,6 +213,86 @@ public class CodexTaskExtensionController {
         }
     }
 
+    /**
+     * Returns only server-derived eligibility for cleaning a stale native turn.
+     * A terminal status alone is never enough to expose the action: the service
+     * also requires the persisted App Server affinity and exact task binding.
+     */
+    @GetMapping("/{taskId}/stale-turn-cleanup-eligibility")
+    public RX<Map<String, Object>> getStaleTurnCleanupEligibility(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        // Keep the unified task record as the first authorization boundary.
+        // Owned but ineligible tasks receive a safe false projection rather
+        // than leaking Codex-private runtime identity to the browser.
+        resourceAccessService.requireOwnedTask(taskId, userId, tenantId);
+        CodexTaskService.StaleTurnCleanupEligibility eligibility =
+                taskService.getStaleTurnCleanupEligibility(taskId, userId, tenantId);
+        if (eligibility.eligible()) {
+            // Eligibility must mean the action is currently usable, not merely
+            // that its persisted Task fields look safe. A revoked Worker grant
+            // must not leave a dead-end destructive-looking button visible.
+            try {
+                CodexTaskEntity task = taskService.getTaskEntity(taskId);
+                if (task == null || !hasText(task.getWorkerId())) {
+                    eligibility = new CodexTaskService.StaleTurnCleanupEligibility(
+                            taskId, false, "STALE_TURN_CLEANUP_UNAVAILABLE");
+                } else {
+                    workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+                }
+            } catch (IllegalArgumentException | SecurityException ignored) {
+                // The caller has already passed the task ownership boundary.
+                // Do not disclose Worker identity or access-policy detail in
+                // this browser-safe eligibility projection.
+                eligibility = new CodexTaskService.StaleTurnCleanupEligibility(
+                        taskId, false, "STALE_TURN_CLEANUP_UNAVAILABLE");
+            }
+        }
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("taskId", taskId);
+        response.put("eligible", eligibility.eligible());
+        if (!eligibility.eligible() && hasText(eligibility.reasonCode())) {
+            response.put("reasonCode", eligibility.reasonCode());
+        }
+        return RX.ok(response);
+    }
+
+    /**
+     * Cleans only the signed native turn bound to this terminal App Server
+     * task. There is intentionally no request body for browser-supplied
+     * Worker, runtime, thread, turn, or process identity.
+     */
+    @PostMapping("/{taskId}/stale-turn-cleanup")
+    public RX<Map<String, Object>> cleanupStaleTurn(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        CodexTaskEntity task = requireTask(taskId, userId, tenantId,
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+        CodexTaskService.StaleTurnCleanupResult result =
+                taskService.cleanupStaleTurn(taskId, userId, tenantId);
+        return RX.ok(Map.of(
+                "taskId", result.taskId(),
+                "operationId", result.operationId(),
+                "status", result.status()));
+    }
+
+    /**
+     * Stale-turn cleanup has two deliberately distinct non-success outcomes:
+     * a definitive conflict is safe to show as 409, while an unconfirmed
+     * remote/audit/runtime outcome is retryable and must not masquerade as an
+     * internal server error. The service provides a fixed safe code only.
+     */
+    @ExceptionHandler(CodexTaskService.StaleTurnCleanupException.class)
+    public ResponseEntity<RX<?>> handleStaleTurnCleanupException(
+            CodexTaskService.StaleTurnCleanupException error) {
+        HttpStatus status = error.isRetryable()
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.CONFLICT;
+        return ResponseEntity.status(status).body(RX.failA(error.getSafeCode()));
+    }
+
     /** Starts one idempotent whole-thread native compaction on the exact pinned runtime. */
     @PostMapping("/{taskId}/compact-context")
     public RX<Map<String, Object>> compactContext(
@@ -292,11 +374,19 @@ public class CodexTaskExtensionController {
                 || !expectedRuntimeType.equals(task.getRuntimeType())
                 || !Objects.equals(ownedTask.getSessionId(), task.getSessionId())
                 || !Objects.equals(ownedTask.getWorkerId(), task.getWorkerId())
-                || !Objects.equals(userId, task.getUserId())
-                || !Objects.equals(tenantId, task.getTenantId())) {
+                || !matchesOwnerScope(task, userId, tenantId)) {
             throw taskNotFound(taskId);
         }
         return task;
+    }
+
+    private boolean matchesOwnerScope(CodexTaskEntity task, String userId, String tenantId) {
+        if (task == null || !hasText(userId) || !Objects.equals(userId, task.getUserId())) {
+            return false;
+        }
+        return hasText(tenantId)
+                ? Objects.equals(tenantId, task.getTenantId())
+                : !hasText(task.getTenantId());
     }
 
     private void requirePinnedAppServerRuntime(CodexTaskEntity task) {

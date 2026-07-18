@@ -461,6 +461,31 @@ public class CodexWorkerClient {
                 .timeout(Duration.ofSeconds(10));
     }
 
+    /**
+     * Interrupts only the exact stale native turn bound to an audited terminal
+     * App Server task. The capability, expected runtime-instance proof, and
+     * task path are all required; this method never targets a process or PID.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> staleTurnCleanup(
+            String taskId, TerminationOperationCapability capability) {
+        requireTaskId(taskId);
+        requireCapability(capability);
+        return webClient.post()
+                .uri("/api/v1/tasks/{taskId}/stale-turn-cleanup", taskId)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(30));
+    }
+
     private static Map<String, Object> responseBodyAsMap(WebClientResponseException error) {
         try {
             Object decoded = OBJECT_MAPPER.readValue(error.getResponseBodyAsByteArray(), Object.class);

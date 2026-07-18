@@ -108,6 +108,24 @@ public class TerminationOperationService {
     }
 
     /**
+     * Closes a one-shot cleanup attempt when its remote outcome cannot be
+     * confirmed. Unlike an active cancellation, a stale-turn cleanup can be
+     * safely retried only by reserving a fresh operation that re-reads the
+     * exact native turn; leaving this operation RUNNING would block that safe
+     * retry forever.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markFailedUnconfirmed(String operationId, String safeFailureCode) {
+        update(operationId, entity -> {
+            if (isTerminal(entity.getStatus())) return;
+            entity.setStatus("FAILED");
+            entity.setDispatchState("UNCONFIRMED");
+            entity.setAttentionCode("TERMINATION_UNCONFIRMED");
+            entity.setFailureCode(safeCode(safeFailureCode, "TERMINATION_DISPATCH_UNCONFIRMED"));
+        });
+    }
+
+    /**
      * A Worker definitively rejected the signed operation (for example a
      * task/PID binding mismatch). This closes the audit operation without
      * manufacturing a task terminal state.
@@ -188,7 +206,9 @@ public class TerminationOperationService {
                 || !hasText(command.actorId()) || !hasText(command.actorType()) || !hasText(command.reasonCode())) {
             throw new IllegalArgumentException("TERMINATION_OPERATION_FIELDS_REQUIRED");
         }
-        if (!"REMOTE_CANCEL".equals(command.kind()) && !"MANUAL_PID_KILL".equals(command.kind())) {
+        if (!"REMOTE_CANCEL".equals(command.kind())
+                && !"MANUAL_PID_KILL".equals(command.kind())
+                && !"STALE_TURN_INTERRUPT".equals(command.kind())) {
             throw new IllegalArgumentException("TERMINATION_OPERATION_KIND_INVALID");
         }
         if ("REMOTE_CANCEL".equals(command.kind())) {
@@ -200,21 +220,34 @@ public class TerminationOperationService {
         if ("MANUAL_PID_KILL".equals(command.kind())
                 && (!("ADMIN_MANUAL".equals(command.origin())) || command.expectedPid() == null
                 || command.expectedPid() < 1 || !hasText(command.expectedProcessIdentity())
-                || !isServerIssuedManualAuthorizationDecision(command.authorizationDecisionId(), command.actorType())
+                || !isServerIssuedAuthorizationDecision(command.authorizationDecisionId(), command.actorType())
                 || !("TENANT_ADMIN_MANUAL".equals(command.actorType())
                 || "UPSTREAM_ADMIN_MANUAL".equals(command.actorType())))) {
             throw new IllegalArgumentException("TERMINATION_MANUAL_PID_AUTHORIZATION_REQUIRED");
         }
+        if ("STALE_TURN_INTERRUPT".equals(command.kind())
+                && (!("UPSTREAM_USER".equals(command.origin()))
+                || !hasText(command.providerTaskId())
+                || command.expectedPid() != null
+                || command.expectedProcessIdentity() != null
+                || !isServerIssuedAuthorizationDecision(
+                        command.authorizationDecisionId(), command.actorType()))) {
+            throw new IllegalArgumentException("TERMINATION_STALE_TURN_AUTHORIZATION_REQUIRED");
+        }
     }
 
-    private static boolean isServerIssuedManualAuthorizationDecision(String authorizationDecisionId,
-                                                                       String actorType) {
+    private static boolean isServerIssuedAuthorizationDecision(String authorizationDecisionId,
+                                                                String actorType) {
         if (!hasText(authorizationDecisionId) || !hasText(actorType)) {
             return false;
         }
         String prefix = "authz-v1:" + actorType.toLowerCase(Locale.ROOT) + ":";
-        return authorizationDecisionId.startsWith(prefix)
-                && authorizationDecisionId.length() > prefix.length();
+        if (!authorizationDecisionId.startsWith(prefix)
+                || authorizationDecisionId.length() <= prefix.length()) {
+            return false;
+        }
+        String identifier = authorizationDecisionId.substring(prefix.length());
+        return identifier.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,95}");
     }
 
     private TerminationOperationDTO toDto(TerminationOperationEntity entity) {

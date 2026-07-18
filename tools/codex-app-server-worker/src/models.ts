@@ -57,7 +57,7 @@ export interface TaskAttention {
   activity_evidence?: string
 }
 
-export type TerminationOperationKind = 'REMOTE_CANCEL' | 'MANUAL_PID_KILL'
+export type TerminationOperationKind = 'REMOTE_CANCEL' | 'MANUAL_PID_KILL' | 'STALE_TURN_INTERRUPT'
 export type TerminationOperationOrigin = 'UPSTREAM_USER' | 'UPSTREAM_SYSTEM' | 'ADMIN_MANUAL'
 export type TerminationOperationStatus = 'CANCEL_REQUESTED' | 'OBSERVED_EXIT'
 

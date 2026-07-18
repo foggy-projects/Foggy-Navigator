@@ -69,6 +69,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -1524,6 +1525,222 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void staleTurnCleanupUsesPersistedProviderTaskCapabilityAndLeavesTerminalTaskUntouched() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-cleanup", null);
+        entity.setErrorMessage("terminal-error-kept");
+        entity.setRuntimeAcceptanceState("TERMINAL");
+        stubStaleCleanupTask(entity, "to-stale-cleaned");
+        when(workerClient.staleTurnCleanup(eq("worker-native-task-stale-cleanup"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "worker-native-task-stale-cleanup",
+                        "operation_id", "to-stale-cleaned",
+                        "status", "cleaned")));
+
+        CodexTaskService.StaleTurnCleanupResult result = service.cleanupStaleTurn(
+                "task-stale-cleanup", "user-1", null);
+
+        assertEquals("task-stale-cleanup", result.taskId());
+        assertEquals("to-stale-cleaned", result.operationId());
+        assertEquals("cleaned", result.status());
+        assertEquals("COMPLETED", entity.getStatus());
+        assertEquals("terminal-error-kept", entity.getErrorMessage());
+        assertEquals("TERMINAL", entity.getRuntimeAcceptanceState());
+        ArgumentCaptor<TerminationOperationService.CreateCommand> command =
+                ArgumentCaptor.forClass(TerminationOperationService.CreateCommand.class);
+        verify(terminationOperationService).accept(command.capture());
+        assertEquals("worker-native-task-stale-cleanup", command.getValue().providerTaskId());
+        assertEquals("STALE_TURN_INTERRUPT", command.getValue().kind());
+        assertEquals("UPSTREAM_USER", command.getValue().origin());
+        assertNull(command.getValue().expectedPid());
+        assertNull(command.getValue().expectedProcessIdentity());
+        ArgumentCaptor<TerminationOperationCapability> capability =
+                ArgumentCaptor.forClass(TerminationOperationCapability.class);
+        verify(workerClient).staleTurnCleanup(eq("worker-native-task-stale-cleanup"), capability.capture());
+        String payload = new String(Base64.getUrlDecoder().decode(capability.getValue().encodedOperation()),
+                StandardCharsets.UTF_8);
+        assertTrue(payload.contains("\"task_id\":\"worker-native-task-stale-cleanup\""));
+        assertFalse(payload.contains("\"task_id\":\"task-stale-cleanup\""));
+        assertFalse(payload.contains("expected_pid"));
+        assertFalse(payload.contains("expected_process_identity"));
+        verify(terminationOperationService).markDispatchStarted("to-stale-cleaned");
+        verify(terminationOperationService).markObservedTerminal("to-stale-cleaned", "COMPLETED");
+    }
+
+    @Test
+    void staleTurnCleanupRejectsTenantlessCallerForTenantBoundTaskBeforeAuditOrWorkerLookup() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-tenant", "tenant-1");
+        when(taskRepository.findByTaskIdForUpdate("task-stale-tenant")).thenReturn(Optional.of(entity));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-tenant", "user-1", null));
+
+        assertEquals("STALE_TURN_CLEANUP_UNAVAILABLE", error.getSafeCode());
+        assertFalse(error.isRetryable());
+        verify(terminationOperationService, never()).accept(any());
+        verifyNoInteractions(workerClient, clientFactory, runtimeRegistryService);
+    }
+
+    @Test
+    void staleTurnCleanupRejectsTenantMismatchBeforeAuditOrWorkerLookup() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-tenant-mismatch", "tenant-1");
+        when(taskRepository.findByTaskIdForUpdate("task-stale-tenant-mismatch"))
+                .thenReturn(Optional.of(entity));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-tenant-mismatch", "user-1", "tenant-2"));
+
+        assertEquals("STALE_TURN_CLEANUP_UNAVAILABLE", error.getSafeCode());
+        assertFalse(error.isRetryable());
+        verify(terminationOperationService, never()).accept(any());
+        verifyNoInteractions(workerClient, clientFactory, runtimeRegistryService);
+    }
+
+    @Test
+    void staleTurnCleanupTreatsInvalidWorkerReceiptAsRetryableUnconfirmedAndClosesOperation() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-invalid-receipt", "tenant-1");
+        stubStaleCleanupTask(entity, "to-stale-invalid-receipt");
+        when(workerClient.staleTurnCleanup(eq("worker-native-task-stale-invalid-receipt"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "worker-native-task-stale-invalid-receipt",
+                        "operation_id", "other-operation",
+                        "status", "cleaned")));
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-invalid-receipt", "user-1", "tenant-1"));
+
+        assertEquals("STALE_TURN_CLEANUP_UNCONFIRMED", error.getSafeCode());
+        assertTrue(error.isRetryable());
+        verify(terminationOperationService).markFailedUnconfirmed(
+                "to-stale-invalid-receipt", "STALE_TURN_CLEANUP_UNCONFIRMED");
+        verify(terminationOperationService, never()).markObservedTerminal(anyString(), anyString());
+    }
+
+    @Test
+    void staleTurnCleanupTreatsWorkerConflictAsDefinitiveRejectedOperation() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-conflict", "tenant-1");
+        stubStaleCleanupTask(entity, "to-stale-conflict");
+        when(workerClient.staleTurnCleanup(eq("worker-native-task-stale-conflict"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.error(new CodexWorkerClient.WorkerQueryRejectedException(
+                        409, "STALE_TURN_CLEANUP_TURN_NOT_RUNNING")));
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-conflict", "user-1", "tenant-1"));
+
+        assertEquals("STALE_TURN_CLEANUP_TURN_NOT_RUNNING", error.getSafeCode());
+        assertFalse(error.isRetryable());
+        verify(terminationOperationService).markRejected(
+                "to-stale-conflict", "STALE_TURN_CLEANUP_TURN_NOT_RUNNING");
+        verify(terminationOperationService, never()).markFailedUnconfirmed(anyString(), anyString());
+    }
+
+    @Test
+    void staleTurnCleanupDoesNotExposeUntrustedWorkerConflictSuffixes() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-secret-conflict", "tenant-1");
+        stubStaleCleanupTask(entity, "to-stale-secret-conflict");
+        when(workerClient.staleTurnCleanup(eq("worker-native-task-stale-secret-conflict"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.error(new CodexWorkerClient.WorkerQueryRejectedException(
+                        409, "STALE_TURN_CLEANUP_TURN_NOT_RUNNING:runtime-secret")));
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-secret-conflict", "user-1", "tenant-1"));
+
+        assertEquals("STALE_TURN_CLEANUP_REJECTED", error.getSafeCode());
+        assertFalse(error.getSafeCode().contains("runtime-secret"));
+        verify(terminationOperationService).markRejected(
+                "to-stale-secret-conflict", "STALE_TURN_CLEANUP_REJECTED");
+    }
+
+    @Test
+    void staleTurnCleanupRejectsAffinityChangeBeforeNativeWorkerCall() {
+        CodexTaskEntity reserved = terminalAppServerTask("task-stale-affinity", "tenant-1");
+        CodexTaskEntity changed = terminalAppServerTask("task-stale-affinity", "tenant-1");
+        changed.setRuntimeInstanceId("instance-b");
+        stubStaleCleanupTask(reserved, changed, "to-stale-affinity");
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-affinity", "user-1", "tenant-1"));
+
+        assertEquals("STALE_TURN_CLEANUP_AFFINITY_CHANGED", error.getSafeCode());
+        assertFalse(error.isRetryable());
+        verify(terminationOperationService).markRejected(
+                "to-stale-affinity", "STALE_TURN_CLEANUP_AFFINITY_CHANGED");
+        verifyNoInteractions(workerClient, clientFactory, runtimeRegistryService);
+    }
+
+    @Test
+    void staleTurnCleanupRejectsCodexThreadRebindingBeforeNativeWorkerCall() {
+        CodexTaskEntity reserved = terminalAppServerTask("task-stale-thread-rebinding", "tenant-1");
+        CodexTaskEntity changed = terminalAppServerTask("task-stale-thread-rebinding", "tenant-1");
+        changed.setCodexThreadId("thread-rebound");
+        stubStaleCleanupTask(reserved, changed, "to-stale-thread-rebinding");
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-thread-rebinding", "user-1", "tenant-1"));
+
+        assertEquals("STALE_TURN_CLEANUP_AFFINITY_CHANGED", error.getSafeCode());
+        verify(terminationOperationService).markRejected(
+                "to-stale-thread-rebinding", "STALE_TURN_CLEANUP_AFFINITY_CHANGED");
+        verifyNoInteractions(workerClient, clientFactory, runtimeRegistryService);
+    }
+
+    @Test
+    void staleTurnCleanupTreatsRuntimeFailureAsRetryableUnconfirmedAndClosesOperation() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-runtime", "tenant-1");
+        stubStaleCleanupTask(entity, "to-stale-runtime");
+        when(workerClient.staleTurnCleanup(eq("worker-native-task-stale-runtime"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.error(new IllegalStateException("runtime disconnected")));
+
+        CodexTaskService.StaleTurnCleanupException error = assertThrows(
+                CodexTaskService.StaleTurnCleanupException.class,
+                () -> service.cleanupStaleTurn("task-stale-runtime", "user-1", "tenant-1"));
+
+        assertEquals("STALE_TURN_CLEANUP_UNCONFIRMED", error.getSafeCode());
+        assertTrue(error.isRetryable());
+        verify(terminationOperationService).markFailedUnconfirmed(
+                "to-stale-runtime", "STALE_TURN_CLEANUP_UNCONFIRMED");
+    }
+
+    @Test
+    void staleTurnCleanupEligibilitySeparatesProviderRuntimeTerminalAndBindingGates() {
+        CodexTaskEntity entity = terminalAppServerTask("task-stale-eligibility", "tenant-1");
+        when(taskRepository.findByTaskId("task-stale-eligibility")).thenReturn(Optional.of(entity));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        assertTrue(service.getStaleTurnCleanupEligibility(
+                "task-stale-eligibility", "user-1", "tenant-1").eligible());
+
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        assertEquals("STALE_TURN_CLEANUP_PROVIDER_UNSUPPORTED", service.getStaleTurnCleanupEligibility(
+                "task-stale-eligibility", "user-1", "tenant-1").reasonCode());
+        entity.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        entity.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        assertEquals("STALE_TURN_CLEANUP_RUNTIME_UNSUPPORTED", service.getStaleTurnCleanupEligibility(
+                "task-stale-eligibility", "user-1", "tenant-1").reasonCode());
+        entity.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        entity.setStatus("RUNNING");
+        assertEquals("STALE_TURN_CLEANUP_TASK_NOT_TERMINAL", service.getStaleTurnCleanupEligibility(
+                "task-stale-eligibility", "user-1", "tenant-1").reasonCode());
+        entity.setStatus("COMPLETED");
+        entity.setCodexThreadId(null);
+        assertEquals("STALE_TURN_CLEANUP_BINDING_INCOMPLETE", service.getStaleTurnCleanupEligibility(
+                "task-stale-eligibility", "user-1", "tenant-1").reasonCode());
+    }
+
+    @Test
     void abortTaskFailsClosedWhenAuditStoreIsUnavailable() {
         CodexTaskEntity entity = createTask(
                 "task-abort", "session-1", "worker-1", "dir-1", "RUNNING",
@@ -2631,6 +2848,85 @@ class CodexTaskServiceTest {
         task.setCodexThreadId("thread-1");
         task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         return task;
+    }
+
+    private CodexTaskEntity terminalAppServerTask(String taskId, String tenantId) {
+        CodexTaskEntity task = createTask(
+                taskId, "session-1", "worker-1", "dir-1", "COMPLETED", LocalDateTime.now());
+        task.setTenantId(tenantId);
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        task.setRuntimeId("app-main");
+        task.setRuntimeRevision(2);
+        task.setRuntimeInstanceId("instance-a");
+        task.setRuntimeAcceptanceState("TERMINAL");
+        task.setWorkerTaskId("worker-native-" + taskId);
+        task.setCodexThreadId("thread-" + taskId);
+        return task;
+    }
+
+    private void stubStaleCleanupTask(CodexTaskEntity task, String operationId) {
+        stubStaleCleanupTask(task, task, operationId, true);
+    }
+
+    /**
+     * Models the explicit re-read after the short reservation transaction.
+     * Keeping both values in one setup avoids a strict-Mockito duplicate stub
+     * and makes the affinity-change regression deterministic.
+     */
+    private void stubStaleCleanupTask(
+            CodexTaskEntity reservedTask, CodexTaskEntity rereadTask, String operationId) {
+        stubStaleCleanupTask(reservedTask, rereadTask, operationId, false);
+    }
+
+    private void stubStaleCleanupTask(
+            CodexTaskEntity reservedTask,
+            CodexTaskEntity rereadTask,
+            String operationId,
+            boolean stubNativeWorkerClient) {
+        CodexTaskEntity task = reservedTask;
+        doReturn(Optional.of(task)).when(taskRepository).findByTaskIdForUpdate(task.getTaskId());
+        doReturn(Optional.of(rereadTask)).when(taskRepository).findByTaskId(task.getTaskId());
+        when(terminationOperationService.hasActiveOperationForTask(task.getTaskId())).thenReturn(false);
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId(operationId);
+            operation.setSchemaVersion(1);
+            operation.setTaskId(command.taskId());
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            return operation;
+        });
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+        if (!stubNativeWorkerClient) {
+            return;
+        }
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId(task.getRuntimeId())
+                .runtimeRevision(task.getRuntimeRevision())
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId(task.getWorkerId())
+                .endpointUrl("http://worker.example")
+                .authToken("worker-token")
+                .instanceId(task.getRuntimeInstanceId())
+                .routingEpoch(1L)
+                .build();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
+                task.getRuntimeInstanceId())).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:" + task.getRuntimeId() + ":" + task.getRuntimeRevision(),
+                "http://worker.example", "worker-token", task.getRuntimeInstanceId()))
+                .thenReturn(workerClient);
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
     }
 
     @Test

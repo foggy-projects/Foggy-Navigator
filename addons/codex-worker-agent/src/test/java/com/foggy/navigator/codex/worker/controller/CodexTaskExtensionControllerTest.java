@@ -40,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -138,6 +139,117 @@ class CodexTaskExtensionControllerTest {
                 () -> controller.listCodexCanaryTasks(Integer.MAX_VALUE, 2, null));
 
         verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void staleTurnCleanupEligibilityReturnsOwnedSafeFalseProjectionOnly() {
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getStaleTurnCleanupEligibility(TASK_ID, USER_ID, TENANT_ID))
+                .thenReturn(new CodexTaskService.StaleTurnCleanupEligibility(
+                        TASK_ID, false, "STALE_TURN_CLEANUP_TASK_NOT_TERMINAL"));
+
+        RX<Map<String, Object>> response = controller.getStaleTurnCleanupEligibility(TASK_ID);
+
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        assertEquals(false, response.getData().get("eligible"));
+        assertEquals("STALE_TURN_CLEANUP_TASK_NOT_TERMINAL", response.getData().get("reasonCode"));
+        assertEquals(3, response.getData().size());
+        verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        verify(taskService).getStaleTurnCleanupEligibility(TASK_ID, USER_ID, TENANT_ID);
+        verifyNoInteractions(workerManagementFacade, clientFactory, runtimeRegistryService, client);
+    }
+
+    @Test
+    void staleTurnCleanupEligibilityRequiresCurrentWorkerAccess() {
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getStaleTurnCleanupEligibility(TASK_ID, USER_ID, TENANT_ID))
+                .thenReturn(new CodexTaskService.StaleTurnCleanupEligibility(TASK_ID, true, null));
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(appServerTask());
+
+        RX<Map<String, Object>> response = controller.getStaleTurnCleanupEligibility(TASK_ID);
+
+        assertEquals(true, response.getData().get("eligible"));
+        assertFalse(response.getData().containsKey("reasonCode"));
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+    }
+
+    @Test
+    void staleTurnCleanupEligibilityHidesActionWhenWorkerAccessWasRevoked() {
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getStaleTurnCleanupEligibility(TASK_ID, USER_ID, TENANT_ID))
+                .thenReturn(new CodexTaskService.StaleTurnCleanupEligibility(TASK_ID, true, null));
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(appServerTask());
+        doThrow(new IllegalArgumentException("Worker not found"))
+                .when(workerManagementFacade)
+                .validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+
+        RX<Map<String, Object>> response = controller.getStaleTurnCleanupEligibility(TASK_ID);
+
+        assertEquals(false, response.getData().get("eligible"));
+        assertEquals("STALE_TURN_CLEANUP_UNAVAILABLE", response.getData().get("reasonCode"));
+        assertEquals(3, response.getData().size());
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+    }
+
+    @Test
+    void staleTurnCleanupOwnedTenantlessTaskIsBodylessAndReturnsOnlySafeReceipt() {
+        setCurrentUser(USER_ID, null);
+        SessionTaskEntity owned = new SessionTaskEntity();
+        owned.setTaskId(TASK_ID);
+        owned.setSessionId("session-1");
+        owned.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        owned.setWorkerId("worker-1");
+        owned.setUserId(USER_ID);
+        owned.setTenantId(null);
+        CodexTaskEntity task = appServerTask();
+        task.setTenantId(null);
+        when(resourceAccessService.requireOwnedTask(TASK_ID, USER_ID, null)).thenReturn(owned);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(taskService.cleanupStaleTurn(TASK_ID, USER_ID, null))
+                .thenReturn(new CodexTaskService.StaleTurnCleanupResult(
+                        TASK_ID, "to-cleanup-1", "cleaned"));
+
+        RX<Map<String, Object>> response = controller.cleanupStaleTurn(TASK_ID);
+
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        assertEquals("to-cleanup-1", response.getData().get("operationId"));
+        assertEquals("cleaned", response.getData().get("status"));
+        assertEquals(3, response.getData().size());
+        assertFalse(response.getData().containsKey("workerTaskId"));
+        assertFalse(response.getData().containsKey("threadId"));
+        assertFalse(response.getData().containsKey("turnId"));
+        assertFalse(response.getData().containsKey("runtimeId"));
+        verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, null);
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, null, "worker-1");
+        verify(taskService).cleanupStaleTurn(TASK_ID, USER_ID, null);
+        verifyNoInteractions(clientFactory, runtimeRegistryService, client);
+    }
+
+    @Test
+    void staleTurnCleanupRejectsOwnershipBeforeCodexPrivateLookup() {
+        setCurrentUser("other-user", TENANT_ID);
+        when(resourceAccessService.requireOwnedTask(TASK_ID, "other-user", TENANT_ID))
+                .thenThrow(new SecurityException("Resource access denied"));
+
+        assertThrows(SecurityException.class, () -> controller.cleanupStaleTurn(TASK_ID));
+
+        verifyNoInteractions(taskService, workerManagementFacade, clientFactory, runtimeRegistryService, client);
+    }
+
+    @Test
+    void staleTurnCleanupExceptionHandlerMapsSafeConflictAndRetryableOutcomes() {
+        ResponseEntity<RX<?>> conflict = controller.handleStaleTurnCleanupException(
+                new CodexTaskService.StaleTurnCleanupException("STALE_TURN_CLEANUP_AFFINITY_CHANGED"));
+        ResponseEntity<RX<?>> retryable = controller.handleStaleTurnCleanupException(
+                new CodexTaskService.StaleTurnCleanupException(
+                        "STALE_TURN_CLEANUP_UNCONFIRMED", true));
+
+        assertEquals(409, conflict.getStatusCode().value());
+        assertEquals("STALE_TURN_CLEANUP_AFFINITY_CHANGED", conflict.getBody().getMsg());
+        assertNull(conflict.getBody().getData());
+        assertEquals(503, retryable.getStatusCode().value());
+        assertEquals("STALE_TURN_CLEANUP_UNCONFIRMED", retryable.getBody().getMsg());
+        assertNull(retryable.getBody().getData());
     }
 
     @Test

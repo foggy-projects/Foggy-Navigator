@@ -546,6 +546,15 @@
               :loading="resyncingTaskId === paneState.task.value?.taskId"
               @click="handlePaneResync(paneState)"
             >重新同步</el-button>
+            <el-button
+              v-if="isStaleTurnCleanupEligible(paneState.task.value)"
+              size="small"
+              text
+              type="warning"
+              title="仅清理此任务已绑定的遗留运行，不会停止共享 App Server"
+              :loading="cleaningStaleTurnTaskId === paneState.task.value?.taskId"
+              @click="handlePaneStaleTurnCleanup(paneState)"
+            >清理遗留运行</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -928,6 +937,15 @@
               :loading="resyncingTaskId === paneState.task.value?.taskId"
               @click="handlePaneResync(paneState)"
             >重新同步</el-button>
+            <el-button
+              v-if="isStaleTurnCleanupEligible(paneState.task.value)"
+              size="small"
+              text
+              type="warning"
+              title="仅清理此任务已绑定的遗留运行，不会停止共享 App Server"
+              :loading="cleaningStaleTurnTaskId === paneState.task.value?.taskId"
+              @click="handlePaneStaleTurnCleanup(paneState)"
+            >清理遗留运行</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -3095,6 +3113,8 @@ import { useAttachments, compressImage, fileIcon, MAX_IMAGE_SIZE, toImagesJson }
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
+  cleanupStaleTurnUnified,
+  getStaleTurnCleanupEligibility,
   reconnectTaskUnified,
   resyncTaskUnified,
   rewindTaskUnified,
@@ -3103,7 +3123,7 @@ import {
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
 } from '@/api/unifiedTask'
-import type { SessionRelationInfo } from '@/api/unifiedTask'
+import type { SessionRelationInfo, StaleTurnCleanupEligibility } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
@@ -3673,6 +3693,12 @@ const scanningTaskId = ref('')
 
 // Resync state
 const resyncingTaskId = ref('')
+
+// The cleanup action is strictly server-gated. Local task state is never
+// sufficient to infer eligibility, and the browser never handles a native
+// Thread/Turn identifier.
+const staleTurnCleanupEligibilityByTaskId = reactive<Record<string, StaleTurnCleanupEligibility | undefined>>({})
+const cleaningStaleTurnTaskId = ref('')
 
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
@@ -4765,6 +4791,21 @@ function canResyncTask(task?: ClaudeTask | null): boolean {
   return !!task && isClaudeCodeTask(task)
 }
 
+function isStaleTurnCleanupEligible(task?: ClaudeTask | null): boolean {
+  const taskId = task?.taskId
+  return !!taskId && staleTurnCleanupEligibilityByTaskId[taskId]?.eligible === true
+}
+
+async function refreshStaleTurnCleanupEligibility(taskId?: string): Promise<void> {
+  if (!taskId) return
+  try {
+    staleTurnCleanupEligibilityByTaskId[taskId] = await getStaleTurnCleanupEligibility(taskId)
+  } catch {
+    // A failed eligibility read must never expose a cleanup action.
+    staleTurnCleanupEligibilityByTaskId[taskId] = { eligible: false }
+  }
+}
+
 type ResponseTimeoutTask = ClaudeTask & {
   responseTimedOut?: boolean
   silentForSeconds?: number
@@ -5305,7 +5346,7 @@ function handleRunFavScript(s: FavoriteScript) {
 }
 
 /** Called when any pane's task reaches a terminal state */
-function handleTaskFinished(_paneId: string) {
+function handleTaskFinished() {
   reloadWorkerTasks()
   if (selectedDirectoryId.value) {
     loadDirectoryTasks()
@@ -7077,9 +7118,19 @@ function createPane(task: ClaudeTask): TaskPaneState {
   const ws = activeWorkspace.value
   if (!ws) throw new Error('No active workspace')
   const paneId = `pane-${++ws.paneCounter}`
-  const pane = useTaskPane(paneId, { onTaskFinished: handleTaskFinished })
+  let pane!: TaskPaneState
+  pane = useTaskPane(paneId, {
+    // Use the exact pane closure rather than resolving paneId through the
+    // current workspace: its task can naturally finish after the user has
+    // switched directories/workspaces.
+    onTaskFinished: () => {
+      void refreshStaleTurnCleanupEligibility(pane.task.value?.taskId)
+      handleTaskFinished()
+    },
+  })
   pane.task.value = task
   ws.panes.value = [...ws.panes.value, pane]
+  void refreshStaleTurnCleanupEligibility(task.taskId)
   return pane
 }
 
@@ -7236,6 +7287,69 @@ async function handlePaneResync(paneState: TaskPaneState) {
   const taskId = paneState.task.value?.taskId
   if (!taskId) return
   await doResync(taskId, paneState)
+}
+
+async function handlePaneStaleTurnCleanup(paneState: TaskPaneState) {
+  const task = paneState.task.value
+  const taskId = task?.taskId
+  if (!taskId || !isStaleTurnCleanupEligible(task)) return
+
+  try {
+    await ElMessageBox.confirm(
+      '这只会清理该任务已绑定的遗留原生运行，不会中止共享 Worker 或 App Server 进程。确认继续？',
+      '清理遗留运行',
+      {
+        type: 'warning',
+        confirmButtonText: '确认清理',
+        cancelButtonText: '取消',
+      },
+    )
+    cleaningStaleTurnTaskId.value = taskId
+    await cleanupStaleTurnUnified(taskId)
+
+    await paneState.syncTaskStatus({ force: true })
+    const refreshes: Array<Promise<unknown>> = [
+      workerState.loadWorkers(),
+      workerState.loadActiveTasks(),
+      workerState.loadAwaitingReplyTasks(),
+      reloadWorkerTasks(),
+    ]
+    if (selectedWorkerId.value) refreshes.push(workerState.loadDirectories(selectedWorkerId.value))
+    if (selectedDirectoryId.value) refreshes.push(loadDirectoryTasks())
+    await Promise.allSettled(refreshes)
+    await refreshStaleTurnCleanupEligibility(taskId)
+
+    ElMessage.success('遗留运行态已清理，请再次发送继续指令。')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    const message = staleTurnCleanupErrorMessage(error)
+    ElMessage.error(message)
+  } finally {
+    if (cleaningStaleTurnTaskId.value === taskId) cleaningStaleTurnTaskId.value = ''
+  }
+}
+
+/**
+ * Cleanup failures can arrive through Axios's non-2xx path, so read the
+ * server's fixed safe code from its response envelope before falling back to
+ * the transport error. This stays local to BUG-018 instead of changing global
+ * API-client error semantics for unrelated screens.
+ */
+function staleTurnCleanupErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const response = (error as { response?: { data?: unknown } }).response
+    const data = response?.data
+    if (data && typeof data === 'object') {
+      const body = data as { msg?: unknown; message?: unknown }
+      const safeMessage = typeof body.msg === 'string' && body.msg.trim()
+        ? body.msg
+        : typeof body.message === 'string' && body.message.trim()
+          ? body.message
+          : undefined
+      if (safeMessage) return safeMessage
+    }
+  }
+  return error instanceof Error && error.message ? error.message : '清理遗留运行失败'
 }
 
 /** 从侧栏会话列表 dropdown 触发 */
@@ -7514,6 +7628,7 @@ async function handlePaneSend(paneId: string, content: string) {
       loadDirectoryTasks()
     }
   } catch (e) {
+    void refreshStaleTurnCleanupEligibility(oldTask.taskId)
     const msg = e instanceof Error ? e.message : ''
     ElMessage.error(msg ? `${msg}（消息已保留）` : '发送失败，消息已保留')
   }
@@ -7561,6 +7676,7 @@ async function viewTask(task: ClaudeTask) {
   if (existing) {
     const wasFocused = focusedPaneId.value === existing.paneId
     focusedPaneId.value = existing.paneId
+    void refreshStaleTurnCleanupEligibility(existing.task.value?.taskId ?? task.taskId)
     // When switching back to a previously unfocused pane, do a full reload
     // to catch up on messages and task status changes that occurred while
     // the pane's SSE was suspended (e.g. task completed in the background).
@@ -8178,6 +8294,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     }
   } catch (e) {
     if (e !== 'cancel') {
+      void refreshStaleTurnCleanupEligibility(task.taskId)
       ElMessage.error(e instanceof Error ? e.message : '继续会话失败')
     }
   }
@@ -8185,6 +8302,8 @@ async function handleResumeFromHistory(task: ClaudeTask) {
 
 defineExpose({
   canResyncTask,
+  isStaleTurnCleanupEligible,
+  handlePaneStaleTurnCleanup,
   handleShowDetail,
   handleResumeFromHistory,
   taskSessionRefLabel,

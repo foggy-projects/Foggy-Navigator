@@ -67,6 +67,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -88,6 +89,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private static final String USER_INPUT_STATE_KEY = "codexPendingInteraction";
     private static final String USER_INPUT_METHOD = "item/tool/requestUserInput";
     private static final int MAX_USER_INPUT_QUESTIONS = 3;
+    private static final String STALE_TURN_INTERRUPT_KIND = "STALE_TURN_INTERRUPT";
+    private static final String STALE_TURN_CLEANUP_ORIGIN = "UPSTREAM_USER";
+    private static final String STALE_TURN_CLEANUP_ACTOR_TYPE = "TASK_OWNER_STALE_TURN_CLEANUP";
+    private static final String STALE_TURN_CLEANUP_REASON = "STALE_TURN_CLEANUP";
+    private static final Set<String> STALE_TURN_CLEANUP_SUCCESS_STATUSES =
+            Set.of("cleaned", "already_terminal");
     private static final Set<String> CODEX_CATALOG_EFFORTS = Set.of(
             "low", "medium", "high", "xhigh", "max", "ultra");
     private static final Map<String, String> CODEX_LEGACY_MODEL_VALUES = Map.ofEntries(
@@ -946,6 +953,291 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private record RemoteTerminationReservation(String taskId, String providerTaskId, String previousStatus,
                                                 String previousRuntimeAcceptanceState,
                                                 TerminationOperationEntity operation) {
+    }
+
+    /**
+     * Safe browser projection for the explicitly requested stale native-turn
+     * cleanup. It deliberately contains no thread, turn, runtime, Worker, or
+     * capability identity.
+     */
+    public record StaleTurnCleanupEligibility(String taskId, boolean eligible, String reasonCode) {
+    }
+
+    /** Safe browser projection after the Worker observed the exact turn cleanup. */
+    public record StaleTurnCleanupResult(String taskId, String operationId, String status) {
+    }
+
+    /**
+     * Evaluates only persisted platform-side prerequisites. The Worker remains
+     * authoritative for the exact native turn and is never contacted by this
+     * read endpoint.
+     */
+    public StaleTurnCleanupEligibility getStaleTurnCleanupEligibility(
+            String taskId, String ownerUserId, String tenantId) {
+        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        String ineligibleReason = staleTurnCleanupIneligibility(entity, ownerUserId, tenantId);
+        if (ineligibleReason != null) {
+            return new StaleTurnCleanupEligibility(taskId, false, ineligibleReason);
+        }
+        if (terminationOperationService == null) {
+            return new StaleTurnCleanupEligibility(
+                    taskId, false, "STALE_TURN_CLEANUP_AUDIT_UNAVAILABLE");
+        }
+        if (terminationOperationService.hasActiveOperationForTask(taskId)) {
+            return new StaleTurnCleanupEligibility(
+                    taskId, false, "STALE_TURN_CLEANUP_OPERATION_PENDING");
+        }
+        return new StaleTurnCleanupEligibility(taskId, true, null);
+    }
+
+    /**
+     * Starts one signed, exact-turn cleanup attempt. The logical Navigator
+     * task is already terminal and is intentionally never reopened, mutated,
+     * or treated as proof that the native App Server turn is released.
+     */
+    public StaleTurnCleanupResult cleanupStaleTurn(
+            String taskId, String ownerUserId, String tenantId) {
+        StaleTurnCleanupReservation reservation = reserveStaleTurnCleanup(
+                taskId, ownerUserId, tenantId);
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            CodexTaskEntity current = taskRepository.findByTaskId(reservation.taskId()).orElse(null);
+            if (!matchesStaleTurnCleanupReservation(current, reservation)) {
+                terminationOperationService.markRejected(
+                        reservation.operation().getOperationId(),
+                        "STALE_TURN_CLEANUP_AFFINITY_CHANGED");
+                throw new StaleTurnCleanupException("STALE_TURN_CLEANUP_AFFINITY_CHANGED");
+            }
+
+            CodexWorkerClient client = terminationClient(current);
+            TerminationOperationCapability capability = TerminationOperationCapability.issue(
+                    reservation.operation(), client.terminationSigningSecret());
+            Map<String, Object> workerResult = client.staleTurnCleanup(
+                            reservation.providerTaskId(), capability)
+                    .block(Duration.ofSeconds(35));
+            String status = requireStaleTurnCleanupReceipt(workerResult, reservation);
+            terminationOperationService.markObservedTerminal(
+                    reservation.operation().getOperationId(), "COMPLETED");
+            log.info("Codex stale native turn cleanup observed: taskId={}, operationId={}, status={}",
+                    reservation.taskId(), reservation.operation().getOperationId(), status);
+            return new StaleTurnCleanupResult(
+                    reservation.taskId(), reservation.operation().getOperationId(), status);
+        } catch (StaleTurnCleanupException error) {
+            throw error;
+        } catch (Exception error) {
+            String operationId = reservation.operation().getOperationId();
+            if (isDefinitiveStaleTurnCleanupRejection(error)) {
+                String safeCode = staleTurnCleanupRejectionCode(error);
+                terminationOperationService.markRejected(operationId, safeCode);
+                log.warn("Codex stale native turn cleanup rejected: taskId={}, operationId={}, type={}",
+                        reservation.taskId(), operationId, error.getClass().getSimpleName());
+                throw new StaleTurnCleanupException(safeCode);
+            }
+            // Do not leave a terminal task permanently blocked by an active
+            // audit operation. A retry reserves a new operation and must again
+            // re-read the exact native turn before interrupting it.
+            terminationOperationService.markFailedUnconfirmed(
+                    operationId, "STALE_TURN_CLEANUP_UNCONFIRMED");
+            log.warn("Codex stale native turn cleanup is unconfirmed: taskId={}, operationId={}, type={}",
+                    reservation.taskId(), operationId, error.getClass().getSimpleName());
+            throw new StaleTurnCleanupException("STALE_TURN_CLEANUP_UNCONFIRMED", true);
+        }
+    }
+
+    /**
+     * Persists the operation under the task-row lock, then releases that lock
+     * before any Worker request. This is intentionally independent from task
+     * lifecycle mutations: cleanup is an audit operation over an already
+     * terminal task, not a second cancellation.
+     */
+    private StaleTurnCleanupReservation reserveStaleTurnCleanup(
+            String taskId, String ownerUserId, String tenantId) {
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+            String ineligibleReason = staleTurnCleanupIneligibility(entity, ownerUserId, tenantId);
+            if (ineligibleReason != null) {
+                throw new StaleTurnCleanupException(ineligibleReason);
+            }
+            if (terminationOperationService == null) {
+                throw new StaleTurnCleanupException("STALE_TURN_CLEANUP_AUDIT_UNAVAILABLE", true);
+            }
+            if (terminationOperationService.hasActiveOperationForTask(entity.getTaskId())) {
+                throw new StaleTurnCleanupException("STALE_TURN_CLEANUP_OPERATION_PENDING");
+            }
+
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            entity.getTaskId(), entity.getWorkerTaskId(), entity.getSessionId(),
+                            entity.getUserId(), entity.getTenantId(), entity.getProviderType(),
+                            entity.getWorkerId(), STALE_TURN_INTERRUPT_KIND,
+                            STALE_TURN_CLEANUP_ORIGIN, entity.getUserId(),
+                            STALE_TURN_CLEANUP_ACTOR_TYPE,
+                            issueStaleTurnCleanupAuthorizationDecisionId(),
+                            STALE_TURN_CLEANUP_REASON,
+                            "stale-turn-cleanup:" + UUID.randomUUID(),
+                            null, null, 300));
+            return new StaleTurnCleanupReservation(
+                    entity.getTaskId(), entity.getWorkerTaskId(), entity.getCodexThreadId(), entity.getWorkerId(),
+                    entity.getRuntimeId(), entity.getRuntimeRevision(), entity.getRuntimeInstanceId(),
+                    entity.getUserId(), entity.getTenantId(), operation);
+        });
+    }
+
+    private String staleTurnCleanupIneligibility(
+            CodexTaskEntity entity, String ownerUserId, String tenantId) {
+        if (!matchesStaleTurnCleanupOwnerScope(entity, ownerUserId, tenantId)) {
+            return "STALE_TURN_CLEANUP_UNAVAILABLE";
+        }
+        if (!CODEX_APP_SERVER_PROVIDER_TYPE.equals(entity.getProviderType())) {
+            return "STALE_TURN_CLEANUP_PROVIDER_UNSUPPORTED";
+        }
+        if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            return "STALE_TURN_CLEANUP_RUNTIME_UNSUPPORTED";
+        }
+        if (!isTerminalStatus(entity.getStatus())) {
+            return "STALE_TURN_CLEANUP_TASK_NOT_TERMINAL";
+        }
+        if (!hasNonBlank(entity.getSessionId()) || !hasNonBlank(entity.getWorkerTaskId())
+                || !hasNonBlank(entity.getCodexThreadId()) || !hasNonBlank(entity.getWorkerId())
+                || !hasNonBlank(entity.getRuntimeId()) || entity.getRuntimeRevision() == null
+                || !hasNonBlank(entity.getRuntimeInstanceId())) {
+            return "STALE_TURN_CLEANUP_BINDING_INCOMPLETE";
+        }
+        return null;
+    }
+
+    private boolean matchesStaleTurnCleanupReservation(
+            CodexTaskEntity entity, StaleTurnCleanupReservation reservation) {
+        return staleTurnCleanupIneligibility(
+                entity, reservation.ownerUserId(), reservation.tenantId()) == null
+                && Objects.equals(entity.getTaskId(), reservation.taskId())
+                && Objects.equals(entity.getWorkerTaskId(), reservation.providerTaskId())
+                && Objects.equals(entity.getCodexThreadId(), reservation.codexThreadId())
+                && Objects.equals(entity.getWorkerId(), reservation.workerId())
+                && Objects.equals(entity.getRuntimeId(), reservation.runtimeId())
+                && Objects.equals(entity.getRuntimeRevision(), reservation.runtimeRevision())
+                && Objects.equals(entity.getRuntimeInstanceId(), reservation.runtimeInstanceId());
+    }
+
+    private String requireStaleTurnCleanupReceipt(
+            Map<String, Object> workerResult, StaleTurnCleanupReservation reservation) {
+        if (workerResult == null
+                || !hasExpectedString(workerResult.get("task_id"), reservation.providerTaskId())
+                || !hasExpectedString(workerResult.get("operation_id"),
+                reservation.operation().getOperationId())) {
+            throw new StaleTurnCleanupReceiptUnconfirmedException();
+        }
+        Object status = workerResult.get("status");
+        if (!(status instanceof String value) || !STALE_TURN_CLEANUP_SUCCESS_STATUSES.contains(value)) {
+            throw new StaleTurnCleanupReceiptUnconfirmedException();
+        }
+        return value;
+    }
+
+    private boolean isDefinitiveStaleTurnCleanupRejection(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof CodexWorkerClient.WorkerQueryRejectedException rejected) {
+                return rejected.getStatusCode() == 409;
+            }
+            if (current instanceof WebClientResponseException response) {
+                return response.getStatusCode().value() == 409;
+            }
+        }
+        return false;
+    }
+
+    private String staleTurnCleanupRejectionCode(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof CodexWorkerClient.WorkerQueryRejectedException rejected
+                    && rejected.getStatusCode() == 409
+                    && isSafeStaleTurnCleanupCode(rejected.getCode())) {
+                return rejected.getCode();
+            }
+        }
+        return "STALE_TURN_CLEANUP_REJECTED";
+    }
+
+    private static boolean hasExpectedString(Object value, String expected) {
+        return value instanceof String actual && Objects.equals(actual, expected);
+    }
+
+    private static boolean hasNonBlank(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    /**
+     * Mirrors the narrow tenantless ownership rule used by
+     * {@code SessionTaskResourceAccessService}: a tenantless principal may
+     * access only its own tenantless record. It is not an administrator
+     * bypass and must not collapse null/blank tenant scope into cross-tenant
+     * access.
+     */
+    private static boolean matchesStaleTurnCleanupOwnerScope(
+            CodexTaskEntity entity, String ownerUserId, String tenantId) {
+        if (entity == null || !hasNonBlank(ownerUserId)
+                || !Objects.equals(ownerUserId, entity.getUserId())) {
+            return false;
+        }
+        return hasNonBlank(tenantId)
+                ? Objects.equals(tenantId, entity.getTenantId())
+                : !hasNonBlank(entity.getTenantId());
+    }
+
+    private static boolean isSafeStaleTurnCleanupCode(String code) {
+        return code != null && code.matches("STALE_TURN_CLEANUP_[A-Z0-9_]{1,120}");
+    }
+
+    private static String issueStaleTurnCleanupAuthorizationDecisionId() {
+        return "authz-v1:" + STALE_TURN_CLEANUP_ACTOR_TYPE.toLowerCase(Locale.ROOT)
+                + ":" + UUID.randomUUID();
+    }
+
+    private record StaleTurnCleanupReservation(
+            String taskId,
+            String providerTaskId,
+            String codexThreadId,
+            String workerId,
+            String runtimeId,
+            Integer runtimeRevision,
+            String runtimeInstanceId,
+            String ownerUserId,
+            String tenantId,
+            TerminationOperationEntity operation) {
+    }
+
+    private static final class StaleTurnCleanupReceiptUnconfirmedException
+            extends IllegalStateException {
+        private StaleTurnCleanupReceiptUnconfirmedException() {
+            super("STALE_TURN_CLEANUP_RECEIPT_INVALID");
+        }
+    }
+
+    /**
+     * Safe API-level outcome for stale-turn cleanup. This intentionally holds
+     * a fixed code only; it never carries a native thread/turn, runtime, or
+     * Worker error payload into the browser response.
+     */
+    public static final class StaleTurnCleanupException extends IllegalStateException {
+        private final boolean retryable;
+
+        public StaleTurnCleanupException(String safeCode) {
+            this(safeCode, false);
+        }
+
+        public StaleTurnCleanupException(String safeCode, boolean retryable) {
+            super(safeCode);
+            this.retryable = retryable;
+        }
+
+        public String getSafeCode() {
+            return getMessage();
+        }
+
+        public boolean isRetryable() {
+            return retryable;
+        }
     }
 
     /**

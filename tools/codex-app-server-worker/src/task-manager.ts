@@ -29,6 +29,10 @@ import { AppServerRuntimeError } from './app-server/runtime.js'
 import { GeneratedImageStore } from './generated-image-store.js'
 import { classifyErrorCode, safeAppServerMessage } from './diagnostics.js'
 import {
+  StaleTurnCleanupError,
+  type StaleTurnCleanupResult,
+} from './stale-turn-cleanup.js'
+import {
   normalizeUserInputAnswers,
   sameRequestId,
   toPendingInteraction,
@@ -301,6 +305,38 @@ export class TaskManager {
             : 'APP_SERVER_COMPACT_FAILED'),
         })
       }
+    })
+  }
+
+  /**
+   * Executes the narrowly-scoped native-turn cleanup for an already-terminal
+   * task. This deliberately does not call isAccepting(): a Worker drain must
+   * not convert a persisted stale turn into an un-actionable record. The
+   * executor remains responsible for refusing an unavailable native runtime.
+   */
+  async cleanupStaleTurn(taskId: string): Promise<StaleTurnCleanupResult> {
+    return this.withTaskOperation(taskId, async () => {
+      const record = this.store.get(taskId)
+      if (!record || record.tombstoned_at || record.status !== 'terminal') {
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_TASK_NOT_TERMINAL', 409)
+      }
+      if (!this.executor.cleanupStaleTurn) {
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+      }
+      let request: TaskRequest
+      try {
+        // Terminal records intentionally evict their request payload from
+        // memory, so this reopens only the encrypted private journal copy.
+        request = await this.store.getRequestForMaintenance(taskId)
+      } catch {
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_BINDING_MISSING', 409)
+      }
+      return this.executor.cleanupStaleTurn({
+        taskId,
+        request,
+        record,
+        signal: new AbortController().signal,
+      })
     })
   }
 

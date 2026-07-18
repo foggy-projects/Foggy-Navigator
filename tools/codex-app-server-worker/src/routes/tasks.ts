@@ -16,6 +16,7 @@ import {
   UserInputResponseError,
   toPublicTask,
 } from '../task-manager.js'
+import { StaleTurnCleanupError } from '../stale-turn-cleanup.js'
 import { ContextCompactOperationConflictError } from '../persistence/context-maintenance-store.js'
 import { UserInputResponseValidationError } from '../app-server/user-input.js'
 import {
@@ -335,6 +336,45 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
     }
   })
 
+  router.post('/api/v1/tasks/:taskId/stale-turn-cleanup', async (req, res, next) => {
+    try {
+      // There is intentionally no caller-supplied target identity. An empty
+      // object is tolerated for generic HTTP clients; every other body is
+      // rejected before the one-use capability is consumed.
+      if (!isEmptyBody(req.body)) {
+        res.status(400).json({ error: 'STALE_TURN_CLEANUP_BODY_UNSUPPORTED' })
+        return
+      }
+      const taskId = single(req.params.taskId)
+      const operation = validateTerminationOperation(
+        req,
+        config,
+        taskId,
+        'STALE_TURN_INTERRUPT',
+        terminationReplayLedger,
+      )
+      const result = await manager.cleanupStaleTurn(taskId)
+      // This receipt is deliberately fixed. It must not reveal a Thread,
+      // Turn, lane, runtime instance, or process identity to the control
+      // plane/browser.
+      res.status(200).json({
+        task_id: taskId,
+        operation_id: operation.operation_id,
+        status: result.status,
+      })
+    } catch (error) {
+      if (error instanceof TerminationOperationValidationError) {
+        sendTerminationOperationError(res, error)
+        return
+      }
+      if (error instanceof StaleTurnCleanupError) {
+        res.status(error.httpStatus).json({ error: error.code })
+        return
+      }
+      next(error)
+    }
+  })
+
   const killAuthorizedProcess = async (req: Request, res: Response, next: (error: Error) => void): Promise<void> => {
     try {
       const pid = Number(single(req.params.pid))
@@ -498,6 +538,11 @@ function writeEvent(res: Response, event: WorkerEvent): void {
 function readIdempotencyKey(req: Request): string | undefined {
   const value = req.header('Idempotency-Key')?.trim()
   return value && IDEMPOTENCY_KEY_PATTERN.test(value) ? value : undefined
+}
+
+function isEmptyBody(value: unknown): boolean {
+  return value === undefined
+    || (value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
 }
 
 function single(value: string | string[] | undefined): string {

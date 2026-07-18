@@ -87,6 +87,17 @@ export type RewindTaskResult = {
   claudeSessionId?: string
 }
 
+export interface StaleTurnCleanupEligibility {
+  eligible: boolean
+  reasonCode?: string
+}
+
+export interface StaleTurnCleanupResult {
+  taskId: string
+  operationId: string
+  status: 'cleaned' | 'already_terminal'
+}
+
 function normalizeImages(images?: string | string[]): string[] | undefined {
   if (images == null) {
     return undefined
@@ -207,6 +218,32 @@ export async function reconnectTaskUnified(taskId: string): Promise<void> {
  */
 export async function resyncTaskUnified(taskId: string): Promise<unknown> {
   const rx = (await client.post(`/tasks/${taskId}/resync`)) as unknown as RX<unknown>
+  return rx.data
+}
+
+/**
+ * Read the server-derived eligibility for cleaning a terminal App Server turn.
+ * The browser never infers eligibility from a provider, status, or native id.
+ */
+export async function getStaleTurnCleanupEligibility(
+  taskId: string,
+): Promise<StaleTurnCleanupEligibility> {
+  const rx = (await client.get(
+    `/tasks/${encodeURIComponent(taskId)}/stale-turn-cleanup-eligibility`,
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<StaleTurnCleanupEligibility>
+  return rx.data
+}
+
+/**
+ * Ask the platform to clean only the exact native turn bound to this task.
+ */
+export async function cleanupStaleTurnUnified(taskId: string): Promise<StaleTurnCleanupResult> {
+  const rx = (await client.post(
+    `/tasks/${encodeURIComponent(taskId)}/stale-turn-cleanup`,
+    undefined,
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<StaleTurnCleanupResult>
   return rx.data
 }
 

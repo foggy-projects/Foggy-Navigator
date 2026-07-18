@@ -59,6 +59,9 @@ vi.mock('@/api/codexRuntime', () => ({
 vi.mock('@/api/unifiedTask', () => ({
   createTaskUnified: vi.fn(),
   cancelTaskUnified: vi.fn(),
+  cleanupStaleTurnUnified: vi.fn(),
+  getStaleTurnCleanupEligibility: vi.fn(),
+  getTaskUnified: vi.fn(),
   listTasksUnified: vi.fn().mockResolvedValue([]),
   respondToTaskUnified: vi.fn(),
   reconnectTaskUnified: vi.fn(),
@@ -313,6 +316,15 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     updatedAt: '2026-02-16T00:05:00Z',
   }
 
+  const mockAppServerTerminalTask: ClaudeTask = {
+    ...mockCompletedTask,
+    taskId: 'task-app-server-terminal-1',
+    sessionId: 'session-app-server-terminal-1',
+    providerType: 'codex-app-server-worker',
+    codexThreadId: 'thread-bound-on-server',
+    status: 'ABORTED',
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -354,6 +366,13 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       hasMore: false,
     })
     vi.mocked(unifiedTaskApi.listTasksUnified).mockResolvedValue([])
+    vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(null)
+    vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: false })
+    vi.mocked(unifiedTaskApi.cleanupStaleTurnUnified).mockResolvedValue({
+      taskId: mockAppServerTerminalTask.taskId,
+      operationId: 'operation-1',
+      status: 'cleaned',
+    })
     vi.mocked(unifiedTaskApi.listTasksPagedUnified).mockResolvedValue({
       content: [], totalSessions: 0, page: 0, size: 20,
     } as any)
@@ -1504,6 +1523,117 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       }
       expect(vm.taskSessionRefLabel(mockLangGraphFailedTask)).toBe('Worker Session ID')
       expect(vm.taskSessionRefValue(mockLangGraphFailedTask)).toBe('worker-session-langgraph-1')
+    })
+  })
+
+  describe('BUG-018 stale App Server turn cleanup', () => {
+    const paneGridStubs = {
+      ...commonGlobal.stubs,
+      TaskPaneGrid: {
+        props: ['panes'],
+        template: `
+          <div class="mock-pane-grid">
+            <div v-for="pane in panes" :key="pane.paneId" class="mock-pane">
+              <slot name="header-extra" :pane-state="pane" />
+            </div>
+          </div>
+        `,
+      },
+    }
+
+    async function openTerminalAppServerPane() {
+      const wrapper = mount(ClaudeWorkerView, {
+        global: {
+          ...commonGlobal,
+          stubs: paneGridStubs,
+        },
+      })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.selectDirectory('worker-1', 'dir-1')
+      await flushPromises()
+      await vm.viewTask(mockAppServerTerminalTask)
+      await flushPromises()
+      return { wrapper, vm, pane: vm.panes[0] }
+    }
+
+    it('shows cleanup only after the server marks the terminal task eligible', async () => {
+      vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: true })
+      const { wrapper } = await openTerminalAppServerPane()
+
+      expect(unifiedTaskApi.getStaleTurnCleanupEligibility)
+        .toHaveBeenCalledWith(mockAppServerTerminalTask.taskId)
+      expect(wrapper.text()).toContain('清理遗留运行')
+      wrapper.unmount()
+    })
+
+    it('cleans the task-bound turn, then force-refreshes before allowing another resume', async () => {
+      vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: true })
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      const { wrapper, vm, pane } = await openTerminalAppServerPane()
+      const syncTaskStatus = vi.spyOn(pane, 'syncTaskStatus')
+
+      await vm.handlePaneStaleTurnCleanup(pane)
+      await flushPromises()
+
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('不会中止共享 Worker 或 App Server 进程'),
+        '清理遗留运行',
+        expect.objectContaining({ confirmButtonText: '确认清理' }),
+      )
+      expect(unifiedTaskApi.cleanupStaleTurnUnified).toHaveBeenCalledWith(mockAppServerTerminalTask.taskId)
+      expect(syncTaskStatus).toHaveBeenCalledWith({ force: true })
+      expect(claudeWorkerApi.listWorkers).toHaveBeenCalled()
+      expect(claudeWorkerApi.listDirectoriesByWorker).toHaveBeenCalledWith('worker-1')
+      expect(unifiedTaskApi.listTasksUnified).toHaveBeenCalled()
+      expect(ElMessage.success).toHaveBeenCalledWith('遗留运行态已清理，请再次发送继续指令。')
+      wrapper.unmount()
+    })
+
+    it('keeps the task status unchanged and shows no success when the server rejects cleanup', async () => {
+      vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: true })
+      vi.mocked(unifiedTaskApi.cleanupStaleTurnUnified).mockRejectedValue({
+        response: { status: 503, data: { msg: 'STALE_TURN_CLEANUP_UNCONFIRMED' } },
+      })
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      const { wrapper, vm, pane } = await openTerminalAppServerPane()
+      const statusBefore = pane.task.value.status
+
+      await vm.handlePaneStaleTurnCleanup(pane)
+      await flushPromises()
+
+      expect(pane.task.value.status).toBe(statusBefore)
+      expect(ElMessage.error).toHaveBeenCalledWith('STALE_TURN_CLEANUP_UNCONFIRMED')
+      expect(ElMessage.success).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    for (const dismissal of ['cancel', 'close'] as const) {
+      it(`silently abandons cleanup when the confirmation is ${dismissal}`, async () => {
+        vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: true })
+        vi.mocked(ElMessageBox.confirm).mockRejectedValue(dismissal)
+        const { wrapper, vm, pane } = await openTerminalAppServerPane()
+        vi.mocked(ElMessage.error).mockClear()
+        vi.mocked(ElMessage.success).mockClear()
+
+        await vm.handlePaneStaleTurnCleanup(pane)
+        await flushPromises()
+
+        expect(unifiedTaskApi.cleanupStaleTurnUnified).not.toHaveBeenCalled()
+        expect(ElMessage.error).not.toHaveBeenCalled()
+        expect(ElMessage.success).not.toHaveBeenCalled()
+        wrapper.unmount()
+      })
+    }
+
+    it('does not expose or invoke cleanup for a server-ineligible task', async () => {
+      vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: false })
+      const { wrapper, vm, pane } = await openTerminalAppServerPane()
+
+      expect(wrapper.text()).not.toContain('清理遗留运行')
+      await vm.handlePaneStaleTurnCleanup(pane)
+      expect(unifiedTaskApi.cleanupStaleTurnUnified).not.toHaveBeenCalled()
+      wrapper.unmount()
     })
   })
 })

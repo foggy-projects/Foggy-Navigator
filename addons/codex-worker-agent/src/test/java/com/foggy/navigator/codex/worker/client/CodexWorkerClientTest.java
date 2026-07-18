@@ -239,6 +239,43 @@ class CodexWorkerClientTest {
     }
 
     @Test
+    void staleTurnCleanupUsesProviderTaskPathSignedCapabilityAndInstanceProof() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.staleTurnCleanup("worker-task-9",
+                            new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("POST", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/stale-turn-cleanup", server.path());
+            assertEquals("encoded-operation", server.terminationOperation());
+            assertEquals("encoded-signature", server.terminationSignature());
+            assertEquals("instance-a", server.expectedInstanceId());
+            assertEquals("worker-task-9", response.get("task_id"));
+            assertEquals("operation-1", response.get("operation_id"));
+            assertEquals("cleaned", response.get("status"));
+        }
+    }
+
+    @Test
+    void staleTurnCleanupPropagatesStableWorkerConflict() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.staleTurnCleanupReturns(409, "STALE_TURN_CLEANUP_TURN_NOT_RUNNING");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            CodexWorkerClient.WorkerQueryRejectedException error = assertThrows(
+                    CodexWorkerClient.WorkerQueryRejectedException.class,
+                    () -> client.staleTurnCleanup("worker-task-9",
+                                    new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                            .block(Duration.ofSeconds(5)));
+
+            assertEquals(409, error.getStatusCode());
+            assertEquals("STALE_TURN_CLEANUP_TURN_NOT_RUNNING", error.getCode());
+        }
+    }
+
+    @Test
     void respondToTaskUsesWorkerTaskPathAndPreservesSingleAnswerArray() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
@@ -469,6 +506,8 @@ class CodexWorkerClientTest {
         private volatile int deleteStatus = 200;
         private volatile int compactStatus = 200;
         private volatile String compactErrorCode;
+        private volatile int staleTurnCleanupStatus = 200;
+        private volatile String staleTurnCleanupErrorCode;
         private volatile String actualInstanceId = "instance-a";
 
         private CaptureServer(HttpServer server) {
@@ -555,6 +594,19 @@ class CodexWorkerClientTest {
                     byte[] response = responseJson.getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "application/json");
                     exchange.sendResponseHeaders(capture.compactStatus, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().endsWith("/stale-turn-cleanup")) {
+                    String responseJson = capture.staleTurnCleanupErrorCode != null
+                            ? "{\"error\":\"" + capture.staleTurnCleanupErrorCode + "\"}"
+                            : "{\"task_id\":\"worker-task-9\","
+                                    + "\"operation_id\":\"operation-1\","
+                                    + "\"status\":\"cleaned\"}";
+                    byte[] response = responseJson.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(capture.staleTurnCleanupStatus, response.length);
                     exchange.getResponseBody().write(response);
                     exchange.close();
                     return;
@@ -718,6 +770,11 @@ class CodexWorkerClientTest {
         void compactReturns(int status, String errorCode) {
             compactStatus = status;
             compactErrorCode = errorCode;
+        }
+
+        void staleTurnCleanupReturns(int status, String errorCode) {
+            staleTurnCleanupStatus = status;
+            staleTurnCleanupErrorCode = errorCode;
         }
 
         @Override

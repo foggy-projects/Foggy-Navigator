@@ -284,7 +284,14 @@ function validateOperationShape(operation: ValidatedTerminationOperation, now: n
         && (operation.expected_pid === undefined || !operation.expected_process_identity))
       || (operation.target_worker_id !== undefined && !isText(operation.target_worker_id))
       || (operation.kind === 'MANUAL_PID_KILL' && operation.origin !== 'ADMIN_MANUAL')
-      || (operation.kind === 'REMOTE_CANCEL' && operation.origin === 'ADMIN_MANUAL')) {
+      || (operation.kind === 'REMOTE_CANCEL' && operation.origin === 'ADMIN_MANUAL')
+      // A stale native-turn cleanup is intentionally not a process operation.
+      // Reject PID claims rather than silently accepting a capability whose
+      // shape could be confused with the separate manual-kill authority.
+      || (operation.kind === 'STALE_TURN_INTERRUPT'
+        && (operation.origin !== 'UPSTREAM_USER'
+          || operation.expected_pid !== undefined
+          || operation.expected_process_identity !== undefined))) {
     throw new TerminationOperationValidationError('TERMINATION_OPERATION_INVALID')
   }
   const issuedAt = Date.parse(operation.issued_at)
@@ -320,7 +327,7 @@ function isIsoInstant(value: unknown): value is string {
 }
 
 function isKind(value: unknown): value is TerminationOperationKind {
-  return value === 'REMOTE_CANCEL' || value === 'MANUAL_PID_KILL'
+  return value === 'REMOTE_CANCEL' || value === 'MANUAL_PID_KILL' || value === 'STALE_TURN_INTERRUPT'
 }
 
 function isBase64Url(value: string): boolean {
