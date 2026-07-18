@@ -30,12 +30,12 @@
       <ExecutionReportInline :report-ref="props.reportRef" :digest="props.digest" />
     </div>
     <button
-      v-if="props.reconnectable"
+      v-if="props.reconnectable && props.taskId"
       class="reconnect-btn"
       :disabled="reconnecting"
       @click="handleReconnect"
     >
-      {{ reconnecting ? '重连中...' : '重连' }}
+      {{ reconnecting ? props.reconnectingLabel || '重连中...' : props.reconnectLabel || '重连' }}
     </button>
     <Teleport to="body">
       <div
@@ -92,6 +92,8 @@ const props = defineProps<{
   error: string
   reconnectable?: boolean
   taskId?: string
+  reconnectLabel?: string
+  reconnectingLabel?: string
   reportRef?: string
   digest?: ExecutionReportDigest
   errorEnvelope?: ErrorEnvelope

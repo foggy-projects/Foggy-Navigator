@@ -92,6 +92,15 @@
               :thought="item.msg.thought"
             />
             <ErrorBlock
+              v-else-if="isReconnectPending(item.msg)"
+              :error="item.msg.error || item.msg.content"
+              :reconnectable="item.msg.reconnectable"
+              :task-id="(item.msg.raw as Record<string, unknown>)?.taskId as string"
+              reconnect-label="重新查询任务状态"
+              reconnecting-label="查询中..."
+              @reconnect="(taskId: string) => emit('reconnect', taskId)"
+            />
+            <ErrorBlock
               v-else-if="isError(item.msg)"
               :error="item.msg.error || item.msg.content"
               :reconnectable="item.msg.reconnectable"
@@ -270,6 +279,12 @@ function isToolCall(msg: ChatMessage) {
 function isError(msg: ChatMessage) {
   return (msg.type === AipMessageType.ERROR || msg.type === AipMessageType.TOOL_CALL_ERROR)
     && (msg.error || msg.content)
+}
+
+function isReconnectPending(msg: ChatMessage) {
+  if (msg.type !== AipMessageType.STATE_SYNC || !msg.reconnectable) return false
+  const raw = msg.raw as Record<string, unknown> | undefined
+  return raw?.subtype === 'reconnect_pending' && typeof raw.taskId === 'string' && raw.taskId.length > 0
 }
 
 function isCompressionHint(msg: ChatMessage) {

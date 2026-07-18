@@ -58,6 +58,7 @@ import ToolCallBlock from '../components/ToolCallBlock.vue'
 import SkillApprovalCard from '../components/SkillApprovalCard.vue'
 import BusinessSuspensionDialog from '../components/BusinessSuspensionDialog.vue'
 import MessageList from '../components/MessageList.vue'
+import ErrorBlock from '../components/ErrorBlock.vue'
 
 const elDialogStub = {
   template: `
@@ -370,6 +371,36 @@ describe('MessageList approval rendering', () => {
     expect(wrapper.findComponent(SkillApprovalCard).exists()).toBe(true)
     expect(wrapper.text()).toContain('manual_dispatch')
     expect(wrapper.text()).toContain('Legacy skill approval')
+  })
+})
+
+describe('MessageList recovery rendering', () => {
+  it('renders reconnect_pending as an actionable status reconciliation card', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [{
+          id: 'msg-reconnect-pending',
+          type: AipMessageType.STATE_SYNC,
+          sender: 'system',
+          content: 'CODEX_RUNTIME_RESULT_UNKNOWN',
+          reconnectable: true,
+          timestamp: Date.now(),
+          raw: {
+            subtype: 'reconnect_pending',
+            taskId: 'task-reconcile-1',
+            reconnectable: true,
+          },
+        } satisfies ChatMessage],
+      },
+    })
+
+    expect(wrapper.findComponent(ErrorBlock).exists()).toBe(true)
+    expect(wrapper.text()).toContain('任务最终状态暂时无法确认')
+    expect(wrapper.get('button.reconnect-btn').text()).toBe('重新查询任务状态')
+
+    await wrapper.get('button.reconnect-btn').trigger('click')
+
+    expect(wrapper.emitted('reconnect')).toEqual([['task-reconcile-1']])
   })
 })
 

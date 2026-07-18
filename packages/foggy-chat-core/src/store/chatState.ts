@@ -683,6 +683,8 @@ export function createChatState(): ChatState {
           type: aip.type,
           sender: 'system',
           content: p.status ? `状态变更: ${p.status}` : statusText,
+          reconnectable: raw.reconnectable === true,
+          raw,
           timestamp: aip.timestamp,
           ...executionReportProps(report),
           ...uiActionProps(uiActions),
