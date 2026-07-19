@@ -9,11 +9,16 @@ import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeoutException;
 
 @RestController
 @RequestMapping("/api/v1/codex-workers")
@@ -147,9 +152,25 @@ public class CodexWorkerController {
      * stable code; full details remain inside the Worker-side protected logs.
      */
     private String safeWorkerErrorCode(Exception error) {
-        if (error instanceof WebClientResponseException responseException) {
-            return "CODEX_WORKER_HTTP_" + responseException.getStatusCode().value();
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8 && visited.add(current); depth++, current = current.getCause()) {
+            if (current instanceof WebClientResponseException responseException) {
+                return "CODEX_WORKER_HTTP_" + responseException.getStatusCode().value();
+            }
+            if (current instanceof TimeoutException || isBlockingTimeout(current)) {
+                return "CODEX_WORKER_TIMEOUT";
+            }
+            if (current instanceof WebClientRequestException) {
+                return "CODEX_WORKER_CONNECTION_UNAVAILABLE";
+            }
         }
         return "CODEX_WORKER_REQUEST_UNCONFIRMED";
+    }
+
+    private boolean isBlockingTimeout(Throwable error) {
+        return error instanceof IllegalStateException
+                && error.getMessage() != null
+                && error.getMessage().startsWith("Timeout on blocking read for ");
     }
 }
