@@ -609,8 +609,13 @@
               <el-table-column label="内存" width="80">
                 <template #default="{ row }">{{ row.memory_mb ? row.memory_mb.toFixed(1) + ' MB' : '-' }}</template>
               </el-table-column>
-              <el-table-column label="启动时间" width="150">
-                <template #default="{ row }">{{ row.started_at || '-' }}</template>
+              <el-table-column label="启动时间" width="170">
+                <template #default="{ row }">
+                  <el-tooltip v-if="row.started_at" :content="`精确时间：${row.started_at}`" placement="top">
+                    <span>{{ formatCliProcessStartedAt(row.started_at) }}</span>
+                  </el-tooltip>
+                  <span v-else>-</span>
+                </template>
               </el-table-column>
               <el-table-column label="会话" width="120">
                 <template #default="{ row }">
@@ -8446,6 +8451,22 @@ function formatTime(dateStr: string): string {
     return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   }
   return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+function formatCliProcessStartedAt(dateStr: string): string {
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return dateStr
+
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`
 }
 
 // ===== SSH Terminal Handlers =====
