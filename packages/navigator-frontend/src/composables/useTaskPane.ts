@@ -19,8 +19,9 @@ import type { AgentMessage, ClaudeTask, Message } from '@/types'
 import { NATIVE_SUBTASK_UPDATE_TYPE } from '@/types/nativeSubtasks'
 import type { NativeSubtask } from '@/types/nativeSubtasks'
 
-/** Number of messages to load per page */
-const PAGE_SIZE = 800
+/** Keep the first paint bounded; fall back when a proxy truncates a response. */
+const INITIAL_HISTORY_PAGE_SIZES = [100, 50, 20] as const
+const HISTORY_PAGE_SIZE = 100
 const NATIVE_SUBTASK_SNAPSHOT_RETRY_BASE_DELAY = 1000
 const NATIVE_SUBTASK_SNAPSHOT_RETRY_MAX_DELAY = 30000
 const NATIVE_SUBTASK_UNSUPPORTED_STATUSES = new Set([404, 405, 501])
@@ -38,6 +39,9 @@ export interface TaskPaneState {
   hasMoreHistory: Ref<boolean>
   /** Total number of messages in the DB for the current session */
   totalMessages: Ref<number>
+  /** Non-empty when persisted history needs an explicit retry. */
+  historyLoadError: Ref<string>
+  historyRetrying: Ref<boolean>
   /** Native Codex subtask state, kept outside @foggy/chat. */
   nativeSubtasks: ComputedRef<NativeSubtask[]>
   nativeSubtasksLoading: Ref<boolean>
@@ -45,6 +49,8 @@ export interface TaskPaneState {
   connect(sessionId: string, pendingImages?: Array<{ name: string; url: string }>): Promise<void>
   /** Load older messages (prepend to chat). Called when user scrolls to top. */
   loadMoreHistory(): Promise<void>
+  /** Retry the latest persisted history page without clearing live messages. */
+  retryHistory(): Promise<void>
   /** Load all (or up to `limit`) messages, replacing current messages. Scrolls to top. */
   loadAllHistory(limit?: number): Promise<void>
   /** Fetch all messages for export/copy without changing the visible pane history. */
@@ -80,6 +86,8 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const loadingMore = ref(false)
   const hasMoreHistory = ref(false)
   const totalMessages = ref(0)
+  const historyLoadError = ref('')
+  const historyRetrying = ref(false)
   let currentSessionId = ''
   /**
    * Session history and the live SSE stream overlap during reconnects. Keep
@@ -245,6 +253,73 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       })
     }
     return counted
+  }
+
+  function convertDbMessagesSafely(
+    messages: Message[],
+    targetState: ChatState = chatState,
+    seenMessageIds?: Set<string>,
+  ): number {
+    let failures = 0
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]
+      if (!msg) continue
+      try {
+        convertAndPushDbMessage(msg, messages[i + 1], targetState, seenMessageIds)
+      } catch (error) {
+        failures++
+        console.error(`[TaskPane ${paneId}] Failed to convert persisted message ${msg.id}:`, error)
+      }
+    }
+    return failures
+  }
+
+  function removeHistoryLoadErrorMessage() {
+    chatState.messages.value = chatState.messages.value.filter((message) => (
+      (message.raw as Record<string, unknown> | undefined)?.subtype !== 'history_load_failed'
+    ))
+  }
+
+  function showHistoryLoadError(message: string) {
+    historyLoadError.value = message
+    removeHistoryLoadErrorMessage()
+    chatState.messages.value.push({
+      id: `load-error-${Date.now()}`,
+      type: AipMessageType.ERROR,
+      sender: 'system',
+      content: '',
+      error: message,
+      raw: { subtype: 'history_load_failed' },
+      timestamp: Date.now(),
+    } as ChatMessage)
+  }
+
+  function applyInitialHistoryResult(result: sessionApi.PaginatedMessages) {
+    totalDbMessages = result.total
+    totalMessages.value = result.total
+    dbLoadedOffset = result.messages.length
+    allDbLoaded = !result.hasMore
+    hasMoreHistory.value = result.hasMore
+    const failures = convertDbMessagesSafely(result.messages, chatState, knownMessageIds)
+    historyLoadError.value = failures > 0
+      ? `${failures} 条历史消息解析失败，其他消息已保留`
+      : ''
+  }
+
+  async function loadInitialHistory(sessionId: string, version: number): Promise<void> {
+    let lastError: unknown
+    for (const pageSize of INITIAL_HISTORY_PAGE_SIZES) {
+      try {
+        const result = await sessionApi.getLatestMessages(sessionId, pageSize, 0)
+        if (connectVersion !== version) return
+        applyInitialHistoryResult(result)
+        return
+      } catch (error) {
+        lastError = error
+        console.warn(`[TaskPane ${paneId}] Failed to load history with limit=${pageSize}:`, error)
+      }
+    }
+    throw lastError ?? new Error('SESSION_HISTORY_UNAVAILABLE')
   }
 
   function appendMissingTaskResult() {
@@ -520,24 +595,14 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     loadingMore.value = false
     hasMoreHistory.value = false
     totalMessages.value = 0
+    historyLoadError.value = ''
+    historyRetrying.value = false
 
-    // Load latest PAGE_SIZE messages from DB (paginated)
+    // Load a bounded latest page and progressively fall back if a proxy or
+    // transport closes a large response early.
     try {
-      const result = await sessionApi.getLatestMessages(sessionId, PAGE_SIZE, 0)
+      await loadInitialHistory(sessionId, myVersion)
       if (connectVersion !== myVersion) return
-
-      totalDbMessages = result.total
-      totalMessages.value = result.total
-      dbLoadedOffset = Math.min(PAGE_SIZE, result.total)
-      allDbLoaded = !result.hasMore
-      hasMoreHistory.value = result.hasMore
-
-      const messages = result.messages
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i]
-        if (!msg) continue
-        convertAndPushDbMessage(msg, messages[i + 1], chatState, knownMessageIds)
-      }
       // Attach pending images to the first user message (for newly created tasks)
       if (pendingImages && pendingImages.length > 0) {
         const firstUserMsg = chatState.messages.value.find(m => m.sender === 'user')
@@ -549,14 +614,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     } catch (e) {
       if (connectVersion !== myVersion) return
       console.error(`[TaskPane ${paneId}] Failed to load history:`, e)
-      chatState.messages.value.push({
-        id: `load-error-${Date.now()}`,
-        type: AipMessageType.ERROR,
-        sender: 'system',
-        content: '',
-        error: '消息加载失败，请尝试关闭后重新打开会话',
-        timestamp: Date.now(),
-      } as ChatMessage)
+      showHistoryLoadError('消息加载失败，可直接重试；实时消息仍会继续接收')
     }
 
     if (connectVersion !== myVersion) return
@@ -629,7 +687,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
     loadingMore.value = true
     try {
-      const result = await sessionApi.getLatestMessages(currentSessionId, PAGE_SIZE, dbLoadedOffset)
+      const result = await sessionApi.getLatestMessages(currentSessionId, HISTORY_PAGE_SIZE, dbLoadedOffset)
 
       if (!result.messages.length) {
         allDbLoaded = true
@@ -646,15 +704,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       const tempMessages = chatState.messages.value
       const insertionPoint = tempMessages.length
       // Append at the end temporarily (the helper pushes to chatState.messages)
-      for (let i = 0; i < result.messages.length; i++) {
-        const msg = result.messages[i]
-        if (!msg) continue
-        // For boundary: the "next" of the last older message is the first already-loaded message
-        const nextMsg = i < result.messages.length - 1
-          ? result.messages[i + 1]
-          : undefined // no peek across boundary for waiting-hint (conservative: render it)
-        convertAndPushDbMessage(msg, nextMsg, chatState, knownMessageIds)
-      }
+      convertDbMessagesSafely(result.messages, chatState, knownMessageIds)
 
       // Extract newly pushed messages and move them to the front
       const newlyAdded = tempMessages.splice(insertionPoint)
@@ -665,10 +715,27 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       dbLoadedOffset += result.messages.length
       allDbLoaded = !result.hasMore
       hasMoreHistory.value = result.hasMore
+      historyLoadError.value = ''
     } catch (e) {
       console.error(`[TaskPane ${paneId}] Failed to load more history:`, e)
+      historyLoadError.value = '较早的历史消息加载失败，可重试'
     } finally {
       loadingMore.value = false
+    }
+  }
+
+  async function retryHistory(): Promise<void> {
+    if (!currentSessionId || historyRetrying.value) return
+    historyRetrying.value = true
+    removeHistoryLoadErrorMessage()
+    try {
+      await loadInitialHistory(currentSessionId, connectVersion)
+      appendMissingTaskResult()
+    } catch (error) {
+      console.error(`[TaskPane ${paneId}] History retry failed:`, error)
+      showHistoryLoadError('消息加载仍未成功，请稍后重试')
+    } finally {
+      historyRetrying.value = false
     }
   }
 
@@ -682,42 +749,44 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
     loadingMore.value = true
     try {
-      chatState.clearMessages()
-      knownMessageIds.clear()
+      const replacementState = createChatState()
+      const replacementMessageIds = new Set<string>()
+      let nextTotal = 0
+      let nextOffset = 0
+      let nextAllLoaded = false
+      let nextHasMore = false
 
       if (limit == null) {
         // Load ALL messages (no pagination)
         const allMessages = await sessionApi.getMessages(currentSessionId)
-
-        for (let i = 0; i < allMessages.length; i++) {
-          const msg = allMessages[i]
-          if (!msg) continue
-          convertAndPushDbMessage(msg, allMessages[i + 1], chatState, knownMessageIds)
-        }
-
-        totalDbMessages = allMessages.length
-        totalMessages.value = allMessages.length
-        dbLoadedOffset = allMessages.length
-        allDbLoaded = true
-        hasMoreHistory.value = false
+        convertDbMessagesSafely(allMessages, replacementState, replacementMessageIds)
+        nextTotal = allMessages.length
+        nextOffset = allMessages.length
+        nextAllLoaded = true
       } else {
         // Load latest `limit` messages
         const result = await sessionApi.getLatestMessages(currentSessionId, limit, 0)
-
-        for (let i = 0; i < result.messages.length; i++) {
-          const msg = result.messages[i]
-          if (!msg) continue
-          convertAndPushDbMessage(msg, result.messages[i + 1], chatState, knownMessageIds)
-        }
-
-        totalDbMessages = result.total
-        totalMessages.value = result.total
-        dbLoadedOffset = Math.min(limit, result.total)
-        allDbLoaded = !result.hasMore
-        hasMoreHistory.value = result.hasMore
+        convertDbMessagesSafely(result.messages, replacementState, replacementMessageIds)
+        nextTotal = result.total
+        nextOffset = result.messages.length
+        nextAllLoaded = !result.hasMore
+        nextHasMore = result.hasMore
       }
+
+      // Commit only after the replacement history is fully available. A
+      // truncated response must not erase messages already visible in the pane.
+      chatState.messages.value = replacementState.messages.value
+      knownMessageIds.clear()
+      replacementMessageIds.forEach(messageId => knownMessageIds.add(messageId))
+      totalDbMessages = nextTotal
+      totalMessages.value = nextTotal
+      dbLoadedOffset = nextOffset
+      allDbLoaded = nextAllLoaded
+      hasMoreHistory.value = nextHasMore
+      historyLoadError.value = ''
     } catch (e) {
       console.error(`[TaskPane ${paneId}] Failed to load all history:`, e)
+      historyLoadError.value = '完整历史加载失败，当前消息已保留'
     } finally {
       loadingMore.value = false
     }
@@ -823,11 +892,14 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     loadingMore,
     hasMoreHistory,
     totalMessages,
+    historyLoadError,
+    historyRetrying,
     nativeSubtasks,
     nativeSubtasksLoading,
     nativeSubtaskLastEventSeq,
     connect,
     loadMoreHistory,
+    retryHistory,
     loadAllHistory,
     getAllHistoryMessages,
     resumeInPlace,

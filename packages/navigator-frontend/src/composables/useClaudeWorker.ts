@@ -10,6 +10,7 @@ import {
   deleteTaskUnified,
   listTasksPagedUnified,
   forwardSessionUnified,
+  getTaskUnified,
   type ForwardTargetMode,
 } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
@@ -232,8 +233,15 @@ export function useClaudeWorker() {
   async function abortTask(taskId: string) {
     // 使用统一任务 API（/api/v1/tasks/{taskId}/cancel）
     await cancelTaskUnified(taskId)
-    const idx = tasks.value.findIndex((t) => t.taskId === taskId)
-    if (idx >= 0) tasks.value[idx]!.status = 'ABORTED'
+    // The cancel response acknowledges a request, not a terminal Worker
+    // observation. Refresh the authoritative projection instead of inventing
+    // ABORTED locally.
+    const fresh = (await getTaskUnified(taskId)) as unknown as ClaudeTask
+    for (const collection of [tasks, activeTasks, awaitingReplyTasks]) {
+      const idx = collection.value.findIndex((task) => task.taskId === taskId)
+      if (idx >= 0) collection.value[idx] = fresh
+    }
+    return fresh
   }
 
   async function deleteTask(taskId: string) {

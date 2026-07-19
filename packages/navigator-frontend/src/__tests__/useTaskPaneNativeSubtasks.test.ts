@@ -57,6 +57,98 @@ describe('useTaskPane native subtasks', () => {
     vi.useRealTimers()
   })
 
+  it('falls back to a smaller initial history page after a truncated response', async () => {
+    mocks.getLatestMessages
+      .mockRejectedValueOnce(new Error('transfer closed with outstanding read data remaining'))
+      .mockResolvedValueOnce({
+        messages: [{
+          id: 'message-1', sessionId: 'session-history', role: 'USER', content: 'visible history',
+          createdAt: '2026-07-19T10:00:00Z',
+        }],
+        total: 4565,
+        hasMore: true,
+      })
+
+    const pane = useTaskPane('pane-history-fallback')
+    await pane.connect('session-history')
+
+    expect(mocks.getLatestMessages).toHaveBeenNthCalledWith(1, 'session-history', 100, 0)
+    expect(mocks.getLatestMessages).toHaveBeenNthCalledWith(2, 'session-history', 50, 0)
+    expect(pane.chatState.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'message-1', content: 'visible history' }),
+    ]))
+    expect(pane.totalMessages.value).toBe(4565)
+    expect(pane.historyLoadError.value).toBe('')
+    pane.dispose()
+  })
+
+  it('keeps the pane usable and retries history after all initial transports fail', async () => {
+    mocks.getLatestMessages
+      .mockRejectedValueOnce(new Error('limit 100 failed'))
+      .mockRejectedValueOnce(new Error('limit 50 failed'))
+      .mockRejectedValueOnce(new Error('limit 20 failed'))
+      .mockResolvedValueOnce({
+        messages: [{
+          id: 'message-retry', sessionId: 'session-history-retry', role: 'ASSISTANT',
+          content: 'recovered history', createdAt: '2026-07-19T10:01:00Z',
+        }],
+        total: 1,
+        hasMore: false,
+      })
+
+    const pane = useTaskPane('pane-history-retry')
+    await pane.connect('session-history-retry')
+
+    expect(pane.historyLoadError.value).toContain('消息加载失败')
+    expect(pane.chatState.messages.value.some(message => (
+      (message.raw as Record<string, unknown> | undefined)?.subtype === 'history_load_failed'
+    ))).toBe(true)
+
+    await pane.retryHistory()
+
+    expect(mocks.getLatestMessages).toHaveBeenLastCalledWith('session-history-retry', 100, 0)
+    expect(pane.historyLoadError.value).toBe('')
+    expect(pane.chatState.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'message-retry', content: 'recovered history' }),
+    ]))
+    pane.dispose()
+  })
+
+  it('isolates one persisted message conversion failure and keeps surrounding messages', async () => {
+    mocks.getLatestMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'message-before', sessionId: 'session-isolation', role: 'USER', content: 'before',
+          createdAt: '2026-07-19T10:00:00Z',
+        },
+        {
+          id: 'message-bad', sessionId: 'session-isolation', role: 'ASSISTANT', content: '',
+          metadata: { type: 'STATE_SYNC', subtype: 'bad-fixture' },
+          createdAt: '2026-07-19T10:00:01Z',
+        },
+        {
+          id: 'message-after', sessionId: 'session-isolation', role: 'ASSISTANT', content: 'after',
+          createdAt: '2026-07-19T10:00:02Z',
+        },
+      ],
+      total: 3,
+      hasMore: false,
+    })
+
+    const pane = useTaskPane('pane-history-isolation')
+    vi.spyOn(pane.chatState, 'processAipMessage').mockImplementationOnce(() => {
+      throw new Error('unsupported persisted payload')
+    })
+    await pane.connect('session-isolation')
+
+    expect(pane.chatState.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'message-before', content: 'before' }),
+      expect.objectContaining({ id: 'message-after', content: 'after' }),
+    ]))
+    expect(pane.historyLoadError.value).toContain('1 条历史消息解析失败')
+    pane.dispose()
+  })
+
   it('initializes a delayed task id and keeps a newer SSE update over an older snapshot', async () => {
     let resolveSnapshot!: (value: any) => void
     mocks.getLatestMessages.mockResolvedValue({ messages: [], total: 0, hasMore: false })
@@ -275,6 +367,28 @@ describe('useTaskPane native subtasks', () => {
     const records = await pane.getAllHistoryMessages()
 
     expect(records.map(message => message.id)).toEqual(['older-question', 'visible-answer'])
+    pane.dispose()
+  })
+
+  it('preserves visible messages when loading complete history fails', async () => {
+    mocks.getLatestMessages.mockResolvedValue({
+      messages: [{
+        id: 'visible-answer', sessionId: 'session-load-all-failure', role: 'ASSISTANT',
+        content: 'keep this visible', createdAt: '2026-07-19T06:01:00Z',
+      }],
+      total: 4565,
+      hasMore: true,
+    })
+    mocks.getMessages.mockRejectedValue(new Error('truncated complete history response'))
+
+    const pane = useTaskPane('pane-load-all-failure')
+    await pane.connect('session-load-all-failure')
+    await pane.loadAllHistory()
+
+    expect(pane.chatState.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'visible-answer', content: 'keep this visible' }),
+    ]))
+    expect(pane.historyLoadError.value).toContain('当前消息已保留')
     pane.dispose()
   })
 

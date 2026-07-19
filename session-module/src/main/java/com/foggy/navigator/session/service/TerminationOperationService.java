@@ -184,11 +184,24 @@ public class TerminationOperationService {
      * There can be at most one in-flight termination intent per task, so a
      * later Worker terminal observation has an unambiguous audit target.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public boolean hasActiveOperationForTask(String taskId) {
-        return hasText(taskId) && !repository
-                .findByTaskIdAndStatusNotInOrderByCreatedAtDesc(taskId, TERMINAL_OPERATION_STATUSES)
-                .isEmpty();
+        if (!hasText(taskId)) return false;
+        LocalDateTime now = LocalDateTime.now();
+        boolean active = false;
+        for (TerminationOperationEntity entity : repository.findByTaskIdOrderByCreatedAtDescForUpdate(taskId)) {
+            if (isTerminal(entity.getStatus())) continue;
+            if (entity.getExpiresAt() != null && !entity.getExpiresAt().isAfter(now)) {
+                entity.setStatus("FAILED");
+                entity.setDispatchState("UNCONFIRMED");
+                entity.setAttentionCode("TERMINATION_UNCONFIRMED");
+                entity.setFailureCode("TERMINATION_OPERATION_EXPIRED");
+                repository.save(entity);
+                continue;
+            }
+            active = true;
+        }
+        return active;
     }
 
     private void update(String operationId, java.util.function.Consumer<TerminationOperationEntity> updater) {

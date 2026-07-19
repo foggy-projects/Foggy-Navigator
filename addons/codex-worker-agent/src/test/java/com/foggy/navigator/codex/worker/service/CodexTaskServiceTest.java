@@ -283,6 +283,27 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void cancelRequestedTaskCanEnterTheExactTaskCancellationFlowAgain() {
+        CodexTaskEntity task = createTask(
+                "task-cancel-retry", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        task.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskIdAndUserId("task-cancel-retry", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdForUpdate("task-cancel-retry"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.cancelTaskDirectForProvider(
+                CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-retry", "user-1");
+
+        assertEquals("CANCEL_REQUESTED", task.getStatus());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", task.getErrorMessage());
+        verify(taskRepository, times(2)).findByTaskIdForUpdate("task-cancel-retry");
+    }
+
+    @Test
     void pendingUserInputAcceptsOpaquePoolInstanceAndProjectsAwaitingInput() {
         CodexTaskEntity task = appServerInputTask("RUNNING");
         SessionTaskEntity sessionTask = inputSessionTask();

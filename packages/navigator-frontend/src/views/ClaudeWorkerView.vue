@@ -1232,14 +1232,14 @@
                     </span>
                   </el-tooltip>
                   <el-button
-                    v-if="conv.latestTask.status === 'RUNNING'"
+                    v-if="isCancellableTaskStatus(conv.latestTask.status)"
                     type="warning"
                     size="small"
                     text
                     title="中止任务"
                     @click="handleAbortTask(conv.latestTask.taskId)"
                   >
-                    中止
+                    {{ conv.latestTask.status === 'CANCEL_REQUESTED' ? '再次中止' : '中止' }}
                   </el-button>
                   <el-dropdown trigger="click" @click.stop>
                     <span class="conv-more-trigger" @click.stop>&#8943;</span>
@@ -1367,14 +1367,14 @@
                       </span>
                     </el-tooltip>
                     <el-button
-                      v-if="child.latestTask.status === 'RUNNING'"
+                      v-if="isCancellableTaskStatus(child.latestTask.status)"
                       type="warning"
                       size="small"
                       text
                       title="中止任务"
                       @click.stop="handleAbortTask(child.latestTask.taskId)"
                     >
-                      中止
+                      {{ child.latestTask.status === 'CANCEL_REQUESTED' ? '再次中止' : '中止' }}
                     </el-button>
                     <el-dropdown trigger="click" @click.stop>
                       <span class="branch-session-more-trigger" @click.stop>&#8943;</span>
@@ -1547,14 +1547,14 @@
                   </span>
                 </el-tooltip>
                 <el-button
-                  v-if="conv.latestTask.status === 'RUNNING'"
+                  v-if="isCancellableTaskStatus(conv.latestTask.status)"
                   type="warning"
                   size="small"
                   text
                   title="中止任务"
                   @click="handleAbortTask(conv.latestTask.taskId)"
                 >
-                  中止
+                  {{ conv.latestTask.status === 'CANCEL_REQUESTED' ? '再次中止' : '中止' }}
                 </el-button>
                 <el-dropdown trigger="click" @click.stop>
                   <span class="conv-more-trigger" @click.stop>&#8943;</span>
@@ -1682,14 +1682,14 @@
                     </span>
                   </el-tooltip>
                   <el-button
-                    v-if="child.latestTask.status === 'RUNNING'"
+                    v-if="isCancellableTaskStatus(child.latestTask.status)"
                     type="warning"
                     size="small"
                     text
                     title="中止任务"
                     @click.stop="handleAbortTask(child.latestTask.taskId)"
                   >
-                    中止
+                    {{ child.latestTask.status === 'CANCEL_REQUESTED' ? '再次中止' : '中止' }}
                   </el-button>
                   <el-dropdown trigger="click" @click.stop>
                     <span class="branch-session-more-trigger" @click.stop>&#8943;</span>
@@ -7172,13 +7172,20 @@ async function abortPane(paneId: string) {
       cancelButtonText: '取消',
     })
     const taskId = pane.task.value.taskId
-    await workerState.abortTask(taskId)
-    pane.task.value.status = 'ABORTED'
-    // Immediately remove from activeTasks (don't wait for SSE)
-    workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
-    workerState.loadAwaitingReplyTasks()
+    const refreshed = await workerState.abortTask(taskId)
+    if (pane.task.value?.taskId === taskId) Object.assign(pane.task.value, refreshed)
+    await pane.syncTaskStatus({ force: true })
+    void workerState.loadActiveTasks()
+    void workerState.loadAwaitingReplyTasks()
     if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
-    ElMessage.info('任务已中止')
+    const status = pane.task.value?.status
+    if (status === 'ABORTED') {
+      ElMessage.success('任务已中止')
+    } else if (status === 'COMPLETED' || status === 'FAILED') {
+      ElMessage.info('任务已结束，状态已同步')
+    } else {
+      ElMessage.info('中止请求已发送，Worker 退出尚未确认')
+    }
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('中止失败')
   }
@@ -7756,6 +7763,10 @@ async function viewTask(task: ClaudeTask) {
   }
 }
 
+function isCancellableTaskStatus(status?: string): boolean {
+  return ['RUNNING', 'AWAITING_PERMISSION', 'AWAITING_INPUT', 'CANCEL_REQUESTED'].includes(status ?? '')
+}
+
 async function handleAbortTask(taskId: string) {
   try {
     await ElMessageBox.confirm('确认中止该任务？', '提示', {
@@ -7763,16 +7774,21 @@ async function handleAbortTask(taskId: string) {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
-    await workerState.abortTask(taskId)
-    // Sync abort status to any open pane showing this task
+    const refreshed = await workerState.abortTask(taskId)
+    // Sync the authoritative status to any open pane showing this task.
     for (const pane of getAllPanes()) {
       if (pane.task.value?.taskId === taskId) {
-        pane.task.value.status = 'ABORTED'
+        Object.assign(pane.task.value, refreshed)
+        await pane.syncTaskStatus({ force: true })
       }
     }
-    ElMessage.success('任务已中止')
-    // Immediately remove from activeTasks (don't wait for SSE)
-    workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
+    if (refreshed.status === 'ABORTED') {
+      ElMessage.success('任务已中止')
+    } else if (['COMPLETED', 'FAILED'].includes(refreshed.status)) {
+      ElMessage.info('任务已结束，状态已同步')
+    } else {
+      ElMessage.info('中止请求已发送，Worker 退出尚未确认')
+    }
     // Refresh task lists
     reloadWorkerTasks()
     workerState.loadAwaitingReplyTasks()

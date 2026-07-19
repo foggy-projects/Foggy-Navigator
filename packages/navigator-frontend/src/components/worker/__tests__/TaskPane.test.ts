@@ -121,11 +121,14 @@ function createPaneState(options: {
     loadingMore: ref(false),
     hasMoreHistory: ref(false),
     totalMessages: ref(0),
+    historyLoadError: ref(''),
+    historyRetrying: ref(false),
     nativeSubtasks: ref([]) as TaskPaneState['nativeSubtasks'],
     nativeSubtasksLoading: ref(false),
     nativeSubtaskLastEventSeq: ref(0) as TaskPaneState['nativeSubtaskLastEventSeq'],
     connect: async () => {},
     loadMoreHistory: async () => {},
+    retryHistory: async () => {},
     loadAllHistory: async () => {},
     getAllHistoryMessages: async () => [],
     resumeInPlace: () => {},
@@ -315,6 +318,30 @@ describe('TaskPane continuation input', () => {
       expect(wrapper.emitted('send')).toBeUndefined()
     },
   )
+
+  it('blocks continuation and exposes recovery actions while cancellation is unconfirmed', async () => {
+    wrapper = mountTaskPane(createPaneState({ status: 'CANCEL_REQUESTED' }))
+
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.text()).toContain('重查状态')
+    expect(wrapper.text()).toContain('再次中止')
+
+    const retryAbort = wrapper.findAll('button').find(button => button.text() === '再次中止')
+    await retryAbort?.trigger('click')
+    expect(wrapper.emitted('abort')?.[0]).toEqual(['pane-1'])
+  })
+
+  it('exposes an explicit persisted-history retry without hiding the pane', async () => {
+    const paneState = createPaneState()
+    paneState.historyLoadError.value = '消息加载失败'
+    const retry = vi.spyOn(paneState, 'retryHistory').mockResolvedValue()
+    wrapper = mountTaskPane(paneState)
+
+    const button = wrapper.findAll('button').find(item => item.text() === '重试消息')
+    expect(button).toBeDefined()
+    await button?.trigger('click')
+    expect(retry).toHaveBeenCalledTimes(1)
+  })
 
   it('restores a running-session draft after the pane is remounted', async () => {
     wrapper = mountTaskPane(createPaneState({ status: 'RUNNING' }))

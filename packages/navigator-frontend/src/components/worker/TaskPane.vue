@@ -56,13 +56,42 @@
           {{ (paneState.task.value.durationMs / 1000).toFixed(1) }}s
         </span>
         <el-button
+          v-if="paneState.historyLoadError.value"
+          size="small"
+          text
+          :loading="paneState.historyRetrying.value"
+          :title="paneState.historyLoadError.value"
+          @click.stop="paneState.retryHistory()"
+        >
+          重试消息
+        </el-button>
+        <el-button
+          v-if="paneState.task.value?.status === 'CANCEL_REQUESTED'"
+          size="small"
+          text
+          title="向 Worker 重查任务是否已停止"
+          @click.stop="handleReconnect(paneState.task.value.taskId)"
+        >
+          重查状态
+        </el-button>
+        <el-button
           v-if="['RUNNING', 'AWAITING_PERMISSION', 'AWAITING_INPUT'].includes(paneState.task.value?.status ?? '')"
           size="small"
           type="danger"
           text
-          @click="emit('abort', paneState.paneId)"
+          @click.stop="emit('abort', paneState.paneId)"
         >
           中止
+        </el-button>
+        <el-button
+          v-else-if="paneState.task.value?.status === 'CANCEL_REQUESTED'"
+          size="small"
+          type="danger"
+          text
+          title="终止仍未确认时，安全重试当前任务的中止请求"
+          @click.stop="emit('abort', paneState.paneId)"
+        >
+          再次中止
         </el-button>
         <el-button
           size="small"
@@ -638,6 +667,10 @@ const pendingQuestionShortcut = computed(() => (
   )
 ))
 
+const cancellationPending = computed(() => (
+  props.paneState.task.value?.status === 'CANCEL_REQUESTED'
+))
+
 const canInput = computed(() => {
   const task = props.paneState.task.value
   if (task?.status === 'RUNNING' || task?.status === 'AWAITING_PERMISSION') {
@@ -655,6 +688,9 @@ const inputPlaceholder = computed(() => {
   if (status === 'AWAITING_INPUT') {
     return '输入选项序号或完整选项文本... (Ctrl+Enter 发送)'
   }
+  if (status === 'CANCEL_REQUESTED') {
+    return '中止结果尚未确认，请先重查状态或再次中止'
+  }
   return '输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)'
 })
 
@@ -662,6 +698,7 @@ const sendDisabled = computed(() => {
   const t = props.paneState.task.value
   return !!t && (
     t.status === 'RUNNING'
+      || cancellationPending.value
       || t.status === 'AWAITING_PERMISSION'
       || (t.status === 'AWAITING_INPUT' && pendingQuestionShortcut.value == null)
   )

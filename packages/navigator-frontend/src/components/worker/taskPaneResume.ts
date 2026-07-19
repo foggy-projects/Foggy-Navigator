@@ -22,6 +22,7 @@ export interface QuestionShortcutResponse {
 const NON_RESUMABLE_STATUSES = new Set([
   'PENDING',
   'RUNNING',
+  'CANCEL_REQUESTED',
   'AWAITING_PERMISSION',
   'AWAITING_INPUT',
 ])

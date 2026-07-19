@@ -4,6 +4,7 @@ import com.foggy.navigator.common.entity.TerminationOperationEntity;
 import com.foggy.navigator.session.repository.TerminationOperationRepository;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -150,6 +151,44 @@ class TerminationOperationServiceTest {
         assertEquals("TERMINATION_UNCONFIRMED", operation.getAttentionCode());
         assertEquals("STALE_TURN_CLEANUP_UNCONFIRMED", operation.getFailureCode());
         verify(repository).save(operation);
+    }
+
+    @Test
+    void expiredUnconfirmedOperationDoesNotBlockAnExactTaskRetry() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+        TerminationOperationEntity expired = new TerminationOperationEntity();
+        expired.setOperationId("to-expired-1");
+        expired.setStatus("RUNNING");
+        expired.setDispatchState("UNCONFIRMED");
+        expired.setExpiresAt(LocalDateTime.now().minusSeconds(1));
+        when(repository.findByTaskIdOrderByCreatedAtDescForUpdate("task-1"))
+                .thenReturn(List.of(expired));
+
+        boolean active = service.hasActiveOperationForTask("task-1");
+
+        assertEquals(false, active);
+        assertEquals("FAILED", expired.getStatus());
+        assertEquals("UNCONFIRMED", expired.getDispatchState());
+        assertEquals("TERMINATION_UNCONFIRMED", expired.getAttentionCode());
+        assertEquals("TERMINATION_OPERATION_EXPIRED", expired.getFailureCode());
+        verify(repository).save(expired);
+    }
+
+    @Test
+    void nonExpiredOperationStillSerializesTerminationRetries() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+        TerminationOperationEntity active = new TerminationOperationEntity();
+        active.setOperationId("to-active-1");
+        active.setStatus("CANCEL_REQUESTED");
+        active.setDispatchState("ACKNOWLEDGED");
+        active.setExpiresAt(LocalDateTime.now().plusMinutes(1));
+        when(repository.findByTaskIdOrderByCreatedAtDescForUpdate("task-1"))
+                .thenReturn(List.of(active));
+
+        assertEquals(true, service.hasActiveOperationForTask("task-1"));
+        verify(repository, org.mockito.Mockito.never()).save(any());
     }
 
     private static TerminationOperationService.CreateCommand manualPidKillCommand(

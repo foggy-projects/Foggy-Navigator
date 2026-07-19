@@ -987,7 +987,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         requireTaskProvider(entity, providerType);
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())
-                || "AWAITING_INPUT".equals(entity.getStatus())) {
+                || "AWAITING_INPUT".equals(entity.getStatus())
+                || "CANCEL_REQUESTED".equals(entity.getStatus())) {
             abortTask(taskId);
         }
     }

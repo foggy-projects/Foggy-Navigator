@@ -22,7 +22,7 @@ describe('taskPaneResume', () => {
     })).toBe(false)
   })
 
-  it.each(['RUNNING', 'AWAITING_PERMISSION', 'AWAITING_INPUT'])(
+  it.each(['RUNNING', 'CANCEL_REQUESTED', 'AWAITING_PERMISSION', 'AWAITING_INPUT'])(
     'does not allow continuation while task is %s',
     (status) => {
       expect(canShowContinuationInput({ sessionId: 'session-active', status })).toBe(false)

@@ -38,6 +38,7 @@ vi.mock('@/api/unifiedTask', () => ({
   deleteTaskUnified: vi.fn(),
   listTasksPagedUnified: vi.fn(),
   forwardSessionUnified: vi.fn(),
+  getTaskUnified: vi.fn(),
 }))
 
 import * as api from '@/api/claudeWorker'
@@ -331,15 +332,23 @@ describe('useClaudeWorker', () => {
   // ========== abortTask ==========
 
   describe('abortTask', () => {
-    it('sets task status to ABORTED', async () => {
+    it('keeps the authoritative cancellation state instead of inventing ABORTED', async () => {
       mockUnifiedTaskApi.cancelTaskUnified.mockResolvedValue(undefined)
+      mockUnifiedTaskApi.getTaskUnified.mockResolvedValue(
+        makeTask({ taskId: 't-1', status: 'CANCEL_REQUESTED', errorMessage: 'TERMINATION_UNCONFIRMED' }),
+      )
 
       const { abortTask, tasks } = useClaudeWorker()
       tasks.value = [makeTask({ taskId: 't-1', status: 'RUNNING' })]
 
-      await abortTask('t-1')
+      const refreshed = await abortTask('t-1')
 
-      expect(tasks.value[0]!.status).toBe('ABORTED')
+      expect(mockUnifiedTaskApi.getTaskUnified).toHaveBeenCalledWith('t-1')
+      expect(refreshed.status).toBe('CANCEL_REQUESTED')
+      expect(tasks.value[0]).toMatchObject({
+        status: 'CANCEL_REQUESTED',
+        errorMessage: 'TERMINATION_UNCONFIRMED',
+      })
     })
   })
 
