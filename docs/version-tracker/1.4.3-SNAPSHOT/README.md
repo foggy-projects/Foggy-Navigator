@@ -1,11 +1,11 @@
 ---
 doc_type: version-index
 version: 1.4.3-SNAPSHOT
-status: planning
+status: p1c-a-accepted-owner-decisions-pending
 canonical_delivery_spec: workitems/GOV-001-upstream-permission-and-trust-boundary.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-18
+last_updated: 2026-07-19
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -16,30 +16,46 @@ last_updated: 2026-07-18
 2. 明确区分 Navigator 实例管理主体、upstream system、ClientApp control、runtime caller、upstream user、Agent/task capability 与 Worker principal。
 3. 按专属可信上游、公司 SaaS 平台和外部第三方三类场景冻结信任边界，再决定统一授权门面、数据模型、API、CLI 和迁移方案。
 4. 保持 fail-closed、最小权限、凭据分层和全链路可审计，并在场景对齐中明确冻结绑定关系与资源归属的语义。
+5. 让 CLI/SKILL 使用者在执行前明确看到当前 principal、credential lane、实例/upstream/tenant/ClientApp scope、允许动作和明确禁止动作。
 
 ## Current Status
 
-- phase: cross-scenario-architecture-alignment
-- implementation_started: no
-- canonical_status: DRAFT
+- phase: p1c-a-accepted-owner-decisions-pending
+- architecture_review: passed-with-complexity-guardrails
+- p0_5_status: complete
+- implementation_started: p1a-accepted-p1b-a-accepted-p1b-b0-accepted-p1c-a-accepted
+- canonical_status: P1A_ACCEPTED_P1B_A_ACCEPTED_P1B_B0_ACCEPTED_P1C_A_ACCEPTED
+- p1a_acceptance_status: accepted
+- active_repair_spec: workitems/BUG-002-p1a-required-section-contract.md
+- p1a_repair_status: ACCEPTED
+- observer_bff_p1a_disposition: catalog-and-test-only
+- p1b_a_status: ACCEPTED
+- p1b_a_acceptance_status: accepted
+- p1b_b0_status: ACCEPTED
+- p1b_b0_acceptance_status: accepted
+- p1c_a_status: ACCEPTED
+- p1c_a_acceptance_status: accepted
 - external_enablement: no
 - production_enablement: no
-- current_scenario: 三类上游信任模型已完成业务定位
-- next_action: 以 S1/S2 为主实现目标冻结跨场景 principal/schema/API；S3 仅保留默认拒绝的设计扩展点，不进入当前实现
+- current_scenario: P1A foundation/shadow、P1B-A fixture-only typed-management authentication core、P1B-B0 pure-offline pre-seed inventory validator 与 P1C-A CLI/SKILL permission visibility 均已独立 accepted。P1C-A 不 seed、签发或验证真实 SIM/TMS 主体、凭据、mapping 或 owner approval，且不构成 external 或 production readiness
+- next_action: Project Owner 已记录 P1B-B=`DEFER`、P2=`CONTROLLED_EXCHANGE_JWS`、P3=`PRIVATE_STAGED_DESIGN`、P4=`DEFER` 的设计方向；[P1B-B/P2/P3/P4 decision intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) 仍须由具名 owner 在受控系统补齐脱敏事实与 immutable approval reference，才可按每个 gate 单独创建 `APPROVED` 实施契约。Gateway strict、Worker external 与 production 均未自动启动
 
-当前仅进行需求和架构设计，不授权修改代码、数据库、配置、Worker 或运行态。任何 external 开关均保持原有默认和语义，不能由本版本规划推导为 Provider ready 或 production ready。
+P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rejected` 记录原样保留；[BUG-002](./workitems/BUG-002-p1a-required-section-contract.md) 修复已通过 [独立 re-signoff](./evidence/BUG-002-p1a-required-section-independent-resignoff.md)，P1A foundation/shadow 状态为 accepted。P1B-A 新增五条 canonical typed-management auth route 及 fixture-only credential/token verifier contract，现已通过 [独立签核](./evidence/GOV-001-p1b-a-independent-signoff.md)；它不 seed 或签发真实 SIM/TMS principal、grant、tenant authority 或 credential。P1B-B0 已通过 [独立签核](./evidence/GOV-001-p1b-b0-independent-signoff.md)：它只提供 synthetic/securely supplied inventory 的离线、无回显、无审批 classification，绝不读取真实 profile/secret/DB/network 或执行 seed。P1C-A 已通过 [独立签核](./evidence/GOV-001-p1c-a-independent-signoff.md)：它只使用 fixture、不能证明真实 S1/S2 principal 或 production readiness。Observer BFF 在 P1A 仍仅为 catalog/test-only，其 runtime shadow/audit 与 production hardening 延后为独立设计，BFF 仍只能 local/trusted dev、production blocked。Owner 批准的 `GET /actuator` 第 415 条 route 和 200→404 唯一兼容例外继续有效。当前仍不包含业务数据 seed、真实上游联调、Worker 路由修改或任何 external/production enablement；`NAVIGATOR_EXTERNAL_ENABLED=true` 仍绝不表示 Provider、Worker Gateway 或 production ready。
 
 ## Workitems
 
 | Workitem | Scope | Status |
 |---|---|---|
-| [GOV-001 上游权限体系与多场景信任边界](./workitems/GOV-001-upstream-permission-and-trust-boundary.md) | 当前权限模型基线、`foggy-world-sim` 专属实例 root、`tms-x3` SaaS 平台/租户分层，以及外部第三方的默认拒绝设计边界 | DRAFT |
+| [GOV-001 上游权限体系与多场景信任边界](./workitems/GOV-001-upstream-permission-and-trust-boundary.md) | 当前权限模型基线、`foggy-world-sim` 专属实例 root、`tms-x3` SaaS 平台/租户分层，以及外部第三方的默认拒绝设计边界 | P1A、[P1B-A](./workitems/GOV-001-p1b-a-typed-management-auth-core.md)、[P1B-B0](./workitems/GOV-001-p1b-b0-preseed-inventory-and-owner-approval.md) 与 [P1C-A](./workitems/GOV-001-p1c-a-cli-skill-operator-ux.md) accepted；real P1B-B factual gate pending |
+| [GOV-001 P1B-B/P2/P3/P4 Owner Decision Intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) | 具名责任人、脱敏事实、架构/生产/迁移决策及 immutable approval reference 占位 | `PENDING_OWNER_INPUT`; 不解除任何 `DRAFT + BLOCKED` gate |
+| [GOV-001 P1C-A CLI/SKILL 权限可见性](./workitems/GOV-001-p1c-a-cli-skill-operator-ux.md) | typed-management-only whoami/permissions/non-binding explain、三态 config check、help/FAQ/runbook、canonical-manifest-derived input guard/provenance | ACCEPTED; no route cutover or release |
+| [BUG-002 P1A action required-section 合同缺失](./workitems/BUG-002-p1a-required-section-contract.md) | 修复 action-specific required-section catalog/context/validator 缺口和 runtime capability 误分类 | ACCEPTED |
 
 ## Scenario Sequence
 
 | Scenario | Description | Status |
 |---|---|---|
-| S1 `foggy-world-sim` | 一个 Navigator 实例专门服务一个强绑定上游；该上游是实例 owner/root，对自有与非自有资源拥有全部控制面权限，但 ask 执行仍受 Agent/runtime/task 权限限制 | aligned |
+| S1 `foggy-world-sim` | SIM 主体直接拥有绑定 Navigator 实例的完整控制面权限，可管理实例内全部 upstream、tenant、ClientApp 及自有/非自有资源；ask 执行仍受 Agent/runtime/task 权限限制 | aligned |
 | S2 `tms-x3` | 共享 Navigator 中的自有多租户业务 SaaS；TMS 主体在自身 upstream 范围拥有完整管理权并拆分 provisioning/security-admin 凭据；租户默认仅持有受限 runtime credential | aligned |
 | S3 外部第三方 | 外部非公司主体接入 Navigator；默认不可信、最小权限，仅作为架构设计考虑，当前不提供 onboarding 或业务实现 | design-aligned / implementation-deferred |
 
@@ -51,8 +67,8 @@ last_updated: 2026-07-18
 4. ClientApp runtime credential 不得承担实例管理、跨 ClientApp 修复或 break-glass 职责。
 5. 资源绑定、资源操作授权和资源所有权是三个不同概念；绑定不隐式转移 owner，但 `foggy-world-sim` instance root 可通过独立、显式、可审计动作转移 owner。
 6. ask 的最终能力始终取 Agent/runtime grant、task capability、Worker route 和执行策略的交集，上游控制面权限不得自动下沉为任务权限。
-7. S1 中 `foggy-world-sim` 拥有 Navigator 实例内全部权限；fail-closed、凭据分层、secret 不回显、审计不可篡改、readiness 与 production gate 是所有主体均不可绕过的系统不变量，不是被扣留的权限。
-8. root 权限属于 `foggy-world-sim` 主体；可由专属 root credential 或具名 root ClientApp 表达，但普通 ClientApp、runtime credential、task token 和 Worker credential 不自动继承。
+7. S1 中 `foggy-world-sim` 拥有 Navigator 实例内全部控制面权限，包括管理实例内其他 upstream system、tenant、ClientApp 及其资源；其唯一授权域边界是绑定的 `navigatorInstanceId`。fail-closed、凭据分层、secret 不回显、审计不可由业务主体绕过/修改/删除、readiness 与 production gate 是所有主体均不可绕过的系统不变量，不是被扣留的权限；跨 sink tamper-evident 证明仍属于 production gate。
+8. root 权限属于 `foggy-world-sim` 主体，并由独立、instance-scoped 的 `INSTANCE_ROOT` principal/credential 表达；不得复用普通 upstream-admin 或具名 ClientApp 作为 root，普通 ClientApp、runtime credential、task token 和 Worker credential 不自动继承。
 9. 每个 Navi 环境实例都是独立授权域；root、platform admin、ClientApp、grant、credential、session、task token 和 Worker principal 均不得跨 `navigatorInstanceId` 继承或复用，即使两个实例由同一用户、服务或公司管理。
 10. S2 中 `tms-x3` 平台管理主体可以管理其 upstream system 范围内的租户 ClientApp 和 Worker 分配；租户 ClientApp credential 不能继承该平台权限或跨 tenant/ClientApp。
 11. ClientApp control credential 与 runtime key/secret 必须是不同 credential lane；租户默认运行面需求不得通过发放 upstream-admin 或宽泛 control credential 实现。
@@ -65,11 +81,34 @@ last_updated: 2026-07-18
 18. S3 外部第三方不是 instance root 或 SaaS platform admin；当前不签发第三方 credential、不开放第三方 onboarding，也不因设计预留启用任何 external/production 路径。
 19. 未来第三方接入默认只能获得 exact upstream system + tenant + ClientApp 的最小 runtime 能力；control 必须按独立需求审批，upstream-admin、Worker 生命周期、跨 owner/tenant 和 production promotion 默认禁止。
 20. 上游 trust profile 只能限制可授予权限上限，不能替代认证、授权或审计；未知、缺失或冲突的 profile 必须 fail closed。
+21. `foggy-world-sim`、`tms-x3` 等正常接入默认一套上游连接 profile 只绑定一个 `navigatorInstanceId`；若上游自行接入多个 Navi 实例，目标实例选择、故障切换和多套凭据保管由上游负责，Navi 仅在各实例内分别签发、校验、轮换、撤销和审计实例绑定凭据。
+22. CLI/SKILL 必须显式区分 S1 instance root、S2 SaaS platform、ClientApp control/runtime、task capability 和 Worker principal；CLI 的本地提示与 preflight 只用于解释和防误用，最终授权始终由服务端 fail-closed policy 决定。
+23. S1 同一 instance-root 主体必须拆分 `INSTANCE_ROOT_CONTROL` 和 `INSTANCE_ROOT_SECURITY`；前者用于日常实例管理，后者只用于 owner transfer、delete/revoke、credential rotate/revoke、grant delegation、trust-root、recovery 和 production promotion 等高风险操作，不得合并为一把常驻万能 key。
+24. S1 credential lifecycle 采用“本地兼容、生产严格”：internal-dev 长期凭据默认 180d、上限 365d，control 只可在显式 trusted-loopback profile 直用；production 长期凭据默认 30d、上限 90d，并强制短期 access token；security 在任何环境均须换取 action-bound、single-use 的短期授权，dev credential 不得被 production 接受。
+25. S2 TMS 使用显式 `principalType=SAAS_PLATFORM`，同一平台主体拆分 `SAAS_PROVISIONING` 和 `SAAS_SECURITY_ADMIN` credential lane，并复用统一 credential/policy/audit 模型；legacy upstream-admin 不得自动提升为 SaaS platform 或 security-admin，只能经核验审批重新签发 provisioning。
+26. S2 复用 S1 的 internal-dev/production 生命周期基线，并使用服务端 versioned `tenantScopeMode=UPSTREAM_OWNED` platform grant；provisioning 可创建/管理 TMS-owned tenant，迁入迁出/停用删除必须走 security-admin，跨 upstream transfer 还需 instance-root security。
+27. canonical authorization contract 固定为 `navi.authorization.v1`；服务端维护唯一 `AuthorizationContext/PolicyDecision`、policy 和 action catalog，CLI/SDK/SKILL 不得各自实现第二套授权语义。
+28. CLI 离线 `config check` 只能返回 `VALID|INVALID|UNVERIFIED`，不能返回 `ALLOW`；在线 `--explain-auth` 是 `nonBinding=true` 的 preflight，真实 mutation 必须重新 enforcement 并生成新的 decisionId。
+29. `auth whoami` / `inspect permissions` 必须分开显示主体 `authorityCeiling` 与当前 credential 的 `effectiveCredentialActions`；多 key profile 逐 lane 显示，绝不做权限并集。
+30. trusted-loopback、instance/environment binding、platform grant、owner 和 Worker route 均由服务端解析；本地 profile、URL、请求体或 legacy tenant 列表不能成为授权事实。
+31. `NAVI_ADMIN_API_KEY` 及当前 `X-Navi-Admin-Key` header 只表示 `UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN`；已退役的 `X-Navi-Admin-Api-Key` 不得重新接受。新 typed management credential 不得与 legacy/control/runtime credential 同请求混用，多个 credential source 必须 fail closed。
+32. `navigator-chat-observer-bff` 是独立部署面，不继承 launcher 的 `ExternalSurfaceGateFilter`；当前默认 `0.0.0.0:5181` 且无入站 observer session，只能作为 local/trusted dev tool，在会话、附件 capability、CSRF/origin 和网络策略闭合前不得进入 production。
 
 ## Evidence Boundary
 
 - 本版本目录建立于 2026-07-18。
 - 当前内容来自代码、配置、CLI help、专项 SKILL、1.4.2 文档及 #151/#152 issue 的只读调研。
 - 2026-07-18 当前工作树复核确认：平台/Gateway 开关默认仍为 `false`，Java Gateway client 仍仅传播 task token，三类 Worker external profile 仍因执行策略 pending 而 fail closed，#151/#152 仍为 OPEN，CLI 1.0.18/1.0.21 漂移仍存在。
-- 本轮没有执行测试、启动或重启服务，也没有修改凭据、资源绑定或 external 配置。
+- 2026-07-18 已完成方案级 `navi.authorization.v1` 冻结：服务端 canonical context/decision、typed credential/token/platform-grant claim、CLI whoami/permissions/explain、离线三态检查与 legacy 不自动提升边界均已落档；尚无实现或运行证据。
+- 2026-07-18 主流架构与复杂度复核结论为 `passed-with-complexity-guardrails`：S1/S2 的 instance/account admin、delegated SaaS admin、credential lane、capability token、ownership/binding 分离均符合常见 IAM/PAM/Zero-Trust 方向；P0.5 明确禁止通用 RBAC/ABAC DSL、全量 credential/token 物理合表和一次性全路由切换。
+- 2026-07-18 P0.5 冻结了 typed management 的最小物理模型、lane API、legacy adapter、shadow/cutover/rollback 和治理责任；该日尚不构成实现授权，后续 gate 关闭与授权状态见 2026-07-19 记录。
+- 2026-07-18 已完成原始 [414 条 method-level route/action manifest](./evidence/GOV-001-p0.5-method-route-manifest.csv) 静态基线及其 [静态评审](./evidence/GOV-001-p0.5-method-route-manifest-review.md)：397 条 launcher MVC、12 条 Observer BFF MVC、1 条 WebSocket、4 条 Actuator family；244 条非 GET MVC 无未分类项。该历史基线不是运行测试或 production readiness 证明。
+- 同次复核确认 Observer BFF 的 12 条入口均须 `LOCAL_TOOL_RESTRICT`；`NAVIGATOR_EXTERNAL_ENABLED` 只影响其后续下游 Navigator `/open` 请求，不能保护或 production-enable BFF ingress。
+- 2026-07-19 已完成 [seed/legacy mapping 静态复核](./evidence/GOV-001-p0.5-seed-legacy-mapping-review.md)：没有任何 legacy record 可自动提升；upstream-admin 唯一合法 canonical adapter 为 `UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN`。未查询实际数据库或读取 secret，实际脱敏 inventory 固定为 P1B seed 前置。
+- 2026-07-19 Project Owner 已确认 canonical contract，并只授权 P1A foundation/shadow；P1B typed seed/credential 与 P1C cutover/CLI/SKILL 仍需后续明确授权。
+- 2026-07-19 编码交接前复核确认：源码仍为证据基线 `1ebe435fd0048024380be875478303d265c68791`，平台/Gateway 开关默认仍为 `false`，Java Gateway client 仍只传播 task token，三类 Worker external profile 仍因执行策略 pending 而 fail closed，#151/#152 仍为 OPEN。
+- 2026-07-19 Ultra P1A 实施后的只读框架复核发现：Spring Boot 3.4.2 默认启用 actuator discovery，当前非空 `/actuator` base path 注册 `GET /actuator` discovery-links ingress；当时冻结 manifest 只有四个 Actuator family、共 414 条且未登记该入口，因此形成 route-manifest/兼容性待决项。
+- 2026-07-19 Project Owner 已同时批准该入口登记和关闭 discovery-links：当前 manifest 为 415 条（5 条 Actuator family）。BUG-002 required-section amendment 后 source/evidence 的当前 SHA-256 为 `ef4c32ac4ca25ee695dff7bacd9845301266807d71fbcafe35ebba4872aadc7d`。配置关闭 `GET /actuator` discovery-links，接受其从 HTTP 200 links 响应变为 404 的唯一兼容例外；子 Actuator endpoint 不因此改变。该决策解除该 route-manifest blocker，P1A 继续执行，不构成 external、Gateway 或 production readiness 信号。
+- 2026-07-19 [P1A 首次独立签核](./evidence/GOV-001-p1a-independent-signoff.md) 结论为 `rejected`：P1A-3 明确失败，manifest 无 required-section 声明且所有 20 个 `runtime.*` action 被启发式要求 capability，违反“仅 ask 增加 capability intent”的冻结合同；P1A-6 当时因 Observer BFF 无 runtime shadow/audit 判为 partial。Project Owner 随后批准 [BUG-002](./workitems/BUG-002-p1a-required-section-contract.md) 并将 Observer BFF 的 P1A 义务修订为 catalog/test-only；BUG-002 修复已通过 [独立 re-signoff](./evidence/BUG-002-p1a-required-section-independent-resignoff.md)，当前 BUG-002 与 P1A foundation/shadow 均为 accepted。该签核时 P1B 尚未启动；后续 P1B-A、P1B-B0 与 P1C-A 的 accepted 状态见本 README 的 Current Status 和各自 work item。
+- 用于发现 actuator discovery 缺口的本轮只读框架复核没有执行测试、启动或重启服务，也没有修改代码、数据库、凭据、资源绑定、Worker 路由或 external 配置。
 - 1.4.2 的历史测试与 issue 现场记录只作为设计输入，不作为 1.4.3 已实现或已验收证据。

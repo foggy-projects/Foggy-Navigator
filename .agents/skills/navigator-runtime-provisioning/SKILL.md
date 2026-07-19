@@ -27,6 +27,21 @@ Use the narrowest lane that can perform the action:
 | Runtime credential | ClientApp key-secret / access token | runtime-token exchange, readiness, owner-smoke, ask, messages, live smoke | modelConfig create, grant, binding, worker-host apply |
 | Break-glass admin | operator/admin env only | cross-owner repair, migration, emergency revocation | normal provisioning |
 
+## Typed-management CLI FAQ (S1 / S2)
+
+- `navi upstream auth whoami` and `inspect permissions` are read-only typed-management introspection commands. They require exactly one `NAVI_PRINCIPAL_CREDENTIAL` (or an explicit `--principal-credential-env`) and send only `X-Navi-Principal-Credential` to `/api/v1/management/v1/auth/**`.
+- S1 (`foggy-world-sim`) is represented only by its future `INSTANCE_ROOT` typed principal/lane on its dedicated Navigator instance. S2 (`tms-x3`) platform management is represented only by a future `SAAS_PLATFORM` typed principal/lane; tenant ClientApp credentials remain narrower runtime/control lanes. A trust profile or authority ceiling never promotes a currently presented credential.
+- `NAVI_ADMIN_API_KEY`, admin login token, `NAVI_CONTROL_API_KEY`, ClientApp key/secret/runtime token, upstream-user token, task token, and Worker credential are legacy/different lanes. They are not S1 root or S2 platform/security typed authority and must never be mixed with typed-management introspection.
+- `config check` is local advisory only. `VALID`, `INVALID`, and `UNVERIFIED` describe local profile shape, not a server authorization result; it must not be used to authorize a mutation.
+- `inspect permissions --explain-auth` is a non-binding preflight for a registered typed-management route/action only. It does not resolve legacy target owner/grant/tenant predicates and every mutation must be re-authorized by the server.
+
+## External / Gateway / Codex boundary FAQ
+
+- `NAVIGATOR_EXTERNAL_ENABLED` gates only Navigator `/api/v1/open/**` routing. It does not mean Provider ready, Worker ready, Worker Gateway external, or production ready.
+- `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED` enables strict Worker-principal validation; it is not a bind address, Ingress, TLS, or network-exposure switch. It remains unavailable until every Worker client propagates the complete Worker principal/lease headers.
+- For Codex on an existing Physical Worker, run `worker-host verify` and then `worker-host update --worker-id <physicalWorkerId>` with `claudeCode.codexConfig`. Do not create a `BizWorkerIdentity`, direct `OPENAI_CODEX` identity, WorkerPool member, or replacement Worker to repair a Codex route.
+- No CLI profile check, external flag, health result, or WorkerHost verification is production approval. Production requires its separate deployment, credential, execution-policy, audit, migration/rollback, and independent-signoff gates.
+
 ## Worker Role Selection
 
 Choose the route by the resource being changed, not by the provider model backend:
