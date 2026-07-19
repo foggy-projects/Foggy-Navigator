@@ -62,6 +62,8 @@ system:
 management:
   endpoints:
     web:
+      discovery:
+        enabled: false
       exposure:
         include: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:health,beans,metrics,info}
   endpoint:

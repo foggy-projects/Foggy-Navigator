@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "navi.authorization.preseed-inventory.v1",
+  "mode": "OFFLINE_VALIDATE_ONLY",
+  "deployment": {
+    "navigatorInstanceId": "synthetic-navi-instance",
+    "environmentProfile": "synthetic-internal"
+  },
+  "records": [
+    {
+      "recordAlias": "synthetic-s1-root",
+      "sourceKind": "S1_INSTANCE_ROOT_DECLARATION",
+      "upstreamSystemReference": "synthetic-s1-world-sim",
+      "tenantReference": null,
+      "clientAppReference": null,
+      "clientAppConflict": false,
+      "namespaceReference": "synthetic-s1-namespace",
+      "ownerReference": "synthetic-s1-owner",
+      "ownerConflict": false,
+      "sourceMappingState": "VERIFIED",
+      "authorityFactsComplete": true,
+      "tenantAuthorityReference": null,
+      "tenantAuthorityState": null,
+      "credentialStatus": "ACTIVE",
+      "expiresAt": "2099-12-31T23:59:59Z",
+      "revoked": false,
+      "credentialFingerprintPrefix": "a1b2c3d4",
+      "credentialFingerprintSuffix": "e5f6a7b8",
+      "proposedPrincipalType": "INSTANCE_ROOT",
+      "proposedCredentialLane": "INSTANCE_ROOT_CONTROL",
+      "proposedDisposition": "CANDIDATE",
+      "quarantineReason": null,
+      "approvalReference": "synthetic-approval-s1-001"
+    },
+    {
+      "recordAlias": "synthetic-s2-platform",
+      "sourceKind": "S2_SAAS_PLATFORM_DECLARATION",
+      "upstreamSystemReference": "synthetic-s2-tms",
+      "tenantReference": "synthetic-s2-tenant",
+      "clientAppReference": "synthetic-s2-client-app",
+      "clientAppConflict": false,
+      "namespaceReference": "synthetic-s2-namespace",
+      "ownerReference": "synthetic-s2-owner",
+      "ownerConflict": false,
+      "sourceMappingState": "VERIFIED",
+      "authorityFactsComplete": true,
+      "tenantAuthorityReference": "synthetic-s2-tenant-authority",
+      "tenantAuthorityState": "VERIFIED",
+      "credentialStatus": "ACTIVE",
+      "expiresAt": "2099-12-31T23:59:59Z",
+      "revoked": false,
+      "credentialFingerprintPrefix": "b1c2d3e4",
+      "credentialFingerprintSuffix": "f5a6b7c8",
+      "proposedPrincipalType": "SAAS_PLATFORM",
+      "proposedCredentialLane": "SAAS_PROVISIONING",
+      "proposedDisposition": "CANDIDATE",
+      "quarantineReason": null,
+      "approvalReference": "synthetic-approval-s2-001"
+    }
+  ],
+  "checksum": "428d140a6f31f353815de24bfdbfaa2b2f6ea5a0083e05be0e917f3d18519a07"
+}

@@ -33,6 +33,14 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Reuse the frozen P1A route catalog only from contract tests. -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

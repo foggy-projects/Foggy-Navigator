@@ -1,6 +1,7 @@
 package com.foggy.navigator.auth.config;
 
 import com.foggy.navigator.auth.interceptor.AuthInterceptor;
+import com.foggy.navigator.auth.interceptor.TypedManagementAuthInterceptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -11,6 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import com.foggy.navigator.auth.interceptor.AuthorizationShadowInterceptor;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -25,6 +27,12 @@ class SecurityConfigAdminRouteTest {
 
     @MockitoBean
     private AuthInterceptor authInterceptor;
+
+    @MockitoBean
+    private AuthorizationShadowInterceptor authorizationShadowInterceptor;
+
+    @MockitoBean
+    private TypedManagementAuthInterceptor typedManagementAuthInterceptor;
 
     @Test
     void adminModelConfigRepairRoute_isPassedThroughToControllerAuthGuard() throws Exception {

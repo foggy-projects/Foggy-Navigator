@@ -1,8 +1,14 @@
 package com.foggy.navigator.common.config;
 
+import com.foggy.navigator.common.authorization.DeploymentIdentity;
+import com.foggy.navigator.common.authorization.DeploymentIdentityProvider;
+import com.foggy.navigator.common.authorization.DeploymentIdentityResolver;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Primary;
+import org.springframework.core.env.Environment;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 /**
@@ -11,6 +17,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  */
 @AutoConfiguration
 @ComponentScan(basePackages = {
+    "com.foggy.navigator.common.authorization",
     "com.foggy.navigator.common.security",
     "com.foggy.navigator.common.migration"
 })
@@ -21,4 +28,11 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
     "com.foggy.navigator.common.repository"
 })
 public class CommonAutoConfiguration {
+
+    @Bean
+    @Primary
+    public DeploymentIdentityProvider deploymentIdentityProvider(Environment environment) {
+        DeploymentIdentity identity = DeploymentIdentityResolver.resolve(environment);
+        return () -> identity;
+    }
 }

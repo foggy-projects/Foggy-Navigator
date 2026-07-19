@@ -1,0 +1,17 @@
+package com.foggy.navigator.common.authorization;
+
+/** Credential lanes remain deliberately separate; no lane is an authority inheritance shortcut. */
+public enum AuthorizationCredentialLane {
+    NAVIGATOR_JWT,
+    LEGACY_UPSTREAM_ADMIN,
+    CLIENT_APP_CONTROL,
+    CLIENT_APP_RUNTIME_CREDENTIAL,
+    CLIENT_APP_RUNTIME_ACCESS,
+    TASK_SCOPED_TOKEN,
+    WORKER_CREDENTIAL,
+    INSTANCE_ROOT_CONTROL,
+    INSTANCE_ROOT_SECURITY,
+    SAAS_PROVISIONING,
+    SAAS_SECURITY_ADMIN,
+    UNKNOWN
+}

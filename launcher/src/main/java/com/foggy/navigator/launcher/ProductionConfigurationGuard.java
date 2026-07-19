@@ -1,5 +1,6 @@
 package com.foggy.navigator.launcher;
 
+import com.foggy.navigator.common.authorization.DeploymentIdentityResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContextInitializer;
@@ -57,6 +58,7 @@ public class ProductionConfigurationGuard implements ApplicationContextInitializ
         validateActuatorExposure(environment, violations);
         validateHealthDetails(environment, violations);
         validateSessionMessagePayloadStore(environment, violations);
+        validateDeploymentIdentity(environment, violations);
 
         if (!violations.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration:\n - "
@@ -147,6 +149,14 @@ public class ProductionConfigurationGuard implements ApplicationContextInitializ
         if (Boolean.parseBoolean(property(environment, "foggy.session.message-payload.enabled"))) {
             validateRequiredProperty(environment,
                     "foggy.session.message-payload.filesystem.directory", violations);
+        }
+    }
+
+    private static void validateDeploymentIdentity(Environment environment, List<String> violations) {
+        try {
+            DeploymentIdentityResolver.resolve(environment);
+        } catch (IllegalStateException exception) {
+            violations.add(exception.getMessage());
         }
     }
 

@@ -58,6 +58,11 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 开放登录和注册接口
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/register").permitAll()
+                        // Typed management requests are permitted only far enough to
+                        // reach TypedManagementAuthInterceptor. That interceptor is
+                        // the canonical fail-closed ingress gate; this matcher does
+                        // not make the namespace anonymously usable.
+                        .requestMatchers("/api/v1/management/v1/**").permitAll()
                         // Temporary diagnostic share is a narrow bearer capability; internal endpoints
                         // below are still protected by AuthInterceptor + @RequireAuth.
                         .requestMatchers("/diagnostic-share/**", "/api/v1/diagnostic-shares/**").permitAll()

@@ -85,6 +85,33 @@ class ProductionConfigurationGuardTest {
                 "foggy.session.message-payload.filesystem.directory"));
     }
 
+    @Test
+    void validate_prodRejectsMissingDeploymentIdentity() {
+        MockEnvironment environment = hardenedEnvironment()
+                .withProperty("navigator.deployment.navigator-instance-id", "")
+                .withProperty("navigator.deployment.environment-profile", "");
+        environment.setActiveProfiles("prod");
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> ProductionConfigurationGuard.validate(environment));
+
+        assertTrue(exception.getMessage().contains("navigator.deployment.navigator-instance-id"));
+        assertTrue(exception.getMessage().contains("navigator.deployment.environment-profile"));
+    }
+
+    @Test
+    void validate_prodRejectsConflictingDeploymentIdentityProfile() {
+        MockEnvironment environment = hardenedEnvironment()
+                .withProperty("navigator.deployment.environment-profile", "local");
+        environment.setActiveProfiles("prod");
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> ProductionConfigurationGuard.validate(environment));
+
+        assertTrue(exception.getMessage().contains("navigator.deployment.environment-profile"));
+        assertTrue(exception.getMessage().contains("conflicts"));
+    }
+
     private static MockEnvironment hardenedEnvironment() {
         return new MockEnvironment()
                 .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
@@ -97,6 +124,8 @@ class ProductionConfigurationGuardTest {
                 .withProperty("navigator.security.credential-key", "prod-credential-key-value")
                 .withProperty("navigator.security.credential-salt", "0123456789abcdef")
                 .withProperty("navigator.api.external-url", "https://navigator.example.com")
+                .withProperty("navigator.deployment.navigator-instance-id", "navi-prod-a")
+                .withProperty("navigator.deployment.environment-profile", "production")
                 .withProperty("management.endpoints.web.exposure.include", "health,metrics")
                 .withProperty("management.endpoint.health.show-details", "never");
     }

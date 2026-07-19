@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "navi.authorization.preseed-inventory.v1",
+  "mode": "OFFLINE_VALIDATE_ONLY",
+  "deployment": {
+    "navigatorInstanceId": "synthetic-navi-instance",
+    "environmentProfile": "synthetic-internal"
+  },
+  "records": [
+    {
+      "recordAlias": "synthetic-invalid-checksum",
+      "sourceKind": "S1_INSTANCE_ROOT_DECLARATION",
+      "upstreamSystemReference": "synthetic-s1-world-sim",
+      "tenantReference": null,
+      "clientAppReference": null,
+      "clientAppConflict": false,
+      "namespaceReference": "synthetic-s1-namespace",
+      "ownerReference": "synthetic-s1-owner",
+      "ownerConflict": false,
+      "sourceMappingState": "VERIFIED",
+      "authorityFactsComplete": true,
+      "tenantAuthorityReference": null,
+      "tenantAuthorityState": null,
+      "credentialStatus": "ACTIVE",
+      "expiresAt": "2099-12-31T23:59:59Z",
+      "revoked": false,
+      "credentialFingerprintPrefix": "d1e2f3a4",
+      "credentialFingerprintSuffix": "b5c6d7e8",
+      "proposedPrincipalType": "INSTANCE_ROOT",
+      "proposedCredentialLane": "INSTANCE_ROOT_CONTROL",
+      "proposedDisposition": "CANDIDATE",
+      "quarantineReason": null,
+      "approvalReference": "synthetic-approval-invalid-001"
+    }
+  ],
+  "checksum": "0000000000000000000000000000000000000000000000000000000000000000"
+}
