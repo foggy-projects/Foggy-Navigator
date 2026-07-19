@@ -1,0 +1,4 @@
+For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.
+Typed-management introspection requires exactly one NAVI_PRINCIPAL_CREDENTIAL (or --principal-credential-env); NAVI_ADMIN_API_KEY is not S1 root or S2 platform/security authority.
+NAVIGATOR_EXTERNAL_ENABLED gates only /api/v1/open/**. It is not Provider, Worker Gateway, Worker, or production readiness.
+NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED is Worker-principal strictness, not network exposure; it remains unavailable until every caller propagates the complete principal headers.

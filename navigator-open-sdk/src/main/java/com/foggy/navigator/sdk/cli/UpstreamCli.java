@@ -7,6 +7,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.foggy.navigator.sdk.api.AgentApi;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
 import com.foggy.navigator.sdk.api.DirectoryApi;
+import com.foggy.navigator.sdk.api.ManagementAuthApi;
 import com.foggy.navigator.sdk.api.WorkerApi;
 import com.foggy.navigator.sdk.exception.NavigatorApiException;
 import com.foggy.navigator.sdk.internal.HttpHelper;
@@ -116,7 +117,9 @@ public class UpstreamCli {
     private static final Pattern BIZ_CONTEXT_ID_PATTERN =
             Pattern.compile("^bctx_(\\d{8})_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$");
     private static final DateTimeFormatter BIZ_CONTEXT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
-
+    private static final String NOT_SUPPLIED_BY_SERVER = "NOT_SUPPLIED_BY_SERVER";
+    private static final Pattern MANAGEMENT_REFERENCE_PATTERN =
+            Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:/@#{}-]*");
     private final PrintStream out;
     private final PrintStream err;
     private final Path cwd;
@@ -171,10 +174,12 @@ public class UpstreamCli {
             case "config check" -> configCheck();
             case "auth", "auth help" -> authUsage();
             case "auth login" -> authLogin(args);
+            case "auth whoami" -> authWhoami(args);
             case "runtime-token" -> runtimeToken(args);
             case "owner-smoke" -> ownerSmoke(args);
             case "verify-agent-readiness", "verify-agent-grant" -> verifyAgentReadiness(args);
             case "inspect", "inspect runtime" -> inspectRuntime(args);
+            case "inspect permissions" -> inspectPermissions(args);
             case "ensure-grant" -> ensureGrant(args);
             case "ask" -> ask(args);
             case "messages" -> messages(args);
@@ -308,9 +313,15 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, auth login, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login/whoami, runtime-token, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status. Do not use these commands to onboard OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
         out.println("For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.");
+        out.println("Typed-management introspection requires exactly one NAVI_PRINCIPAL_CREDENTIAL (or --principal-credential-env); NAVI_ADMIN_API_KEY is not S1 root or S2 platform/security authority.");
+        out.println("NAVIGATOR_EXTERNAL_ENABLED gates only /api/v1/open/**. It is not Provider, Worker Gateway, Worker, or production readiness.");
+        out.println("NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED is Worker-principal strictness, not network exposure; it remains unavailable until every caller propagates the complete principal headers.");
+        CliProvenance provenance = CliProvenance.load();
+        out.println("CLI provenance: source=" + provenance.sourceVersion() + ", published=" + provenance.publishedVersion()
+                + ", artifactDrift=" + provenance.artifactDrift() + " (not a release claim).");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
@@ -326,8 +337,10 @@ public class UpstreamCli {
 
     private int authUsage() {
         out.println("Usage: navi upstream auth <command> [options]");
-        out.println("Commands: login");
+        out.println("Commands: login, whoami");
         out.println("  login --base-url <navigatorBaseUrl> --username <username> --password-env <envName> --write-profile");
+        out.println("  whoami [--principal-credential-env <envName>]");
+        out.println("whoami is typed-management-only. It uses exactly one NAVI_PRINCIPAL_CREDENTIAL and never falls back to NAVI_ADMIN_API_KEY, control, runtime, user, task, or Worker credentials.");
         out.println("Stores NAVI_ADMIN_TOKEN in the gitignored project profile for admin-key approval. The password is read from an environment variable and is never printed.");
         return 0;
     }
@@ -447,6 +460,92 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int authWhoami(CliArguments args) {
+        if (args.flag("help")) {
+            return authWhoamiUsage();
+        }
+        Map<String, Object> response = typedManagementAuthApi().whoami();
+        printTypedManagementIdentity("whoami", response);
+        return 0;
+    }
+
+    private int inspectPermissions(CliArguments args) {
+        if (args.flag("help")) {
+            return inspectPermissionsUsage();
+        }
+        if (args.flag("explain-auth")) {
+            return inspectPermissionsExplain(args);
+        }
+        Map<String, Object> response = typedManagementAuthApi().permissions();
+        printTypedManagementIdentity("permissions", response);
+        return 0;
+    }
+
+    private int authWhoamiUsage() {
+        out.println("Usage: navi upstream auth whoami [--principal-credential-env <envName>]");
+        out.println("Read-only typed-management inspection. It requires exactly one NAVI_PRINCIPAL_CREDENTIAL or explicit source.");
+        out.println("It sends only X-Navi-Principal-Credential and never falls back to NAVI_ADMIN_API_KEY, control, runtime, user, task, or Worker credentials.");
+        out.println("The server is authoritative; local profile metadata and config check do not authorize a mutation.");
+        return 0;
+    }
+
+    private int inspectPermissionsUsage() {
+        out.println("Usage: navi upstream inspect permissions [--explain-auth --route-id <id> --action-id <id>");
+        out.println("  [--target-reference <safe-ref> --impact-reference <safe-ref> --reason-reference <safe-ref>]]");
+        out.println("Read-only typed-management inspection. It requires exactly one NAVI_PRINCIPAL_CREDENTIAL or explicit source.");
+        out.println("--explain-auth accepts only a registered typed-management route/action; the three safe references are all-or-none.");
+        out.println("Explain is non-binding and every mutation must be re-authorized by the server for exact owner, grant, tenant, ClientApp, action, and credential facts.");
+        return 0;
+    }
+
+    private int inspectPermissionsExplain(CliArguments args) {
+        String routeId = requiredOption(args, "route-id", "typed-management route id");
+        String actionId = requiredOption(args, "action-id", "typed-management action id");
+        if (!TypedManagementExplainCatalog.load().matches(routeId, actionId)) {
+            throw new UpstreamCliException("typed-management explain route/action is not registered "
+                    + "(TYPED_MANAGEMENT_EXPLAIN_ROUTE_ACTION_UNREGISTERED)");
+        }
+
+        String targetReference = args.option("target-reference");
+        String impactReference = args.option("impact-reference");
+        String reasonReference = args.option("reason-reference");
+        boolean anyReference = hasText(targetReference) || hasText(impactReference) || hasText(reasonReference);
+        boolean allReferences = hasText(targetReference) && hasText(impactReference) && hasText(reasonReference);
+        if (anyReference && !allReferences) {
+            throw new UpstreamCliException("typed-management explain references must be supplied together "
+                    + "(TYPED_MANAGEMENT_EXPLAIN_REFERENCE_SET_INCOMPLETE)");
+        }
+        if (allReferences) {
+            validateManagementReference(targetReference);
+            validateManagementReference(impactReference);
+            validateManagementReference(reasonReference);
+        }
+
+        Map<String, Object> form = new LinkedHashMap<>();
+        form.put("routeId", routeId);
+        form.put("actionId", actionId);
+        if (allReferences) {
+            form.put("targetReference", targetReference);
+            form.put("impactReference", impactReference);
+            form.put("reasonReference", reasonReference);
+        }
+        Map<String, Object> response = typedManagementAuthApi().explain(form);
+        if (!Boolean.TRUE.equals(response.get("nonBinding"))) {
+            throw new UpstreamCliException("typed-management explain response is not non-binding "
+                    + "(TYPED_MANAGEMENT_EXPLAIN_NON_BINDING_REQUIRED)");
+        }
+
+        out.println("preflight=PREFLIGHT");
+        out.println("nonBinding=true");
+        out.println("routeId=" + routeId);
+        out.println("actionId=" + actionId);
+        out.println("allowed=" + Boolean.TRUE.equals(response.get("allowed")));
+        out.println("reasonCode=" + safeTypedResponseValue(response, "reasonCode"));
+        out.println("targetOwnerGrantTenant=UNRESOLVED_SERVER_SIDE");
+        out.println("mutationAuthorization=REAUTHORIZE_ON_SERVER");
+        return 0;
+    }
+
     private int workerUsage() {
         out.println("Usage: navi upstream worker <command> [options]");
         out.println("Commands: list, create, get, update, delete, health, processes, kill");
@@ -530,21 +629,13 @@ public class UpstreamCli {
     }
 
     private int configCheck() {
-        out.println("Navigator upstream CLI config check");
-        out.println("profile=" + (config.profilePath() == null ? "(none)" : config.profilePath()));
-        out.println("profileExists=" + config.profileExists());
-        out.println("profileGitIgnored=" + config.profileIsGitIgnored());
-        if (!config.profileIsGitIgnored()) {
-            throw new UpstreamCliException("Profile path is not git-ignored: " + config.profilePath());
-        }
-        for (Map.Entry<String, String> entry : config.values().entrySet()) {
-            if (isSensitiveKey(entry.getKey())) {
-                out.println(entry.getKey() + "=" + SecretMasker.mask(entry.getValue()));
-            } else {
-                out.println(entry.getKey() + "=" + valueOrEmpty(entry.getValue()));
-            }
-        }
-        return 0;
+        UpstreamCliConfig.LocalState configState = config.configState();
+        out.println("configState=" + configState);
+        out.println("profileSafety=" + config.profileSafetyState());
+        out.println("typedMetadata=" + config.typedMetadataState());
+        out.println("typedCredentialSource=" + config.typedCredentialSourceState());
+        out.println("authorization=UNVERIFIED");
+        return configState == UpstreamCliConfig.LocalState.INVALID ? 2 : 0;
     }
 
     private int runtimeToken(CliArguments args) {
@@ -3563,6 +3654,102 @@ public class UpstreamCli {
 
     private int unsupportedTmsHelper() {
         throw new UpstreamCliException("TMS test-only helper is not implemented in this CLI build; use env/profile tokens without printing secrets");
+    }
+
+    private ManagementAuthApi typedManagementAuthApi() {
+        String principalCredential = resolveTypedManagementPrincipalCredential();
+        HttpHelper typedManagementHttp = new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Duration.ofSeconds(30));
+        return new ManagementAuthApi(typedManagementHttp, principalCredential);
+    }
+
+    private String resolveTypedManagementPrincipalCredential() {
+        UpstreamCliConfig.TypedCredentialSource source = config.typedCredentialSource();
+        if (source == UpstreamCliConfig.TypedCredentialSource.AMBIGUOUS) {
+            throw new UpstreamCliException("typed-management credential source is ambiguous "
+                    + "(TYPED_MANAGEMENT_CREDENTIAL_SOURCE_AMBIGUOUS)");
+        }
+        if (source == UpstreamCliConfig.TypedCredentialSource.EXPLICIT_ENV_MISSING) {
+            throw new UpstreamCliException("typed-management explicit credential source is unavailable "
+                    + "(TYPED_MANAGEMENT_CREDENTIAL_SOURCE_MISSING)");
+        }
+        if (source == UpstreamCliConfig.TypedCredentialSource.MISSING) {
+            if (config.hasLegacyCredentialSource()) {
+                throw new UpstreamCliException("legacy credential cannot be used for typed-management introspection "
+                        + "(TYPED_MANAGEMENT_LEGACY_CREDENTIAL_ONLY)");
+            }
+            throw new UpstreamCliException("typed-management principal credential is required "
+                    + "(TYPED_MANAGEMENT_CREDENTIAL_MISSING)");
+        }
+        if (config.hasLegacyCredentialSource()) {
+            throw new UpstreamCliException("typed-management credential cannot be mixed with a legacy credential lane "
+                    + "(TYPED_MANAGEMENT_LEGACY_CREDENTIAL_CONFLICT)");
+        }
+        String principalCredential = config.principalCredential();
+        if (!hasText(principalCredential)) {
+            throw new UpstreamCliException("typed-management principal credential is required "
+                    + "(TYPED_MANAGEMENT_CREDENTIAL_MISSING)");
+        }
+        return principalCredential;
+    }
+
+    private void printTypedManagementIdentity(String command, Map<String, Object> response) {
+        if (response == null || response.isEmpty()) {
+            throw new UpstreamCliException("typed-management " + command + " response is incomplete "
+                    + "(TYPED_MANAGEMENT_RESPONSE_INCOMPLETE)");
+        }
+        out.println("typedManagement=" + command);
+        // P1B-A intentionally does not expose these fields. Do not infer or compute either locally.
+        out.println("schemaVersion=" + NOT_SUPPLIED_BY_SERVER);
+        out.println("principalType=" + safeTypedResponseValue(response, "principalType"));
+        out.println("principalId=" + safeTypedResponseValue(response, "principalId"));
+        out.println("sourceUpstreamSystemId=" + safeTypedResponseValue(response, "sourceUpstreamSystemId"));
+        out.println("navigatorInstanceId=" + safeTypedResponseValue(response, "navigatorInstanceId"));
+        out.println("environmentProfile=" + safeTypedResponseValue(response, "environmentProfile"));
+        out.println("credentialLane=" + safeTypedResponseValue(response, "credentialLane"));
+        out.println("credentialStatus=" + safeTypedResponseValue(response, "credentialStatus"));
+        out.println("credentialExpiresAt=" + safeTypedResponseValue(response, "credentialExpiresAt"));
+        out.println("credentialFingerprint=" + NOT_SUPPLIED_BY_SERVER);
+        out.println("authorityCeilingActions=" + safeTypedActionSet(response, "authorityCeilingActions"));
+        out.println("effectiveCredentialActions=" + safeTypedActionSet(response, "effectiveCredentialActions"));
+    }
+
+    private String safeTypedResponseValue(Map<String, Object> response, String field) {
+        Object value = response.get(field);
+        if (value == null || String.valueOf(value).isBlank()) {
+            return NOT_SUPPLIED_BY_SERVER;
+        }
+        return redact(String.valueOf(value));
+    }
+
+    private String safeTypedActionSet(Map<String, Object> response, String field) {
+        Object value = response.get(field);
+        if (!(value instanceof Collection<?> actions)) {
+            return NOT_SUPPLIED_BY_SERVER;
+        }
+        List<String> safeActions = actions.stream()
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .filter(UpstreamCli::hasText)
+                .sorted()
+                .map(this::redact)
+                .toList();
+        return safeActions.isEmpty() ? "(none)" : String.join(",", safeActions);
+    }
+
+    private static void validateManagementReference(String value) {
+        if (!hasText(value) || value.length() > 512 || !value.equals(value.trim())
+                || !MANAGEMENT_REFERENCE_PATTERN.matcher(value).matches()) {
+            throw new UpstreamCliException("typed-management explain reference is invalid "
+                    + "(TYPED_MANAGEMENT_EXPLAIN_REFERENCE_INVALID)");
+        }
     }
 
     private AgentApi agentApi() {

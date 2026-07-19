@@ -13,6 +13,7 @@ final class CliArguments {
             "admin-api-key-env",
             "admin-token",
             "admin-token-env",
+            "action-id",
             "agent",
             "agent-bundle-code",
             "agent-code",
@@ -59,6 +60,7 @@ final class CliArguments {
             "dry-run",
             "effective-user-id",
             "expected-sha256",
+            "explain-auth",
             "expires-at",
             "file",
             "force",
@@ -69,6 +71,7 @@ final class CliArguments {
             "help",
             "install-shell",
             "interval",
+            "impact-reference",
             "limit",
             "manifest",
             "max-chars",
@@ -96,16 +99,19 @@ final class CliArguments {
             "pid",
             "poll",
             "pool-id",
+            "principal-credential-env",
             "private-account-id",
             "profile",
             "provider",
             "provider-task-id",
             "provider-type",
             "reason",
+            "reason-reference",
             "request-code",
             "requested-tenant-id",
             "rotate-credentials",
             "rotate-runtime-credential",
+            "route-id",
             "runtime-budget-override-json",
             "runtime-budget-preset",
             "sandbox-mode",
@@ -120,6 +126,7 @@ final class CliArguments {
             "start-line",
             "status",
             "target-tenant-id",
+            "target-reference",
             "task-id",
             "tenant-id",
             "tenant-name",
@@ -189,6 +196,9 @@ final class CliArguments {
         }
         if (words.size() >= 2 && "config".equals(words.get(0)) && "check".equals(words.get(1))) {
             return "config check";
+        }
+        if (words.size() >= 2 && "inspect".equals(words.get(0)) && "permissions".equals(words.get(1))) {
+            return "inspect permissions";
         }
         if (words.size() >= 2 && "diagnostics".equals(words.get(0))) {
             if ("session-dir".equals(words.get(1))) {

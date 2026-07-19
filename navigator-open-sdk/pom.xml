@@ -49,6 +49,23 @@
     </dependencies>
 
     <build>
+        <!--
+            Package the canonical route manifest from navigator-common instead of
+            maintaining a CLI-local typed-management route/action allowlist.
+            The CLI uses this resource only as a fail-closed input guard; the
+            Navigator server remains the authorization decision point.
+        -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}/../navigator-common/src/main/resources</directory>
+                <includes>
+                    <include>authorization/route-manifest-v1.csv</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

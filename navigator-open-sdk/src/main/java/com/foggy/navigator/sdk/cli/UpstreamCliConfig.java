@@ -9,22 +9,62 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 final class UpstreamCliConfig {
     static final String DEFAULT_BASE_URL = "http://localhost:8112";
 
+    enum LocalState {
+        VALID,
+        INVALID,
+        UNVERIFIED
+    }
+
+    enum TypedCredentialSource {
+        DIRECT,
+        EXPLICIT_ENV,
+        MISSING,
+        EXPLICIT_ENV_MISSING,
+        AMBIGUOUS
+    }
+
+    private static final Set<String> LEGACY_CREDENTIAL_KEYS = Set.of(
+            "NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY",
+            "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN",
+            "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
+            "NAVI_CONTROL_API_KEY", "NAVIGATOR_CONTROL_API_KEY",
+            "NAVI_USER_API_KEY",
+            "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY",
+            "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET",
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", "CLIENT_APP_RUNTIME_TOKEN",
+                "NAVI_CLIENT_APP_RUNTIME_TOKEN",
+                "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN",
+                "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_LLM_API_KEY",
+                "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN", "NAVI_RUNTIME_CREDENTIAL");
+
     private final Map<String, String> values;
     private final Path profilePath;
     private final Path cwd;
+    private final TypedCredentialSource typedCredentialSource;
+    private final List<String> extraSensitiveValues;
 
-    private UpstreamCliConfig(Map<String, String> values, Path profilePath, Path cwd) {
+    private UpstreamCliConfig(Map<String, String> values,
+                              Path profilePath,
+                              Path cwd,
+                              TypedCredentialSource typedCredentialSource,
+                              List<String> extraSensitiveValues) {
         this.values = values;
         this.profilePath = profilePath;
         this.cwd = cwd;
+        this.typedCredentialSource = typedCredentialSource;
+        this.extraSensitiveValues = List.copyOf(extraSensitiveValues);
     }
 
     static UpstreamCliConfig load(CliArguments args, Map<String, String> env, Path cwd) {
@@ -49,8 +89,19 @@ final class UpstreamCliConfig {
             }
         }
         applyAliases(values);
+
+        String directPrincipalCredential = values.get("NAVI_PRINCIPAL_CREDENTIAL");
+        String explicitPrincipalCredentialEnv = args.option("principal-credential-env");
+        String explicitPrincipalCredential = hasText(explicitPrincipalCredentialEnv)
+                ? env.get(explicitPrincipalCredentialEnv) : null;
+        TypedCredentialSource typedCredentialSource = resolveTypedCredentialSource(
+                directPrincipalCredential, explicitPrincipalCredentialEnv, explicitPrincipalCredential);
+        List<String> extraSensitiveValues = new ArrayList<>();
+        addSensitiveValue(extraSensitiveValues, directPrincipalCredential);
+        addSensitiveValue(extraSensitiveValues, explicitPrincipalCredential);
+
         applyOptions(values, args, env);
-        return new UpstreamCliConfig(values, profile, cwd);
+        return new UpstreamCliConfig(values, profile, cwd, typedCredentialSource, extraSensitiveValues);
     }
 
     String get(String key) {
@@ -100,6 +151,11 @@ final class UpstreamCliConfig {
         }
         for (String key : sensitiveKeys()) {
             String value = values.get(key);
+            if (hasText(value) && !secrets.contains(value)) {
+                secrets.add(value);
+            }
+        }
+        for (String value : extraSensitiveValues) {
             if (hasText(value) && !secrets.contains(value)) {
                 secrets.add(value);
             }
@@ -190,6 +246,72 @@ final class UpstreamCliConfig {
         return values;
     }
 
+    TypedCredentialSource typedCredentialSource() {
+        return typedCredentialSource;
+    }
+
+    String principalCredential() {
+        return values.get("NAVI_PRINCIPAL_CREDENTIAL");
+    }
+
+    boolean hasLegacyCredentialSource() {
+        return !presentLegacyCredentialKeys().isEmpty();
+    }
+
+    LocalState profileSafetyState() {
+        if (!profileExists()) {
+            return LocalState.UNVERIFIED;
+        }
+        return profileIsGitIgnored() ? LocalState.VALID : LocalState.INVALID;
+    }
+
+    LocalState typedMetadataState() {
+        String[] metadata = {
+                values.get("NAVI_NAVIGATOR_INSTANCE_ID"),
+                values.get("NAVI_ENVIRONMENT_PROFILE"),
+                values.get("NAVI_EXPECTED_PRINCIPAL_TYPE"),
+                values.get("NAVI_EXPECTED_CREDENTIAL_LANE")};
+        long present = Arrays.stream(metadata).filter(UpstreamCliConfig::hasText).count();
+        if (present == 0) {
+            return LocalState.UNVERIFIED;
+        }
+        if (present != metadata.length) {
+            return LocalState.INVALID;
+        }
+        return compatiblePrincipalAndLane(
+                values.get("NAVI_EXPECTED_PRINCIPAL_TYPE"),
+                values.get("NAVI_EXPECTED_CREDENTIAL_LANE")) ? LocalState.VALID : LocalState.INVALID;
+    }
+
+    LocalState typedCredentialSourceState() {
+        if (typedCredentialSource == TypedCredentialSource.AMBIGUOUS
+                || typedCredentialSource == TypedCredentialSource.EXPLICIT_ENV_MISSING
+                || hasLegacyCredentialSource() && typedCredentialSource != TypedCredentialSource.MISSING) {
+            return LocalState.INVALID;
+        }
+        return typedCredentialSource == TypedCredentialSource.MISSING
+                ? LocalState.UNVERIFIED : LocalState.VALID;
+    }
+
+    LocalState configState() {
+        List<LocalState> states = List.of(profileSafetyState(), typedMetadataState(), typedCredentialSourceState());
+        if (states.contains(LocalState.INVALID)) {
+            return LocalState.INVALID;
+        }
+        return states.stream().allMatch(LocalState.VALID::equals)
+                ? LocalState.VALID : LocalState.UNVERIFIED;
+    }
+
+    private List<String> presentLegacyCredentialKeys() {
+        Set<String> present = new LinkedHashSet<>();
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            if (hasText(entry.getValue()) && LEGACY_CREDENTIAL_KEYS.contains(entry.getKey().toUpperCase(Locale.ROOT))) {
+                present.add(entry.getKey());
+            }
+        }
+        return List.copyOf(present);
+    }
+
     private static void applyOptions(Map<String, String> values, CliArguments args, Map<String, String> env) {
         putOption(values, args, "base-url", "NAVI_BASE_URL");
         putOption(values, args, "tenant-id", "NAVI_TENANT_ID");
@@ -212,6 +334,7 @@ final class UpstreamCliConfig {
         putOption(values, args, "admin-api-key", "NAVI_ADMIN_API_KEY");
         putOption(values, args, "operator-api-key", "NAVI_OPERATOR_API_KEY");
         putOption(values, args, "control-api-key", "NAVI_CONTROL_API_KEY");
+        putEnvOption(values, args, env, "principal-credential-env", "NAVI_PRINCIPAL_CREDENTIAL");
         putOption(values, args, "request-code", "NAVI_ADMIN_KEY_REQUEST_CODE");
         putOption(values, args, "claim-token", "NAVI_ADMIN_KEY_CLAIM_TOKEN");
         putOption(values, args, "upstream-user-token", "NAVI_UPSTREAM_USER_TOKEN");
@@ -343,6 +466,40 @@ final class UpstreamCliConfig {
         return value != null && !value.isBlank();
     }
 
+    private static TypedCredentialSource resolveTypedCredentialSource(
+            String directPrincipalCredential,
+            String explicitPrincipalCredentialEnv,
+            String explicitPrincipalCredential
+    ) {
+        boolean direct = hasText(directPrincipalCredential);
+        boolean explicitRequested = hasText(explicitPrincipalCredentialEnv);
+        if (direct && explicitRequested) {
+            return TypedCredentialSource.AMBIGUOUS;
+        }
+        if (explicitRequested) {
+            return hasText(explicitPrincipalCredential)
+                    ? TypedCredentialSource.EXPLICIT_ENV : TypedCredentialSource.EXPLICIT_ENV_MISSING;
+        }
+        return direct ? TypedCredentialSource.DIRECT : TypedCredentialSource.MISSING;
+    }
+
+    private static boolean compatiblePrincipalAndLane(String principalType, String credentialLane) {
+        String normalizedPrincipalType = principalType.trim().toUpperCase(Locale.ROOT);
+        String normalizedCredentialLane = credentialLane.trim().toUpperCase(Locale.ROOT);
+        return ("INSTANCE_ROOT".equals(normalizedPrincipalType)
+                && ("INSTANCE_ROOT_CONTROL".equals(normalizedCredentialLane)
+                || "INSTANCE_ROOT_SECURITY".equals(normalizedCredentialLane)))
+                || ("SAAS_PLATFORM".equals(normalizedPrincipalType)
+                && ("SAAS_PROVISIONING".equals(normalizedCredentialLane)
+                || "SAAS_SECURITY_ADMIN".equals(normalizedCredentialLane)));
+    }
+
+    private static void addSensitiveValue(List<String> values, String value) {
+        if (hasText(value) && !values.contains(value)) {
+            values.add(value);
+        }
+    }
+
     private static List<String> envKeys() {
         return List.of("NAVI_BASE_URL", "TMS_WEB_BASE_URL", "BASIC_BASE_URL", "NAVI_TENANT_ID",
                 "NAVI_CLIENT_APP_ID", "NAVI_CLIENT_APP_KEY", "NAVI_AGENT_CODE",
@@ -350,6 +507,8 @@ final class UpstreamCliConfig {
                 "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
                 "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY", "NAVI_OPERATOR_API_KEY",
                 "NAVI_CONTROL_API_KEY", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_REQUEST_CODE", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
+                "NAVI_PRINCIPAL_CREDENTIAL", "NAVI_NAVIGATOR_INSTANCE_ID", "NAVI_ENVIRONMENT_PROFILE",
+                "NAVI_EXPECTED_PRINCIPAL_TYPE", "NAVI_EXPECTED_CREDENTIAL_LANE",
                 "NAVI_UPSTREAM_SYSTEM_ID", "NAVI_REQUESTED_TENANT_ID", "NAVI_TARGET_TENANT_ID",
                 "NAVI_SOURCE_TENANT_ID", "NAVI_UPSTREAM_REF", "NAVI_UPSTREAM_MULTI_TENANT",
                 "NAVI_MODEL_PROFILE_CODE", "NAVI_SKILL_ID", "NAVI_BIZ_WORKER_ID", "NAVI_WORKER_POOL_ID",
@@ -358,20 +517,24 @@ final class UpstreamCliConfig {
                 "NAVI_CODEX_WEB_SEARCH_MODE", "NAVI_ALLOWED_TOOLS",
                 "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",
-                "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
+                "CLIENT_APP_RUNTIME_TOKEN", "NAVI_CLIENT_APP_RUNTIME_TOKEN", "NAVI_RUNTIME_CREDENTIAL",
+                "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN",
+                "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
                 "NAVIGATOR_CONTROL_API_KEY", "NAVI_UPSTREAM_PROFILE");
     }
 
     private static List<String> sensitiveKeys() {
         return List.of("NAVI_CLIENT_APP_SECRET", "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN",
                 "NAVI_ADMIN_API_KEY", "NAVI_OPERATOR_API_KEY", "NAVI_CONTROL_API_KEY", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
-                "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
+                "NAVI_PRINCIPAL_CREDENTIAL",
+                "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVI_CLIENT_APP_RUNTIME_TOKEN",
+                "NAVI_RUNTIME_CREDENTIAL", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN", "CLIENT_APP_KEY",
                 "NAVI_CLIENT_APP_KEY", "CLIENT_APP_SECRET", "CLIENT_APP_RUNTIME_TOKEN",
                 "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVIGATOR_CONTROL_API_KEY");
     }
 
     private static boolean isSensitiveKey(String key) {
         return key.endsWith("_SECRET") || key.endsWith("_TOKEN")
-                || key.endsWith("_API_KEY") || key.endsWith("_KEY");
+                || key.endsWith("_API_KEY") || key.endsWith("_KEY") || key.endsWith("_CREDENTIAL");
     }
 }

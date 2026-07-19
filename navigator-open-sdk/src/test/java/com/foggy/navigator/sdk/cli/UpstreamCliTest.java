@@ -16,11 +16,16 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,6 +44,8 @@ class UpstreamCliTest {
     private static String lastClientAppAccessTokenHeader;
     private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
+    private static String lastPrincipalCredentialHeader;
+    private static String lastTenantIdHeader;
     private static String responseOverride;
     private static int responseStatusOverride;
     private static List<String> requestPaths;
@@ -69,6 +76,8 @@ class UpstreamCliTest {
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
             lastClientAppControlKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
+            lastPrincipalCredentialHeader = exchange.getRequestHeaders().getFirst("X-Navi-Principal-Credential");
+            lastTenantIdHeader = exchange.getRequestHeaders().getFirst("X-Tenant-Id");
 
             String response;
             if ("__MESSAGES_TERMINAL__".equals(responseOverride)) {
@@ -243,6 +252,8 @@ class UpstreamCliTest {
         lastClientAppAccessTokenHeader = null;
         lastClientAppControlKeyHeader = null;
         lastUpstreamUserIdHeader = null;
+        lastPrincipalCredentialHeader = null;
+        lastTenantIdHeader = null;
         requestPaths = new ArrayList<>();
         requestBodies = new ArrayList<>();
         responseOverride = "{\"code\":0,\"data\":{}}";
@@ -330,7 +341,7 @@ class UpstreamCliTest {
     }
 
     @Test
-    void configCheckMasksSecretsAndRequiresIgnoredProfile() throws Exception {
+    void configCheckReportsOnlyLocalTriStateAndNeverAuthorizes() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navi-upstream.env\n", StandardCharsets.UTF_8);
         Files.writeString(tempDir.resolve(".navi-upstream.env"),
                 "NAVI_CLIENT_APP_SECRET=super-secret-value\nNAVI_CLIENT_APP_ACCESS_TOKEN=runtime-secret-value\n",
@@ -340,106 +351,343 @@ class UpstreamCliTest {
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
-        assertTrue(output.contains("profileGitIgnored=true"));
+        assertEquals("""
+                configState=UNVERIFIED
+                profileSafety=VALID
+                typedMetadata=UNVERIFIED
+                typedCredentialSource=UNVERIFIED
+                authorization=UNVERIFIED
+                """, output);
         assertFalse(output.contains("super-secret-value"));
         assertFalse(output.contains("runtime-secret-value"));
+        assertFalse(output.contains("ALLOW"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
-    void configCheckUsesProjectLocalProfileByDefault() throws Exception {
+    void configCheckReportsCompatibleTypedFixtureAsValidWithoutHttp() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
         Path configDir = tempDir.resolve(".navigator");
         Files.createDirectories(configDir);
         Files.writeString(configDir.resolve("upstream.env"), """
-                NAVI_BASE_URL=http://navigator.local
-                NAVI_CLIENT_APP_ID=app-project
-                NAVI_CLIENT_APP_KEY=cak-project-secret
+                NAVI_NAVIGATOR_INSTANCE_ID=sim-navigator-local
+                NAVI_ENVIRONMENT_PROFILE=LOCAL
+                NAVI_EXPECTED_PRINCIPAL_TYPE=INSTANCE_ROOT
+                NAVI_EXPECTED_CREDENTIAL_LANE=INSTANCE_ROOT_CONTROL
+                NAVI_PRINCIPAL_CREDENTIAL=typed-fixture-secret
                 """, StandardCharsets.UTF_8);
 
         int code = run(new String[]{"upstream", "config", "check"}, Map.of());
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
-        assertTrue(output.contains(".navigator"));
-        assertTrue(output.contains("profileExists=true"));
-        assertTrue(output.contains("profileGitIgnored=true"));
-        assertTrue(output.contains("NAVI_BASE_URL=http://navigator.local"));
-        assertTrue(output.contains("NAVI_CLIENT_APP_ID=app-project"));
-        assertFalse(output.contains("cak-project-secret"));
+        assertEquals("""
+                configState=VALID
+                profileSafety=VALID
+                typedMetadata=VALID
+                typedCredentialSource=VALID
+                authorization=UNVERIFIED
+                """, output);
+        assertFalse(output.contains("typed-fixture-secret"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
-    void configCheckUsesProfileFromEnvironmentWhenNoCliProfile() throws Exception {
-        Path externalDir = Files.createTempDirectory("navi-upstream-profile-env");
-        Path externalProfile = externalDir.resolve("upstream-a.env");
-        Files.writeString(externalProfile, "NAVI_CLIENT_APP_ID=app-env-profile\n", StandardCharsets.UTF_8);
-
-        int code = run(new String[]{"upstream", "config", "check"},
-                env("NAVI_UPSTREAM_PROFILE", externalProfile.toString()));
+    void configCheckFailsClosedForPartialTypedMetadata() {
+        int code = run(new String[]{"upstream", "config", "check"}, env(
+                "NAVI_PRINCIPAL_CREDENTIAL", "typed-fixture-secret",
+                "NAVI_NAVIGATOR_INSTANCE_ID", "sim-navigator-local",
+                "NAVI_EXPECTED_PRINCIPAL_TYPE", "INSTANCE_ROOT",
+                "NAVI_EXPECTED_CREDENTIAL_LANE", "INSTANCE_ROOT_CONTROL"));
 
         String output = stdout.toString(StandardCharsets.UTF_8);
-        assertEquals(0, code);
-        assertTrue(output.contains("upstream-a.env"));
-        assertTrue(output.contains("NAVI_CLIENT_APP_ID=app-env-profile"));
+        assertEquals(2, code);
+        assertTrue(output.contains("configState=INVALID"));
+        assertTrue(output.contains("typedMetadata=INVALID"));
+        assertTrue(output.contains("authorization=UNVERIFIED"));
+        assertFalse(output.contains("typed-fixture-secret"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
-    void configCheckRejectsUnignoredProfile() throws Exception {
+    void configCheckFailsClosedForMixedTypedAndLegacyCredentialLanes() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navi-upstream.env\n", StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navi-upstream.env"), """
+                NAVI_NAVIGATOR_INSTANCE_ID=sim-navigator-local
+                NAVI_ENVIRONMENT_PROFILE=LOCAL
+                NAVI_EXPECTED_PRINCIPAL_TYPE=INSTANCE_ROOT
+                NAVI_EXPECTED_CREDENTIAL_LANE=INSTANCE_ROOT_CONTROL
+                NAVI_PRINCIPAL_CREDENTIAL=typed-fixture-secret
+                NAVI_CONTROL_API_KEY=legacy-control-secret
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "config", "check", "--profile", ".navi-upstream.env"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertTrue(output.contains("configState=INVALID"));
+        assertTrue(output.contains("typedCredentialSource=INVALID"));
+        assertTrue(output.contains("authorization=UNVERIFIED"));
+        assertFalse(output.contains("typed-fixture-secret"));
+        assertFalse(output.contains("legacy-control-secret"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void configCheckMarksUnignoredProfileInvalidWithoutEchoingIt() throws Exception {
         Files.writeString(tempDir.resolve("local.properties"),
                 "NAVI_CLIENT_APP_SECRET=super-secret-value\n", StandardCharsets.UTF_8);
 
         int code = run(new String[]{"upstream", "config", "check", "--profile", "local.properties"}, Map.of());
 
+        String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(2, code);
-        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("not git-ignored"));
-    }
-
-    @Test
-    void configCheckAllowsProfileOutsideWorkspace() throws Exception {
-        Path externalDir = Files.createTempDirectory("navi-upstream-external");
-        Path externalProfile = externalDir.resolve("sandbox.local.env");
-        Files.writeString(externalProfile, "NAVI_CLIENT_APP_SECRET=super-secret-value\n", StandardCharsets.UTF_8);
-
-        int code = run(new String[]{"upstream", "config", "check", "--profile", externalProfile.toString()}, Map.of());
-
-        String output = stdout.toString(StandardCharsets.UTF_8);
-        assertEquals(0, code);
-        assertTrue(output.contains("profileGitIgnored=true"));
+        assertTrue(output.contains("configState=INVALID"));
+        assertTrue(output.contains("profileSafety=INVALID"));
+        assertTrue(output.contains("authorization=UNVERIFIED"));
         assertFalse(output.contains("super-secret-value"));
+        assertFalse(output.contains("local.properties"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
-    void configCheckMapsSandboxProfileAliasesAndMasksClientAppKey() throws Exception {
-        Path externalDir = Files.createTempDirectory("navi-upstream-sandbox");
-        Path externalProfile = externalDir.resolve("current-dev-sandbox.local.env");
-        Files.writeString(externalProfile, """
-                NAVIGATOR_BASE_URL=http://localhost:8112
-                NAVIGATOR_TENANT_ID=tenant-1
-                CLIENT_APP_ID=app-1
-                CLIENT_APP_KEY=cak-sensitive-key
-                CLIENT_APP_SECRET=cas-sensitive-secret
-                CLIENT_APP_RUNTIME_TOKEN=cat-sensitive-token
-                NAVIGATOR_ADMIN_TOKEN=admin-sensitive-token
-                NAVIGATOR_OPERATOR_API_KEY=operator-sensitive-key
-                """, StandardCharsets.UTF_8);
+    void typedManagementWhoamiUsesOnlyPrincipalHeaderAndNeverEchoesSecrets() {
+        String principalCredential = "p1c-principal-secret";
+        responseOverride = """
+                {"code":0,"data":{
+                  "principalType":"INSTANCE_ROOT",
+                  "principalId":"sim-root",
+                  "sourceUpstreamSystemId":"foggy-world-sim",
+                  "navigatorInstanceId":"navi-sim-local",
+                  "environmentProfile":"LOCAL",
+                  "credentialLane":"INSTANCE_ROOT_CONTROL",
+                  "credentialStatus":"ACTIVE",
+                  "credentialExpiresAt":"2030-01-01T00:00:00Z",
+                  "credential":"server-echo-secret",
+                  "credentialFingerprint":"server-fingerprint",
+                  "authorityCeilingActions":["instance.manage","instance.security"],
+                  "effectiveCredentialActions":["instance.manage"]
+                }}
+                """;
 
-        int code = run(new String[]{"upstream", "config", "check", "--profile", externalProfile.toString()}, Map.of());
+        int code = run(new String[]{"upstream", "auth", "whoami", "--base-url", baseUrl()}, env(
+                "NAVI_PRINCIPAL_CREDENTIAL", principalCredential,
+                "NAVI_TENANT_ID", "must-not-be-sent"));
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
-        assertTrue(output.contains("NAVI_BASE_URL=http://localhost:8112"));
-        assertTrue(output.contains("NAVI_TENANT_ID=tenant-1"));
-        assertTrue(output.contains("NAVI_CLIENT_APP_ID=app-1"));
-        assertTrue(output.contains("NAVI_CLIENT_APP_KEY="));
-        assertTrue(output.contains("NAVI_CLIENT_APP_SECRET="));
-        assertTrue(output.contains("NAVI_CLIENT_APP_ACCESS_TOKEN="));
-        assertTrue(output.contains("NAVI_ADMIN_TOKEN="));
-        assertTrue(output.contains("NAVI_OPERATOR_API_KEY="));
-        assertFalse(output.contains("cak-sensitive-key"));
-        assertFalse(output.contains("cas-sensitive-secret"));
-        assertFalse(output.contains("cat-sensitive-token"));
-        assertFalse(output.contains("admin-sensitive-token"));
-        assertFalse(output.contains("operator-sensitive-key"));
+        assertTypedManagementRequest("/api/v1/management/v1/auth/whoami", "GET", principalCredential);
+        assertTrue(output.contains("typedManagement=whoami"));
+        assertTrue(output.contains("schemaVersion=NOT_SUPPLIED_BY_SERVER"));
+        assertTrue(output.contains("credentialFingerprint=NOT_SUPPLIED_BY_SERVER"));
+        assertTrue(output.contains("authorityCeilingActions=instance.manage,instance.security"));
+        assertTrue(output.contains("effectiveCredentialActions=instance.manage"));
+        assertFalse(output.contains(principalCredential));
+        assertFalse(output.contains("server-echo-secret"));
+        assertFalse(output.contains("server-fingerprint"));
+    }
+
+    @Test
+    void typedManagementPermissionsAcceptsOneExplicitCredentialSourceOnly() {
+        String explicitCredential = "p1c-explicit-principal-secret";
+        responseOverride = """
+                {"code":0,"data":{
+                  "principalType":"SAAS_PLATFORM",
+                  "navigatorInstanceId":"navi-tms-local",
+                  "credentialLane":"SAAS_PROVISIONING",
+                  "authorityCeilingActions":["platform.manage","platform.security"],
+                  "effectiveCredentialActions":["platform.manage"]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "inspect", "permissions", "--base-url", baseUrl(),
+                "--principal-credential-env", "P1C_TYPED_CREDENTIAL"}, env(
+                "P1C_TYPED_CREDENTIAL", explicitCredential,
+                "NAVI_TENANT_ID", "must-not-be-sent"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTypedManagementRequest("/api/v1/management/v1/auth/permissions", "GET", explicitCredential);
+        assertTrue(output.contains("typedManagement=permissions"));
+        assertTrue(output.contains("authorityCeilingActions=platform.manage,platform.security"));
+        assertTrue(output.contains("effectiveCredentialActions=platform.manage"));
+        assertFalse(output.contains(explicitCredential));
+    }
+
+    @Test
+    void typedManagementRejectsMissingCredentialBeforeHttpDispatch() {
+        int code = run(new String[]{"upstream", "auth", "whoami", "--base-url", baseUrl()}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("TYPED_MANAGEMENT_CREDENTIAL_MISSING"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void typedManagementRejectsLegacyOnlyCredentialBeforeHttpDispatch() {
+        String legacyCredential = "legacy-admin-secret";
+        int code = run(new String[]{"upstream", "inspect", "permissions", "--base-url", baseUrl()},
+                env("NAVI_ADMIN_API_KEY", legacyCredential));
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertTrue(error.contains("TYPED_MANAGEMENT_LEGACY_CREDENTIAL_ONLY"));
+        assertFalse(error.contains(legacyCredential));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void typedManagementRejectsMixedLegacyAndTypedCredentialLanesBeforeHttpDispatch() {
+        String principalCredential = "typed-principal-secret";
+        String legacyCredential = "legacy-control-secret";
+        int code = run(new String[]{"upstream", "auth", "whoami", "--base-url", baseUrl()}, env(
+                "NAVI_PRINCIPAL_CREDENTIAL", principalCredential,
+                "NAVI_CONTROL_API_KEY", legacyCredential));
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertTrue(error.contains("TYPED_MANAGEMENT_LEGACY_CREDENTIAL_CONFLICT"));
+        assertFalse(error.contains(principalCredential));
+        assertFalse(error.contains(legacyCredential));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void typedManagementRejectsRuntimeTaskAndWorkerCredentialEnvSourcesBeforeHttpDispatch() {
+        for (String legacyKey : List.of(
+                "NAVI_CLIENT_APP_RUNTIME_TOKEN",
+                "NAVI_RUNTIME_CREDENTIAL",
+                "NAVI_TASK_SCOPED_TOKEN",
+                "NAVI_WORKER_CREDENTIAL")) {
+            String principalCredential = "typed-principal-secret";
+            String legacyCredential = "legacy-" + legacyKey + "-secret";
+
+            int code = run(new String[]{"upstream", "auth", "whoami", "--base-url", baseUrl()}, env(
+                    "NAVI_PRINCIPAL_CREDENTIAL", principalCredential,
+                    legacyKey, legacyCredential));
+
+            String error = stderr.toString(StandardCharsets.UTF_8);
+            assertEquals(2, code, legacyKey);
+            assertTrue(error.contains("TYPED_MANAGEMENT_LEGACY_CREDENTIAL_CONFLICT"), legacyKey);
+            assertFalse(error.contains(principalCredential), legacyKey);
+            assertFalse(error.contains(legacyCredential), legacyKey);
+            assertTrue(requestPaths.isEmpty(), legacyKey);
+            stdout.reset();
+            stderr.reset();
+        }
+    }
+
+    @Test
+    void typedManagementRejectsAmbiguousOrMissingExplicitCredentialSourcesBeforeHttpDispatch() {
+        String directCredential = "typed-direct-secret";
+        String explicitCredential = "typed-explicit-secret";
+        int ambiguousCode = run(new String[]{"upstream", "auth", "whoami", "--base-url", baseUrl(),
+                "--principal-credential-env", "P1C_TYPED_CREDENTIAL"}, env(
+                "NAVI_PRINCIPAL_CREDENTIAL", directCredential,
+                "P1C_TYPED_CREDENTIAL", explicitCredential));
+
+        String ambiguousError = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, ambiguousCode);
+        assertTrue(ambiguousError.contains("TYPED_MANAGEMENT_CREDENTIAL_SOURCE_AMBIGUOUS"));
+        assertFalse(ambiguousError.contains(directCredential));
+        assertFalse(ambiguousError.contains(explicitCredential));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int missingExplicitCode = run(new String[]{"upstream", "inspect", "permissions", "--base-url", baseUrl(),
+                "--principal-credential-env", "P1C_TYPED_CREDENTIAL"}, Map.of());
+
+        assertEquals(2, missingExplicitCode);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("TYPED_MANAGEMENT_CREDENTIAL_SOURCE_MISSING"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void typedManagementExplainUsesRegisteredPreflightAndDoesNotEchoReferences() {
+        String principalCredential = "p1c-principal-secret";
+        responseOverride = """
+                {"code":0,"data":{
+                  "allowed":true,
+                  "reasonCode":"AUTHZ_ALLOW",
+                  "nonBinding":true,
+                  "decisionId":"decision-internal-secret",
+                  "correlationId":"correlation-internal-secret"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "inspect", "permissions", "--explain-auth",
+                "--base-url", baseUrl(),
+                "--route-id", "mvc:get:/api/v1/management/v1/auth/whoami",
+                "--action-id", "auth.whoami",
+                "--target-reference", "target-opaque-1",
+                "--impact-reference", "impact-opaque-1",
+                "--reason-reference", "reason-opaque-1"},
+                env("NAVI_PRINCIPAL_CREDENTIAL", principalCredential));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTypedManagementRequest("/api/v1/management/v1/auth/explain", "POST", principalCredential);
+        assertTrue(lastBody.contains("\"routeId\":\"mvc:get:/api/v1/management/v1/auth/whoami\""));
+        assertTrue(lastBody.contains("\"actionId\":\"auth.whoami\""));
+        assertTrue(lastBody.contains("\"targetReference\":\"target-opaque-1\""));
+        assertTrue(output.contains("preflight=PREFLIGHT"));
+        assertTrue(output.contains("nonBinding=true"));
+        assertTrue(output.contains("targetOwnerGrantTenant=UNRESOLVED_SERVER_SIDE"));
+        assertTrue(output.contains("mutationAuthorization=REAUTHORIZE_ON_SERVER"));
+        assertFalse(output.contains(principalCredential));
+        assertFalse(output.contains("target-opaque-1"));
+        assertFalse(output.contains("impact-opaque-1"));
+        assertFalse(output.contains("reason-opaque-1"));
+        assertFalse(output.contains("decision-internal-secret"));
+        assertFalse(output.contains("correlation-internal-secret"));
+    }
+
+    @Test
+    void typedManagementExplainRejectsUnregisteredOrIncompleteReferencesBeforeHttpDispatch() {
+        Map<String, String> typedEnv = env("NAVI_PRINCIPAL_CREDENTIAL", "p1c-principal-secret");
+        int unregisteredCode = run(new String[]{"upstream", "inspect", "permissions", "--explain-auth",
+                "--base-url", baseUrl(),
+                "--route-id", "mvc:post:/api/v1/legacy/mutate",
+                "--action-id", "legacy.mutate"}, typedEnv);
+
+        assertEquals(2, unregisteredCode);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("TYPED_MANAGEMENT_EXPLAIN_ROUTE_ACTION_UNREGISTERED"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int incompleteReferenceCode = run(new String[]{"upstream", "inspect", "permissions", "--explain-auth",
+                "--base-url", baseUrl(),
+                "--route-id", "mvc:get:/api/v1/management/v1/auth/whoami",
+                "--action-id", "auth.whoami",
+                "--target-reference", "target-opaque-1"}, typedEnv);
+
+        assertEquals(2, incompleteReferenceCode);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("TYPED_MANAGEMENT_EXPLAIN_REFERENCE_SET_INCOMPLETE"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void typedManagementExplainRejectsBindingResponse() {
+        responseOverride = """
+                {"code":0,"data":{"allowed":true,"reasonCode":"AUTHZ_ALLOW","nonBinding":false}}
+                """;
+        int code = run(new String[]{"upstream", "inspect", "permissions", "--explain-auth",
+                "--base-url", baseUrl(),
+                "--route-id", "mvc:get:/api/v1/management/v1/auth/permissions",
+                "--action-id", "auth.permissions.inspect"},
+                env("NAVI_PRINCIPAL_CREDENTIAL", "p1c-principal-secret"));
+
+        assertEquals(2, code);
+        assertEquals("/api/v1/management/v1/auth/explain", lastPath);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("TYPED_MANAGEMENT_EXPLAIN_NON_BINDING_REQUIRED"));
+        assertFalse(stdout.toString(StandardCharsets.UTF_8).contains("allowed="));
     }
 
     @Test
@@ -4133,12 +4381,232 @@ class UpstreamCliTest {
         assertTrue(output.contains("available-models"));
     }
 
+    @Test
+    void p1cHardBoundaryHelpMatchesSnapshotAndTypedHelpDoesNotDispatchHttp() throws Exception {
+        int rootCode = run(new String[]{"upstream", "--help"}, Map.of());
+        String rootOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, rootCode);
+        assertEquals(readTestResource("/com/foggy/navigator/sdk/cli/p1c-hard-boundary-help-snapshot.txt"),
+                String.join("\n", hardBoundaryLines(rootOutput)) + "\n");
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int whoamiHelpCode = run(new String[]{"upstream", "auth", "whoami", "--help"},
+                env("NAVI_ADMIN_API_KEY", "legacy-secret"));
+        String whoamiHelp = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, whoamiHelpCode);
+        assertTrue(whoamiHelp.contains("X-Navi-Principal-Credential"));
+        assertTrue(whoamiHelp.contains("never falls back to NAVI_ADMIN_API_KEY"));
+        assertFalse(whoamiHelp.contains("legacy-secret"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int permissionsHelpCode = run(new String[]{"upstream", "inspect", "permissions", "--help"}, Map.of());
+        String permissionsHelp = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, permissionsHelpCode);
+        assertTrue(permissionsHelp.contains("--explain-auth"));
+        assertTrue(permissionsHelp.contains("all-or-none"));
+        assertTrue(permissionsHelp.contains("re-authorized by the server"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void p1cProvenanceMatchesCanonicalManifestAndDeclaresArtifactDrift() throws Exception {
+        CliProvenance provenance = CliProvenance.load();
+        Path root = repositoryRoot();
+        Path manifest = root.resolve("navigator-common/src/main/resources/authorization/route-manifest-v1.csv");
+        List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
+        Set<String> routeIds = new HashSet<>();
+
+        assertEquals("1.0.21", provenance.sourceVersion());
+        assertEquals("1.0.18", provenance.publishedVersion());
+        assertEquals("SOURCE_NEWER_THAN_PUBLISHED", provenance.artifactDrift());
+        assertNotEquals(provenance.sourceVersion(), provenance.publishedVersion());
+        assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
+                .contains("<version>" + provenance.sourceVersion() + "</version>"));
+        assertEquals(provenance.manifestEntryCount() + 1, manifestLines.size());
+        assertEquals(provenance.manifestSha256(), sha256(manifest));
+        for (String line : manifestLines.subList(1, manifestLines.size())) {
+            int firstComma = line.indexOf(',');
+            assertTrue(firstComma > 0);
+            assertTrue(routeIds.add(line.substring(0, firstComma)), "duplicate routeId: " + line);
+        }
+    }
+
+    @Test
+    void p1cExplainInputGuardIsGeneratedFromTheCanonicalManifestAndFailsClosedWhenInvalid() throws Exception {
+        Path root = repositoryRoot();
+        Path sourceManifest = root.resolve("navigator-common/src/main/resources/authorization/route-manifest-v1.csv");
+        byte[] sourceBytes = Files.readAllBytes(sourceManifest);
+        byte[] packagedBytes;
+        try (var input = UpstreamCliTest.class.getResourceAsStream(TypedManagementExplainCatalog.MANIFEST_RESOURCE)) {
+            assertNotNull(input, "missing packaged canonical route manifest");
+            packagedBytes = input.readAllBytes();
+        }
+
+        assertArrayEquals(sourceBytes, packagedBytes,
+                "the SDK explain guard must consume the build-time packaged canonical manifest");
+        Map<String, String> canonicalPairs = typedManagementCanonicalPairs(sourceManifest);
+        assertEquals(Map.of(
+                "mvc:post:/api/v1/management/v1/auth/exchange", "auth.exchange",
+                "mvc:post:/api/v1/management/v1/auth/security-actions/authorize", "auth.security-authorize",
+                "mvc:get:/api/v1/management/v1/auth/whoami", "auth.whoami",
+                "mvc:get:/api/v1/management/v1/auth/permissions", "auth.permissions.inspect",
+                "mvc:post:/api/v1/management/v1/auth/explain", "auth.decision.explain"), canonicalPairs,
+                "P1B-A exposes exactly the five canonical typed-management route/action pairs");
+
+        TypedManagementExplainCatalog catalog = TypedManagementExplainCatalog.load();
+        assertEquals(canonicalPairs, catalog.actionsByRouteId());
+        assertTrue(catalog.matches("mvc:get:/api/v1/management/v1/auth/whoami", "auth.whoami"));
+        assertFalse(catalog.matches("mvc:get:/api/v1/management/v1/auth/whoami", "auth.exchange"));
+        assertFalse(catalog.matches("mvc:post:/api/v1/legacy/mutate", "legacy.mutate"));
+        assertFalse(Files.readString(root.resolve(
+                        "navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java"),
+                StandardCharsets.UTF_8).contains("TYPED_MANAGEMENT_EXPLAIN_ACTIONS"));
+
+        byte[] checksumMismatch = Arrays.copyOf(packagedBytes, packagedBytes.length);
+        checksumMismatch[checksumMismatch.length - 1] ^= 1;
+        IllegalStateException checksumFailure = assertThrows(IllegalStateException.class,
+                () -> TypedManagementExplainCatalog.fromCanonicalManifestBytes(checksumMismatch));
+        assertTrue(checksumFailure.getMessage().contains("checksum mismatch"));
+
+        IllegalStateException malformedFailure = assertThrows(IllegalStateException.class,
+                () -> TypedManagementExplainCatalog.parseTypedManagementActions(
+                        "not,a,canonical,manifest\n".getBytes(StandardCharsets.UTF_8)));
+        assertTrue(malformedFailure.getMessage().contains("header changed unexpectedly"));
+    }
+
+    @Test
+    void p1cSkillAndRunbookPreserveTypedCredentialAndTrustBoundaryFaq() throws Exception {
+        Path root = repositoryRoot();
+        String skill = Files.readString(root.resolve(".agents/skills/navigator-runtime-provisioning/SKILL.md"),
+                StandardCharsets.UTF_8);
+        String runbook = Files.readString(root.resolve(
+                "docs/version-tracker/1.4.3-SNAPSHOT/runbooks/GOV-001-p1c-typed-management-cli-operator-ux.md"),
+                StandardCharsets.UTF_8);
+
+        assertAll(
+                () -> assertTrue(skill.contains("X-Navi-Principal-Credential")),
+                () -> assertTrue(skill.contains("NAVI_ADMIN_API_KEY") && skill.contains("not S1 root or S2 platform/security typed authority")),
+                () -> assertTrue(skill.contains("NAVIGATOR_EXTERNAL_ENABLED") && skill.contains("/api/v1/open/**")),
+                () -> assertTrue(skill.contains("NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED") && skill.contains("not a bind address")),
+                () -> assertTrue(skill.contains("worker-host verify") && skill.contains("BizWorkerIdentity") && skill.contains("WorkerPool")),
+                () -> assertTrue(runbook.contains("authorization=UNVERIFIED")),
+                () -> assertTrue(runbook.contains("NOT_SUPPLIED_BY_SERVER")),
+                () -> assertTrue(runbook.contains("NAVIGATOR_EXTERNAL_ENABLED") && runbook.contains("/api/v1/open/**")),
+                () -> assertTrue(runbook.contains("NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED") && runbook.contains("network-exposure")),
+                () -> assertTrue(runbook.contains("worker-host update --worker-id <physicalWorkerId>")
+                        && runbook.contains("BizWorkerIdentity") && runbook.contains("WorkerPool")),
+                () -> assertTrue(runbook.contains("SOURCE_NEWER_THAN_PUBLISHED"))
+        );
+    }
+
     private int run(String[] args, Map<String, String> env) {
         return new UpstreamCli(
                 new PrintStream(stdout, true, StandardCharsets.UTF_8),
                 new PrintStream(stderr, true, StandardCharsets.UTF_8),
                 tempDir)
                 .run(args, env);
+    }
+
+    private void assertTypedManagementRequest(String expectedPath, String expectedMethod, String expectedPrincipalCredential) {
+        assertEquals(expectedPath, lastPath);
+        assertEquals(expectedMethod, lastMethod);
+        assertEquals(expectedPrincipalCredential, lastPrincipalCredentialHeader);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertNull(lastOperatorKeyHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertNull(lastClientAppKeyHeader);
+        assertNull(lastClientAppSecretHeader);
+        assertNull(lastClientAppAccessTokenHeader);
+        assertNull(lastClientAppControlKeyHeader);
+        assertNull(lastUpstreamUserIdHeader);
+        assertNull(lastTenantIdHeader);
+    }
+
+    private static List<String> hardBoundaryLines(String output) {
+        return output.lines()
+                .filter(line -> line.startsWith("For an existing Physical Worker,")
+                        || line.startsWith("Typed-management introspection requires exactly one")
+                        || line.startsWith("NAVIGATOR_EXTERNAL_ENABLED gates only")
+                        || line.startsWith("NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED is Worker-principal strictness"))
+                .toList();
+    }
+
+    private static String readTestResource(String path) throws Exception {
+        try (var input = UpstreamCliTest.class.getResourceAsStream(path)) {
+            assertNotNull(input, "missing test resource " + path);
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static Path repositoryRoot() {
+        Path current = Path.of("").toAbsolutePath().normalize();
+        while (current != null) {
+            if (Files.isRegularFile(current.resolve("CLAUDE.md"))
+                    && Files.isDirectory(current.resolve("navigator-open-sdk"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException("Foggy Navigator repository root is unavailable");
+    }
+
+    private static Map<String, String> typedManagementCanonicalPairs(Path manifest) throws Exception {
+        Map<String, String> pairs = new LinkedHashMap<>();
+        List<String> lines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
+        for (String line : lines.subList(1, lines.size())) {
+            List<String> columns = parseManifestCsvLine(line);
+            if (columns.size() != 18) {
+                throw new IllegalStateException("Malformed canonical manifest test fixture");
+            }
+            if ("TYPED_MANAGEMENT_AUTH".equals(columns.get(4))
+                    && "CANONICAL_ENFORCE".equals(columns.get(13))
+                    && "KEEP".equals(columns.get(14))) {
+                String previous = pairs.putIfAbsent(columns.get(0), columns.get(9));
+                if (previous != null) {
+                    throw new IllegalStateException("Duplicate typed-management route in canonical manifest");
+                }
+            }
+        }
+        return Map.copyOf(pairs);
+    }
+
+    private static List<String> parseManifestCsvLine(String line) {
+        List<String> values = new ArrayList<>();
+        StringBuilder value = new StringBuilder();
+        boolean quoted = false;
+        for (int index = 0; index < line.length(); index++) {
+            char current = line.charAt(index);
+            if (current == '"') {
+                if (quoted && index + 1 < line.length() && line.charAt(index + 1) == '"') {
+                    value.append('"');
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (current == ',' && !quoted) {
+                values.add(value.toString());
+                value.setLength(0);
+            } else {
+                value.append(current);
+            }
+        }
+        if (quoted) {
+            throw new IllegalStateException("Unclosed quote in canonical manifest test fixture");
+        }
+        values.add(value.toString());
+        return values;
+    }
+
+    private static String sha256(Path file) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));
     }
 
     private int run(String[] args, Map<String, String> env, UpstreamCli.CommandRunner commandRunner) {
