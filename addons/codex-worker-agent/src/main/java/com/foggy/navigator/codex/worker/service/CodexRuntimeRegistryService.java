@@ -1001,7 +1001,7 @@ public class CodexRuntimeRegistryService {
 
     private CodexWorkerClient clientFor(CodexRuntimeEntity entity) {
         return clientFactory.getOrCreate(clientKey(entity), entity.getEndpointUrl(),
-                credentialEncryptor.decrypt(entity.getAuthTokenCiphertext()), entity.getInstanceId());
+                effectiveAuthToken(entity), entity.getInstanceId());
     }
 
     private CodexRuntimeEntity createSyncedRuntime(CodexAppServerEndpointEntity endpoint,
@@ -1084,10 +1084,42 @@ public class CodexRuntimeRegistryService {
                 .runtimeType(parseRuntimeType(entity.getRuntimeType()))
                 .workerId(entity.getWorkerId())
                 .endpointUrl(entity.getEndpointUrl())
-                .authToken(credentialEncryptor.decrypt(entity.getAuthTokenCiphertext()))
+                .authToken(effectiveAuthToken(entity))
                 .instanceId(entity.getInstanceId())
                 .routingEpoch(entity.getRoutingEpoch())
                 .build();
+    }
+
+    /**
+     * Runtime identity remains immutable, while its HTTP credential may rotate on the
+     * same endpoint profile. Never borrow a credential after worker or URL drift, and
+     * honor an explicit token clear instead of reviving the historical snapshot.
+     */
+    private String effectiveAuthToken(CodexRuntimeEntity entity) {
+        String snapshot = credentialEncryptor.decrypt(entity.getAuthTokenCiphertext());
+        if (!"ENDPOINT_SYNC".equals(entity.getRuntimeSource())
+                || entity.getEndpointId() == null || entity.getEndpointId().isBlank()) {
+            return snapshot;
+        }
+        return endpointRepository.findByEndpointId(entity.getEndpointId())
+                .filter(endpoint -> Objects.equals(entity.getWorkerId(), endpoint.getWorkerId()))
+                .filter(endpoint -> sameEndpointUrl(entity.getEndpointUrl(), endpoint.getEndpointUrl()))
+                .map(endpoint -> credentialEncryptor.decrypt(endpoint.getAuthTokenCiphertext()))
+                .orElse(snapshot);
+    }
+
+    private boolean sameEndpointUrl(String runtimeUrl, String endpointUrl) {
+        return Objects.equals(normalizeStoredEndpointUrl(runtimeUrl),
+                normalizeStoredEndpointUrl(endpointUrl));
+    }
+
+    private String normalizeStoredEndpointUrl(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        while (normalized.endsWith("/") && normalized.length() > 1) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private CodexRuntimeDTO toDTO(CodexRuntimeEntity entity) {
@@ -1102,6 +1134,7 @@ public class CodexRuntimeRegistryService {
                 .reportedRuntimeRevision(entity.getReportedRuntimeRevision())
                 .endpointConfigured(entity.getEndpointUrl() != null && !entity.getEndpointUrl().isBlank())
                 .endpointDisplay(maskedEndpoint(entity.getEndpointUrl()))
+                .tokenConfigured(hasConfiguredCredential(effectiveAuthToken(entity)))
                 .instanceId(entity.getInstanceId())
                 .enabled(entity.getEnabled())
                 .routingPolicy(entity.getRoutingPolicy())
@@ -1123,6 +1156,10 @@ public class CodexRuntimeRegistryService {
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private boolean hasConfiguredCredential(String value) {
+        return value != null && !value.isBlank();
     }
 
     private CodexAppServerEndpointDTO toEndpointDTO(CodexAppServerEndpointEntity endpoint) {

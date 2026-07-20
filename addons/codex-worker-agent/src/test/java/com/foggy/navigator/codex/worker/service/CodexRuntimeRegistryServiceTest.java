@@ -1235,6 +1235,123 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void boundRuntimeUsesCurrentEndpointCredentialWhenSnapshotWasEmpty() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("current-token");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        assertEquals("current-token", binding.getAuthToken());
+        assertEquals("http://127.0.0.1:3062", binding.getEndpointUrl());
+        assertEquals("instance-a", binding.getInstanceId());
+        assertEquals(1, binding.getRuntimeRevision());
+    }
+
+    @Test
+    void boundRuntimeUsesCurrentEndpointCredentialAfterRotation() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:old-token");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("new-token");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        assertEquals("new-token", binding.getAuthToken());
+    }
+
+    @Test
+    void boundRuntimeDoesNotRestoreSnapshotAfterEndpointCredentialIsCleared() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:old-token");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        assertEquals("", binding.getAuthToken());
+    }
+
+    @Test
+    void boundRuntimeKeepsSnapshotWhenEndpointProfileIsMissing() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:snapshot-token");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.empty());
+
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        assertEquals("snapshot-token", binding.getAuthToken());
+    }
+
+    @Test
+    void boundRuntimeDoesNotBorrowCredentialFromAnotherWorker() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:snapshot-token");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("other-token");
+        endpoint.setWorkerId("worker-2");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        assertEquals("snapshot-token", binding.getAuthToken());
+    }
+
+    @Test
+    void boundRuntimeDoesNotBorrowCredentialFromAnotherEndpointUrl() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:snapshot-token");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("other-token");
+        endpoint.setEndpointUrl("http://127.0.0.1:4062");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        assertEquals("snapshot-token", binding.getAuthToken());
+    }
+
+    @Test
+    void runtimeDtoReportsEffectiveCredentialConfigurationWithoutExposingToken() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("current-token");
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        var result = service.listByWorker("worker-1", true);
+
+        assertTrue(result.get(0).getTokenConfigured());
+        assertFalse(result.get(0).toString().contains("current-token"));
+    }
+
+    @Test
+    void runtimeDtoReportsClearedCurrentCredentialAsUnconfigured() {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        entity.setAuthTokenCiphertext("encrypted:old-token");
+        CodexAppServerEndpointEntity endpoint = matchingEndpoint("");
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.of(endpoint));
+
+        var result = service.listByWorker("worker-1", true);
+
+        assertFalse(result.get(0).getTokenConfigured());
+    }
+
+    @Test
     void boundRuntimeCapabilitiesRejectUnsupportedModelAndFeatures() throws Exception {
         CodexRuntimeEntity entity = runtime("DRAINING", 0);
         setModelCapabilities(entity, Map.of("codex-terra", "gpt-5.6-terra"),
@@ -1319,6 +1436,13 @@ class CodexRuntimeRegistryServiceTest {
         endpoint.setAuthTokenCiphertext("encrypted:runtime-token");
         endpoint.setConfigurationVersion(1L);
         endpoint.setLastSyncStatus("PENDING");
+        return endpoint;
+    }
+
+    private CodexAppServerEndpointEntity matchingEndpoint(String token) {
+        CodexAppServerEndpointEntity endpoint = endpoint("endpoint-main");
+        endpoint.setEndpointUrl("http://127.0.0.1:3062/");
+        endpoint.setAuthTokenCiphertext("encrypted:" + token);
         return endpoint;
     }
 

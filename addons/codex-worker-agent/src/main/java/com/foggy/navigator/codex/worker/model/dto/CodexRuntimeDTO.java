@@ -18,6 +18,7 @@ public class CodexRuntimeDTO {
     private Integer reportedRuntimeRevision;
     private Boolean endpointConfigured;
     private String endpointDisplay;
+    private Boolean tokenConfigured;
     private String instanceId;
     private Boolean enabled;
     private String routingPolicy;
