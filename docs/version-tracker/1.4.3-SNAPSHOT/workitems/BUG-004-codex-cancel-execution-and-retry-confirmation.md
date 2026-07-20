@@ -146,10 +146,11 @@ open_questions: []
   - Codex App Server Worker 版本提升至 `0.3.22`；`npm run package:release` 通过，337 tests / 336 passed / 1 platform-conditional skipped / 0 failed，schema digest `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f`，typecheck/build 通过。ZIP 为 2428107 bytes、SHA-256 `b566baa491320aadb8b6c53a05b58c10c51dc7babfafb23599dd66228bf8b018`。
   - App Server 最终 ZIP 的隔离更新验证 `bash tools/codex-app-server-worker/update.sh --package .../codex-app-server-worker-0.3.22.zip --install-dir temp/test-artifacts/bug004-worker-release-20260720/appserver-dryrun --dry-run` 通过；候选校验再次执行 337 tests、schema、typecheck 和 build，并确认当前安装未修改。
   - 从最终 ZIP 解包并安装生产依赖后启动独立候选端口 `13063`，真实 `/health` 返回 `version=0.3.22`、`ready=true`、CLI `0.144.3` compatible。`local-smoke` canary 使用受控本地 Navigator 终态任务源和真实候选 Worker health，结果为永久标记的 `NON_PRODUCTION_SMOKE`：2/2 terminal tasks、100% success、0 internal/recovery/affinity/privacy/pool failures，gate PASS；未触碰当前 `13062` 手工验证 Worker。
+  - 2026-07-20 已从 clean、pushed commit `ff3637043bc6e41dc839befa4fc9e4fdc16d9833` 发布到 OBS：SDK `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/latest.json` 指向 `1.0.18` 且 `smokeLevel=full`；App Server `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json` 指向 `0.3.22`。两个发布脚本均完成远端 manifest、archive 和 bootstrap 字节校验；另行公网下载四个归档后复算的大小/SHA-256 与上述本地候选完全一致，四个远端 `install.sh`/`install.ps1` 也与本地发布资产逐字节一致。
 - deviations:
   - 无目标、兼容、安全边界或数据迁移偏离。SDK 升级终止绑定到 SDK 直接启动且已验证身份的 Codex CLI 进程；POSIX 未新增独立的任意后代进程扫描或模糊进程树清理，以避免扩大杀进程权限。
 - residual_risks:
-  - 本地真实 Worker、Java 和浏览器 smoke 已通过；用户仍需按自身操作习惯在当前保留环境中完成手工体验确认。Worker 发布是后续单独授权动作，不代表 Java/前端已部署，也不会自动升级当前保留的手工验证 Worker。
+  - 本地真实 Worker、Java 和浏览器 smoke 已通过，SDK Worker `1.0.18` 与 App Server Worker `0.3.22` 也已发布；用户仍需按自身操作习惯完成手工体验确认并按需升级目标 Worker。该 Worker 发布不代表 Java/前端已部署，也不会自动升级当前保留的手工验证 Worker。
   - 本地 SDK Worker health 为 `degraded` 的原因是外部 credential forwarding readiness 未配置；`codex_sdk_available=true`、SDK 版本兼容且真实任务执行/中止已通过。本项不影响本 BUG 的 internal-dev 验证，但不能作为外部接入就绪证明。
   - 若未来 Codex SDK 在直连 CLI 之外引入独立存活的后代执行进程，需要新增可证明父子身份的进程树契约，不能直接扩大当前 PID 终止范围。
 - readiness: READY_FOR_SIGNOFF
