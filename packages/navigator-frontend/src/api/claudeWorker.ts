@@ -499,9 +499,9 @@ export async function resyncTask(
 
 export async function abortTask(
   taskId: string,
-): Promise<{ taskId: string; status: string }> {
+): Promise<ClaudeTask | null> {
   await cancelTaskUnified(taskId)
-  return { taskId, status: 'ABORTED' }
+  return getTaskUnified(taskId)
 }
 
 export async function rewindTask(

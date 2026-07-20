@@ -131,6 +131,19 @@ test('task abort route requires an authenticated operation and ACKs only CANCEL_
     })
     assert.equal(replay.status, 409)
     assert.equal((await replay.json()).code, 'TERMINATION_OPERATION_REPLAYED')
+
+    const retry = await fetch(`${server.baseUrl}/api/v1/tasks/task-route-1/abort`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...signedCancel('task-route-1', 'route-operation-retry'),
+      },
+      body: '{}',
+    })
+    const retryBody = await retry.json()
+    assert.equal(retry.status, 202)
+    assert.equal(retryBody.status, 'cancel_requested')
+    assert.equal(retryBody.termination_operation.operation_id, 'route-operation-retry')
   } finally {
     config.workerToken = previousToken
     await server.close()

@@ -3079,7 +3079,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { h, ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Loading, WarningFilled } from '@element-plus/icons-vue'
@@ -3119,6 +3119,8 @@ import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
   cleanupStaleTurnUnified,
+  getTaskUnified,
+  getTerminationInspection,
   getStaleTurnCleanupEligibility,
   reconnectTaskUnified,
   resyncTaskUnified,
@@ -3127,8 +3129,9 @@ import {
   getIncomingForwardRelation,
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
+  retryTerminationUnified,
 } from '@/api/unifiedTask'
-import type { SessionRelationInfo, StaleTurnCleanupEligibility } from '@/api/unifiedTask'
+import type { SessionRelationInfo, StaleTurnCleanupEligibility, TerminationInspection } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
@@ -7171,13 +7174,9 @@ async function abortPane(paneId: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
   try {
-    await ElMessageBox.confirm('确认中止该任务？', '提示', {
-      type: 'warning',
-      confirmButtonText: '确认',
-      cancelButtonText: '取消',
-    })
     const taskId = pane.task.value.taskId
-    const refreshed = await workerState.abortTask(taskId)
+    const refreshed = await confirmAndAbortTask(pane.task.value)
+    if (!refreshed) return
     if (pane.task.value?.taskId === taskId) Object.assign(pane.task.value, refreshed)
     await pane.syncTaskStatus({ force: true })
     void workerState.loadActiveTasks()
@@ -7194,6 +7193,106 @@ async function abortPane(paneId: string) {
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('中止失败')
   }
+}
+
+function terminationStateLabel(state?: string): string {
+  return ({
+    in_progress: '仍在运行',
+    completed: '已完成',
+    failed: '已失败',
+    interrupted: '已中断',
+    terminal: 'Worker 已终态',
+    unknown: '状态未知',
+    unavailable: '暂时无法查询',
+    binding_mismatch: '任务绑定不一致',
+  } as Record<string, string>)[state || ''] || state || '未返回'
+}
+
+function terminationInspectionMessage(inspection: TerminationInspection, prompt: string) {
+  const lines = [
+    `Navigator 任务状态：${inspection.taskStatus || '未知'}`,
+    `App Server 执行状态：${terminationStateLabel(inspection.providerState)}`,
+  ]
+  if (inspection.threadStatus) lines.push(`Thread 状态：${inspection.threadStatus}`)
+  if (inspection.turnStatus) lines.push(`Turn 状态：${inspection.turnStatus}`)
+  if (inspection.checkedAt) lines.push(`查询时间：${inspection.checkedAt}`)
+  return h('div', { style: { lineHeight: '1.7' } }, [
+    ...lines.map(line => h('div', line)),
+    h('div', { style: { marginTop: '12px' } }, prompt),
+  ])
+}
+
+async function confirmAndAbortTask(task: ClaudeTask): Promise<ClaudeTask | null> {
+  const isAppServerRetry = task.status === 'CANCEL_REQUESTED'
+    && task.providerType === 'codex-app-server-worker'
+  if (!isAppServerRetry) {
+    await ElMessageBox.confirm('确认中止该任务？', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
+    return workerState.abortTask(task.taskId)
+  }
+
+  const inspection = await getTerminationInspection(task.taskId)
+  if (inspection.recommendedAction === 'RETRY_INTERRUPT') {
+    await ElMessageBox.confirm(
+      terminationInspectionMessage(
+        inspection,
+        '已确认对应 App Server Turn 仍在运行。是否再次发送精确中止请求？',
+      ),
+      '确认再次中止',
+      {
+        type: 'warning',
+        confirmButtonText: '再次中止',
+        cancelButtonText: '取消',
+      },
+    )
+    try {
+      await retryTerminationUnified(task.taskId)
+    } catch (error) {
+      const refreshed = await getTaskUnified(task.taskId) as ClaudeTask | null
+      if (refreshed && ['COMPLETED', 'FAILED', 'ABORTED'].includes(refreshed.status)) return refreshed
+      throw error
+    }
+    return await getTaskUnified(task.taskId) as ClaudeTask | null
+  }
+  if (inspection.recommendedAction === 'REFRESH_TASK_STATE'
+      || inspection.recommendedAction === 'NO_ACTION') {
+    await ElMessageBox.confirm(
+      terminationInspectionMessage(
+        inspection,
+        '原生 Turn 已结束，不会再次执行 interrupt。是否将该终态同步到 Navigator？',
+      ),
+      '任务状态确认',
+      {
+        type: 'info',
+        confirmButtonText: '同步状态',
+        cancelButtonText: '关闭',
+      },
+    )
+    try {
+      // The Worker re-reads the exact persisted turn and returns its terminal
+      // outcome without dispatching another interrupt. The backend then
+      // reconciles the Navigator task from that evidence.
+      await retryTerminationUnified(task.taskId)
+    } catch (error) {
+      const refreshed = await getTaskUnified(task.taskId) as ClaudeTask | null
+      if (refreshed && ['COMPLETED', 'FAILED', 'ABORTED'].includes(refreshed.status)) return refreshed
+      throw error
+    }
+    return await getTaskUnified(task.taskId) as ClaudeTask | null
+  }
+
+  await ElMessageBox.alert(
+    terminationInspectionMessage(
+      inspection,
+      '当前无法安全确认目标 Turn，未发送新的中止请求。请稍后重查状态。',
+    ),
+    '暂时无法再次中止',
+    { type: 'warning', confirmButtonText: '知道了' },
+  )
+  return null
 }
 
 async function handlePaneReconnect(paneId: string, taskId: string) {
@@ -7774,12 +7873,13 @@ function isCancellableTaskStatus(status?: string): boolean {
 
 async function handleAbortTask(taskId: string) {
   try {
-    await ElMessageBox.confirm('确认中止该任务？', '提示', {
-      type: 'warning',
-      confirmButtonText: '确认',
-      cancelButtonText: '取消',
-    })
-    const refreshed = await workerState.abortTask(taskId)
+    const sourceTask = workerState.tasks.value.find(task => task.taskId === taskId)
+      || workerState.activeTasks.value.find(task => task.taskId === taskId)
+      || workerState.awaitingReplyTasks.value.find(task => task.taskId === taskId)
+      || getAllPanes().find(pane => pane.task.value?.taskId === taskId)?.task.value
+    if (!sourceTask) throw new Error('Task not found')
+    const refreshed = await confirmAndAbortTask(sourceTask)
+    if (!refreshed) return
     // Sync the authoritative status to any open pane showing this task.
     for (const pane of getAllPanes()) {
       if (pane.task.value?.taskId === taskId) {

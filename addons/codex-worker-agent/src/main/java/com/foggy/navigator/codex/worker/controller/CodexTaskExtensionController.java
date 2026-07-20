@@ -214,6 +214,63 @@ public class CodexTaskExtensionController {
     }
 
     /**
+     * Reads the exact App Server turn state before the UI offers a second
+     * cancellation attempt. Native identifiers remain Worker/server private.
+     */
+    @GetMapping("/{taskId}/termination-inspection")
+    public RX<Map<String, Object>> getTerminationInspection(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        CodexTaskEntity task = requireTask(
+                taskId, userId, tenantId, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+        requirePinnedAppServerRuntime(task);
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+
+        try {
+            Map<String, Object> workerResult = pinnedAppServerClient(task)
+                    .getTerminationInspection(remoteTaskId(task))
+                    .block(Duration.ofSeconds(10));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("taskId", task.getTaskId());
+            result.put("providerType", task.getProviderType());
+            result.put("taskStatus", task.getStatus());
+            copySafeTerminationField(workerResult, result, "lifecycle_status", "workerLifecycleStatus");
+            copySafeTerminationField(workerResult, result, "provider_state", "providerState");
+            copySafeTerminationField(workerResult, result, "thread_status", "threadStatus");
+            copySafeTerminationField(workerResult, result, "turn_status", "turnStatus");
+            copySafeTerminationField(workerResult, result, "recommended_action", "recommendedAction");
+            copySafeTerminationField(workerResult, result, "checked_at", "checkedAt");
+            return RX.ok(result);
+        } catch (CodexWorkerClient.WorkerQueryRejectedException e) {
+            return RX.failA(e.getCode());
+        } catch (Exception e) {
+            log.warn("Failed to inspect Codex App Server cancellation: taskId={}, type={}",
+                    taskId, e.getClass().getSimpleName());
+            return RX.failA("CODEX_TERMINATION_INSPECTION_UNAVAILABLE");
+        }
+    }
+
+    /** Executes the user-confirmed retry; the Worker revalidates exact affinity again. */
+    @PostMapping("/{taskId}/termination-retry")
+    public RX<Map<String, Object>> retryTermination(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        CodexTaskEntity task = requireTask(
+                taskId, userId, tenantId, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                CodexRuntimeType.APP_SERVER.name());
+        requirePinnedAppServerRuntime(task);
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+        CodexTaskService.AppServerAbortRetryResult result =
+                taskService.retryAppServerAbort(taskId, userId, tenantId);
+        return RX.ok(Map.of(
+                "taskId", result.taskId(),
+                "operationId", result.operationId(),
+                "providerState", result.providerState(),
+                "status", result.status()));
+    }
+
+    /**
      * Returns only server-derived eligibility for cleaning a stale native turn.
      * A terminal status alone is never enough to expose the action: the service
      * also requires the persisted App Server affinity and exact task binding.
@@ -287,6 +344,15 @@ public class CodexTaskExtensionController {
     @ExceptionHandler(CodexTaskService.StaleTurnCleanupException.class)
     public ResponseEntity<RX<?>> handleStaleTurnCleanupException(
             CodexTaskService.StaleTurnCleanupException error) {
+        HttpStatus status = error.isRetryable()
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.CONFLICT;
+        return ResponseEntity.status(status).body(RX.failA(error.getSafeCode()));
+    }
+
+    @ExceptionHandler(CodexTaskService.AppServerAbortRetryException.class)
+    public ResponseEntity<RX<?>> handleAppServerAbortRetryException(
+            CodexTaskService.AppServerAbortRetryException error) {
         HttpStatus status = error.isRetryable()
                 ? HttpStatus.SERVICE_UNAVAILABLE
                 : HttpStatus.CONFLICT;
@@ -450,6 +516,16 @@ public class CodexTaskExtensionController {
     private void renameIfPresent(Map<String, Object> result, String source, String target) {
         if (result.containsKey(source)) {
             result.put(target, result.remove(source));
+        }
+    }
+
+    private void copySafeTerminationField(
+            Map<String, Object> source, Map<String, Object> target,
+            String sourceKey, String targetKey) {
+        if (source == null) return;
+        Object value = source.get(sourceKey);
+        if (value instanceof String text && !text.isBlank()) {
+            target.put(targetKey, text);
         }
     }
 

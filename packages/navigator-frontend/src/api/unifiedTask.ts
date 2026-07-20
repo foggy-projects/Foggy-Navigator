@@ -98,6 +98,25 @@ export interface StaleTurnCleanupResult {
   status: 'cleaned' | 'already_terminal'
 }
 
+export interface TerminationInspection {
+  taskId: string
+  providerType: 'codex-app-server-worker'
+  taskStatus: string
+  workerLifecycleStatus?: string
+  providerState: 'in_progress' | 'completed' | 'failed' | 'interrupted' | 'terminal' | 'unknown' | 'unavailable' | 'binding_mismatch'
+  threadStatus?: string
+  turnStatus?: string
+  recommendedAction: 'RETRY_INTERRUPT' | 'REFRESH_TASK_STATE' | 'RECHECK_LATER' | 'NO_ACTION'
+  checkedAt?: string
+}
+
+export interface TerminationRetryResult {
+  taskId: string
+  operationId: string
+  providerState: 'completed' | 'failed' | 'interrupted'
+  status: 'COMPLETED' | 'FAILED' | 'ABORTED'
+}
+
 function normalizeImages(images?: string | string[]): string[] | undefined {
   if (images == null) {
     return undefined
@@ -244,6 +263,27 @@ export async function cleanupStaleTurnUnified(taskId: string): Promise<StaleTurn
     undefined,
     { suppressErrorMessage: true } as any,
   )) as unknown as RX<StaleTurnCleanupResult>
+  return rx.data
+}
+
+export async function getTerminationInspection(
+  taskId: string,
+): Promise<TerminationInspection> {
+  const rx = (await client.get(
+    `/tasks/${encodeURIComponent(taskId)}/termination-inspection`,
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<TerminationInspection>
+  return rx.data
+}
+
+export async function retryTerminationUnified(
+  taskId: string,
+): Promise<TerminationRetryResult> {
+  const rx = (await client.post(
+    `/tasks/${encodeURIComponent(taskId)}/termination-retry`,
+    undefined,
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<TerminationRetryResult>
   return rx.data
 }
 

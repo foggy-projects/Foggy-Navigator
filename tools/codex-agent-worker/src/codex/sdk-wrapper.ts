@@ -26,7 +26,15 @@ import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { safeSdkError } from '../diagnostics.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
-import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
+import {
+  canonicalizeCodexCliProcessStartedAt,
+  detectSpawnedCodexPid,
+  detectSpawnedCodexProcess,
+  killCodexCliProcess,
+  listCodexCliProcesses,
+  snapshotCodexCliPids,
+  type CodexCliProcessInfo,
+} from './processes.js'
 import { releaseCodexThreadReservationsForTask } from './thread-reservations.js'
 import {
   buildNavigatorBusinessMcpConfig,
@@ -57,6 +65,12 @@ export type RunQueryDependencies = {
   codexFactory?: CodexFactory
   snapshotCodexCliPids?: typeof snapshotCodexCliPids
   detectSpawnedCodexPid?: typeof detectSpawnedCodexPid
+  detectSpawnedCodexProcess?: typeof detectSpawnedCodexProcess
+  listCodexCliProcesses?: typeof listCodexCliProcesses
+  killCodexCliProcess?: typeof killCodexCliProcess
+  cancellationGraceMs?: number
+  cancellationForceGraceMs?: number
+  cancellationPollIntervalMs?: number
   prepareResumeToolsModelCatalog?: typeof prepareResumeToolsModelCatalog
 }
 
@@ -890,6 +904,7 @@ function finalizeTask(
   status: Extract<TaskStatus, 'completed' | 'failed' | 'aborted'>,
   result?: string,
 ): void {
+  if (isTaskTerminal(entry.status)) return
   entry.status = status
   entry.completedAt = Date.now()
   entry.availableActions = []
@@ -905,6 +920,133 @@ function finalizeTask(
   lifecycleEvent(entry, 'lifecycle_terminal', result ?? toTaskLifecycleState(status))
 }
 
+type CancellationProcessDependencies = Pick<
+  RunQueryDependencies,
+  | 'listCodexCliProcesses'
+  | 'killCodexCliProcess'
+  | 'cancellationGraceMs'
+  | 'cancellationForceGraceMs'
+  | 'cancellationPollIntervalMs'
+>
+
+type BoundProcessObservation = 'exited' | 'running' | 'unverified'
+
+async function observeBoundTaskProcess(
+  entry: TaskEntry,
+  listProcesses: typeof listCodexCliProcesses,
+): Promise<BoundProcessObservation> {
+  if (!entry.pid || !entry.processStartedAt) return 'unverified'
+  const duplicateBinding = [...taskRegistry.values()].some(candidate => (
+    candidate.taskId !== entry.taskId
+    && candidate.pid === entry.pid
+    && isTaskExecutionActive(candidate.status)
+  ))
+  if (duplicateBinding) return 'unverified'
+
+  const processes = await listProcesses()
+  const processInfo = processes.find(candidate => candidate.pid === entry.pid)
+  if (!processInfo) return 'exited'
+  const observedStartedAt = canonicalizeCodexCliProcessStartedAt(processInfo.started_at)
+  return observedStartedAt === entry.processStartedAt ? 'running' : 'unverified'
+}
+
+async function waitForBoundTaskProcessExit(
+  entry: TaskEntry,
+  listProcesses: typeof listCodexCliProcesses,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<BoundProcessObservation> {
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  do {
+    try {
+      const observation = await observeBoundTaskProcess(entry, listProcesses)
+      if (observation !== 'running') return observation
+    } catch {
+      return 'unverified'
+    }
+    if (Date.now() >= deadline) return 'running'
+    await new Promise(resolve => setTimeout(resolve, Math.max(1, pollIntervalMs)))
+  } while (true)
+}
+
+/**
+ * Completes an already-authorized SDK cancellation. The SDK signal is given a
+ * short grace period first; only the exact task-bound CLI process can then be
+ * signalled. No watchdog or timeout source can call this path on its own.
+ */
+export async function settleAuthorizedTaskCancellation(
+  taskId: string,
+  operationId: string,
+  dependencies: CancellationProcessDependencies = {},
+): Promise<TaskEntry | undefined> {
+  const entry = taskRegistry.get(taskId)
+  if (!entry || entry.terminationOperation?.operation_id !== operationId) return entry
+
+  const listProcesses = dependencies.listCodexCliProcesses ?? listCodexCliProcesses
+  const killProcess = dependencies.killCodexCliProcess ?? killCodexCliProcess
+  const graceMs = dependencies.cancellationGraceMs ?? 2_000
+  const forceGraceMs = dependencies.cancellationForceGraceMs ?? 2_000
+  const pollIntervalMs = dependencies.cancellationPollIntervalMs ?? 100
+
+  const initial = await waitForBoundTaskProcessExit(entry, listProcesses, graceMs, pollIntervalMs)
+  if (entry.terminationOperation?.operation_id !== operationId || isTaskTerminal(entry.status)) return entry
+  if (initial === 'exited') {
+    return confirmTaskProcessExit(taskId, operationId, 'SDK_ABORT_PROCESS_EXIT_VERIFIED')
+  }
+  if (initial === 'unverified' || !entry.pid) {
+    return markTaskTerminationUnconfirmed(taskId, operationId, 'SDK_CANCEL_PROCESS_BINDING_UNVERIFIED')
+  }
+
+  let gracefulKillFailed = false
+  try {
+    await killProcess(entry.pid, false)
+  } catch {
+    gracefulKillFailed = true
+  }
+  const afterGracefulKill = await waitForBoundTaskProcessExit(
+    entry,
+    listProcesses,
+    forceGraceMs,
+    pollIntervalMs,
+  )
+  if (entry.terminationOperation?.operation_id !== operationId || isTaskTerminal(entry.status)) return entry
+  if (afterGracefulKill === 'exited') {
+    return confirmTaskProcessExit(
+      taskId,
+      operationId,
+      gracefulKillFailed
+        ? 'SDK_CANCEL_PROCESS_EXIT_VERIFIED_AFTER_SIGNAL_ERROR'
+        : 'SDK_CANCEL_PROCESS_EXIT_VERIFIED_AFTER_SIGTERM',
+    )
+  }
+  if (afterGracefulKill === 'unverified') {
+    return markTaskTerminationUnconfirmed(taskId, operationId, 'SDK_CANCEL_PROCESS_EXIT_UNVERIFIED')
+  }
+
+  try {
+    await killProcess(entry.pid, true)
+  } catch {
+    // A signal error is not authoritative; the post-signal scan below is.
+  }
+  const afterForceKill = await waitForBoundTaskProcessExit(
+    entry,
+    listProcesses,
+    forceGraceMs,
+    pollIntervalMs,
+  )
+  if (entry.terminationOperation?.operation_id !== operationId || isTaskTerminal(entry.status)) return entry
+  if (afterForceKill === 'exited') {
+    return confirmTaskProcessExit(taskId, operationId, 'SDK_CANCEL_PROCESS_EXIT_VERIFIED_AFTER_SIGKILL')
+  }
+  return markTaskTerminationUnconfirmed(
+    taskId,
+    operationId,
+    afterForceKill === 'unverified'
+      ? 'SDK_CANCEL_PROCESS_EXIT_UNVERIFIED'
+      : 'SDK_CANCEL_PROCESS_STILL_RUNNING',
+  )
+}
+
 /**
  * An explicit, already-authorized remote cancel request.  The acknowledgement
  * remains CANCEL_REQUESTED until a provider terminal event or a verified
@@ -915,7 +1057,7 @@ export function requestTaskCancellation(
   operation: TerminationOperationSummary,
 ): TaskEntry | undefined {
   const entry = taskRegistry.get(taskId)
-  if (!entry || entry.status !== 'running') return undefined
+  if (!entry || !isTaskExecutionActive(entry.status)) return undefined
 
   entry.status = 'cancel_requested'
   entry.terminationOperation = operation
@@ -928,6 +1070,7 @@ export function requestTaskCancellation(
   })
   lifecycleEvent(entry, 'termination_requested', 'Cancellation request dispatched to the Codex runtime')
   entry.abortController?.abort(`Termination operation ${operation.operation_id}: ${operation.reason_code}`)
+  entry.cancelExecution?.(operation)
   return entry
 }
 
@@ -963,7 +1106,8 @@ export function markTaskTerminationUnconfirmed(
   result: string,
 ): TaskEntry | undefined {
   const entry = taskRegistry.get(taskId)
-  if (!entry || entry.terminationOperation?.operation_id !== operationId) return undefined
+  if (!entry || !isTaskExecutionActive(entry.status)
+    || entry.terminationOperation?.operation_id !== operationId) return undefined
   entry.terminationOperation = {
     ...entry.terminationOperation,
     status: 'UNCONFIRMED',
@@ -994,6 +1138,22 @@ export function confirmTaskProcessExit(
   if (!entry || entry.terminationOperation?.operation_id !== operationId) return undefined
   finalizeTask(entry, 'aborted', result)
   const broadcast = taskBroadcasts.get(taskId)
+  if (broadcast && !broadcast.isClosed()) {
+    const terminalEvent = createErrorEvent(
+      entry.taskId,
+      entry.threadId,
+      'CODEX_TURN_CANCELLED',
+      broadcast.nextSeq(),
+      'ABORTED',
+      'VERIFIED_PROCESS_EXIT',
+    )
+    terminalEvent.pid = entry.pid
+    terminalEvent.subtype = 'lifecycle_terminal'
+    terminalEvent.lifecycle_state = toTaskLifecycleState(entry.status)
+    terminalEvent.provider_status = result
+    terminalEvent.termination_operation = entry.terminationOperation
+    broadcast.emit(terminalEvent)
+  }
   broadcast?.close()
   return entry
 }
@@ -1249,6 +1409,16 @@ export async function runQuery(
     model: requestedModel,
     startedAt: Date.now(),
   }
+  entry.cancelExecution = operation => {
+    void settleAuthorizedTaskCancellation(taskId, operation.operation_id, dependencies)
+      .catch(() => {
+        markTaskTerminationUnconfirmed(
+          taskId,
+          operation.operation_id,
+          'SDK_CANCEL_SETTLEMENT_FAILED',
+        )
+      })
+  }
   taskRegistry.set(taskId, entry)
 
   emitWorkerEvent(broadcast, {
@@ -1451,6 +1621,7 @@ export async function runQuery(
     let pidDetectionStarted = false
 
     for await (const event of events) {
+      if (isTaskTerminal(entry.status)) break
       // The SDK stream is lazy: wait until its first event starts iteration
       // before looking for a new child PID.  Taking the snapshot immediately
       // after runStreamed() can incorrectly classify a just-starting task as
@@ -1458,7 +1629,17 @@ export async function runQuery(
       if (!pidDetectionStarted) {
         pidDetectionStarted = true
         try {
-          entry.pid = await (dependencies.detectSpawnedCodexPid ?? detectSpawnedCodexPid)(existingPids)
+          if (dependencies.detectSpawnedCodexProcess || !dependencies.detectSpawnedCodexPid) {
+            const processInfo = await (
+              dependencies.detectSpawnedCodexProcess ?? detectSpawnedCodexProcess
+            )(existingPids)
+            entry.pid = processInfo?.pid
+            entry.processStartedAt = processInfo
+              ? canonicalizeCodexCliProcessStartedAt(processInfo.started_at)
+              : undefined
+          } else {
+            entry.pid = await dependencies.detectSpawnedCodexPid(existingPids)
+          }
         } catch {
           markTaskAttention(taskId, {
             code: 'PROCESS_UNVERIFIED',

@@ -126,6 +126,23 @@ public class TerminationOperationService {
     }
 
     /**
+     * Closes the prior in-flight cancellation before an explicitly confirmed
+     * retry reserves a fresh one-shot capability for the same task.
+     */
+    @Transactional
+    public void supersedeActiveOperationsForTask(String taskId, String safeFailureCode) {
+        if (!hasText(taskId)) return;
+        for (TerminationOperationEntity entity : repository.findByTaskIdOrderByCreatedAtDescForUpdate(taskId)) {
+            if (isTerminal(entity.getStatus())) continue;
+            entity.setStatus("FAILED");
+            entity.setDispatchState("UNCONFIRMED");
+            entity.setAttentionCode("TERMINATION_RETRY_REQUESTED");
+            entity.setFailureCode(safeCode(safeFailureCode, "TERMINATION_OPERATION_SUPERSEDED"));
+            repository.save(entity);
+        }
+    }
+
+    /**
      * A Worker definitively rejected the signed operation (for example a
      * task/PID binding mismatch). This closes the audit operation without
      * manufacturing a task terminal state.

@@ -61,6 +61,8 @@ vi.mock('@/api/unifiedTask', () => ({
   cancelTaskUnified: vi.fn(),
   cleanupStaleTurnUnified: vi.fn(),
   getStaleTurnCleanupEligibility: vi.fn(),
+  getTerminationInspection: vi.fn(),
+  retryTerminationUnified: vi.fn(),
   getTaskUnified: vi.fn(),
   listTasksUnified: vi.fn().mockResolvedValue([]),
   respondToTaskUnified: vi.fn(),
@@ -100,6 +102,7 @@ vi.mock('element-plus', async () => {
     ElMessageBox: {
       prompt: vi.fn(),
       confirm: vi.fn(),
+      alert: vi.fn(),
     },
     ElMessage: {
       success: vi.fn(),
@@ -367,6 +370,23 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     })
     vi.mocked(unifiedTaskApi.listTasksUnified).mockResolvedValue([])
     vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(null)
+    vi.mocked(unifiedTaskApi.getTerminationInspection).mockResolvedValue({
+      taskId: mockAppServerTerminalTask.taskId,
+      providerType: 'codex-app-server-worker',
+      taskStatus: 'CANCEL_REQUESTED',
+      workerLifecycleStatus: 'abort_requested',
+      providerState: 'in_progress',
+      threadStatus: 'active',
+      turnStatus: 'inProgress',
+      recommendedAction: 'RETRY_INTERRUPT',
+      checkedAt: '2026-07-19T10:00:00Z',
+    })
+    vi.mocked(unifiedTaskApi.retryTerminationUnified).mockResolvedValue({
+      taskId: mockAppServerTerminalTask.taskId,
+      operationId: 'operation-retry-1',
+      providerState: 'interrupted',
+      status: 'ABORTED',
+    })
     vi.mocked(unifiedTaskApi.getStaleTurnCleanupEligibility).mockResolvedValue({ eligible: false })
     vi.mocked(unifiedTaskApi.cleanupStaleTurnUnified).mockResolvedValue({
       taskId: mockAppServerTerminalTask.taskId,
@@ -1714,6 +1734,103 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       expect(wrapper.text()).not.toContain('清理遗留运行')
       await vm.handlePaneStaleTurnCleanup(pane)
       expect(unifiedTaskApi.cleanupStaleTurnUnified).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+  })
+
+  describe('BUG-004 App Server cancellation retry confirmation', () => {
+    it('shows exact native state before dispatching the user-confirmed retry', async () => {
+      const pendingTask: ClaudeTask = {
+        ...mockAppServerTerminalTask,
+        status: 'CANCEL_REQUESTED',
+      }
+      const refreshedTask: ClaudeTask = { ...pendingTask, status: 'ABORTED' }
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(refreshedTask)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      const result = await vm.confirmAndAbortTask(pendingTask)
+      await flushPromises()
+
+      expect(unifiedTaskApi.getTerminationInspection).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          children: expect.arrayContaining([
+            expect.objectContaining({ children: 'App Server 执行状态：仍在运行' }),
+            expect.objectContaining({ children: 'Turn 状态：inProgress' }),
+          ]),
+        }),
+        '确认再次中止',
+        expect.objectContaining({ confirmButtonText: '再次中止' }),
+      )
+      expect(unifiedTaskApi.retryTerminationUnified).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(unifiedTaskApi.getTaskUnified).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(result.status).toBe('ABORTED')
+      wrapper.unmount()
+    })
+
+    it('does not retry when the exact native turn cannot be safely confirmed', async () => {
+      const pendingTask: ClaudeTask = {
+        ...mockAppServerTerminalTask,
+        status: 'CANCEL_REQUESTED',
+      }
+      vi.mocked(unifiedTaskApi.getTerminationInspection).mockResolvedValue({
+        taskId: pendingTask.taskId,
+        providerType: 'codex-app-server-worker',
+        taskStatus: 'CANCEL_REQUESTED',
+        workerLifecycleStatus: 'abort_requested',
+        providerState: 'binding_mismatch',
+        recommendedAction: 'RECHECK_LATER',
+        checkedAt: '2026-07-19T10:00:00Z',
+      })
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      const result = await vm.confirmAndAbortTask(pendingTask)
+      await flushPromises()
+
+      expect(ElMessageBox.alert).toHaveBeenCalled()
+      expect(unifiedTaskApi.retryTerminationUnified).not.toHaveBeenCalled()
+      expect(result).toBeNull()
+      wrapper.unmount()
+    })
+
+    it('synchronizes an already terminal native turn without presenting another interrupt', async () => {
+      const pendingTask: ClaudeTask = {
+        ...mockAppServerTerminalTask,
+        status: 'CANCEL_REQUESTED',
+      }
+      const refreshedTask: ClaudeTask = { ...pendingTask, status: 'COMPLETED' }
+      vi.mocked(unifiedTaskApi.getTerminationInspection).mockResolvedValue({
+        taskId: pendingTask.taskId,
+        providerType: 'codex-app-server-worker',
+        taskStatus: 'CANCEL_REQUESTED',
+        workerLifecycleStatus: 'abort_requested',
+        providerState: 'completed',
+        turnStatus: 'completed',
+        recommendedAction: 'REFRESH_TASK_STATE',
+        checkedAt: '2026-07-19T10:00:00Z',
+      })
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(refreshedTask)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      const result = await vm.confirmAndAbortTask(pendingTask)
+      await flushPromises()
+
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.anything(),
+        '任务状态确认',
+        expect.objectContaining({ confirmButtonText: '同步状态' }),
+      )
+      expect(unifiedTaskApi.retryTerminationUnified).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(unifiedTaskApi.getTaskUnified).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(result.status).toBe('COMPLETED')
       wrapper.unmount()
     })
   })

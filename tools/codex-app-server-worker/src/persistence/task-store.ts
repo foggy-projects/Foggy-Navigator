@@ -240,6 +240,31 @@ export class TaskStore {
     })
   }
 
+  /**
+   * Replaces only an existing remote-cancel operation after the control plane
+   * has explicitly authorized a user-confirmed retry. Other termination kinds
+   * remain mutually exclusive with cancellation.
+   */
+  async retryAbort(taskId: string, operation: TerminationOperationSummary): Promise<StoredTaskRecord> {
+    return this.withLock(taskId, async () => {
+      const current = this.required(taskId)
+      if (current.status === 'terminal') return clone(current)
+      const existing = current.termination_operation
+      if (!current.abort_requested_at || existing?.kind !== 'REMOTE_CANCEL'
+          || operation.kind !== 'REMOTE_CANCEL') {
+        throw new TaskTerminationOperationPendingError(taskId, existing?.operation_id || '')
+      }
+      const timestamp = this.now().toISOString()
+      const next = compact({
+        ...current,
+        termination_operation: operation,
+        updated_at: timestamp,
+      }) as StoredTaskRecord
+      await this.append(next)
+      return clone(this.required(taskId))
+    })
+  }
+
   async transition(
     taskId: string,
     status: TaskPhase,

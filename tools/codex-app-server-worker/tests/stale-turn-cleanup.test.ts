@@ -205,6 +205,45 @@ test('stale-turn cleanup retains the exact lease whenever native state remains i
   }
 })
 
+test('explicit abort retry reuses its retained exact lease after an unconfirmed first retry', async t => {
+  const runtime = new StaleTurnRuntime({ reads: ['inProgress'] })
+  const fixture = await createExecutorFixture(
+    t,
+    runtime,
+    { config: { poolAcquireTimeoutMs: 20 } },
+    { rereadTimeoutMs: 10, rereadIntervalMs: 1 },
+  )
+
+  await assertStaleCleanupFailure(
+    () => fixture.executor.retryExplicitAbort(fixture.options),
+    'STALE_TURN_CLEANUP_REREAD_TIMEOUT',
+  )
+  assert.equal(fixture.factoryCalls(), 1)
+  assert.equal(fixture.executor.metrics().retained_stale_turn_cleanup, 1)
+  assert.equal(fixture.pool.metrics().busy, 1)
+
+  runtime.setReads(['inProgress', 'interrupted'])
+  const result = await fixture.executor.retryExplicitAbort(fixture.options)
+
+  assert.deepEqual(result, { status: 'interrupted' })
+  assert.equal(fixture.factoryCalls(), 1, 'retry must reuse the exact retained runtime lease')
+  assert.equal(fixture.executor.metrics().retained_stale_turn_cleanup, 0)
+  assert.equal(fixture.pool.metrics().busy, 0)
+  assert.deepEqual(runtime.observedTerminal, [[THREAD_ID, TURN_ID]])
+})
+
+test('termination inspection refuses a replacement App Server instance before reading the turn', async t => {
+  const runtime = new StaleTurnRuntime({ reads: ['inProgress'] })
+  const fixture = await createExecutorFixture(t, runtime)
+  fixture.options.record.app_server_instance_id = 'persisted-original-instance'
+
+  const result = await fixture.executor.inspectTermination(fixture.options)
+
+  assert.deepEqual(result, { state: 'binding_mismatch' })
+  assert.deepEqual(runtime.readThreads, [])
+  assert.equal(fixture.pool.metrics().busy, 0)
+})
+
 test('stale-turn cleanup HTTP contract is capability-bound, body-free, replay-safe, and identity-minimal', async t => {
   const fixture = await createHttpFixture(t)
   const bodyRejectedOperation = 'stale-cleanup-body-rejected'
@@ -537,6 +576,11 @@ class StaleTurnRuntime implements PoolRuntimeInstance {
   isHealthy(): boolean { return !this.closed }
   isActive(): boolean { return false }
   requiresAttention(): boolean { return this.attentionRequired }
+
+  setReads(reads: RuntimeRead[]): void {
+    this.options.reads = reads
+    this.readIndex = 0
+  }
 
   async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
     if (this.options.executeFailure) {

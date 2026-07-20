@@ -26,6 +26,7 @@ import {
   renderNavigatorBusinessMcpConfigBlock,
   requestTaskCancellation,
   runQuery,
+  settleAuthorizedTaskCancellation,
   resolveDefaultCodexHome,
   resolveCodexHome,
   resolveNavigatorBusinessMcpServerPath,
@@ -45,6 +46,24 @@ import {
   buildNavigatorBusinessMcpEnv,
   isNavigatorBusinessMcpEnabled,
 } from '../src/business-mcp/navigator-business-mcp-server.ts'
+import { EventBroadcast } from '../src/persistence/event-store.ts'
+
+function remoteCancelOperation(operationId: string, taskId: string) {
+  return {
+    operation_id: operationId,
+    task_id: taskId,
+    worker_id: 'navigator-worker-sdk-wrapper',
+    kind: 'REMOTE_CANCEL' as const,
+    origin: 'UPSTREAM_USER' as const,
+    actor_id: 'user-1',
+    actor_type: 'USER',
+    authorization_decision_id: 'decision-1',
+    reason_code: 'USER_CANCELLED',
+    correlation_id: 'corr-1',
+    requested_at: new Date().toISOString(),
+    status: 'CANCEL_REQUESTED' as const,
+  }
+}
 
 function createSeq(): () => number {
   let seq = 0
@@ -1210,6 +1229,116 @@ test('an explicit SDK cancellation that lacks a provider exit observation remain
   } finally {
     taskBroadcasts.get(taskId)?.cleanup()
     taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('authorized SDK cancellation becomes ABORTED when the exact bound process exit is observed', async () => {
+  const taskId = `task-cancel-observed-${Date.now()}`
+  const operation = remoteCancelOperation('operation-observed', taskId)
+  const broadcast = new EventBroadcast(taskId)
+  taskBroadcasts.set(taskId, broadcast)
+  taskRegistry.set(taskId, {
+    taskId,
+    status: 'cancel_requested',
+    pid: 321,
+    processStartedAt: '2026-07-19T01:02:03.000Z',
+    startedAt: Date.now(),
+    terminationOperation: operation,
+  })
+
+  try {
+    const settled = await settleAuthorizedTaskCancellation(taskId, operation.operation_id, {
+      listCodexCliProcesses: async () => [],
+      cancellationGraceMs: 0,
+    })
+
+    assert.equal(settled?.status, 'aborted')
+    assert.equal(settled?.terminationOperation?.status, 'OBSERVED_EXIT')
+    assert.equal(settled?.terminationOperation?.result, 'SDK_ABORT_PROCESS_EXIT_VERIFIED')
+
+    const events = broadcast.getEventsAfter(0)
+    assert.deepEqual(events.map(event => event.type), ['warning', 'error'])
+    assert.deepEqual(events.map(event => event.seq), [1, 2])
+    const terminal = events[1]
+    assert.equal(terminal?.terminal_observed, true)
+    assert.equal(terminal?.terminal_status, 'ABORTED')
+    assert.equal(terminal?.terminal_source, 'VERIFIED_PROCESS_EXIT')
+    assert.equal(terminal?.lifecycle_state, 'ABORTED')
+    assert.equal(terminal?.provider_status, 'SDK_ABORT_PROCESS_EXIT_VERIFIED')
+    assert.equal(terminal?.termination_operation?.status, 'OBSERVED_EXIT')
+    assert.equal(broadcast.isClosed(), true)
+  } finally {
+    broadcast.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('authorized SDK cancellation escalates only the exact bound process after the SDK grace period', async () => {
+  const taskId = `task-cancel-escalate-${Date.now()}`
+  const operation = remoteCancelOperation('operation-escalate', taskId)
+  let processRunning = true
+  const killCalls: Array<{ pid: number; force: boolean }> = []
+  taskRegistry.set(taskId, {
+    taskId,
+    status: 'cancel_requested',
+    pid: 654,
+    processStartedAt: '2026-07-19T01:02:03.000Z',
+    startedAt: Date.now(),
+    terminationOperation: operation,
+  })
+
+  const settled = await settleAuthorizedTaskCancellation(taskId, operation.operation_id, {
+    listCodexCliProcesses: async () => processRunning ? [{
+      pid: 654,
+      command: 'codex --experimental-json',
+      memory_mb: 1,
+      started_at: '2026-07-19T01:02:03.000Z',
+    }] : [],
+    killCodexCliProcess: async (pid, force) => {
+      killCalls.push({ pid, force })
+      processRunning = false
+    },
+    cancellationGraceMs: 0,
+    cancellationForceGraceMs: 0,
+  })
+
+  assert.deepEqual(killCalls, [{ pid: 654, force: false }])
+  assert.equal(settled?.status, 'aborted')
+  assert.equal(settled?.terminationOperation?.result, 'SDK_CANCEL_PROCESS_EXIT_VERIFIED_AFTER_SIGTERM')
+})
+
+test('authorized SDK cancellation fails closed when the process identity is missing or changed', async () => {
+  for (const [taskId, processStartedAt] of [
+    ['task-cancel-no-identity', undefined],
+    ['task-cancel-changed-identity', '2026-07-19T01:02:03.000Z'],
+  ] as const) {
+    const operation = remoteCancelOperation(`operation-${taskId}`, taskId)
+    let killCalls = 0
+    taskRegistry.set(taskId, {
+      taskId,
+      status: 'cancel_requested',
+      pid: 987,
+      processStartedAt,
+      startedAt: Date.now(),
+      terminationOperation: operation,
+    })
+
+    const settled = await settleAuthorizedTaskCancellation(taskId, operation.operation_id, {
+      listCodexCliProcesses: async () => [{
+        pid: 987,
+        command: 'codex --experimental-json',
+        memory_mb: 1,
+        started_at: '2026-07-19T09:09:09.000Z',
+      }],
+      killCodexCliProcess: async () => { killCalls++ },
+      cancellationGraceMs: 0,
+    })
+
+    assert.equal(killCalls, 0)
+    assert.equal(settled?.status, 'cancel_requested')
+    assert.equal(settled?.terminationOperation?.status, 'UNCONFIRMED')
     taskRegistry.delete(taskId)
   }
 })

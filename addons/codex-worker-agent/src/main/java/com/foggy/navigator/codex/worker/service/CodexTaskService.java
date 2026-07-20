@@ -1365,6 +1365,193 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                                                 TerminationOperationEntity operation) {
     }
 
+    public record AppServerAbortRetryResult(
+            String taskId, String operationId, String providerState, String status) {
+    }
+
+    /**
+     * Reserves and dispatches a fresh one-shot cancellation only for an owned
+     * App Server task that is already waiting on an earlier cancel request.
+     * The Worker re-reads the exact persisted thread/turn before interrupting.
+     */
+    public AppServerAbortRetryResult retryAppServerAbort(
+            String taskId, String ownerUserId, String tenantId) {
+        RemoteTerminationReservation reservation = reserveAppServerAbortRetry(
+                taskId, ownerUserId, tenantId);
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            CodexTaskEntity current = taskRepository.findByTaskId(reservation.taskId()).orElse(null);
+            if (current == null) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_TASK_UNAVAILABLE", true);
+            }
+            if (isTerminalStatus(current.getStatus())) {
+                terminationOperationService.markRejected(
+                        reservation.operation().getOperationId(),
+                        "TERMINATION_RETRY_NOT_DISPATCHED_TASK_TERMINAL");
+                String providerState = switch (current.getStatus()) {
+                    case "ABORTED" -> "interrupted";
+                    case "FAILED" -> "failed";
+                    default -> "completed";
+                };
+                return new AppServerAbortRetryResult(
+                        reservation.taskId(), reservation.operation().getOperationId(),
+                        providerState, current.getStatus());
+            }
+            CodexWorkerClient client = terminationClient(current);
+            TerminationOperationCapability capability = TerminationOperationCapability.issue(
+                    reservation.operation(), client.terminationSigningSecret());
+            Map<String, Object> receipt = client.retryAbortTask(
+                            reservation.providerTaskId(), capability)
+                    .block(Duration.ofSeconds(15));
+            String providerState = requireAppServerAbortRetryReceipt(receipt, reservation);
+            String requestedOutcome = switch (providerState) {
+                case "interrupted" -> "ABORTED";
+                case "failed" -> "FAILED";
+                default -> "COMPLETED";
+            };
+            switch (providerState) {
+                case "interrupted" -> reconcileAbortedTask(
+                        reservation.taskId(), reservation.providerTaskId(), null);
+                case "failed" -> failTask(
+                        reservation.taskId(), reservation.providerTaskId(), null,
+                        "CODEX_APP_SERVER_TURN_FAILED");
+                default -> completeTask(
+                        reservation.taskId(), reservation.providerTaskId(), null,
+                        null, null, null, null, null, null, null);
+            }
+            String outcome = taskRepository.findByTaskId(reservation.taskId())
+                    .map(CodexTaskEntity::getStatus)
+                    .filter(this::isTerminalStatus)
+                    .orElse(requestedOutcome);
+            terminationOperationService.markObservedTerminal(
+                    reservation.operation().getOperationId(), outcome);
+            log.info("Codex App Server cancellation retry observed: taskId={}, operationId={}, providerState={}",
+                    reservation.taskId(), reservation.operation().getOperationId(), providerState);
+            return new AppServerAbortRetryResult(
+                    reservation.taskId(), reservation.operation().getOperationId(), providerState, outcome);
+        } catch (AppServerAbortRetryException error) {
+            if (error.isRetryable()) {
+                terminationOperationService.markFailedUnconfirmed(
+                        reservation.operation().getOperationId(), error.getSafeCode());
+                markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+            } else {
+                terminationOperationService.markRejected(
+                        reservation.operation().getOperationId(), error.getSafeCode());
+            }
+            throw error;
+        } catch (CodexWorkerClient.WorkerQueryRejectedException error) {
+            String operationId = reservation.operation().getOperationId();
+            if (isDefinitiveRetryRejection(error)) {
+                String safeCode = safeRetryRejectionCode(error);
+                terminationOperationService.markRejected(operationId, safeCode);
+                throw new AppServerAbortRetryException(safeCode);
+            }
+            terminationOperationService.markFailedUnconfirmed(
+                    operationId, "TERMINATION_RETRY_UNCONFIRMED");
+            markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+            throw new AppServerAbortRetryException("TERMINATION_RETRY_UNCONFIRMED", true);
+        } catch (Exception error) {
+            String operationId = reservation.operation().getOperationId();
+            terminationOperationService.markFailedUnconfirmed(
+                    operationId, "TERMINATION_RETRY_UNCONFIRMED");
+            markCancellationAttention(reservation.taskId(), "TERMINATION_UNCONFIRMED");
+            throw new AppServerAbortRetryException("TERMINATION_RETRY_UNCONFIRMED", true);
+        }
+    }
+
+    private boolean isDefinitiveRetryRejection(CodexWorkerClient.WorkerQueryRejectedException error) {
+        int status = error.getStatusCode();
+        return status >= 400 && status < 500
+                && status != 404 && status != 408 && status != 429;
+    }
+
+    private String safeRetryRejectionCode(CodexWorkerClient.WorkerQueryRejectedException error) {
+        String code = error.getCode();
+        if (code != null && code.matches("TERMINATION_RETRY_[A-Z0-9_]{1,120}")) {
+            return code;
+        }
+        return "TERMINATION_RETRY_REJECTED";
+    }
+
+    private RemoteTerminationReservation reserveAppServerAbortRetry(
+            String taskId, String ownerUserId, String tenantId) {
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+            if (!matchesStaleTurnCleanupOwnerScope(entity, ownerUserId, tenantId)) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_UNAVAILABLE");
+            }
+            if (!CODEX_APP_SERVER_PROVIDER_TYPE.equals(entity.getProviderType())
+                    || !CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_PROVIDER_UNSUPPORTED");
+            }
+            if (isTerminalStatus(entity.getStatus())) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_TASK_TERMINAL");
+            }
+            if (!"CANCEL_REQUESTED".equals(entity.getStatus())) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_NOT_PENDING");
+            }
+            if (!hasNonBlank(entity.getWorkerTaskId()) || !hasNonBlank(entity.getWorkerId())
+                    || !hasNonBlank(entity.getRuntimeId()) || entity.getRuntimeRevision() == null
+                    || !hasNonBlank(entity.getRuntimeInstanceId())) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_BINDING_MISSING");
+            }
+            if (terminationOperationService == null) {
+                throw new AppServerAbortRetryException("TERMINATION_RETRY_AUDIT_UNAVAILABLE", true);
+            }
+
+            terminationOperationService.supersedeActiveOperationsForTask(
+                    entity.getTaskId(), "TERMINATION_OPERATION_SUPERSEDED_BY_RETRY");
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            entity.getTaskId(), entity.getWorkerTaskId(), entity.getSessionId(),
+                            entity.getUserId(), entity.getTenantId(), entity.getProviderType(),
+                            entity.getWorkerId(), "REMOTE_CANCEL", "UPSTREAM_USER",
+                            entity.getUserId(), "USER", "user-retry:" + UUID.randomUUID(),
+                            "USER_CANCEL_RETRY", "remote-cancel-retry:" + UUID.randomUUID(),
+                            null, null, 300));
+            return new RemoteTerminationReservation(
+                    entity.getTaskId(), entity.getWorkerTaskId(), entity.getStatus(),
+                    entity.getRuntimeAcceptanceState(), operation);
+        });
+    }
+
+    private String requireAppServerAbortRetryReceipt(
+            Map<String, Object> receipt, RemoteTerminationReservation reservation) {
+        if (receipt == null
+                || !Objects.equals(reservation.providerTaskId(), stringValue(receipt.get("task_id")))
+                || !"observed_terminal".equals(stringValue(receipt.get("retry_status")))) {
+            throw new AppServerAbortRetryException("TERMINATION_RETRY_RECEIPT_INVALID", true);
+        }
+        String providerState = stringValue(receipt.get("provider_state"));
+        if (!Set.of("completed", "failed", "interrupted").contains(providerState)) {
+            throw new AppServerAbortRetryException("TERMINATION_RETRY_RECEIPT_INVALID", true);
+        }
+        return providerState;
+    }
+
+    public static class AppServerAbortRetryException extends RuntimeException {
+        private final String safeCode;
+        private final boolean retryable;
+
+        public AppServerAbortRetryException(String safeCode) {
+            this(safeCode, false);
+        }
+
+        public AppServerAbortRetryException(String safeCode, boolean retryable) {
+            super(safeCode);
+            this.safeCode = safeCode;
+            this.retryable = retryable;
+        }
+
+        public String getSafeCode() {
+            return safeCode;
+        }
+
+        public boolean isRetryable() {
+            return retryable;
+        }
+    }
+
     /**
      * Safe browser projection for the explicitly requested stale native-turn
      * cleanup. It deliberately contains no thread, turn, runtime, Worker, or

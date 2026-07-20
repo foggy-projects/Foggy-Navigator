@@ -50,6 +50,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [GOV-001 P1B-B/P2/P3/P4 Owner Decision Intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) | 具名责任人、脱敏事实、架构/生产/迁移决策及 immutable approval reference 占位 | `PENDING_OWNER_INPUT`; 不解除任何 `DRAFT + BLOCKED` gate |
 | [GOV-001 P1C-A CLI/SKILL 权限可见性](./workitems/GOV-001-p1c-a-cli-skill-operator-ux.md) | typed-management-only whoami/permissions/non-binding explain、三态 config check、help/FAQ/runbook、canonical-manifest-derived input guard/provenance | ACCEPTED; no route cutover or release |
 | [BUG-002 P1A action required-section 合同缺失](./workitems/BUG-002-p1a-required-section-contract.md) | 修复 action-specific required-section catalog/context/validator 缺口和 runtime capability 误分类 | ACCEPTED |
+| [BUG-004 Codex 真实中止闭环与再次中止状态确认](./workitems/BUG-004-codex-cancel-execution-and-retry-confirmation.md) | SDK Worker 真实进程退出闭环；App Server exact thread/turn 状态检查与再次中止确认 | READY_FOR_SIGNOFF |
 
 ## Scenario Sequence
 

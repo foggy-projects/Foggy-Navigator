@@ -24,6 +24,7 @@ import {
   cleanupMaterializedInput,
   type ManagedTaskProcessSnapshot,
   type TaskExecutor,
+  type TerminationInspectionResult,
 } from './app-server/executor.js'
 import { AppServerRuntimeError } from './app-server/runtime.js'
 import { GeneratedImageStore } from './generated-image-store.js'
@@ -124,6 +125,21 @@ export type ManualPidKillResult = {
   observed_exit: boolean
   /** A provider terminal event won before this signed operation could signal. */
   provider_terminal_observed?: boolean
+}
+
+export type TaskTerminationInspection = {
+  task_status: string
+  lifecycle_status: string
+  provider_state: TerminationInspectionResult['state'] | 'terminal'
+  thread_status?: string
+  turn_status?: string
+  recommended_action: 'RETRY_INTERRUPT' | 'REFRESH_TASK_STATE' | 'RECHECK_LATER' | 'NO_ACTION'
+  checked_at: string
+}
+
+export type RetryAbortResult = {
+  record: StoredTaskRecord
+  provider_state: 'completed' | 'failed' | 'interrupted'
 }
 
 export class TaskManager {
@@ -351,6 +367,61 @@ export class TaskManager {
     return snapshot || []
   }
 
+  async inspectTermination(taskId: string): Promise<TaskTerminationInspection | undefined> {
+    const record = this.store.get(taskId)
+    if (!record || record.tombstoned_at) return undefined
+    const checkedAt = new Date().toISOString()
+    if (record.status === 'terminal') {
+      return {
+        task_status: record.status,
+        lifecycle_status: lifecycleStatus(record),
+        provider_state: 'terminal',
+        turn_status: record.outcome,
+        recommended_action: 'NO_ACTION',
+        checked_at: checkedAt,
+      }
+    }
+    if (!this.executor.inspectTermination) {
+      return {
+        task_status: record.status,
+        lifecycle_status: lifecycleStatus(record),
+        provider_state: 'unavailable',
+        recommended_action: 'RECHECK_LATER',
+        checked_at: checkedAt,
+      }
+    }
+
+    let result: TerminationInspectionResult
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort('TERMINATION_INSPECTION_TIMEOUT'), 5_000)
+    timeout.unref()
+    try {
+      result = await this.executor.inspectTermination({
+        taskId,
+        request: this.store.getRequest(taskId),
+        record,
+        signal: controller.signal,
+      })
+    } catch {
+      result = { state: 'unavailable' }
+    } finally {
+      clearTimeout(timeout)
+    }
+    return {
+      task_status: record.status,
+      lifecycle_status: lifecycleStatus(record),
+      provider_state: result.state,
+      thread_status: result.threadStatus,
+      turn_status: result.turnStatus,
+      recommended_action: result.state === 'in_progress'
+        ? 'RETRY_INTERRUPT'
+        : result.state === 'completed' || result.state === 'failed' || result.state === 'interrupted'
+          ? 'REFRESH_TASK_STATE'
+          : 'RECHECK_LATER',
+      checked_at: checkedAt,
+    }
+  }
+
   async respondToUserInput(taskId: string, body: UserInputResponseBody): Promise<StoredTaskRecord> {
     return this.withTaskOperation(taskId, async () => {
       const record = this.store.get(taskId)
@@ -499,6 +570,71 @@ export class TaskManager {
           ? 'aborted'
           : 'already_terminal',
     }
+  }
+
+  async retryAbort(taskId: string, operation: TerminationOperationSummary): Promise<RetryAbortResult | undefined> {
+    return this.withTaskOperation(taskId, async () => {
+      let record = this.store.get(taskId)
+      if (!record) return undefined
+      if (record.status === 'terminal') {
+        return {
+          record,
+          provider_state: record.outcome === 'failed'
+            ? 'failed'
+            : record.outcome === 'aborted'
+              ? 'interrupted'
+              : 'completed',
+        }
+      }
+      if (!this.executor.retryExplicitAbort) {
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+      }
+
+      record = await this.store.retryAbort(taskId, operation)
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort('TERMINATION_RETRY_TIMEOUT'), 10_000)
+      timeout.unref()
+      let result: Awaited<ReturnType<NonNullable<TaskExecutor['retryExplicitAbort']>>>
+      try {
+        result = await this.executor.retryExplicitAbort({
+          taskId,
+          request: this.store.getRequest(taskId),
+          record,
+          signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(timeout)
+      }
+
+      const broadcast = this.getBroadcast(taskId)
+      const current = this.store.get(taskId) || record
+      if (current.status !== 'terminal') {
+        const outcome = result.status === 'interrupted'
+          ? 'aborted'
+          : result.status === 'failed'
+            ? 'failed'
+            : 'completed'
+        if (outcome !== 'completed') {
+          const code = outcome === 'aborted' ? 'TASK_ABORTED' : 'APP_SERVER_TURN_FAILED'
+          this.emitError(
+            broadcast,
+            taskId,
+            current.thread_id,
+            code,
+            outcome === 'aborted' ? 'ABORTED' : 'FAILED',
+            'PROVIDER_TERMINAL_EVENT',
+          )
+          await broadcast.flush()
+          await this.transitionTerminal(taskId, { outcome, error_code: code })
+        } else {
+          await this.reconcileCommitted(current, broadcast)
+        }
+      }
+      return {
+        record: this.store.get(taskId) || record,
+        provider_state: result.status,
+      }
+    })
   }
 
   async manualPidKill(

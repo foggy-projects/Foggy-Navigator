@@ -44,6 +44,7 @@ test('instance affinity guard rejects every task route before manager access', a
   const requests: Array<[string, RequestInit]> = [
     ['/api/v1/tasks', { method: 'POST', headers, body: JSON.stringify({ prompt: 'must not persist' }) }],
     ['/api/v1/tasks/task-1/status', { headers }],
+    ['/api/v1/tasks/task-1/termination-inspection', { headers }],
     ['/api/v1/tasks/task-1/subscribe?ack_seq=0', { headers }],
     ['/api/v1/tasks/task-1/generated-images/0123456789abcdef0123456789abcdef', { headers }],
     ['/api/v1/tasks/task-1/abort', { method: 'POST', headers }],
@@ -74,6 +75,115 @@ test('instance affinity guard rejects every task route before manager access', a
   assert.equal(oversized.actualInstanceId, config.instanceId)
   assert.equal(oversized.serverClosed, true)
   assert.equal(managerAccesses, 0)
+})
+
+test('termination inspection returns a safe exact-turn status projection without native identifiers', async t => {
+  const stateDir = await tempDirectory('codex-app-termination-inspection-')
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await store.initialize()
+  await store.accept('inspection-task', { prompt: 'inspect cancellation state' })
+  await store.transition('inspection-task', 'starting')
+  await store.transition('inspection-task', 'committed', {
+    thread_id: 'private-thread-id',
+    app_server_lane_key: 'private-lane',
+  })
+  await store.transition('inspection-task', 'running', {
+    thread_id: 'private-thread-id',
+    turn_id: 'private-turn-id',
+    app_server_lane_key: 'private-lane',
+  })
+  const executor = Object.assign(new FakeExecutor(), {
+    inspectTermination: async () => ({
+      state: 'in_progress' as const,
+      threadStatus: 'active',
+      turnStatus: 'inProgress',
+    }),
+  })
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const response = await fetch(`${baseUrl}/api/v1/tasks/inspection-task/termination-inspection`, {
+    headers: authHeaders(),
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json() as Record<string, unknown>
+  assert.equal(body.task_status, 'running')
+  assert.equal(body.provider_state, 'in_progress')
+  assert.equal(body.thread_status, 'active')
+  assert.equal(body.turn_status, 'inProgress')
+  assert.equal(body.recommended_action, 'RETRY_INTERRUPT')
+  assert.equal(typeof body.checked_at, 'string')
+  assert.equal('thread_id' in body, false)
+  assert.equal('turn_id' in body, false)
+  assert.equal('app_server_instance_id' in body, false)
+})
+
+test('confirmed cancellation retry replaces only the prior remote operation and records exact terminal evidence', async t => {
+  const stateDir = await tempDirectory('codex-app-abort-retry-')
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await store.initialize()
+  await store.accept('abort-retry-task', { prompt: 'keep running' })
+  await store.transition('abort-retry-task', 'starting')
+  await store.transition('abort-retry-task', 'committed', { thread_id: 'thread-retry' })
+  await store.transition('abort-retry-task', 'running', {
+    thread_id: 'thread-retry',
+    turn_id: 'turn-retry',
+    app_server_instance_id: 'instance-retry',
+    app_server_lane_key: 'lane-retry',
+  })
+  const now = new Date().toISOString()
+  await store.requestAbort('abort-retry-task', {
+    operation_id: 'remote-cancel-original',
+    task_id: 'abort-retry-task',
+    worker_id: config.navigatorWorkerId,
+    kind: 'REMOTE_CANCEL',
+    origin: 'UPSTREAM_USER',
+    actor_id: 'test-user',
+    actor_type: 'USER',
+    authorization_decision_id: 'decision-original',
+    reason_code: 'USER_REQUESTED',
+    correlation_id: 'correlation-original',
+    issued_at: now,
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    requested_at: now,
+    status: 'CANCEL_REQUESTED',
+  })
+  const executor = new RetryAbortExecutor()
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize({ resume: false })
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const response = await fetch(`${baseUrl}/api/v1/tasks/abort-retry-task/abort/retry`, {
+    method: 'POST',
+    headers: terminationHeaders('abort-retry-task', { operationId: 'remote-cancel-retry' }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    task_id: 'abort-retry-task',
+    status: 'terminal',
+    lifecycle_status: 'ABORTED',
+    provider_state: 'interrupted',
+    retry_status: 'observed_terminal',
+  })
+  assert.equal(executor.retryCalls, 1)
+  assert.equal(manager.get('abort-retry-task')?.termination_operation?.operation_id, 'remote-cancel-retry')
+  assert.equal(manager.get('abort-retry-task')?.outcome, 'aborted')
 })
 
 test('task and capability responses prove the actual instance while absent expectation remains compatible', async t => {
@@ -1422,6 +1532,19 @@ class PendingTerminationOperationExecutor implements TaskExecutor {
   async manualPidKill(taskId: string, pid: number): Promise<{ observed_exit: boolean }> {
     this.manualCalls.push({ taskId, pid })
     return { observed_exit: true }
+  }
+}
+
+class RetryAbortExecutor implements TaskExecutor {
+  retryCalls = 0
+
+  async execute(): Promise<ExecutionResult> {
+    throw new Error('seeded retry task must not be executed')
+  }
+
+  async retryExplicitAbort(): Promise<{ status: 'interrupted' }> {
+    this.retryCalls += 1
+    return { status: 'interrupted' }
   }
 }
 

@@ -259,6 +259,41 @@ class CodexWorkerClientTest {
     }
 
     @Test
+    void terminationInspectionUsesExactProviderTaskPathAndInstanceProof() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.getTerminationInspection("worker-task-9")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("GET", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/termination-inspection", server.path());
+            assertEquals("instance-a", server.expectedInstanceId());
+            assertEquals("in_progress", response.get("provider_state"));
+            assertEquals("RETRY_INTERRUPT", response.get("recommended_action"));
+        }
+    }
+
+    @Test
+    void retryAbortUsesSignedCapabilityAndExactBoundInstance() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.retryAbortTask("worker-task-9",
+                            new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("POST", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/abort/retry", server.path());
+            assertEquals("instance-a", server.expectedInstanceId());
+            assertEquals("encoded-operation", server.terminationOperation());
+            assertEquals("encoded-signature", server.terminationSignature());
+            assertEquals("observed_terminal", response.get("retry_status"));
+            assertEquals("interrupted", response.get("provider_state"));
+        }
+    }
+
+    @Test
     void staleTurnCleanupPropagatesStableWorkerConflict() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             server.staleTurnCleanupReturns(409, "STALE_TURN_CLEANUP_TURN_NOT_RUNNING");
@@ -563,6 +598,32 @@ class CodexWorkerClientTest {
                             + "\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\","
                             + "\"current_tokens\":81234,\"model_context_window\":270000,"
                             + "\"remaining_tokens\":188766,\"state\":\"known\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().endsWith("/termination-inspection")) {
+                    byte[] response = ("{\"task_id\":\"worker-task-9\","
+                            + "\"lifecycle_status\":\"abort_requested\","
+                            + "\"provider_state\":\"in_progress\","
+                            + "\"thread_status\":\"active\","
+                            + "\"turn_status\":\"inProgress\","
+                            + "\"recommended_action\":\"RETRY_INTERRUPT\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().endsWith("/abort/retry")) {
+                    byte[] response = ("{\"task_id\":\"worker-task-9\","
+                            + "\"status\":\"terminal\",\"lifecycle_status\":\"ABORTED\","
+                            + "\"provider_state\":\"interrupted\","
+                            + "\"retry_status\":\"observed_terminal\"}")
                             .getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "application/json");
                     exchange.sendResponseHeaders(200, response.length);

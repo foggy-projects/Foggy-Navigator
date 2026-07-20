@@ -75,6 +75,14 @@ export type ReconciliationResult = {
 }
 
 export type ExplicitAbortDispatchResult = 'requested' | 'unavailable'
+export type RetryExplicitAbortResult = {
+  status: 'completed' | 'failed' | 'interrupted'
+}
+export type TerminationInspectionResult = {
+  state: 'in_progress' | 'completed' | 'failed' | 'interrupted' | 'unknown' | 'unavailable' | 'binding_mismatch'
+  threadStatus?: string
+  turnStatus?: string
+}
 export type ManualPidKillResult = {
   observed_exit: boolean
   /**
@@ -121,6 +129,18 @@ export interface TaskExecutor {
   drain?(timeoutMs: number): Promise<void>
   readDefaultRateLimits?(refresh?: boolean): Promise<PoolRateLimitsView>
   requestExplicitAbort?(taskId: string, record: StoredTaskRecord): Promise<ExplicitAbortDispatchResult>
+  retryExplicitAbort?(options: {
+    taskId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+  }): Promise<RetryExplicitAbortResult>
+  inspectTermination?(options: {
+    taskId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+  }): Promise<TerminationInspectionResult>
   listManagedTaskProcesses?(): Promise<readonly ManagedTaskProcessSnapshot[]> | readonly ManagedTaskProcessSnapshot[]
   manualPidKill?(
     taskId: string,
@@ -387,6 +407,172 @@ export class StrictAppServerExecutor implements TaskExecutor {
     if (record.turn_id && record.turn_id !== retained.turnId) return 'unavailable'
     await retained.lease.runtime.interruptTurn(retained.threadId, retained.turnId)
     return 'requested'
+  }
+
+  /**
+   * Revalidates and interrupts only the exact persisted App Server turn. This
+   * is the second, explicitly confirmed cancellation path; it never selects a
+   * process or a merely active thread by inference.
+   */
+  async retryExplicitAbort(options: {
+    taskId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+  }): Promise<RetryExplicitAbortResult> {
+    const threadId = options.record.thread_id
+    const turnId = options.record.turn_id
+    const persistedLaneKey = options.record.app_server_lane_key
+    if (!threadId || !turnId || !persistedLaneKey) {
+      throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_BINDING_MISSING', 409)
+    }
+
+    const context = await this.buildContext(options.request)
+    if (persistedLaneKey !== context.lane.key) {
+      throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_LANE_AFFINITY_MISMATCH', 409)
+    }
+
+    const retainedTaskLease = this.taskRuntimeLeases.get(options.taskId)
+    const retainedCleanupLease = this.staleTurnCleanupLeases.get(options.taskId)
+    let releaseThread: (() => void) | undefined
+    let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
+    let terminalObserved = false
+    try {
+      if (retainedCleanupLease && retainedTaskLease
+          && retainedCleanupLease.lease !== retainedTaskLease.lease) {
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+      }
+      if (retainedTaskLease) {
+        if (!retainedTaskLease.retainLease
+            || retainedTaskLease.threadId !== threadId
+            || retainedTaskLease.turnId !== turnId
+            || retainedTaskLease.laneKey !== context.lane.key
+            || (options.record.app_server_instance_id
+              && options.record.app_server_instance_id !== retainedTaskLease.lease.instanceId)) {
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+        }
+        lease = retainedTaskLease.lease
+      } else {
+        releaseThread = await this.locks.acquire(`thread:${threadId}`, options.signal)
+        this.assertCanonicalCwdUnchanged(context.cwd)
+        if (retainedCleanupLease) {
+          if (retainedCleanupLease.threadId !== threadId
+              || retainedCleanupLease.turnId !== turnId
+              || retainedCleanupLease.laneKey !== context.lane.key
+              || (options.record.app_server_instance_id
+                && options.record.app_server_instance_id !== retainedCleanupLease.lease.instanceId)) {
+            throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+          }
+          lease = retainedCleanupLease.lease
+        } else {
+          try {
+            lease = await this.pool.acquireForThread(context.lane, threadId, options.signal)
+          } catch {
+            throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_RUNTIME_UNAVAILABLE', 503)
+          }
+        }
+      }
+
+      let turn = await this.readExactStaleTurn(lease.runtime, threadId, turnId)
+      if (isTerminalStaleTurnStatus(turn)) {
+        terminalObserved = true
+        return { status: turn as RetryExplicitAbortResult['status'] }
+      }
+      if (!lease.runtime.interruptTurn) {
+        throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_INTERRUPT_UNAVAILABLE', 503)
+      }
+      await lease.runtime.interruptTurn(threadId, turnId)
+
+      const timeoutMs = Math.max(1, this.staleTurnCleanupTiming.rereadTimeoutMs)
+      const intervalMs = Math.max(1, this.staleTurnCleanupTiming.rereadIntervalMs)
+      const deadline = Date.now() + timeoutMs
+      while (true) {
+        turn = await this.readExactStaleTurn(lease.runtime, threadId, turnId)
+        if (isTerminalStaleTurnStatus(turn)) {
+          terminalObserved = true
+          return { status: turn as RetryExplicitAbortResult['status'] }
+        }
+        if (Date.now() >= deadline) {
+          throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_REREAD_TIMEOUT', 503)
+        }
+        await delay(Math.min(intervalMs, Math.max(1, deadline - Date.now())))
+      }
+    } catch (error) {
+      if (error instanceof StaleTurnCleanupError) throw error
+      throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_READ_UNAVAILABLE', 503)
+    } finally {
+      if (lease && terminalObserved) {
+        lease.runtime.markObservedTerminal?.(threadId, turnId)
+        lease.release(lease.runtime.isHealthy())
+        if (this.staleTurnCleanupLeases.get(options.taskId)?.lease === lease) {
+          this.staleTurnCleanupLeases.delete(options.taskId)
+        }
+        if (this.taskRuntimeLeases.get(options.taskId)?.lease === lease) {
+          this.taskRuntimeLeases.delete(options.taskId)
+        }
+      } else if (lease) {
+        if (this.taskRuntimeLeases.get(options.taskId)?.lease !== lease) {
+          this.staleTurnCleanupLeases.set(options.taskId, {
+            lease,
+            threadId,
+            turnId,
+            laneKey: context.lane.key,
+          })
+        }
+      }
+      releaseThread?.()
+    }
+  }
+
+  async inspectTermination(options: {
+    taskId: string
+    request: TaskRequest
+    record: StoredTaskRecord
+    signal: AbortSignal
+  }): Promise<TerminationInspectionResult> {
+    const threadId = options.record.thread_id
+    const turnId = options.record.turn_id
+    if (!threadId || !turnId) return { state: 'binding_mismatch' }
+
+    let context: Awaited<ReturnType<StrictAppServerExecutor['buildContext']>>
+    try {
+      context = await this.buildContext(options.request)
+    } catch {
+      return { state: 'unavailable' }
+    }
+    if (options.record.app_server_lane_key && options.record.app_server_lane_key !== context.lane.key) {
+      return { state: 'binding_mismatch' }
+    }
+
+    const retained = this.taskRuntimeLeases.get(options.taskId)
+    if (retained) {
+      if (retained.threadId !== threadId
+          || retained.turnId !== turnId
+          || retained.laneKey !== context.lane.key
+          || (options.record.app_server_instance_id
+            && options.record.app_server_instance_id !== retained.lease.instanceId)) {
+        return { state: 'binding_mismatch' }
+      }
+      try {
+        return await this.readTerminationState(retained.lease.runtime, threadId, turnId)
+      } catch {
+        return { state: 'unavailable' }
+      }
+    }
+
+    let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
+    try {
+      lease = await this.pool.acquireForThread(context.lane, threadId, options.signal)
+      if (options.record.app_server_instance_id
+          && options.record.app_server_instance_id !== lease.instanceId) {
+        return { state: 'binding_mismatch' }
+      }
+      return await this.readTerminationState(lease.runtime, threadId, turnId)
+    } catch {
+      return { state: 'unavailable' }
+    } finally {
+      lease?.release(lease.runtime.isHealthy())
+    }
   }
 
   async cleanupStaleTurn(options: {
@@ -754,6 +940,29 @@ export class StrictAppServerExecutor implements TaskExecutor {
     throw new StaleTurnCleanupError('STALE_TURN_CLEANUP_TURN_STATUS_UNKNOWN', 409)
   }
 
+  private async readTerminationState(
+    runtime: Awaited<ReturnType<AppServerPool['acquire']>>['runtime'],
+    threadId: string,
+    turnId: string,
+  ): Promise<TerminationInspectionResult> {
+    const thread = await runtime.readThread(threadId, true)
+    if (readString(thread.id) !== threadId) return { state: 'binding_mismatch' }
+    const turns = Array.isArray(thread.turns) ? thread.turns.filter(isRecord) : []
+    const turn = turns.find(candidate => readString(candidate.id) === turnId)
+    if (!turn) return { state: 'binding_mismatch', threadStatus: readRuntimeStatus(thread.status) }
+    const turnStatus = readString(turn.status)
+    const state = turnStatus === 'inProgress'
+      ? 'in_progress'
+      : turnStatus === 'completed' || turnStatus === 'failed' || turnStatus === 'interrupted'
+        ? turnStatus
+        : 'unknown'
+    return {
+      state,
+      threadStatus: readRuntimeStatus(thread.status),
+      turnStatus,
+    }
+  }
+
   async readDefaultRateLimits(refresh = false): Promise<PoolRateLimitsView> {
     const codexHome = await this.resolveCodexHome(undefined)
     const lane = await buildAppServerLane({
@@ -978,6 +1187,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function readRuntimeStatus(value: unknown): string | undefined {
+  return readString(value) || readString(asRecord(value)?.type)
 }
 
 function delay(timeoutMs: number): Promise<void> {

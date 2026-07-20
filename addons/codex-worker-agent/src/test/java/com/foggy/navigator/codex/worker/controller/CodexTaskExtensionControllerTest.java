@@ -450,6 +450,67 @@ class CodexTaskExtensionControllerTest {
     }
 
     @Test
+    void terminationInspectionReturnsOnlyBrowserSafeStateFromPinnedRuntime() {
+        CodexTaskEntity task = appServerTask();
+        task.setStatus("CANCEL_REQUESTED");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getTerminationInspection("worker-task-1"))
+                .thenReturn(Mono.just(new LinkedHashMap<>(Map.ofEntries(
+                        Map.entry("task_id", "worker-task-1"),
+                        Map.entry("thread_id", "private-thread"),
+                        Map.entry("turn_id", "private-turn"),
+                        Map.entry("app_server_instance_id", "private-instance"),
+                        Map.entry("auth_token", "private-token"),
+                        Map.entry("lifecycle_status", "abort_requested"),
+                        Map.entry("provider_state", "in_progress"),
+                        Map.entry("thread_status", "active"),
+                        Map.entry("turn_status", "inProgress"),
+                        Map.entry("recommended_action", "RETRY_INTERRUPT"),
+                        Map.entry("checked_at", "2026-07-19T10:00:00Z")))));
+
+        RX<Map<String, Object>> response = controller.getTerminationInspection(TASK_ID);
+
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        assertEquals("CANCEL_REQUESTED", response.getData().get("taskStatus"));
+        assertEquals("in_progress", response.getData().get("providerState"));
+        assertEquals("RETRY_INTERRUPT", response.getData().get("recommendedAction"));
+        assertFalse(response.getData().containsKey("task_id"));
+        assertFalse(response.getData().containsKey("thread_id"));
+        assertFalse(response.getData().containsKey("turn_id"));
+        assertFalse(response.getData().containsKey("app_server_instance_id"));
+        assertFalse(response.getData().containsKey("auth_token"));
+        verify(client).getTerminationInspection("worker-task-1");
+    }
+
+    @Test
+    void terminationRetryRequiresOwnedPinnedAppServerTaskAndReturnsSafeReceipt() {
+        CodexTaskEntity task = appServerTask();
+        task.setStatus("CANCEL_REQUESTED");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(taskService.retryAppServerAbort(TASK_ID, USER_ID, TENANT_ID))
+                .thenReturn(new CodexTaskService.AppServerAbortRetryResult(
+                        TASK_ID, "to-retry-1", "interrupted", "ABORTED"));
+
+        RX<Map<String, Object>> response = controller.retryTermination(TASK_ID);
+
+        assertEquals(Map.of(
+                "taskId", TASK_ID,
+                "operationId", "to-retry-1",
+                "providerState", "interrupted",
+                "status", "ABORTED"), response.getData());
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        verify(taskService).retryAppServerAbort(TASK_ID, USER_ID, TENANT_ID);
+        verifyNoInteractions(clientFactory, runtimeRegistryService, client);
+    }
+
+    @Test
     void compactContext_ownerUsesPinnedRuntimeAndOperationId() {
         CodexTaskEntity task = appServerTask();
         task.setCodexThreadId("thread-1");

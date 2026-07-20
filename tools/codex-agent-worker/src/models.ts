@@ -194,8 +194,10 @@ export interface TaskEntry {
   taskId: string
   status: TaskStatus
   abortController?: AbortController
+  cancelExecution?: (operation: TerminationOperationSummary) => void
   threadId?: string
   pid?: number
+  processStartedAt?: string
   model?: string
   startedAt: number
   completedAt?: number

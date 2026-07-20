@@ -191,6 +191,39 @@ class TerminationOperationServiceTest {
         verify(repository, org.mockito.Mockito.never()).save(any());
     }
 
+    @Test
+    void supersedesEveryActiveOperationBeforeAUserConfirmedRetry() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+        TerminationOperationEntity acknowledged = new TerminationOperationEntity();
+        acknowledged.setOperationId("to-old-acknowledged");
+        acknowledged.setStatus("CANCEL_REQUESTED");
+        acknowledged.setDispatchState("ACKNOWLEDGED");
+        TerminationOperationEntity running = new TerminationOperationEntity();
+        running.setOperationId("to-old-running");
+        running.setStatus("RUNNING");
+        running.setDispatchState("PENDING");
+        TerminationOperationEntity terminal = new TerminationOperationEntity();
+        terminal.setOperationId("to-old-terminal");
+        terminal.setStatus("FAILED");
+        terminal.setDispatchState("UNCONFIRMED");
+        when(repository.findByTaskIdOrderByCreatedAtDescForUpdate("task-1"))
+                .thenReturn(List.of(acknowledged, running, terminal));
+
+        service.supersedeActiveOperationsForTask(
+                "task-1", "TERMINATION_OPERATION_SUPERSEDED_BY_RETRY");
+
+        for (TerminationOperationEntity operation : List.of(acknowledged, running)) {
+            assertEquals("FAILED", operation.getStatus());
+            assertEquals("UNCONFIRMED", operation.getDispatchState());
+            assertEquals("TERMINATION_RETRY_REQUESTED", operation.getAttentionCode());
+            assertEquals("TERMINATION_OPERATION_SUPERSEDED_BY_RETRY", operation.getFailureCode());
+            verify(repository).save(operation);
+        }
+        assertEquals("FAILED", terminal.getStatus());
+        verify(repository, org.mockito.Mockito.never()).save(terminal);
+    }
+
     private static TerminationOperationService.CreateCommand manualPidKillCommand(
             String authorizationDecisionId) {
         return manualPidKillCommand(authorizationDecisionId, "TENANT_ADMIN_MANUAL");

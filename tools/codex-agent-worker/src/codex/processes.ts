@@ -213,18 +213,24 @@ export async function snapshotCodexCliPids(): Promise<Set<number>> {
   return new Set(processes.map(processInfo => processInfo.pid))
 }
 
-export async function detectSpawnedCodexPid(existingPids: ReadonlySet<number>): Promise<number | undefined> {
+export async function detectSpawnedCodexProcess(
+  existingPids: ReadonlySet<number>,
+): Promise<CodexCliProcessInfo | undefined> {
   for (let attempt = 0; attempt < 10; attempt++) {
     const processes = await listCodexCliProcesses()
     const newest = processes
       .filter(processInfo => !existingPids.has(processInfo.pid))
       .sort((a, b) => b.pid - a.pid)[0]
     if (newest) {
-      return newest.pid
+      return newest
     }
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   return undefined
+}
+
+export async function detectSpawnedCodexPid(existingPids: ReadonlySet<number>): Promise<number | undefined> {
+  return (await detectSpawnedCodexProcess(existingPids))?.pid
 }
 
 export function buildWindowsKillAttemptArgs(pid: number, force = false): string[][] {

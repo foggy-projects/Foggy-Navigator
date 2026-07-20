@@ -135,6 +135,19 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
     res.json(toPublicTask(record))
   })
 
+  router.get('/api/v1/tasks/:taskId/termination-inspection', async (req, res, next) => {
+    try {
+      const inspection = await manager.inspectTermination(single(req.params.taskId))
+      if (!inspection) {
+        res.status(404).json({ error: 'TASK_NOT_FOUND' })
+        return
+      }
+      res.json(inspection)
+    } catch (error) {
+      next(error)
+    }
+  })
+
   router.get('/api/v1/tasks/:taskId/context-usage', (req, res) => {
     const taskId = single(req.params.taskId)
     const record = manager.get(taskId)
@@ -336,6 +349,45 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
     }
   })
 
+  router.post('/api/v1/tasks/:taskId/abort/retry', async (req, res, next) => {
+    try {
+      const taskId = single(req.params.taskId)
+      const operation = validateTerminationOperation(
+        req,
+        config,
+        taskId,
+        'REMOTE_CANCEL',
+        terminationReplayLedger,
+      )
+      const result = await manager.retryAbort(taskId, toOperationSummary(operation))
+      if (!result) {
+        res.status(404).json({ error: 'TASK_NOT_FOUND' })
+        return
+      }
+      res.status(200).json({
+        task_id: taskId,
+        status: result.record.status,
+        lifecycle_status: toPublicTask(result.record).lifecycle_status,
+        provider_state: result.provider_state,
+        retry_status: 'observed_terminal',
+      })
+    } catch (error) {
+      if (error instanceof TerminationOperationValidationError) {
+        sendTerminationOperationError(res, error)
+        return
+      }
+      if (error instanceof TaskTerminationOperationPendingError) {
+        res.status(409).json({ error: error.code })
+        return
+      }
+      if (error instanceof StaleTurnCleanupError) {
+        res.status(error.httpStatus).json({ error: retryAbortErrorCode(error.code) })
+        return
+      }
+      next(error)
+    }
+  })
+
   router.post('/api/v1/tasks/:taskId/stale-turn-cleanup', async (req, res, next) => {
     try {
       // There is intentionally no caller-supplied target identity. An empty
@@ -457,6 +509,16 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
     }
   })
   return router
+}
+
+function retryAbortErrorCode(code: string): string {
+  if (code.endsWith('BINDING_MISSING') || code.endsWith('AFFINITY_MISMATCH')) {
+    return 'TERMINATION_RETRY_BINDING_MISMATCH'
+  }
+  if (code.endsWith('TURN_NOT_FOUND') || code.endsWith('TURN_STATUS_UNKNOWN')) {
+    return 'TERMINATION_RETRY_STATE_CONFLICT'
+  }
+  return 'TERMINATION_RETRY_UNAVAILABLE'
 }
 
 function toOperationSummary(operation: ValidatedTerminationOperation) {

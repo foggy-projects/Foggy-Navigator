@@ -292,7 +292,7 @@ class CodexTaskServiceTest {
                 .thenReturn(Optional.of(task));
         when(taskRepository.findByTaskIdForUpdate("task-cancel-retry"))
                 .thenReturn(Optional.of(task));
-        when(taskRepository.save(any(CodexTaskEntity.class)))
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         service.cancelTaskDirectForProvider(
@@ -1640,6 +1640,78 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void appServerAbortRetrySupersedesOldOperationAndPersistsExactInterruptedOutcome() {
+        CodexTaskEntity entity = pendingAppServerRetryTask("task-retry", "tenant-1");
+        stubAppServerAbortRetryTask(entity, "to-retry");
+        when(workerClient.retryAbortTask(eq("worker-native-task-retry"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "worker-native-task-retry",
+                        "retry_status", "observed_terminal",
+                        "provider_state", "interrupted")));
+
+        CodexTaskService.AppServerAbortRetryResult result = service.retryAppServerAbort(
+                "task-retry", "user-1", "tenant-1");
+
+        assertEquals("ABORTED", entity.getStatus());
+        assertEquals("TERMINAL", entity.getRuntimeAcceptanceState());
+        assertEquals("interrupted", result.providerState());
+        assertEquals("ABORTED", result.status());
+        verify(terminationOperationService).supersedeActiveOperationsForTask(
+                "task-retry", "TERMINATION_OPERATION_SUPERSEDED_BY_RETRY");
+        ArgumentCaptor<TerminationOperationService.CreateCommand> command =
+                ArgumentCaptor.forClass(TerminationOperationService.CreateCommand.class);
+        verify(terminationOperationService).accept(command.capture());
+        assertEquals("REMOTE_CANCEL", command.getValue().kind());
+        assertEquals("USER_CANCEL_RETRY", command.getValue().reasonCode());
+        assertEquals("worker-native-task-retry", command.getValue().providerTaskId());
+        verify(terminationOperationService).markDispatchStarted("to-retry");
+        verify(terminationOperationService).markObservedTerminal("to-retry", "ABORTED");
+    }
+
+    @Test
+    void appServerAbortRetryClosesDefinitiveWorkerConflictWithoutChangingTaskState() {
+        CodexTaskEntity entity = pendingAppServerRetryTask("task-retry-conflict", "tenant-1");
+        stubAppServerAbortRetryTask(entity, "to-retry-conflict");
+        when(workerClient.retryAbortTask(eq("worker-native-task-retry-conflict"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.error(new CodexWorkerClient.WorkerQueryRejectedException(
+                        409, "TERMINATION_RETRY_BINDING_MISMATCH")));
+
+        CodexTaskService.AppServerAbortRetryException error = assertThrows(
+                CodexTaskService.AppServerAbortRetryException.class,
+                () -> service.retryAppServerAbort(
+                        "task-retry-conflict", "user-1", "tenant-1"));
+
+        assertEquals("TERMINATION_RETRY_BINDING_MISMATCH", error.getSafeCode());
+        assertFalse(error.isRetryable());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(terminationOperationService).markRejected(
+                "to-retry-conflict", "TERMINATION_RETRY_BINDING_MISMATCH");
+        verify(terminationOperationService, never()).markFailedUnconfirmed(anyString(), anyString());
+    }
+
+    @Test
+    void appServerAbortRetryDoesNotMisattributeATerminalRaceToTheNewOperation() {
+        CodexTaskEntity reserved = pendingAppServerRetryTask("task-retry-race", "tenant-1");
+        CodexTaskEntity terminal = pendingAppServerRetryTask("task-retry-race", "tenant-1");
+        terminal.setStatus("FAILED");
+        terminal.setRuntimeAcceptanceState("TERMINAL");
+        stubAppServerAbortRetryTask(reserved, terminal, "to-retry-race");
+
+        CodexTaskService.AppServerAbortRetryResult result = service.retryAppServerAbort(
+                "task-retry-race", "user-1", "tenant-1");
+
+        assertEquals("failed", result.providerState());
+        assertEquals("FAILED", result.status());
+        verify(terminationOperationService).markRejected(
+                "to-retry-race", "TERMINATION_RETRY_NOT_DISPATCHED_TASK_TERMINAL");
+        verify(terminationOperationService, never()).markObservedTerminal(
+                eq("to-retry-race"), anyString());
+        verify(workerClient, never()).retryAbortTask(anyString(), any());
+    }
+
+    @Test
     void staleTurnCleanupRejectsTenantlessCallerForTenantBoundTaskBeforeAuditOrWorkerLookup() {
         CodexTaskEntity entity = terminalAppServerTask("task-stale-tenant", "tenant-1");
         when(taskRepository.findByTaskIdForUpdate("task-stale-tenant")).thenReturn(Optional.of(entity));
@@ -2452,7 +2524,7 @@ class CodexTaskServiceTest {
         entity.setWorkerTaskId(null);
         when(taskRepository.findByTaskIdForUpdate("task-not-accepted"))
                 .thenReturn(Optional.of(entity));
-        when(taskRepository.save(any(CodexTaskEntity.class)))
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         assertTrue(service.failTaskIfAcceptanceNotStarted(
@@ -2931,6 +3003,63 @@ class CodexTaskServiceTest {
         task.setWorkerTaskId("worker-native-" + taskId);
         task.setCodexThreadId("thread-" + taskId);
         return task;
+    }
+
+    private CodexTaskEntity pendingAppServerRetryTask(String taskId, String tenantId) {
+        CodexTaskEntity task = terminalAppServerTask(taskId, tenantId);
+        task.setStatus("CANCEL_REQUESTED");
+        task.setRuntimeAcceptanceState("ABORT_REQUESTED");
+        return task;
+    }
+
+    private void stubAppServerAbortRetryTask(CodexTaskEntity task, String operationId) {
+        stubAppServerAbortRetryTask(task, task, operationId);
+    }
+
+    private void stubAppServerAbortRetryTask(
+            CodexTaskEntity reservedTask, CodexTaskEntity rereadTask, String operationId) {
+        doReturn(Optional.of(reservedTask)).when(taskRepository)
+                .findByTaskIdForUpdate(reservedTask.getTaskId());
+        doReturn(Optional.of(rereadTask)).when(taskRepository)
+                .findByTaskId(reservedTask.getTaskId());
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId(operationId);
+            operation.setSchemaVersion(1);
+            operation.setTaskId(command.taskId());
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            return operation;
+        });
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId(reservedTask.getRuntimeId())
+                .runtimeRevision(reservedTask.getRuntimeRevision())
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId(reservedTask.getWorkerId())
+                .endpointUrl("http://worker.example")
+                .authToken("worker-token")
+                .instanceId(reservedTask.getRuntimeInstanceId())
+                .routingEpoch(1L)
+                .build();
+        lenient().when(runtimeRegistryService.resolveBoundRuntime(
+                reservedTask.getRuntimeId(), reservedTask.getRuntimeRevision(), reservedTask.getWorkerId(),
+                reservedTask.getRuntimeInstanceId())).thenReturn(binding);
+        lenient().when(clientFactory.getOrCreate(
+                "runtime:" + reservedTask.getRuntimeId() + ":" + reservedTask.getRuntimeRevision(),
+                "http://worker.example", "worker-token", reservedTask.getRuntimeInstanceId()))
+                .thenReturn(workerClient);
+        lenient().when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
     }
 
     private void stubStaleCleanupTask(CodexTaskEntity task, String operationId) {

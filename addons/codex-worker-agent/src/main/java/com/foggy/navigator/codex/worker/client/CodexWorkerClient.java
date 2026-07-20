@@ -461,6 +461,44 @@ public class CodexWorkerClient {
                 .timeout(Duration.ofSeconds(10));
     }
 
+    /** Revalidates and retries the exact persisted App Server turn only. */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> retryAbortTask(
+            String taskId, TerminationOperationCapability capability) {
+        requireTaskId(taskId);
+        requireCapability(capability);
+        return webClient.post()
+                .uri("/api/v1/tasks/{taskId}/abort/retry", taskId)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(15));
+    }
+
+    /** Reads a browser-safe projection of the exact App Server turn state. */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getTerminationInspection(String taskId) {
+        requireTaskId(taskId);
+        return webClient.get()
+                .uri("/api/v1/tasks/{taskId}/termination-inspection", taskId)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(10));
+    }
+
     /**
      * Interrupts only the exact stale native turn bound to an audited terminal
      * App Server task. The capability, expected runtime-instance proof, and
