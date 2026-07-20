@@ -140,10 +140,16 @@ open_questions: []
   - Codex SDK 真实 Playwright smoke：任务 `20260720-bc06` 执行持续输出命令后点击真实“中止”，页面收到 `CODEX_RUNTIME_REMOTE_ABORTED`，任务收敛为 `ABORTED`，宽限期后不再输出且无“再次中止”；Worker 事件包含 lifecycle warning 后的 verified terminal error。证据：`temp/test-artifacts/bug004-playwright-20260720/sdk-fixed-running.png`、`sdk-fixed-aborted.png`、`sdk-fixed-aborted-after-grace.png`、`sdk-fixed-task-responses.json`。
   - Codex App Server 真实 Playwright smoke：任务 `20260720-4e00` 运行持续输出命令后点击真实“中止”，页面收到 `CODEX_RUNTIME_REMOTE_ABORTED`、退出处理中状态且无“再次中止”；API 网络证据包含 `RUNNING -> ABORTED`。证据：同目录 `appserver-running.png`、`appserver-aborted.png`、`appserver-task-responses.json`。
   - App Server 终态“再次中止”弹窗验证：真实任务 `20260720-b364` 已完成真实 interrupt 和远端终态收敛；因正常链路约几十毫秒即从 `CANCEL_REQUESTED` 进入 `ABORTED`，Playwright 仅在 SSE 已结束后临时把该任务的浏览器列表/详情投影固定为 `CANCEL_REQUESTED`，从而稳定进入 UI 分支，状态查询和服务端数据均未模拟。真实 `termination-inspection` 返回 `taskStatus=ABORTED`、`workerLifecycleStatus=ABORTED`、`providerState=terminal`、`turnStatus=aborted`、`recommendedAction=NO_ACTION`，且安全投影不含 threadId、turnId、runtime instance 或 PID。弹窗显示“原生 Turn 已结束”，点击“关闭”没有调用 `termination-retry`；移除浏览器投影后恢复权威 `ABORTED` 且无“再次中止”。证据：同目录 `appserver-cancel-requested.png`、`appserver-retry-confirmation.png`、`appserver-retry-cancelled-authoritative.png`、`appserver-retry-popup-network.json`。
+- release_evidence:
+  - 用户于 2026-07-20 另行授权发布两个 Worker；该授权只增加 Worker 版本与发布证据，不扩大本 BUG 的 Java、前端或环境部署范围。
+  - Codex SDK Worker 版本提升至 `1.0.18`；`npm run package:release -- --platform all --smoke full` 通过，223 tests / 222 passed / 1 Windows-only skipped / 0 failed，完成 archive structure、sidecar、敏感文件扫描、候选 `npm ci` 和候选 `/health` 验证。Linux 与 macOS 包均为 162703 bytes、SHA-256 `42c31de0a306d822e8fa5fe37bd79d9d512dd326339b97f54fa0ddefa13b5923`；Windows 包为 673256 bytes、SHA-256 `91108a10509c4dedd26e0b911797d286aa31121787b495f3881c8dc2b72070f0`。
+  - Codex App Server Worker 版本提升至 `0.3.22`；`npm run package:release` 通过，337 tests / 336 passed / 1 platform-conditional skipped / 0 failed，schema digest `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f`，typecheck/build 通过。ZIP 为 2428107 bytes、SHA-256 `b566baa491320aadb8b6c53a05b58c10c51dc7babfafb23599dd66228bf8b018`。
+  - App Server 最终 ZIP 的隔离更新验证 `bash tools/codex-app-server-worker/update.sh --package .../codex-app-server-worker-0.3.22.zip --install-dir temp/test-artifacts/bug004-worker-release-20260720/appserver-dryrun --dry-run` 通过；候选校验再次执行 337 tests、schema、typecheck 和 build，并确认当前安装未修改。
+  - 从最终 ZIP 解包并安装生产依赖后启动独立候选端口 `13063`，真实 `/health` 返回 `version=0.3.22`、`ready=true`、CLI `0.144.3` compatible。`local-smoke` canary 使用受控本地 Navigator 终态任务源和真实候选 Worker health，结果为永久标记的 `NON_PRODUCTION_SMOKE`：2/2 terminal tasks、100% success、0 internal/recovery/affinity/privacy/pool failures，gate PASS；未触碰当前 `13062` 手工验证 Worker。
 - deviations:
   - 无目标、兼容、安全边界或数据迁移偏离。SDK 升级终止绑定到 SDK 直接启动且已验证身份的 Codex CLI 进程；POSIX 未新增独立的任意后代进程扫描或模糊进程树清理，以避免扩大杀进程权限。
 - residual_risks:
-  - 本地真实 Worker、Java 和浏览器 smoke 已通过；用户仍需按自身操作习惯在当前保留环境中完成手工体验确认。本次没有部署或发布到其他环境。
+  - 本地真实 Worker、Java 和浏览器 smoke 已通过；用户仍需按自身操作习惯在当前保留环境中完成手工体验确认。Worker 发布是后续单独授权动作，不代表 Java/前端已部署，也不会自动升级当前保留的手工验证 Worker。
   - 本地 SDK Worker health 为 `degraded` 的原因是外部 credential forwarding readiness 未配置；`codex_sdk_available=true`、SDK 版本兼容且真实任务执行/中止已通过。本项不影响本 BUG 的 internal-dev 验证，但不能作为外部接入就绪证明。
   - 若未来 Codex SDK 在直连 CLI 之外引入独立存活的后代执行进程，需要新增可证明父子身份的进程树契约，不能直接扩大当前 PID 终止范围。
 - readiness: READY_FOR_SIGNOFF
