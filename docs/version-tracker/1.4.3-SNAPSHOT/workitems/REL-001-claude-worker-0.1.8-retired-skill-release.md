@@ -1,7 +1,7 @@
 ---
 title: Claude Agent Worker 0.1.8 retired cross-project skill release
 version: 1.4.3-SNAPSHOT
-status: PACKAGED_AWAITING_PUBLICATION
+status: BLOCKED_RELEASE_CREDENTIALS
 owner: release-owner
 created: 2026-07-20
 ---
@@ -42,4 +42,5 @@ Publish a patch release of `tools/claude-agent-worker` to the existing `claude-w
 - Pre-release validation: `cd tools/claude-agent-worker && .venv/bin/python -m pytest -q` → `542 passed, 11 skipped` on 2026-07-20.
 - Package validation: Linux and macOS archives SHA-256 `cb6bfdd3c03ec0c71a66b411f53385376442c709e0488adcadc206fb8f2cec70`; Windows archive SHA-256 `53099b4d0bf49026fd44104605b172c47bd0005cf99ce9a085fdf5db8e14c5a0`.
 - Archive inspection: all three archives contain `VERSION=0.1.8`, omit `cross-project-task` artifacts, and retain the retired-skill reconciliation policy.
-- Pending OBS verification and isolated-install record.
+- Publication attempt: `bash dist/upload.sh 0.1.8` was blocked before the first archive upload because local `obsutil` has no AK/SK/endpoint configuration (`obsutil ls` exit `3`). Public verification immediately afterward still returned `latest.json.version=0.1.7`, and all three `0.1.8` archive URLs returned HTTP `404`.
+- Isolated public installer verification is pending publication.
