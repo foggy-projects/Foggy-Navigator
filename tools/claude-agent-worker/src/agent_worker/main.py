@@ -140,8 +140,6 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: close all SSH sessions
     await stop_cleanup_and_close_all()
-    if _monitor_publisher:
-        _monitor_publisher.close()
     logger.info("Claude Agent Worker stopped")
     if _log_listener is not None:
         _log_listener.stop()

@@ -1,46 +1,47 @@
 ---
-title: Claude Agent Worker 0.1.8 retired cross-project skill release
+title: Claude Agent Worker 0.1.9 retired cross-project skill release
 version: 1.4.3-SNAPSHOT
-status: BLOCKED_RELEASE_CREDENTIALS
+status: READY_FOR_SIGNOFF
 owner: release-owner
 created: 2026-07-20
 ---
 
-# REL-001 Claude Agent Worker 0.1.8 Release
+# REL-001 Claude Agent Worker 0.1.9 Release
 
 ## Approved Goal
 
-Publish a patch release of `tools/claude-agent-worker` to the existing `claude-worker` OBS channel, then verify that a clean Linux installation from the public `install.sh` does not create `cross-project-task/SKILL.md`.
+Publish a Worker update to the existing `claude-worker` OBS channel and verify that Worker startup does not create `cross-project-task/SKILL.md`; a recognized historical Navigator-generated copy must be retired.
 
 ## Scope
 
-- Bump the Worker release version from `0.1.7` to `0.1.8`.
-- Run the Worker test suite and package Linux, macOS, and Windows archives.
-- Publish versioned artifacts, bootstrap installers, and `latest.json` to the existing OBS release channel.
-- Install the public Linux release in an isolated temporary home and inspect the three retired-skill roots.
+- Published `0.1.8`, then superseded it with hotfix `0.1.9` after package runtime validation exposed an existing shutdown-path `NameError`.
+- Kept the retired-skill policy unchanged: current platform skills are deployed, while only recognized historical `cross-project-task` content is removed.
+- Published Linux, macOS, and Windows `0.1.9` archives, current bootstrap installers, and `latest.json`.
 
 ## Non-goals
 
 - No Navigator backend or frontend rollout.
 - No Worker restart or mutation of an existing installation.
-- No changes to the retired-skill policy beyond packaging the already committed behavior.
+- No deletion of unrecognized, user-owned skills that merely share the retired name.
 
-## Acceptance Criteria
+## Acceptance Criteria and Evidence
 
-1. OBS `latest.json` reports `0.1.8` and points to all three platform archives.
-2. Published archives are retrievable and match the locally generated SHA-256 values.
-3. A clean `curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.sh | bash`-equivalent isolated installation succeeds.
-4. `~/.agents/skills/cross-project-task/SKILL.md`, `~/.agent/skills/cross-project-task/SKILL.md`, and `~/.claude/skills/cross-project-task/SKILL.md` are absent after the regression check.
+1. Public `latest.json` reports `0.1.9` and contains Linux, macOS, and Windows archive paths: passed on 2026-07-20.
+2. Published archive SHA-256 values match local packages: passed.
+   - Linux/macOS: `30302ca6ff820947e29cfa76bf96871844b2dc304041f7dc89200982600cdf43`
+   - Windows: `d132d518bf8f6a0e44956dce822e62eadac46610000ae33594d130d4c97af86c`
+3. The packaged Linux `0.1.9` archive starts, answers `/health` with `version=0.1.9`, and shuts down cleanly: passed.
+4. On that packaged runtime, a historical `cross-project-task/SKILL.md` carrying both `name: cross-project-task` and `/api/v1/cross-project-tasks` was removed on startup; no new such file was deployed: passed.
 
-## Risks
+## Validation
 
-- The release changes public installer discovery immediately through `latest.json`.
-- The isolated installer verifies installation layout and packaged policy; it does not start a Worker or prove runtime startup behavior.
+- `cd tools/claude-agent-worker && .venv/bin/python -m pytest -q` -> `542 passed, 11 skipped`.
+- `cd tools/claude-agent-worker && bash dist/package.sh all` -> all `0.1.9` platform archives generated.
+- OBS upload used the existing operator-local OBS configuration without copying credentials into the repository; all archive, `latest.json`, `install.sh`, and `install.ps1` uploads returned HTTP 200.
+- Public download and SHA-256 comparison passed for all three archives.
+- Package lifecycle evidence is under `temp/test-artifacts/REL-001-claude-worker-0.1.8/`.
 
-## Evidence
+## Decision and Residual Risk
 
-- Pre-release validation: `cd tools/claude-agent-worker && .venv/bin/python -m pytest -q` → `542 passed, 11 skipped` on 2026-07-20.
-- Package validation: Linux and macOS archives SHA-256 `cb6bfdd3c03ec0c71a66b411f53385376442c709e0488adcadc206fb8f2cec70`; Windows archive SHA-256 `53099b4d0bf49026fd44104605b172c47bd0005cf99ce9a085fdf5db8e14c5a0`.
-- Archive inspection: all three archives contain `VERSION=0.1.8`, omit `cross-project-task` artifacts, and retain the retired-skill reconciliation policy.
-- Publication attempt: `bash dist/upload.sh 0.1.8` was blocked before the first archive upload because local `obsutil` has no AK/SK/endpoint configuration (`obsutil ls` exit `3`). Public verification immediately afterward still returned `latest.json.version=0.1.7`, and all three `0.1.8` archive URLs returned HTTP `404`.
-- Isolated public installer verification is pending publication.
+- A same-name file without the historical Navigator content signature is intentionally preserved, to avoid deleting user-owned skills. The Worker does not deploy `cross-project-task` on a clean installation.
+- The public installer was fetched in an isolated test home and selected `0.1.8` before the hotfix; the harness ended during quiet dependency installation without a diagnostic. The final `0.1.9` archive, public installer metadata, and full package startup/stop path were verified separately. Target-environment confirmation remains the requested `curl -sSL .../install.sh | bash` update test.
