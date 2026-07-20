@@ -262,7 +262,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         form.setCodexThreadId(lockedSession.codexThreadId());
 
         if (taskFence.activeTask().isPresent()) {
-            if (repairStaleResumeTaskIfVerifiedAbsent(taskFence.activeTask().get())) {
+            if (repairStaleSdkTaskIfVerifiedAbsent(taskFence.activeTask().get())) {
                 throw new CodexStaleTaskRepairedException();
             }
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
@@ -474,7 +474,34 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private record ResumeSessionState(String codexThreadId, String latestTaskId) {}
 
-    private boolean repairStaleResumeTaskIfVerifiedAbsent(CodexTaskEntity activeTask) {
+    private boolean repairStaleSdkTaskIfVerifiedAbsent(CodexTaskEntity activeTask) {
+        if (!sdkTaskAbsenceVerified(activeTask)) {
+            return false;
+        }
+        repairVerifiedStaleSdkTask(activeTask);
+        return true;
+    }
+
+    private boolean repairStaleSdkCancellationIfVerifiedAbsent(CodexTaskEntity observedTask) {
+        if (!sdkTaskAbsenceVerified(observedTask)) {
+            return false;
+        }
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity current = taskRepository.findByTaskIdForUpdate(observedTask.getTaskId())
+                    .orElse(null);
+            if (current == null || isTerminalStatus(current.getStatus())) {
+                return true;
+            }
+            if (!"CANCEL_REQUESTED".equals(current.getStatus())
+                    || !sameStaleReconciliationIdentity(observedTask, current)) {
+                return false;
+            }
+            repairVerifiedStaleSdkTask(current);
+            return true;
+        });
+    }
+
+    private boolean sdkTaskAbsenceVerified(CodexTaskEntity activeTask) {
         if (!supportsSdkResumeReconciliation(activeTask)
                 || sessionTaskRepository == null || sessionEntityRepository == null) {
             return false;
@@ -489,7 +516,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             client = terminationClient(activeTask);
         } catch (RuntimeException error) {
             log.warn(
-                    "Keeping Codex resume guard because the bound Worker client is unavailable: taskId={}, workerId={}, errorType={}",
+                    "Keeping Codex task active because the bound Worker client is unavailable: taskId={}, workerId={}, errorType={}",
                     activeTask.getTaskId(), activeTask.getWorkerId(), error.getClass().getSimpleName());
             return false;
         }
@@ -500,7 +527,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             WebClientResponseException responseError = findWorkerResponseError(error);
             if (responseError == null || responseError.getStatusCode().value() != 404) {
                 log.warn(
-                        "Keeping Codex resume guard after inconclusive Worker status probe: taskId={}, workerId={}, errorType={}, httpStatus={}",
+                        "Keeping Codex task active after inconclusive Worker status probe: taskId={}, workerId={}, errorType={}, httpStatus={}",
                         activeTask.getTaskId(), activeTask.getWorkerId(), error.getClass().getSimpleName(),
                         responseError != null ? responseError.getStatusCode().value() : null);
                 return false;
@@ -513,7 +540,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         } catch (RuntimeException error) {
             WebClientResponseException responseError = findWorkerResponseError(error);
             log.warn(
-                    "Keeping Codex resume guard after inconclusive Worker process probe: taskId={}, workerId={}, errorType={}, httpStatus={}",
+                    "Keeping Codex task active after inconclusive Worker process probe: taskId={}, workerId={}, errorType={}, httpStatus={}",
                     activeTask.getTaskId(), activeTask.getWorkerId(), error.getClass().getSimpleName(),
                     responseError != null ? responseError.getStatusCode().value() : null);
             return false;
@@ -521,21 +548,33 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (!processSnapshotConfirmsTaskAbsent(
                 processSnapshot, workerTaskId, stringValue(activeTask.getCodexThreadId()))) {
             log.warn(
-                    "Keeping Codex resume guard because Worker process snapshot did not prove absence: taskId={}, workerId={}",
+                    "Keeping Codex task active because Worker process snapshot did not prove absence: taskId={}, workerId={}",
                     activeTask.getTaskId(), activeTask.getWorkerId());
             return false;
         }
-
-        resolvePendingInteractionForStaleTask(activeTask);
-        String previousStatus = activeTask.getStatus();
-        activeTask.setStatus("FAILED");
-        activeTask.setErrorMessage(CodexStaleTaskRepairedException.CODE);
-        persistRepairedResumeTask(activeTask);
-        publishStatusChange(activeTask, previousStatus);
-        log.warn(
-                "Repaired stale Codex resume guard after Worker task and CLI absence were verified: taskId={}, workerId={}, previousStatus={}",
-                activeTask.getTaskId(), activeTask.getWorkerId(), previousStatus);
         return true;
+    }
+
+    private void repairVerifiedStaleSdkTask(CodexTaskEntity task) {
+        resolvePendingInteractionForStaleTask(task);
+        String previousStatus = task.getStatus();
+        task.setStatus("FAILED");
+        task.setErrorMessage(CodexStaleTaskRepairedException.CODE);
+        persistRepairedResumeTask(task);
+        publishStatusChange(task, previousStatus);
+        log.warn(
+                "Repaired stale Codex task after Worker task and CLI absence were verified: taskId={}, workerId={}, previousStatus={}",
+                task.getTaskId(), task.getWorkerId(), previousStatus);
+    }
+
+    private boolean sameStaleReconciliationIdentity(CodexTaskEntity observed, CodexTaskEntity current) {
+        return Objects.equals(observed.getTaskId(), current.getTaskId())
+                && Objects.equals(observed.getUserId(), current.getUserId())
+                && Objects.equals(observed.getWorkerId(), current.getWorkerId())
+                && Objects.equals(observed.getWorkerTaskId(), current.getWorkerTaskId())
+                && Objects.equals(observed.getCodexThreadId(), current.getCodexThreadId())
+                && Objects.equals(observed.getRuntimeType(), current.getRuntimeType())
+                && Objects.equals(resolveProviderType(observed), resolveProviderType(current));
     }
 
     private void persistRepairedResumeTask(CodexTaskEntity task) {
@@ -989,6 +1028,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())
                 || "AWAITING_INPUT".equals(entity.getStatus())
                 || "CANCEL_REQUESTED".equals(entity.getStatus())) {
+            if ("CANCEL_REQUESTED".equals(entity.getStatus())
+                    && repairStaleSdkCancellationIfVerifiedAbsent(entity)) {
+                return;
+            }
             abortTask(taskId);
         }
     }

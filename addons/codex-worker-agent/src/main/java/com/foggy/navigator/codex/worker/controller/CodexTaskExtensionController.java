@@ -6,6 +6,7 @@ import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeUnavailableException;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -243,6 +244,8 @@ public class CodexTaskExtensionController {
             copySafeTerminationField(workerResult, result, "checked_at", "checkedAt");
             return RX.ok(result);
         } catch (CodexWorkerClient.WorkerQueryRejectedException e) {
+            return RX.failA(e.getCode());
+        } catch (CodexRuntimeUnavailableException e) {
             return RX.failA(e.getCode());
         } catch (Exception e) {
             log.warn("Failed to inspect Codex App Server cancellation: taskId={}, type={}",

@@ -6,6 +6,7 @@ import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeUnavailableException;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -486,6 +487,44 @@ class CodexTaskExtensionControllerTest {
         assertFalse(response.getData().containsKey("app_server_instance_id"));
         assertFalse(response.getData().containsKey("auth_token"));
         verify(client).getTerminationInspection("worker-task-1");
+    }
+
+    @Test
+    void terminationInspectionReturnsSafeRuntimeUnavailableCode() {
+        CodexTaskEntity task = appServerTask();
+        task.setStatus("CANCEL_REQUESTED");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a"))
+                .thenThrow(new CodexRuntimeUnavailableException(
+                        "CODEX_RUNTIME_INSTANCE_UNAVAILABLE", "private runtime details"));
+
+        RX<Map<String, Object>> response = controller.getTerminationInspection(TASK_ID);
+
+        assertEquals("CODEX_RUNTIME_INSTANCE_UNAVAILABLE", response.getMsg());
+        assertNull(response.getData());
+        verifyNoInteractions(clientFactory, client);
+    }
+
+    @Test
+    void terminationInspectionKeepsGenericCodeForUnexpectedFailure() {
+        CodexTaskEntity task = appServerTask();
+        task.setStatus("CANCEL_REQUESTED");
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getTerminationInspection("worker-task-1"))
+                .thenReturn(Mono.error(new IllegalStateException("private unexpected details")));
+
+        RX<Map<String, Object>> response = controller.getTerminationInspection(TASK_ID);
+
+        assertEquals("CODEX_TERMINATION_INSPECTION_UNAVAILABLE", response.getMsg());
+        assertNull(response.getData());
     }
 
     @Test

@@ -304,6 +304,125 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void repeatedCancelRepairsVerifiedAbsentSdkTaskWithoutMintingTerminationOperation() {
+        CodexTaskEntity task = createTask(
+                "task-cancel-stale", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setWorkerTaskId("worker-task-stale");
+        task.setCodexThreadId("thread-stale");
+        when(taskRepository.findByTaskIdAndUserId("task-cancel-stale", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdForUpdate("task-cancel-stale"))
+                .thenReturn(Optional.of(task));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.cancelTaskDirectForProvider(
+                CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-stale", "user-1");
+
+        assertEquals("FAILED", task.getStatus());
+        assertEquals(CodexStaleTaskRepairedException.CODE, task.getErrorMessage());
+        verify(workerClient).getTaskStatus("worker-task-stale");
+        verify(workerClient).listCliProcesses();
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "task-cancel-stale".equals(entity.getTaskId())
+                        && "FAILED".equals(entity.getStatus())
+                        && CodexStaleTaskRepairedException.CODE.equals(entity.getErrorMessage())));
+        verifyNoInteractions(terminationOperationService);
+        verify(workerClient, never()).abortTask(anyString(), any());
+    }
+
+    @Test
+    void repeatedCancelKeepsExistingFlowWhenSdkProcessSnapshotIsInconclusive() {
+        CodexTaskEntity task = createTask(
+                "task-cancel-inconclusive", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setWorkerTaskId("worker-task-stale");
+        task.setCodexThreadId("thread-stale");
+        when(taskRepository.findByTaskIdAndUserId("task-cancel-inconclusive", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdForUpdate("task-cancel-inconclusive"))
+                .thenReturn(Optional.of(task));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(Map.of(
+                "processes", List.of(), "active_task_count", 0, "total", 1)));
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.cancelTaskDirectForProvider(
+                CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-inconclusive", "user-1");
+
+        assertEquals("CANCEL_REQUESTED", task.getStatus());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", task.getErrorMessage());
+        verify(workerClient).getTaskStatus("worker-task-stale");
+        verify(workerClient).listCliProcesses();
+        verify(taskRepository, times(2)).findByTaskIdForUpdate("task-cancel-inconclusive");
+    }
+
+    @Test
+    void repeatedCancelDoesNotOverwriteTerminalStateCommittedDuringAbsenceProbe() {
+        CodexTaskEntity observed = createTask(
+                "task-cancel-race", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        observed.setTenantId("tenant-1");
+        observed.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        observed.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        observed.setWorkerTaskId("worker-task-stale");
+        observed.setCodexThreadId("thread-stale");
+        CodexTaskEntity terminal = createTask(
+                "task-cancel-race", "session-1", "worker-1", "dir-1",
+                "ABORTED", observed.getCreatedAt());
+        terminal.setTenantId("tenant-1");
+        terminal.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        terminal.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        terminal.setWorkerTaskId("worker-task-stale");
+        terminal.setCodexThreadId("thread-stale");
+        when(taskRepository.findByTaskIdAndUserId("task-cancel-race", "user-1"))
+                .thenReturn(Optional.of(observed));
+        lenient().when(taskRepository.findByTaskIdForUpdate("task-cancel-race"))
+                .thenReturn(Optional.of(terminal));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder().baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("worker-task-stale"))
+                .thenReturn(Mono.error(workerStatusError(404, "Not Found")));
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
+
+        service.cancelTaskDirectForProvider(
+                CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-race", "user-1");
+
+        assertEquals("CANCEL_REQUESTED", observed.getStatus());
+        assertEquals("ABORTED", terminal.getStatus());
+        verify(taskRepository, never()).save(any());
+        verifyNoInteractions(terminationOperationService);
+    }
+
+    @Test
     void pendingUserInputAcceptsOpaquePoolInstanceAndProjectsAwaitingInput() {
         CodexTaskEntity task = appServerInputTask("RUNNING");
         SessionTaskEntity sessionTask = inputSessionTask();
