@@ -27,6 +27,14 @@ Use the narrowest lane that can perform the action:
 | Runtime credential | ClientApp key-secret / access token | runtime-token exchange, readiness, owner-smoke, ask, messages, live smoke | modelConfig create, grant, binding, worker-host apply |
 | Break-glass admin | operator/admin env only | cross-owner repair, migration, emergency revocation | normal provisioning |
 
+## Development S1/S2 Integration MVP
+
+- This path is only for local/trusted development integration. It does not implement or prove S1 `INSTANCE_ROOT`, S2 typed `SAAS_PLATFORM`, Worker Gateway external, or production readiness.
+- SIM uses its dedicated Navigator instance and may use the current legacy upstream-admin lane for SIM-owned development resources. Do not describe that lane as final instance-root authority or use it to claim arbitrary cross-owner control.
+- TMS platform uses upstream-admin for bootstrap and keeps ClientApp control credentials in a platform-private, gitignored profile. A tenant receives only a separate runtime key/secret or short-lived runtime token unless an explicit limited-control requirement is approved.
+- `client-app ensure-tenant --write-profile` currently writes both runtime and control credentials into the selected private profile. Never hand that bootstrap profile to a tenant; split out a runtime-only profile before delivery.
+- `ensure-tenant` `READY` is not ask-ready. Require `activationReady=true`, `verify-agent-readiness` `OK`, then `owner-smoke` before a safe ask. `NAVIGATOR_EXTERNAL_ENABLED=true` still only opens `/api/v1/open/**`; keep `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false` for this MVP.
+
 ## Typed-management CLI FAQ (S1 / S2)
 
 - `navi upstream auth whoami` and `inspect permissions` are read-only typed-management introspection commands. They require exactly one `NAVI_PRINCIPAL_CREDENTIAL` (or an explicit `--principal-credential-env`) and send only `X-Navi-Principal-Credential` to `/api/v1/management/v1/auth/**`.

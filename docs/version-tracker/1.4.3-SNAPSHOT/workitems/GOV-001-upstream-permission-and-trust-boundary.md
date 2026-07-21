@@ -3,10 +3,12 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: GOV-001
-status: APPROVED
+status: NEEDS_REPLAN
 overall_delivery_status: PARTIALLY_ACCEPTED_GATED
-canonical: true
+canonical: false
 execution_mode: ultra
+active_delivery_status: DEFERRED_FOR_DEV_MVP
+superseded_for_active_delivery_by: GOV-001-dev-s1-s2-integration-mvp.md
 scenario_s1_status: aligned
 scenario_s2_status: aligned
 scenario_s3_status: design-aligned-implementation-deferred
@@ -55,6 +57,7 @@ open_questions: []
 - purpose: 记录当前权限模型事实，并按真实上游场景冻结上游系统、ClientApp、runtime、Agent/task 和 Worker 的权限边界。
 - canonical_path: `docs/version-tracker/1.4.3-SNAPSHOT/workitems/GOV-001-upstream-permission-and-trust-boundary.md`
 - current_boundary: 2026-07-19 Owner 已批准把 Spring Boot 3.4.2 discovery-links 的现有 `GET /actuator` ingress 纳入 deployment-aware catalog，保持 415 条并接入 P1A shadow/audit；BUG-002 required-section amendment 后 source/evidence SHA-256 为 `ef4c32ac4ca25ee695dff7bacd9845301266807d71fbcafe35ebba4872aadc7d`。同时关闭 discovery-links，接受 `/actuator` 从 HTTP 200 links 响应变为 404 的唯一兼容例外，子 Actuator endpoint 保持原有行为。P1A、fixture-only P1B-A、pure-offline P1B-B0 与 fixture-only P1C-A 均已 independently accepted；B0 只验证 synthetic/securely supplied envelope 的结构与隔离，P1C-A 只验证 typed-management CLI/SKILL 可见性，均不验证真实事实或批准。P1B-B/P2/P3/P4 的具名 owner 输入已汇总进 [Owner Decision Intake / ADR Packet](./GOV-001-owner-decision-intake-adr-packet.md)，仍是 `PENDING_OWNER_INPUT`。2026-07-19 Project Owner 授权继续进行 P1–P4 的 gate preparation 与 owner intake；真实 seed、route-family cutover、Gateway strict、external/production 或任何跨系统基础设施事实仍须满足本 work item 的逐阶段 gate，不能因该授权自动开启。
+- active_delivery_note: 2026-07-20 Project Owner 将当前优先级改为开发期 SIM/TMS 对接；本 work item 的已接受历史和最终 S1/S2 设计结论不变，但尚未实施的 P1B-B/P2/P3/P4 不再作为当前编码范围。后续继续该宽泛治理合同前必须 replan；当前唯一 active canonical contract 是 [GOV-001-dev-s1-s2-integration-mvp.md](./GOV-001-dev-s1-s2-integration-mvp.md)。
 
 ## Goal
 

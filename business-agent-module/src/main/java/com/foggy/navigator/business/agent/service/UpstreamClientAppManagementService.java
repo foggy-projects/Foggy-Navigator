@@ -30,16 +30,31 @@ public class UpstreamClientAppManagementService {
     @Transactional(readOnly = true)
     public List<ClientAppDTO> listClientApps(UpstreamClientAppAdminPrincipal principal, String tenantId) {
         requirePrincipal(principal);
-        List<String> tenantIds = resolveTenantFilter(principal, tenantId);
-        if (tenantIds.isEmpty()) {
+        if (StringUtils.hasText(tenantId)) {
+            List<String> tenantIds = resolveTenantFilter(principal, tenantId);
+            return clientAppRepository
+                    .findByUpstreamSystemIdAndUpstreamClientAppNamespaceAndTenantIdInOrderByCreatedAtDesc(
+                            principal.getUpstreamSystemId(),
+                            principal.getAuthorizedClientAppNamespace(),
+                            tenantIds)
+                    .stream()
+                    .map(ClientAppDTO::fromEntity)
+                    .toList();
+        }
+        if (principal.getAuthorizedTenantIds() == null || principal.getAuthorizedTenantIds().isEmpty()) {
             return List.of();
         }
+
+        // A system-scoped upstream-admin credential can authorize Navigator tenants derived
+        // from its source tenants (for example nav_tms-x3_<tenant>). Fetch only that
+        // upstream's namespace and apply the same fail-closed tenant predicate used by
+        // mutations; never turn the credential's raw tenant strings into a broad list query.
         return clientAppRepository
-                .findByUpstreamSystemIdAndUpstreamClientAppNamespaceAndTenantIdInOrderByCreatedAtDesc(
+                .findByUpstreamSystemIdAndUpstreamClientAppNamespaceOrderByCreatedAtDesc(
                         principal.getUpstreamSystemId(),
-                        principal.getAuthorizedClientAppNamespace(),
-                        tenantIds)
+                        principal.getAuthorizedClientAppNamespace())
                 .stream()
+                .filter(app -> adminCredentialService.isTenantAuthorized(principal, app.getTenantId()))
                 .map(ClientAppDTO::fromEntity)
                 .toList();
     }

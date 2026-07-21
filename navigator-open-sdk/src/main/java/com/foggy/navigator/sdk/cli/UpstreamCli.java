@@ -422,6 +422,8 @@ public class UpstreamCli {
         out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--upstream-ref <ref>] [--agent-code <id>] [--worker-backend <backend>] [--physical-worker-id <id>] [--directory-id <id>] [--biz-worker-base-url <url>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
         out.println("  issue-runtime-key --client-app-id <id> [--tenant-profile <path>] [--rotate-runtime-credential] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
+        out.println("  These commands require the upstream-admin lane (NAVI_ADMIN_API_KEY); they are not runtime calls.");
+        out.println("  ensure-tenant writes one-time runtime and control credentials to its private tenant profile. Keep NAVI_CONTROL_API_KEY with the platform; deliver a runtime-only profile to a tenant.");
         return 0;
     }
 

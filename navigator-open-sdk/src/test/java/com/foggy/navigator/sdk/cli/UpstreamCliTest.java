@@ -286,6 +286,18 @@ class UpstreamCliTest {
     }
 
     @Test
+    void clientAppHelpExplainsProvisioningAndTenantRuntimeCredentialBoundary() {
+        int code = run(new String[]{"upstream", "client-app", "--help"}, Map.of());
+        String output = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, code);
+        assertTrue(output.contains("require the upstream-admin lane (NAVI_ADMIN_API_KEY)"));
+        assertTrue(output.contains("Keep NAVI_CONTROL_API_KEY with the platform"));
+        assertTrue(output.contains("runtime-only profile to a tenant"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
     void workerHelpDistinguishesExistingCodexPhysicalWorkersFromWorkerPoolCompatibility() {
         int rootCode = run(new String[]{"upstream", "--help"}, Map.of());
         String rootOutput = stdout.toString(StandardCharsets.UTF_8);

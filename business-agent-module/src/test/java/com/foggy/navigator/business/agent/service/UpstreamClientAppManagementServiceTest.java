@@ -12,6 +12,7 @@ import com.foggy.navigator.business.agent.repository.UpstreamClientAppAdminCrede
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -78,6 +79,67 @@ class UpstreamClientAppManagementServiceTest {
         assertEquals("capp-1", dto.getClientAppId());
         assertEquals("Orders A Updated", dto.getName());
         verify(clientAppRepository).save(existing);
+    }
+
+    @Test
+    void listClientAppsIncludesDynamicNavigatorTenantsForSystemScopedPrincipal() {
+        ClientAppEntity first = activeApp("nav_x6-tms_tenant-a", "capp-1", "x6-tms", "x6", "tenant-a");
+        ClientAppEntity second = activeApp("nav_x6-tms_tenant-b", "capp-2", "x6-tms", "x6", "tenant-b");
+        when(clientAppRepository.findByUpstreamSystemIdAndUpstreamClientAppNamespaceOrderByCreatedAtDesc(
+                "x6-tms", "x6"))
+                .thenReturn(List.of(first, second));
+
+        var apps = service.listClientApps(principal("x6-tms"), null);
+
+        assertEquals(List.of("capp-1", "capp-2"), apps.stream().map(dto -> dto.getClientAppId()).toList());
+        verify(clientAppRepository)
+                .findByUpstreamSystemIdAndUpstreamClientAppNamespaceOrderByCreatedAtDesc("x6-tms", "x6");
+        verify(clientAppRepository, never())
+                .findByUpstreamSystemIdAndUpstreamClientAppNamespaceAndTenantIdInOrderByCreatedAtDesc(
+                        anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void listClientAppsFiltersUnauthorizedDynamicTenantWithinSameUpstreamNamespace() {
+        ClientAppEntity authorized = activeApp("nav_x6-tms_tenant-a", "capp-1", "x6-tms", "x6", "tenant-a");
+        ClientAppEntity unauthorized = activeApp("nav_x6-tms_tenant-b", "capp-2", "x6-tms", "x6", "tenant-b");
+        when(clientAppRepository.findByUpstreamSystemIdAndUpstreamClientAppNamespaceOrderByCreatedAtDesc(
+                "x6-tms", "x6"))
+                .thenReturn(List.of(authorized, unauthorized));
+
+        var apps = service.listClientApps(principal("tenant-a"), null);
+
+        assertEquals(List.of("capp-1"), apps.stream().map(dto -> dto.getClientAppId()).toList());
+    }
+
+    @Test
+    void listClientAppsWithNoAuthorizedTenantsReturnsEmptyWithoutQuerying() {
+        var apps = service.listClientApps(principal(), null);
+
+        assertTrue(apps.isEmpty());
+        verifyNoInteractions(clientAppRepository);
+    }
+
+    @Test
+    void listClientAppsForExplicitDynamicTenantKeepsExactRepositoryQuery() {
+        ClientAppEntity app = activeApp("nav_x6-tms_tenant-a", "capp-1", "x6-tms", "x6", "tenant-a");
+        when(clientAppRepository.findByUpstreamSystemIdAndUpstreamClientAppNamespaceAndTenantIdInOrderByCreatedAtDesc(
+                "x6-tms", "x6", List.of("nav_x6-tms_tenant-a")))
+                .thenReturn(List.of(app));
+
+        var apps = service.listClientApps(principal("tenant-a"), "nav_x6-tms_tenant-a");
+
+        assertEquals(List.of("capp-1"), apps.stream().map(dto -> dto.getClientAppId()).toList());
+        verify(clientAppRepository, never())
+                .findByUpstreamSystemIdAndUpstreamClientAppNamespaceOrderByCreatedAtDesc(anyString(), anyString());
+    }
+
+    @Test
+    void listClientAppsRejectsUnauthorizedExplicitDynamicTenantWithoutQuerying() {
+        assertThrows(SecurityException.class,
+                () -> service.listClientApps(principal("tenant-a"), "nav_x6-tms_tenant-b"));
+
+        verifyNoInteractions(clientAppRepository);
     }
 
     @Test

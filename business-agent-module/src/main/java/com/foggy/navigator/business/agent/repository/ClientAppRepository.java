@@ -24,4 +24,8 @@ public interface ClientAppRepository extends JpaRepository<ClientAppEntity, Long
             String upstreamSystemId,
             String upstreamClientAppNamespace,
             List<String> tenantIds);
+
+    List<ClientAppEntity> findByUpstreamSystemIdAndUpstreamClientAppNamespaceOrderByCreatedAtDesc(
+            String upstreamSystemId,
+            String upstreamClientAppNamespace);
 }
