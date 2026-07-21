@@ -32,21 +32,14 @@ RUN_ID='int001-<unique-lowercase-id>'
 
 不要在 `run` 之前调用 bootstrap，也不要对一个无法由 runId/cwd/PID-start/process-group/Compose label 证明为 harness-owned 的目标调用 cleanup。
 
-## BUG-009 forced-SIGNAL 演练（仅已批准的 repair）
+## BUG-009 forced-SIGNAL 演练（窗口已关闭）
 
-普通 `exercise` 不能替代健康后、经 ownership proof 的 parent-TERM 演练。仅在 BUG-009 的批准范围内，使用全新的 runId 运行 supervisor：
-
-```bash
-RUN_ID='int001-bug009-<new-unique-lowercase-suffix>'
-PYTHONDONTWRITEBYTECODE=1 python3 \
-  tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py \
-  --run-id "$RUN_ID"
-```
+普通 `exercise` 不能替代健康后、经 ownership proof 的 parent-TERM 演练。BUG-009 candidate-first 修复及全部离线 gate 已完成，但 exact runId `int001-bug009-20260721-c4n8v2k6` 已执行并 fail closed；窗口现已关闭。不得重跑该 runId、替换新 runId 或基于本 runbook 启动另一轮 rehearsal。
 
 - supervisor 只会启动一个新的 loopback-only target；它拒绝既有 runId、共享 `8112`、非固定 Docker Unix socket、非 canonical `0700` artifact root、已被 block 的 HUP/INT/TERM，或任何 pending/unobservable control signal。
-- 它依次证明 listener、exercise parent、健康状态、再次 listener/parent；仅当三次证明一致时才允许一次 parent `TERM`。它绝不按端口、child PID、process group 或 Docker resource 发信号。
+- 它先发现唯一 exact Launcher candidate，再从 candidate 自身 procfs 证明 loopback listener、FD 与 current-user 唯一 holder；随后执行 A/B identity/socket reproof，并在 signal mask commit point 下完成 final reproof。只有全部证明稳定一致时才允许一次 parent `TERM`。它绝不按端口、child PID、process group 或 Docker resource 发信号。
 - `--forced-signal-rehearsal` 只能出现在 supervisor 启动的 exact outer `exercise` argv。outer 会以 exact canonical argv 启动 `setsid run --hold-for-parent-term` child；只有该 child 的 PID、start ticks、UID、session、cwd、runId 和 NUL argv 全部仍匹配时，outer 才把它唯一收到的 TERM 转发给该 child 的已证明 session。直接调用 `run --hold-for-parent-term` 只会有界 self-clean，不能构成合格 forced-SIGNAL evidence，也不是 operator recovery 或手工清理入口。
-- hold 只在 owned Launcher health-ready 后开始，固定为不可调用方覆盖的 180 秒。若没有来自已证明 outer parent 的 TERM，held child 必须经 owned cleanup 以 `CLEANED/UNKNOWN` 非零结束；它绝不能形成 `CLEANED/SIGNAL`，也不能继续 bootstrap、audit 或普通 cleanup 流程。
+- hold 只在 harness 证明 Launcher child 当时仍存活且目标 URL 返回成功后开始，固定为不可调用方覆盖的 180 秒。receipt 中的历史枚举 `HEALTH_READY` 仅表示这两个独立观察，不证明响应 listener 属于 Launcher，也不授权 TERM。若没有来自已证明 outer parent 的 TERM，held child 必须经 owned cleanup 以 `CLEANED/UNKNOWN` 非零结束；它绝不能形成 `CLEANED/SIGNAL`，也不能继续 bootstrap、audit 或普通 cleanup 流程。
 - 最后一项无 pending signal 检查是 deliberate dispatch commit point。POSIX 无法将该检查与对另一 PID 的 `kill()` 合成原子操作：commit 前已观测到的 control signal 必须是 `0 TERM`；commit 后观测到的 signal 最多保留事实上的 `1 TERM`，但必须令本次 run `dispatchSafe=false`、不读取成功形态 evidence 且以非零退出。不得将这种 run 解释为成功。
 - 不要把 stdout 重定向到 run 根目录；成功时根目录除 `cleanup-report.json` 外必须没有 residue。只允许读取 supervisor 的脱敏 JSON 和新 run 根级 receipt/名称快照，绝不读取 `private/`、`children/`、日志、profile 或 payload。失败不重试、不手工 cleanup，也不检查历史 failed run。
 - supervisor 会在安全的 `temp/test-artifacts/INT-001/` artifact root 写入 `${RUN_ID}.forced-signal-projection.json`。它是 run 目录的 sibling，不参与 run-root residue 计数；文件必须为当前用户拥有的 `0600` 单链接普通文件。它只用于确认 supervisor 到达的固定阶段、是否采样到合法 receipt/root snapshot、以及 stdout summary 是否已经 emit。
@@ -60,14 +53,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 - projection 不包含也不得扩展为 PID、argv、cwd、port、inode、socket、目录名称清单、日志、异常文本、profile、credential、payload 或 Docker identifier/count。`stdoutSummaryState=EMITTED` 但执行包装层没有返回 stdout 时，只能诊断为 stdout capture/projection 链路缺失；不得据此推断 TERM、cleanup 或成功。
 - projection 永远不是授权或验收证据的替代品。即使 `phase=COMPLETE`、`outcome=SUCCESS_GATE_MET`，仍必须独立满足下述完整 forced-SIGNAL gate；projection 缺失、格式错误或与 receipt/residue 证据冲突时一律 fail closed。
 
-本次批准的单次新 rehearsal 只允许读取该新 run 的 projection、root receipt 和允许的 root-name/redacted residue 证据：
-
-```bash
-sed -n '1p' "temp/test-artifacts/INT-001/${RUN_ID}.forced-signal-projection.json"
-sed -n '1,160p' "temp/test-artifacts/INT-001/${RUN_ID}/cleanup-report.json"
-```
-
-若任一文件缺失或不符合固定 schema，记录结果后停止；不得重跑同一 runId、不得读取 `private/`、`children/`、日志、profile、payload、进程或 Docker 对象补证。
+此前批准的 projection rehearsal 已完成并停止。当前不允许任何 runId；canonical work item 中的 exact runId 仅可用于引用既有记录，不得重跑、替换或追加第二次运行。任一允许文件缺失或不符合固定 schema 时必须记录后停止，不得读取 `private/`、`children/`、日志、profile、payload、进程或 Docker 对象补证。
 
 合格的 forced-SIGNAL 成功证据必须同时含 `controlledHealthPrecondition=true`、parent proof `commandLine+cwd+runId+uid+session+startTicks`、listener proof `uid+java+argv+cwd+ancestor+socket+startTicks`、`termDispatches=1`、`dispatchSafe=true`、`CLEANED/SIGNAL`、`privateAbsent=true`、root non-receipt residue `0` 以及 Docker container/network/volume residue 各为 `0`。任何一项缺失均为 fail-closed 失败，不能由额外检查私有产物补证。
 

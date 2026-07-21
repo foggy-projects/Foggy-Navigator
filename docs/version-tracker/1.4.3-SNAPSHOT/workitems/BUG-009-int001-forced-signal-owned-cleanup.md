@@ -10,9 +10,9 @@ bug_source: acceptance-found
 approved_by: project-owner-user-confirmed
 approved_at: 2026-07-21
 continued_authorization: 2026-07-21-project-owner-user-confirmed
-replan_approved_at: 2026-07-21
+previous_replan_approved_at: 2026-07-21
 open_questions:
-  - strict-listener-proof-vs-held-child-health-ready
+  - exact-launcher-candidate-absent-after-candidate-first-rehearsal
 ---
 
 # Delivery Spec: INT-001 forced-SIGNAL owned cleanup returns FAILED_CLEANUP
@@ -107,6 +107,29 @@ open_questions:
   - Complete offline regression and static validation first.
   - After those gates pass, execute at most one new loopback-only disposable rehearsal. Read only its validated projection, root receipt and permitted root-name/redacted residue evidence. On failure, record and stop without retry.
 
+## Approved Replan: Candidate-First Strict Listener Proof
+
+- status: APPROVED on 2026-07-21 by Project Owner; implementation and offline validation are authorized, followed by at most one new rehearsal only if every offline gate passes.
+- static_diagnosis:
+  - The held child's historical `HEALTH_READY` and the supervisor's strict listener proof are different predicates, so the recorded states are not contradictory.
+  - The harness first proves that its Launcher child remains alive, then records `HEALTH_READY` when the target URL returns a successful response. It does not bind that response socket to the Launcher PID and does not continue monitoring the listener during the 180-second hold.
+  - The supervisor instead requires one exact loopback LISTEN inode, one current-user holder, trusted Java, exact argv/runId, run-owned cwd, descendant lineage and stable start ticks before it performs its stronger `200 + {status: UP}` health check or considers TERM.
+  - Current evidence cannot establish whether the mismatch came from procfs/environment visibility, a listener lifecycle change, or a responder not bound to the proven Launcher. The existing final `socket-listener-absent` label is insufficient to choose among those causes.
+- proposed_decisions:
+  - Preserve `launcherReadinessObservation=HEALTH_READY` as a low-authority historical diagnostic meaning only “owned Launcher child alive at the probe plus successful endpoint response.” It must never authorize TERM or retroactively prove listener ownership.
+  - Replace socket-first discovery with candidate-first strict proof: identify exactly one current-user descendant matching trusted Java, exact argv/runId, run-owned cwd, lineage and stable start ticks; then prove from that candidate's procfs network/FD view that it alone holds one IPv4 `127.0.0.1:<port>` LISTEN socket.
+  - Preserve A/B/final identity and socket reproof, signal-mask commit point, exactly-one-parent-TERM limit, and fail-closed handling for zero/multiple candidates, unavailable/malformed procfs, wildcard/IPv6/ambiguous listeners, FD mismatch or any identity change.
+  - Add fixed-enum, non-authorizing mismatch diagnostics only if required by offline regression. They must not persist PID, port, inode, argv, cwd, path, exception text or any private value.
+  - Do not solve this by trusting held-child `HEALTH_READY`, moving health ahead of ownership, extending the hold, weakening listener predicates, targeting a port/child/process group, or reading `children/`, logs or private carriers.
+- required_offline_gates_before_runtime:
+  - A deterministic topology regression using test-owned processes and real `/proc`: outer parent → held child → exact IPv4 listener, with no Docker, real Launcher, profile, credential or external service.
+  - Positive candidate/socket proof plus negative zero/multiple candidate, argv/cwd/exe/lineage/start-tick drift, missing/malformed procfs, wildcard/IPv6/duplicate listener, FD mismatch and listener-loss cases.
+  - A cross-layer fail-closed regression for `HEALTH_READY + listener ineligible + HOLD_TIMEOUT + CLEANED/UNKNOWN + EXIT_2 + 0 TERM`.
+  - All existing Python, synthetic TypeScript, typecheck, shell syntax, diff and scoped secret checks remain mandatory.
+- runtime_gate_after_approval:
+  - Only after implementation and every offline gate passes may one new loopback-only disposable rehearsal be considered authorized.
+  - That rehearsal retains the existing projection/root-receipt/root-name evidence limits and stops on first failure without retry or manual cleanup.
+
 ## Acceptance Criteria
 
 - [x] AC-1: A stable automated regression demonstrates the relevant parent-TERM ownership/cleanup classification and proves that unproven ownership remains fail closed.
@@ -114,6 +137,8 @@ open_questions:
 - [ ] AC-3: The AC-2 run leaves no private carrier and no run-owned process/container/volume/file resource; evidence records only redacted receipt fields and ownership checks.
 - [x] AC-4: 除新建、loopback-only、run-owned disposable target 内的 `NAVIGATOR_EXTERNAL_ENABLED=true` `/api/v1/open/**` 路由门禁外，不得读取、修改、启用或使用任何共享/真实 target、upstream profile、existing Worker、TMS/SIM resource、Worker Gateway external 或 production configuration；该唯一例外不表示 Provider、Gateway 或 production readiness，且 `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false` 必须得到验证。
 - [x] AC-5: Relevant unit/integration/script checks actually pass; the work item, runbook and test record state exact commands, results, deviations and residual risk. Completion is at most `READY_FOR_SIGNOFF`.
+- [x] AC-6: Candidate-first listener proof has deterministic real-procfs topology coverage and preserves or strengthens every existing owner/listener and one-TERM constraint.
+- [x] AC-7: The historical `HEALTH_READY + listener ineligible + HOLD_TIMEOUT + CLEANED/UNKNOWN + EXIT_2 + 0 TERM` combination is covered as an explicit fail-closed contract and cannot authorize success.
 
 ## Contract / Data / Security Constraints
 
@@ -159,10 +184,11 @@ open_questions:
   - The original failure may not reproduce on a fresh run. In that case do not claim a fix; record the exact result and use `BLOCKED` or `NEEDS_REPLAN` if a new scope is necessary.
   - A real cleanup defect can look fixed if ownership proof is weakened. Preserve explicit failure for unknown processes/resources.
   - This work does not make INT-001 accepted, real upstream integration ready, Gateway external, Provider ready or production ready without a new independent signoff.
-- open_questions: Why the supervisor's strict listener proof remained `socket-listener-absent` while the held child independently recorded `HEALTH_READY`; resolving this requires a newly approved static diagnosis/fix plan and must not weaken ownership proof.
+- open_questions: Which exact Launcher identity predicate was ineligible at the candidate-first proof point. The fixed-enum evidence intentionally does not expose PID, argv, cwd, path or process detail, so this requires a separately approved diagnostic design rather than failed-run inspection.
 
 ## Ultra Execution Contract
 
+- Implement only the approved candidate-first proof and offline topology gates. Do not start another rehearsal until all offline gates pass.
 - First read this work item, root `AGENTS.md`, `CLAUDE.md`, the INT-001 runbook and `navigator-runtime-provisioning` skill.
 - Set the work item to `ULTRA_EXECUTING` before implementation. Within scope, choose the smallest maintainable harness/test structure and prefer a failing regression before the fix.
 - Never read or touch the failed run; only a new owned run may be created, signalled or cleaned.
@@ -171,51 +197,57 @@ open_questions:
 
 ## Implementation Result
 
-- implementation_summary: The approved replan added a strict artifact-root-level fixed-enum execution projection without changing the run-root residue or forced-SIGNAL authorization gates. Its reader rejects duplicate keys, unknown fields/enums, wrong types, mismatched runId, unsafe permissions and link shapes. All offline gates passed. The single approved fresh rehearsal produced the intended projection and captured redacted stdout, but the supervisor never obtained its strict listener proof, sent zero TERM, and the held child timed out with `CLEANED/UNKNOWN` plus `HOLD_TIMEOUT`. AC-2 and AC-3 remain unmet, so the work returns to `NEEDS_REPLAN` rather than entering signoff.
+- implementation_summary: The approved candidate-first replan is implemented. The supervisor first identifies exactly one current-user Launcher descendant by trusted Java executable, exact argv/runId, run-owned cwd, lineage and stable start ticks; it then reads that candidate's own `/proc/<pid>/net/tcp{,6}`, requires one exact IPv4 `127.0.0.1:<port>` LISTEN inode, candidate FD ownership and current-user unique-holder proof, and repeats identity/socket proof before authorization. Post-rehearsal security review additionally hardened identity discovery into explicit `MATCH / MISMATCH / PROC_UNAVAILABLE / PROC_MALFORMED` results: only confirmed disappearance or PID owner replacement is treated as a harmless race, while an existing current-user process with unreadable or malformed stat/cmdline/cwd/exe/lineage rejects the whole proof. Existing A/B/final reproof, signal-mask commit point, exactly-one-parent-TERM limit and fixed-enum projection remain unchanged. All offline gates passed, but the single authorized rehearsal still returned `listener-candidate-absent`, sent zero TERM and ended `CLEANED/UNKNOWN + HOLD_TIMEOUT`. The implementation therefore remains fail-closed but does not resolve AC-2/AC-3.
 - changed_paths:
-  - `tools/navigator-upstream/scripts/synthetic-upstream-harness.sh`
   - `tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py`
   - `tools/navigator-upstream/fixtures/synthetic-integration/test_forced_signal_supervisor.py`
   - `business-agent-module/integration-tests/tests/05-synthetic-upstream-bootstrap-safety.test.ts`
   - `docs/version-tracker/1.4.3-SNAPSHOT/runbooks/INT-001-synthetic-upstream-integration-harness.md`
-  - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-forced-signal-runtime-2026-07-21-k6f8m2q9.md`
-  - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-forced-signal-runtime-follow-up-2026-07-21.md`
-  - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-fixed-enum-projection-runtime-2026-07-21.md`
+  - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-candidate-first-runtime-2026-07-21.md`
   - this canonical work item and the version index
 - tests_and_results:
-  - `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/fixtures/synthetic-integration/test_forced_signal_supervisor.py` — PASS, 46 offline tests, including projection schema/file-shape, duplicate-key, unknown enum, missing projection/receipt, child early-exit and stdout failure paths.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/fixtures/synthetic-integration/test_forced_signal_supervisor.py` — PASS, 61 offline tests, no skips. Coverage includes exact candidate identity, explicit unavailable/malformed/disappeared-race/PID-owner-replacement classification for stat/cmdline/cwd/exe/lineage, zero/one/multiple candidates, readable unrelated argv mismatch, procfs/table failures, wildcard/IPv6/ambiguous listeners, candidate FD and unique current-user holder proof, listener/identity drift, a test-owned outer-parent -> held-child -> IPv4 LISTEN real-procfs full `identity -> find -> prove` chain, and the historical fail-closed state combination.
   - `bash -n tools/navigator-upstream/scripts/synthetic-upstream-harness.sh tools/navigator-upstream/scripts/synthetic-upstream-bootstrap.sh tools/navigator-upstream/scripts/synthetic-upstream-runtime-audit.sh` — PASS.
-  - `(cd business-agent-module/integration-tests && env -u INT001_SYNTHETIC_UPSTREAM_HARNESS -u INT001_RUNTIME_PROBE npm run test:synthetic)` — PASS, 93 passed / 1 skipped, including the parent-adoption duplicate-key regression.
+  - `(cd business-agent-module/integration-tests && env -u INT001_SYNTHETIC_UPSTREAM_HARNESS -u INT001_RUNTIME_PROBE npm run test:synthetic)` — PASS, 94 passed / 1 skipped, including the explicit `HEALTH_READY + HOLD_TIMEOUT + CLEANED/UNKNOWN` low-authority regression.
   - `(cd business-agent-module/integration-tests && npm run typecheck)` — PASS.
+  - `python3 -m py_compile tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py tools/navigator-upstream/fixtures/synthetic-integration/test_forced_signal_supervisor.py` — PASS.
   - `git diff --check` — PASS.
+  - Scoped added-line high-confidence secret scan over all seven changed paths, including the new durable test record — PASS, `0 matches`.
+  - Independent read-only security review — PASS, no blocking finding. It confirmed explicit fail-closed identity states, candidate-owned net/FD/holder proof, A/B/final reproof, signal-mask commit point and at-most-one TERM. Its two non-blocking test-precision suggestions (PID owner replacement and malformed lineage) were added before final verification.
+- historical_runtime_results:
   - Fresh foreground supervisor rehearsal `int001-bug009-20260721-k6f8m2q9` — FAIL CLOSED, exit `1`; it did not dispatch TERM and cannot satisfy AC-2/AC-3.
   - Fresh foreground supervisor rehearsals `int001-bug009-20260721-r6a1p9k4` and `int001-bug009-20260721-v2m8q4z7` — NOT SUCCESSFUL; this session received no redacted supervisor summary from the execution wrapper. Each permitted root-name snapshot had no `cleanup-report.json`, retained `private/`, and had seven non-receipt entries. Neither can satisfy AC-2/AC-3.
   - Single approved fixed-enum rehearsal `int001-bug009-20260721-p7m3c6r2` — FAIL CLOSED, exit `1`; projection `COMPLETE/CHILD_EXITED_BEFORE_HEALTH`, supervisor listener proof `socket-listener-absent`, zero TERM, receipt `CLEANED/UNKNOWN` with `HOLD_TIMEOUT`, private absent, root residue `0`, redacted Docker residue counts `0/0/0`.
-- manual_or_experience_evidence: Only the new run's fixed-enum projection, redacted supervisor stdout, root receipt and root-name/redacted residue evidence were read. No historical run, private carrier contents, `children/` metadata, log, profile, payload, process detail or Docker object was inspected.
-- deviations: The approved projection behaved as designed and closed the wrapper-observability gap, but the one-run runtime gate failed before TERM dispatch. The run was not retried. The strict listener proof was not weakened or bypassed.
+- candidate_first_runtime_result:
+  - `int001-bug009-20260721-c4n8v2k6` — FAIL CLOSED, exit `1`; projection `COMPLETE/CHILD_EXITED_BEFORE_HEALTH`, listener proof `listener-candidate-absent`, listener never eligible, parent proof not attempted, zero TERM, `dispatchSafe=false`, receipt `CLEANED/UNKNOWN` with `HEALTH_READY + HOLD_TIMEOUT`, private absent, root residue `0`, Docker residue counts `0/0/0`.
+  - durable_record: `../test-records/BUG-009-int001-candidate-first-runtime-2026-07-21.md`
+- runtime_authorization: consumed. The exact runId executed once and must not be retried or replaced without a new approved plan.
+- manual_or_experience_evidence: Only the new run's fixed-enum projection, redacted supervisor stdout, root receipt and permitted redacted residue counts were read. No historical run, private carrier, `children/` metadata, log, profile, payload, process detail or Docker object was inspected.
+- deviations: The offline implementation matched the approved design, but the runtime did not produce an exact Launcher candidate. No owner/listener predicate was weakened and no retry was attempted.
 - residual_risks:
   - POSIX cannot atomically combine the final pending-signal observation and `kill()`; the explicit commit-point rule remains fail closed.
-  - No positive runtime evidence exists for exactly one TERM, `dispatchSafe=true`, `CLEANED/SIGNAL`, or the required controlled-health/strict listener proof.
+  - No positive runtime evidence exists for exactly one TERM, `dispatchSafe=true`, `CLEANED/SIGNAL`, or the controlled-health/strict listener proof.
+  - An unreadable or malformed identity component is retained only as the fixed redacted reason `listener-candidate-proc-unavailable` or `listener-candidate-proc-malformed`; it rejects discovery/reproof without exposing process detail, so diagnostic granularity remains intentionally limited.
   - The historical run and all three failed fresh runs remain read-prohibited beyond their recorded redacted facts; no private carrier, children metadata, log, profile, payload, process, Docker object, retry, or manual cleanup was accessed.
-  - The projection now proves the latest execution reached supervision and emitted stdout, but static/runtime-safe evidence does not yet explain why strict supervisor listener proof remained `socket-listener-absent` while the held child recorded `HEALTH_READY`.
-- readiness: NEEDS_REPLAN
-- signoff_eligibility: no; AC-2 and AC-3 still require a later positive `CLEANED/SIGNAL` proof.
+  - The new fixed reason proves only that no exact candidate satisfied every identity predicate at the proof point; it does not identify which predicate differed, and the approved evidence boundary forbids filling that gap from failed-run private/process data.
+- readiness: NEEDS_REPLAN; candidate-first implementation and offline gates passed, but the sole runtime gate failed before health/parent proof and TERM dispatch.
+- signoff_eligibility: no; AC-2 and AC-3 remain unmet.
 
 ## Historical Continuation Authorization
 
-On 2026-07-21, after the recorded fail-closed rehearsal, the Project Owner explicitly authorized continued isolated diagnosis and fresh retries. That authorization remained inside the existing harness-only boundary: every retry used a new loopback-only disposable run, preserved strict ownership proof and redacted root-level evidence, and did not read, enumerate, retry, clean, or otherwise touch historical failed runs. It did not authorize access to real TMS/SIM, shared `8112`, profiles or credentials, Workers, Gateway, Pool, identity, Codex routing, external enablement, or production configuration. The later approved fixed-enum projection plan limited runtime to the single `p7m3c6r2` rehearsal; that limit is now exhausted and supersedes the earlier general retry authorization.
+On 2026-07-21, after the recorded fail-closed rehearsal, the Project Owner explicitly authorized continued isolated diagnosis and fresh retries. That authorization remained inside the existing harness-only boundary: every retry used a new loopback-only disposable run, preserved strict ownership proof and redacted root-level evidence, and did not read, enumerate, retry, clean, or otherwise touch historical failed runs. It did not authorize access to real TMS/SIM, shared `8112`, profiles or credentials, Workers, Gateway, Pool, identity, Codex routing, external enablement, or production configuration. The fixed-enum `p7m3c6r2` runtime limit and later candidate-first `c4n8v2k6` runtime limit are both exhausted.
 
 ## Execution Stop and Replan Trigger
 
 - The authorized follow-up runs `r6a1p9k4` and `v2m8q4z7` were each fresh, loopback-only, and evidence-limited. They did not produce the required redacted completion evidence; their permitted root snapshots showed no receipt, retained `private/`, and seven root non-receipt entries.
-- Do not create a further blind retry. The fixed-enum projection has closed the execution-wrapper observability gap; a follow-on plan must instead statically diagnose and, if justified, correct why strict supervisor listener proof remained `socket-listener-absent` while the held child recorded `HEALTH_READY`. It must preserve `env -i`, strict owner/listener proof, no private/children/log/profile/payload access, no manual cleanup, and all existing external/Gateway/production exclusions.
-- The approved projection plan was implemented and the single permitted run `p7m3c6r2` completed with usable redacted evidence. It sent zero TERM because strict listener proof remained `socket-listener-absent`; the child later produced `CLEANED/UNKNOWN` with `HOLD_TIMEOUT`. The run limit is exhausted. Any further runtime or listener-proof change requires a new approved plan.
+- Do not create a blind retry, reuse a historical runId or inspect the failed run beyond its already recorded allowed evidence. The candidate-first implementation and offline topology gates are complete, but the exact fresh runId recorded in `runtime_authorization` has executed and the window is closed. Any next diagnostic or runtime step requires a new approved plan preserving `env -i`, strict owner/listener proof, no private/children/log/profile/payload access, no manual cleanup, and all existing external/Gateway/production exclusions.
+- The approved projection plan was implemented and the single permitted run `p7m3c6r2` completed with usable redacted evidence. It sent zero TERM because strict listener proof remained `socket-listener-absent`; the child later produced `CLEANED/UNKNOWN` with `HOLD_TIMEOUT`. That historical limit remains exhausted and is not reusable.
 
 ## Blocking Effect
 
 - INT-001: independent signoff must be recorded as rejected on AC-2 until a fresh proof returns `CLEANED/SIGNAL`.
 - BUG-008: independently signed off as `accepted-with-risks` on its normal owner-context proof. That risk-bounded decision explicitly excludes, does not accept, and does not remediate INT-001's rejected forced-SIGNAL cleanup or BUG-009.
-- BUG-009: `NEEDS_REPLAN`; the projection implementation and offline regression are complete, but the only approved rehearsal failed before TERM dispatch. A new plan must address the strict-listener/held-health evidence mismatch without weakening ownership proof.
+- BUG-009: `NEEDS_REPLAN`; candidate-first and all offline gates passed, but the single runtime gate returned `listener-candidate-absent`, zero TERM and `CLEANED/UNKNOWN + HOLD_TIMEOUT`.
 
 ## References
 

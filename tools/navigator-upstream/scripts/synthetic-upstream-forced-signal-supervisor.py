@@ -147,6 +147,14 @@ SOCKET_LISTENER_AMBIGUOUS = "socket-listener-ambiguous"
 SOCKET_LISTENER_NONLOOPBACK_OR_IPV6 = "socket-listener-nonloopback-or-ipv6"
 SOCKET_LISTENER_PROC_UNAVAILABLE = "socket-listener-proc-unavailable"
 SOCKET_LISTENER_PROC_MALFORMED = "socket-listener-proc-malformed"
+LISTENER_CANDIDATE_ABSENT = "listener-candidate-absent"
+LISTENER_CANDIDATE_AMBIGUOUS = "listener-candidate-ambiguous"
+LISTENER_CANDIDATE_PROC_UNAVAILABLE = "listener-candidate-proc-unavailable"
+LISTENER_CANDIDATE_PROC_MALFORMED = "listener-candidate-proc-malformed"
+IDENTITY_MATCH = "MATCH"
+IDENTITY_MISMATCH = "MISMATCH"
+IDENTITY_PROC_UNAVAILABLE = "PROC_UNAVAILABLE"
+IDENTITY_PROC_MALFORMED = "PROC_MALFORMED"
 SIGNAL_LABELS = {signal.SIGHUP: "HUP", signal.SIGINT: "INT", signal.SIGTERM: "TERM"}
 CONTROL_SIGNALS = frozenset(SIGNAL_LABELS)
 CONTROL_SIGNAL_ORDER = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
@@ -179,6 +187,22 @@ class ListenerProof:
     pid: int | None = None
     start_ticks: int | None = None
     socket_inode: int | None = None
+
+
+@dataclass(frozen=True)
+class ListenerCandidate:
+    """One exact current-run Launcher process, retained only in memory."""
+
+    pid: int
+    start_ticks: int
+
+
+@dataclass(frozen=True)
+class ListenerCandidateIdentityProbe:
+    """Tri-state-plus-malformed result for one procfs identity inspection."""
+
+    status: str
+    candidate: ListenerCandidate | None = None
 
 
 @dataclass(frozen=True)
@@ -557,13 +581,17 @@ def expected_launcher_argv(repo_root: Path, run_id: str) -> list[str] | None:
     ]
 
 
-def listener_socket_probe_for_loopback_port(port: int) -> tuple[int | None, str]:
-    """Return one strict loopback LISTEN inode or a fixed fail-closed reason."""
+def listener_socket_probe_from_tables(
+    port: int,
+    tcp_table: Path,
+    tcp6_table: Path,
+) -> tuple[int | None, str]:
+    """Return one strict loopback LISTEN inode from an explicit procfs view."""
     if not 1 <= port <= 65535:
         return None, SOCKET_LISTENER_ABSENT
     port_hex = f"{port:04X}"
     expected_inodes: list[int] = []
-    for proc_net in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+    for proc_net in (tcp_table, tcp6_table):
         try:
             lines = proc_net.read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -603,6 +631,20 @@ def listener_socket_probe_for_loopback_port(port: int) -> tuple[int | None, str]
     if len(expected_inodes) != 1:
         return None, SOCKET_LISTENER_AMBIGUOUS
     return expected_inodes[0], "socket-listener"
+
+
+def listener_socket_probe_for_loopback_port(port: int) -> tuple[int | None, str]:
+    """Compatibility probe using the supervisor's own network namespace."""
+    return listener_socket_probe_from_tables(port, Path("/proc/net/tcp"), Path("/proc/net/tcp6"))
+
+
+def listener_socket_probe_for_candidate(port: int, pid: int) -> tuple[int | None, str]:
+    """Inspect the already-proven candidate's network namespace, not ours."""
+    return listener_socket_probe_from_tables(
+        port,
+        Path(f"/proc/{pid}/net/tcp"),
+        Path(f"/proc/{pid}/net/tcp6"),
+    )
 
 
 def listener_inode_for_loopback_port(port: int) -> int | None:
@@ -654,6 +696,220 @@ def command_line(pid: int) -> list[str] | None:
         return None
 
 
+def proc_identity_failure_status(pid: int, *, malformed: bool) -> str:
+    """Classify a failed procfs read without treating uncertainty as absence."""
+    try:
+        details = Path(f"/proc/{pid}").stat()
+    except FileNotFoundError:
+        return IDENTITY_MISMATCH
+    except OSError:
+        return IDENTITY_PROC_UNAVAILABLE
+    if details.st_uid != os.getuid():
+        return IDENTITY_MISMATCH
+    return IDENTITY_PROC_MALFORMED if malformed else IDENTITY_PROC_UNAVAILABLE
+
+
+def proc_identity_snapshot(pid: int) -> tuple[tuple[str, int, int] | None, str]:
+    """Read state, parent PID, and start ticks with explicit failure classes."""
+    try:
+        if Path(f"/proc/{pid}").stat().st_uid != os.getuid():
+            return None, IDENTITY_MISMATCH
+    except FileNotFoundError:
+        return None, IDENTITY_MISMATCH
+    except OSError:
+        return None, IDENTITY_PROC_UNAVAILABLE
+    try:
+        fields = proc_stat_fields(pid)
+        state = fields[0]
+        parent_pid = int(fields[1])
+        start_ticks = int(fields[19])
+        if state not in set("RSDZTtXxKWPI") or parent_pid < 0 or start_ticks <= 0:
+            return None, proc_identity_failure_status(pid, malformed=True)
+        return (state, parent_pid, start_ticks), IDENTITY_MATCH
+    except FileNotFoundError:
+        return None, proc_identity_failure_status(pid, malformed=False)
+    except OSError:
+        return None, proc_identity_failure_status(pid, malformed=False)
+    except (UnicodeDecodeError, ValueError, RuntimeError, IndexError):
+        return None, proc_identity_failure_status(pid, malformed=True)
+
+
+def command_line_identity_probe(pid: int) -> tuple[list[str] | None, str]:
+    """Read one exact argv, distinguishing a race from unsafe procfs data."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except FileNotFoundError:
+        return None, proc_identity_failure_status(pid, malformed=False)
+    except OSError:
+        return None, proc_identity_failure_status(pid, malformed=False)
+    if not raw or not raw.endswith(b"\0"):
+        return None, proc_identity_failure_status(pid, malformed=True)
+    try:
+        return [part.decode("utf-8", "strict") for part in raw.split(b"\0")[:-1]], IDENTITY_MATCH
+    except UnicodeDecodeError:
+        return None, proc_identity_failure_status(pid, malformed=True)
+
+
+def proc_link_identity_probe(pid: int, name: str) -> tuple[Path | None, str]:
+    """Resolve one candidate procfs link without hiding read or shape errors."""
+    try:
+        return Path(f"/proc/{pid}/{name}").resolve(strict=True), IDENTITY_MATCH
+    except FileNotFoundError:
+        return None, proc_identity_failure_status(pid, malformed=False)
+    except OSError:
+        return None, proc_identity_failure_status(pid, malformed=False)
+    except RuntimeError:
+        return None, proc_identity_failure_status(pid, malformed=True)
+
+
+def launcher_lineage_identity_status(pid: int, ancestor_pid: int, ancestor_start_ticks: int) -> str:
+    """Prove the candidate lineage with the same explicit procfs failure states."""
+    current = pid
+    seen: set[int] = set()
+    for _ in range(64):
+        if current <= 1:
+            return IDENTITY_MISMATCH
+        if current in seen:
+            return IDENTITY_PROC_MALFORMED
+        seen.add(current)
+        snapshot, status = proc_identity_snapshot(current)
+        if status != IDENTITY_MATCH or snapshot is None:
+            return status
+        state, parent_pid, start_ticks = snapshot
+        if state == "Z":
+            return IDENTITY_MISMATCH
+        if current == ancestor_pid:
+            return IDENTITY_MATCH if start_ticks == ancestor_start_ticks else IDENTITY_MISMATCH
+        current = parent_pid
+    return IDENTITY_MISMATCH
+
+
+def exact_launcher_candidate_identity(
+    *,
+    pid: int,
+    expected_start_ticks: int | None,
+    expected_argv: list[str],
+    java: Path,
+    run_dir: Path,
+    exercise_pid: int,
+    exercise_start_ticks: int,
+) -> ListenerCandidateIdentityProbe:
+    """Return an explicit stable-identity result for one Launcher candidate.
+
+    Every field is re-read from procfs. A caller must repeat this proof after
+    socket inspection so PID reuse or identity changes cannot authorize TERM.
+    """
+    initial_snapshot, status = proc_identity_snapshot(pid)
+    if status != IDENTITY_MATCH or initial_snapshot is None:
+        return ListenerCandidateIdentityProbe(status)
+    state, _parent_pid, start_ticks = initial_snapshot
+    if state == "Z" or (expected_start_ticks is not None and start_ticks != expected_start_ticks):
+        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+
+    argv, status = command_line_identity_probe(pid)
+    if status != IDENTITY_MATCH:
+        return ListenerCandidateIdentityProbe(status)
+    if argv != expected_argv:
+        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+
+    cwd, status = proc_link_identity_probe(pid, "cwd")
+    if status != IDENTITY_MATCH:
+        return ListenerCandidateIdentityProbe(status)
+    if cwd != run_dir:
+        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+
+    executable, status = proc_link_identity_probe(pid, "exe")
+    if status != IDENTITY_MATCH:
+        return ListenerCandidateIdentityProbe(status)
+    if executable != java:
+        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+
+    status = launcher_lineage_identity_status(pid, exercise_pid, exercise_start_ticks)
+    if status != IDENTITY_MATCH:
+        return ListenerCandidateIdentityProbe(status)
+
+    final_snapshot, status = proc_identity_snapshot(pid)
+    if status != IDENTITY_MATCH or final_snapshot is None:
+        return ListenerCandidateIdentityProbe(status)
+    final_state, _final_parent_pid, final_start_ticks = final_snapshot
+    if final_state == "Z" or final_start_ticks != start_ticks:
+        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+    return ListenerCandidateIdentityProbe(IDENTITY_MATCH, ListenerCandidate(pid, start_ticks))
+
+
+def find_exact_launcher_candidate(
+    *,
+    expected_argv: list[str],
+    java: Path,
+    run_dir: Path,
+    exercise_pid: int,
+    exercise_start_ticks: int,
+) -> tuple[ListenerCandidate | None, str]:
+    """Find exactly one current-run Launcher before inspecting any socket.
+
+    An uninspectable live current-user process makes discovery fail closed:
+    without reading its identity we cannot prove that the candidate set is
+    complete. Processes that disappear during enumeration are harmless races.
+    """
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE
+
+    candidates: list[ListenerCandidate] = []
+    for proc_dir in proc_entries:
+        if not proc_dir.name.isdecimal():
+            continue
+        try:
+            owner = proc_dir.stat().st_uid
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE
+        if owner != os.getuid():
+            continue
+        pid = int(proc_dir.name)
+        identity = exact_launcher_candidate_identity(
+            pid=pid,
+            expected_start_ticks=None,
+            expected_argv=expected_argv,
+            java=java,
+            run_dir=run_dir,
+            exercise_pid=exercise_pid,
+            exercise_start_ticks=exercise_start_ticks,
+        )
+        if identity.status == IDENTITY_PROC_UNAVAILABLE:
+            return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE
+        if identity.status == IDENTITY_PROC_MALFORMED:
+            return None, LISTENER_CANDIDATE_PROC_MALFORMED
+        if identity.status == IDENTITY_MATCH and identity.candidate is not None:
+            candidates.append(identity.candidate)
+    if not candidates:
+        return None, LISTENER_CANDIDATE_ABSENT
+    if len(candidates) != 1:
+        return None, LISTENER_CANDIDATE_AMBIGUOUS
+    return candidates[0], "listener-candidate"
+
+
+def candidate_holds_socket(pid: int, socket_inode: int) -> bool:
+    """Require the exact candidate to retain at least one FD for the inode."""
+    target = f"socket:[{socket_inode}]"
+    fd_root = Path(f"/proc/{pid}/fd")
+    try:
+        fd_entries = tuple(fd_root.iterdir())
+    except OSError:
+        return False
+    found = False
+    for fd in fd_entries:
+        try:
+            if os.readlink(fd) == target:
+                found = True
+        except OSError:
+            if fd.exists():
+                return False
+    return found
+
+
 def is_descendant_of(pid: int, ancestor_pid: int, ancestor_start_ticks: int) -> bool:
     current = pid
     seen: set[int] = set()
@@ -698,35 +954,67 @@ def prove_owned_loopback_launcher(
     expected_argv = expected_launcher_argv(repo_root, run_id)
     if expected_argv is None:
         return ListenerProof(False, "launcher-expected")
-    socket_inode, socket_reason = listener_socket_probe_for_loopback_port(port)
+    java = trusted_java_executable()
+    if java is None:
+        return ListenerProof(False, "listener-java")
+    candidate, candidate_reason = find_exact_launcher_candidate(
+        expected_argv=expected_argv,
+        java=java,
+        run_dir=run_dir,
+        exercise_pid=exercise_pid,
+        exercise_start_ticks=exercise_start_ticks,
+    )
+    if candidate is None:
+        return ListenerProof(False, candidate_reason)
+    pid = candidate.pid
+    initial_start_ticks = candidate.start_ticks
+    socket_inode, socket_reason = listener_socket_probe_for_candidate(port, pid)
     if socket_inode is None:
         return ListenerProof(False, socket_reason)
-    holders = current_uid_socket_holders(socket_inode)
-    if holders is None or len(holders) != 1:
+    if not candidate_holds_socket(pid, socket_inode):
         return ListenerProof(False, "socket-owner")
-    pid = holders[0]
+    if current_uid_socket_holders(socket_inode) != (pid,):
+        return ListenerProof(False, "socket-owner")
     try:
-        if Path(f"/proc/{pid}").stat().st_uid != os.getuid() or not proc_is_live(pid):
-            return ListenerProof(False, "listener-process")
-        initial_start_ticks = proc_stat(pid)[2]
-        if Path(f"/proc/{pid}/cwd").resolve() != run_dir:
-            return ListenerProof(False, "listener-cwd")
-        java = trusted_java_executable()
-        if java is None or Path(f"/proc/{pid}/exe").resolve(strict=True) != java:
-            return ListenerProof(False, "listener-java")
-        if command_line(pid) != expected_argv:
-            return ListenerProof(False, "listener-argv")
-        if not is_descendant_of(pid, exercise_pid, exercise_start_ticks):
-            return ListenerProof(False, "listener-ancestor")
-        if proc_stat(pid)[2] != initial_start_ticks or not proc_is_live(pid):
+        reproved = exact_launcher_candidate_identity(
+            pid=pid,
+            expected_start_ticks=initial_start_ticks,
+            expected_argv=expected_argv,
+            java=java,
+            run_dir=run_dir,
+            exercise_pid=exercise_pid,
+            exercise_start_ticks=exercise_start_ticks,
+        )
+        if reproved.status == IDENTITY_PROC_UNAVAILABLE:
+            return ListenerProof(False, LISTENER_CANDIDATE_PROC_UNAVAILABLE)
+        if reproved.status == IDENTITY_PROC_MALFORMED:
+            return ListenerProof(False, LISTENER_CANDIDATE_PROC_MALFORMED)
+        if reproved.status != IDENTITY_MATCH or reproved.candidate != candidate:
             return ListenerProof(False, "listener-start-ticks")
-        final_socket_inode, final_socket_reason = listener_socket_probe_for_loopback_port(port)
+        final_socket_inode, final_socket_reason = listener_socket_probe_for_candidate(port, pid)
         if final_socket_inode is None:
             return ListenerProof(False, final_socket_reason)
         if final_socket_inode != socket_inode:
             return ListenerProof(False, "listener-inode")
+        if not candidate_holds_socket(pid, socket_inode):
+            return ListenerProof(False, "socket-owner")
         if current_uid_socket_holders(socket_inode) != (pid,):
             return ListenerProof(False, "socket-owner")
+        final_identity = exact_launcher_candidate_identity(
+            pid=pid,
+            expected_start_ticks=initial_start_ticks,
+            expected_argv=expected_argv,
+            java=java,
+            run_dir=run_dir,
+            exercise_pid=exercise_pid,
+            exercise_start_ticks=exercise_start_ticks,
+        )
+        if final_identity.status == IDENTITY_PROC_UNAVAILABLE:
+            return ListenerProof(False, LISTENER_CANDIDATE_PROC_UNAVAILABLE)
+        if final_identity.status == IDENTITY_PROC_MALFORMED:
+            return ListenerProof(False, LISTENER_CANDIDATE_PROC_MALFORMED)
+        if final_identity.status != IDENTITY_MATCH or final_identity.candidate != candidate:
+            return ListenerProof(False, "listener-start-ticks")
         return ListenerProof(True, "uid+java+argv+cwd+ancestor+socket+startTicks", pid, initial_start_ticks, socket_inode)
     except (OSError, ValueError, RuntimeError):
         return ListenerProof(False, "unavailable")

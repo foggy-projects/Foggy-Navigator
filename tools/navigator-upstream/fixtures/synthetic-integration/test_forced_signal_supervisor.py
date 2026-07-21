@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Offline regression tests for the BUG-009 forced-SIGNAL supervisor.
 
-These tests deliberately replace every process, HTTP, Docker, and signal
-boundary. They must never start the synthetic harness, connect to a real
-Listener, query Docker, or signal a real process. The assertions protect the
-supervisor's fail-closed preconditions rather than a disposable runtime.
+Most tests replace process, HTTP, Docker, and signal boundaries. A narrowly
+scoped topology test may open a test-owned loopback listener and inspect its
+test-owned process topology through ``/proc``. The suite must never start the
+synthetic harness, query Docker, use a runtime profile, or touch a non-test
+process. The assertions protect the supervisor's fail-closed preconditions
+rather than a disposable runtime.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import importlib.util
 import io
 import json
 import os
+import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -551,33 +555,133 @@ class ListenerProofGateTest(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def test_listener_proof_accepts_only_stable_exact_owned_launcher(self) -> None:
-        proof = self._prove()
+        proof, patches = self._prove(return_patches=True)
 
         self.assertTrue(proof.ok)
         self.assertEqual(self.pid, proof.pid)
         self.assertEqual(self.start_ticks, proof.start_ticks)
         self.assertEqual(self.socket_inode, proof.socket_inode)
+        patches["find_candidate"].assert_called_once()
+        self.assertEqual(
+            [mock.call(24_570, self.pid), mock.call(24_570, self.pid)],
+            patches["socket_probe"].call_args_list,
+        )
+        self.assertEqual(
+            [mock.call(self.pid, self.socket_inode), mock.call(self.pid, self.socket_inode)],
+            patches["candidate_holds"].call_args_list,
+        )
+        self.assertEqual(
+            [mock.call(self.socket_inode), mock.call(self.socket_inode)],
+            patches["holders"].call_args_list,
+        )
+        self.assertEqual(2, patches["identity"].call_count)
+        for call in patches["identity"].call_args_list:
+            self.assertEqual(self.pid, call.kwargs["pid"])
+            self.assertEqual(self.start_ticks, call.kwargs["expected_start_ticks"])
 
-    def test_listener_proof_rejects_each_identity_component(self) -> None:
-        cases: tuple[tuple[str, dict[str, object], str], ...] = (
-            ("socket-owner", {"holders": (self.pid, self.pid + 1)}, "socket-owner"),
-            ("java", {"java": None}, "listener-java"),
-            ("jar", {"expected_argv": None}, "launcher-expected"),
-            ("cwd", {"cwd": self.root / "wrong-cwd"}, "listener-cwd"),
+    def test_listener_proof_rejects_missing_launcher_contract_before_candidate_discovery(self) -> None:
+        cases = (
+            ("launcher-expected", {"expected_argv": None}, "launcher-expected"),
+            ("listener-java", {"java": None}, "listener-java"),
+        )
+        for label, overrides, expected_reason in cases:
+            with self.subTest(label=label):
+                proof, patches = self._prove(return_patches=True, **overrides)
+                self.assertFalse(proof.ok)
+                self.assertEqual(expected_reason, proof.reason)
+                patches["find_candidate"].assert_not_called()
+
+    def test_listener_proof_rejects_candidate_discovery_failures_before_socket_reads(self) -> None:
+        for reason in (
+            "listener-candidate-absent",
+            "listener-candidate-ambiguous",
+            "listener-candidate-proc-unavailable",
+            "listener-candidate-proc-malformed",
+        ):
+            with self.subTest(reason=reason):
+                proof, patches = self._prove(
+                    candidate_result=(None, reason),
+                    return_patches=True,
+                )
+
+                self.assertFalse(proof.ok)
+                self.assertEqual(reason, proof.reason)
+                patches["socket_probe"].assert_not_called()
+                patches["candidate_holds"].assert_not_called()
+                patches["holders"].assert_not_called()
+                patches["identity"].assert_not_called()
+
+    def test_listener_proof_requires_candidate_alone_to_hold_listener_inode(self) -> None:
+        cases: tuple[tuple[str, dict[str, object]], ...] = (
+            ("candidate-fd-missing-initial", {"candidate_holds": [False]}),
+            ("another-current-user-holder-initial", {"holders": [(self.pid, self.pid + 1)]}),
+            ("holder-enumeration-unavailable-initial", {"holders": [None]}),
+            ("candidate-fd-lost-on-reproof", {"candidate_holds": [True, False]}),
             (
-                "run-id",
+                "another-current-user-holder-on-reproof",
+                {"holders": [(self.pid,), (self.pid, self.pid + 1)]},
+            ),
+        )
+        for label, overrides in cases:
+            with self.subTest(label=label):
+                proof = self._prove(**overrides)
+                self.assertFalse(proof.ok)
+                self.assertEqual("socket-owner", proof.reason)
+
+    def test_listener_proof_rejects_listener_loss_inode_change_and_identity_drift(self) -> None:
+        candidate = supervisor.ListenerCandidate(self.pid, self.start_ticks)
+        match = supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MATCH, candidate)
+        mismatch = supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MISMATCH)
+        cases: tuple[tuple[str, dict[str, object], str], ...] = (
+            (
+                "listener-lost",
                 {
-                    "command": [
-                        str(self.java),
-                        "-Dint001.run-id=other-run",
-                        "-jar",
-                        "/trusted/launcher.jar",
-                        "--spring.profiles.active=mock",
+                    "socket_probes": [
+                        (self.socket_inode, "socket-listener"),
+                        (None, "socket-listener-absent"),
                     ]
                 },
-                "listener-argv",
+                "socket-listener-absent",
             ),
-            ("ancestor", {"ancestor": False}, "listener-ancestor"),
+            (
+                "listener-inode-changed",
+                {
+                    "socket_probes": [
+                        (self.socket_inode, "socket-listener"),
+                        (self.socket_inode + 1, "socket-listener"),
+                    ]
+                },
+                "listener-inode",
+            ),
+            (
+                "identity-drift-after-first-socket-proof",
+                {"identity_reproofs": [mismatch]},
+                "listener-start-ticks",
+            ),
+            (
+                "identity-drift-after-final-socket-proof",
+                {"identity_reproofs": [match, mismatch]},
+                "listener-start-ticks",
+            ),
+            (
+                "identity-unavailable-after-first-socket-proof",
+                {
+                    "identity_reproofs": [
+                        supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_PROC_UNAVAILABLE)
+                    ]
+                },
+                "listener-candidate-proc-unavailable",
+            ),
+            (
+                "identity-malformed-after-final-socket-proof",
+                {
+                    "identity_reproofs": [
+                        match,
+                        supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_PROC_MALFORMED),
+                    ]
+                },
+                "listener-candidate-proc-malformed",
+            ),
         )
         for label, overrides, expected_reason in cases:
             with self.subTest(label=label):
@@ -588,79 +692,560 @@ class ListenerProofGateTest(unittest.TestCase):
     def _prove(
         self,
         *,
-        holders: tuple[int, ...] | None = None,
-        socket_probe: tuple[int | None, str] | None = None,
+        candidate_result: tuple[object | None, str] | None = None,
+        socket_probes: list[tuple[int | None, str]] | None = None,
+        candidate_holds: list[bool] | None = None,
+        holders: list[tuple[int, ...] | None] | None = None,
+        identity_reproofs: list[object | None] | None = None,
         java: Path | None | object = ...,
         expected_argv: list[str] | None | object = ...,
-        cwd: Path | None = None,
-        command: list[str] | None = None,
-        ancestor: bool = True,
+        return_patches: bool = False,
     ) -> object:
         actual_java = self.java if java is ... else java
         actual_expected_argv = self.expected_argv if expected_argv is ... else expected_argv
-        actual_cwd = self.run_dir if cwd is None else cwd
-        actual_command = self.expected_argv if command is None else command
-        actual_holders = (self.pid,) if holders is None else holders
-        actual_socket_probe = (
-            (self.socket_inode, "socket-listener") if socket_probe is None else socket_probe
+        candidate = supervisor.ListenerCandidate(self.pid, self.start_ticks)
+        actual_candidate_result = (
+            (candidate, "listener-candidate") if candidate_result is None else candidate_result
         )
-        pid = self.pid
-        root = self.root
-        run_dir = self.run_dir
-        trusted_java = self.java
+        actual_socket_probes = socket_probes or [
+            (self.socket_inode, "socket-listener"),
+            (self.socket_inode, "socket-listener"),
+        ]
+        actual_candidate_holds = candidate_holds or [True, True]
+        actual_holders = holders or [(self.pid,), (self.pid,)]
+        match = supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MATCH, candidate)
+        actual_identity_reproofs = identity_reproofs or [match, match]
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(supervisor, "safe_run_directory", return_value=True))
+            stack.enter_context(mock.patch.object(supervisor, "expected_launcher_argv", return_value=actual_expected_argv))
+            stack.enter_context(mock.patch.object(supervisor, "trusted_java_executable", return_value=actual_java))
+            find_candidate = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "find_exact_launcher_candidate",
+                    return_value=actual_candidate_result,
+                )
+            )
+            socket_probe = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "listener_socket_probe_for_candidate",
+                    side_effect=actual_socket_probes,
+                )
+            )
+            candidate_holds_patch = stack.enter_context(
+                mock.patch.object(supervisor, "candidate_holds_socket", side_effect=actual_candidate_holds)
+            )
+            holders_patch = stack.enter_context(
+                mock.patch.object(supervisor, "current_uid_socket_holders", side_effect=actual_holders)
+            )
+            identity = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "exact_launcher_candidate_identity",
+                    side_effect=actual_identity_reproofs,
+                )
+            )
+            proof = supervisor.prove_owned_loopback_launcher(
+                port=24_570,
+                run_id=self.run_id,
+                run_dir=self.run_dir,
+                artifact_root=self.artifact_root,
+                repo_root=self.root,
+                exercise_pid=40_001,
+                exercise_start_ticks=40_002,
+            )
+            if return_patches:
+                return proof, {
+                    "find_candidate": find_candidate,
+                    "socket_probe": socket_probe,
+                    "candidate_holds": candidate_holds_patch,
+                    "holders": holders_patch,
+                    "identity": identity,
+                }
+            return proof
+
+
+class ListenerCandidateIdentityTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.pid = 42_424
+        self.start_ticks = 123_456
+        self.run_dir = Path("/safe/run")
+        self.java = Path("/trusted/java")
+        self.expected_argv = [str(self.java), "-jar", "/trusted/launcher.jar"]
+
+    def test_exact_candidate_identity_requires_every_stable_component(self) -> None:
+        probe = self._identity()
+        self.assertEqual(supervisor.IDENTITY_MATCH, probe.status)
+        self.assertEqual(supervisor.ListenerCandidate(self.pid, self.start_ticks), probe.candidate)
+
+        cases: tuple[tuple[str, dict[str, object]], ...] = (
+            ("initial-identity", {"initial_status": supervisor.IDENTITY_MISMATCH}),
+            ("zombie", {"initial_state": "Z"}),
+            ("start-ticks", {"initial_start_ticks": self.start_ticks + 1}),
+            ("argv", {"argv": [str(self.java), "-jar", "/wrong/launcher.jar"]}),
+            ("cwd", {"cwd": Path("/wrong/run")}),
+            ("java", {"java": Path("/wrong/java")}),
+            ("ancestor", {"lineage_status": supervisor.IDENTITY_MISMATCH}),
+            ("final-start-ticks", {"final_start_ticks": self.start_ticks + 1}),
+            ("final-zombie", {"final_state": "Z"}),
+        )
+        for label, overrides in cases:
+            with self.subTest(label=label):
+                rejected = self._identity(**overrides)
+                self.assertEqual(supervisor.IDENTITY_MISMATCH, rejected.status)
+                self.assertIsNone(rejected.candidate)
+
+    def test_identity_unavailable_and_malformed_are_never_collapsed_to_mismatch(self) -> None:
+        cases: tuple[tuple[str, dict[str, object], str], ...] = (
+            (
+                "initial-unavailable",
+                {"initial_status": supervisor.IDENTITY_PROC_UNAVAILABLE},
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            (
+                "initial-malformed",
+                {"initial_status": supervisor.IDENTITY_PROC_MALFORMED},
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+            (
+                "argv-unavailable",
+                {"argv_status": supervisor.IDENTITY_PROC_UNAVAILABLE},
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            (
+                "argv-malformed",
+                {"argv_status": supervisor.IDENTITY_PROC_MALFORMED},
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+            (
+                "cwd-unavailable",
+                {"cwd_status": supervisor.IDENTITY_PROC_UNAVAILABLE},
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            (
+                "exe-malformed",
+                {"exe_status": supervisor.IDENTITY_PROC_MALFORMED},
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+            (
+                "lineage-unavailable",
+                {"lineage_status": supervisor.IDENTITY_PROC_UNAVAILABLE},
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            (
+                "lineage-malformed",
+                {"lineage_status": supervisor.IDENTITY_PROC_MALFORMED},
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+            (
+                "final-malformed",
+                {"final_status": supervisor.IDENTITY_PROC_MALFORMED},
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+        )
+        for label, overrides, expected_status in cases:
+            with self.subTest(label=label):
+                probe = self._identity(**overrides)
+                self.assertEqual(expected_status, probe.status)
+                self.assertIsNone(probe.candidate)
+
+    def test_readable_argv_mismatch_short_circuits_deeper_identity_reads(self) -> None:
+        probe, patches = self._identity(
+            argv=[str(self.java), "-jar", "/unrelated.jar"],
+            return_patches=True,
+        )
+
+        self.assertEqual(supervisor.IDENTITY_MISMATCH, probe.status)
+        patches["links"].assert_not_called()
+        patches["lineage"].assert_not_called()
+
+    def _identity(
+        self,
+        *,
+        initial_status: str = supervisor.IDENTITY_MATCH,
+        initial_state: str = "S",
+        initial_start_ticks: int | None = None,
+        final_status: str = supervisor.IDENTITY_MATCH,
+        final_state: str = "S",
+        final_start_ticks: int | None = None,
+        argv_status: str = supervisor.IDENTITY_MATCH,
+        cwd: Path | None = None,
+        cwd_status: str = supervisor.IDENTITY_MATCH,
+        java: Path | None = None,
+        exe_status: str = supervisor.IDENTITY_MATCH,
+        argv: list[str] | None = None,
+        lineage_status: str = supervisor.IDENTITY_MATCH,
+        return_patches: bool = False,
+    ) -> object:
+        observed_initial_ticks = self.start_ticks if initial_start_ticks is None else initial_start_ticks
+        observed_final_ticks = self.start_ticks if final_start_ticks is None else final_start_ticks
+        observed_cwd = self.run_dir if cwd is None else cwd
+        observed_java = self.java if java is None else java
+        observed_argv = self.expected_argv if argv is None else argv
+
+        with contextlib.ExitStack() as stack:
+            snapshots = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "proc_identity_snapshot",
+                    side_effect=[
+                        (
+                            (initial_state, 40_001, observed_initial_ticks)
+                            if initial_status == supervisor.IDENTITY_MATCH
+                            else None,
+                            initial_status,
+                        ),
+                        (
+                            (final_state, 40_001, observed_final_ticks)
+                            if final_status == supervisor.IDENTITY_MATCH
+                            else None,
+                            final_status,
+                        ),
+                    ],
+                )
+            )
+            command = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "command_line_identity_probe",
+                    return_value=(observed_argv if argv_status == supervisor.IDENTITY_MATCH else None, argv_status),
+                )
+            )
+
+            def link_probe(_pid: int, name: str) -> tuple[Path | None, str]:
+                if name == "cwd":
+                    return (observed_cwd if cwd_status == supervisor.IDENTITY_MATCH else None, cwd_status)
+                if name == "exe":
+                    return (observed_java if exe_status == supervisor.IDENTITY_MATCH else None, exe_status)
+                raise AssertionError(f"unexpected proc link: {name}")
+
+            links = stack.enter_context(
+                mock.patch.object(supervisor, "proc_link_identity_probe", side_effect=link_probe)
+            )
+            lineage = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "launcher_lineage_identity_status",
+                    return_value=lineage_status,
+                )
+            )
+            probe = supervisor.exact_launcher_candidate_identity(
+                pid=self.pid,
+                expected_start_ticks=self.start_ticks,
+                expected_argv=self.expected_argv,
+                java=self.java,
+                run_dir=self.run_dir,
+                exercise_pid=40_001,
+                exercise_start_ticks=40_002,
+            )
+            if return_patches:
+                return probe, {
+                    "snapshots": snapshots,
+                    "command": command,
+                    "links": links,
+                    "lineage": lineage,
+                }
+            return probe
+
+
+class ListenerProcIdentityFieldTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.pid = 42_425
+        self.proc_dir = f"/proc/{self.pid}"
+
+    def test_stat_field_distinguishes_disappearance_unavailable_and_malformed(self) -> None:
+        cases: tuple[tuple[str, object, BaseException | None, str], ...] = (
+            (
+                "disappeared",
+                FileNotFoundError("stat disappeared"),
+                FileNotFoundError("process disappeared"),
+                supervisor.IDENTITY_MISMATCH,
+            ),
+            (
+                "unavailable",
+                PermissionError("stat denied"),
+                None,
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            (
+                "malformed",
+                "not-a-proc-stat-record",
+                None,
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+        )
+        for label, stat_payload, proc_error, expected_status in cases:
+            with self.subTest(label=label):
+                path_type = self._path_type(
+                    text_payloads={f"{self.proc_dir}/stat": stat_payload},
+                    proc_error=proc_error,
+                )
+                with mock.patch.object(supervisor, "Path", side_effect=path_type):
+                    snapshot, status = supervisor.proc_identity_snapshot(self.pid)
+                self.assertIsNone(snapshot)
+                self.assertEqual(expected_status, status)
+
+    def test_cmdline_field_distinguishes_disappearance_unavailable_and_malformed(self) -> None:
+        cases: tuple[tuple[str, object, BaseException | None, str], ...] = (
+            (
+                "disappeared",
+                FileNotFoundError("cmdline disappeared"),
+                FileNotFoundError("process disappeared"),
+                supervisor.IDENTITY_MISMATCH,
+            ),
+            (
+                "unavailable",
+                PermissionError("cmdline denied"),
+                None,
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            ("missing-terminator", b"/trusted/java", None, supervisor.IDENTITY_PROC_MALFORMED),
+            ("invalid-utf8", b"\xff\0", None, supervisor.IDENTITY_PROC_MALFORMED),
+        )
+        for label, cmdline_payload, proc_error, expected_status in cases:
+            with self.subTest(label=label):
+                path_type = self._path_type(
+                    byte_payloads={f"{self.proc_dir}/cmdline": cmdline_payload},
+                    proc_error=proc_error,
+                )
+                with mock.patch.object(supervisor, "Path", side_effect=path_type):
+                    argv, status = supervisor.command_line_identity_probe(self.pid)
+                self.assertIsNone(argv)
+                self.assertEqual(expected_status, status)
+
+    def test_cwd_and_exe_fields_distinguish_disappearance_unavailable_and_malformed(self) -> None:
+        cases: tuple[tuple[str, BaseException, BaseException | None, str], ...] = (
+            (
+                "disappeared",
+                FileNotFoundError("link disappeared"),
+                FileNotFoundError("process disappeared"),
+                supervisor.IDENTITY_MISMATCH,
+            ),
+            (
+                "unavailable",
+                PermissionError("link denied"),
+                None,
+                supervisor.IDENTITY_PROC_UNAVAILABLE,
+            ),
+            (
+                "malformed",
+                RuntimeError("symlink loop"),
+                None,
+                supervisor.IDENTITY_PROC_MALFORMED,
+            ),
+        )
+        for link_name in ("cwd", "exe"):
+            for label, link_error, proc_error, expected_status in cases:
+                with self.subTest(link=link_name, label=label):
+                    path_type = self._path_type(
+                        resolve_payloads={f"{self.proc_dir}/{link_name}": link_error},
+                        proc_error=proc_error,
+                    )
+                    with mock.patch.object(supervisor, "Path", side_effect=path_type):
+                        resolved, status = supervisor.proc_link_identity_probe(self.pid, link_name)
+                    self.assertIsNone(resolved)
+                    self.assertEqual(expected_status, status)
+
+    def test_failed_field_after_pid_owner_replacement_is_a_mismatch(self) -> None:
+        path_type = self._path_type(proc_uid=os.getuid() + 1)
+        with mock.patch.object(supervisor, "Path", side_effect=path_type):
+            status = supervisor.proc_identity_failure_status(self.pid, malformed=True)
+        self.assertEqual(supervisor.IDENTITY_MISMATCH, status)
+
+    def _path_type(
+        self,
+        *,
+        text_payloads: dict[str, object] | None = None,
+        byte_payloads: dict[str, object] | None = None,
+        resolve_payloads: dict[str, object] | None = None,
+        proc_error: BaseException | None = None,
+        proc_uid: int | None = None,
+    ) -> type[object]:
+        proc_dir = self.proc_dir
+        text_payloads = text_payloads or {}
+        byte_payloads = byte_payloads or {}
+        resolve_payloads = resolve_payloads or {}
 
         class FakeProcPath:
             def __init__(self, raw_path: object) -> None:
                 self.raw_path = os.fspath(raw_path)
 
             def stat(self) -> SimpleNamespace:
-                if self.raw_path == f"/proc/{pid}":
-                    return SimpleNamespace(st_uid=os.getuid())
-                raise AssertionError(f"unexpected stat path: {self.raw_path}")
+                if self.raw_path != proc_dir:
+                    raise AssertionError(f"unexpected stat path: {self.raw_path}")
+                if proc_error is not None:
+                    raise proc_error
+                return SimpleNamespace(st_uid=os.getuid() if proc_uid is None else proc_uid)
 
-            def resolve(self, strict: bool = False) -> Path:
-                if self.raw_path == f"/proc/{pid}/cwd":
-                    return actual_cwd
-                if self.raw_path == f"/proc/{pid}/exe":
-                    return actual_java if actual_java is not None else trusted_java
-                raise AssertionError(f"unexpected resolve path: {self.raw_path}")
+            def read_text(self, *, encoding: str) -> str:
+                payload = text_payloads[self.raw_path]
+                if isinstance(payload, BaseException):
+                    raise payload
+                if not isinstance(payload, str):
+                    raise AssertionError(f"unexpected text payload: {payload!r}")
+                return payload
 
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(supervisor, "safe_run_directory", return_value=True))
-            stack.enter_context(mock.patch.object(supervisor, "expected_launcher_argv", return_value=actual_expected_argv))
-            stack.enter_context(
-                mock.patch.object(
-                    supervisor,
-                    "listener_socket_probe_for_loopback_port",
-                    side_effect=[actual_socket_probe, actual_socket_probe],
-                )
+            def read_bytes(self) -> bytes:
+                payload = byte_payloads[self.raw_path]
+                if isinstance(payload, BaseException):
+                    raise payload
+                if not isinstance(payload, bytes):
+                    raise AssertionError(f"unexpected bytes payload: {payload!r}")
+                return payload
+
+            def resolve(self, *, strict: bool) -> Path:
+                payload = resolve_payloads[self.raw_path]
+                if isinstance(payload, BaseException):
+                    raise payload
+                if not isinstance(payload, Path):
+                    raise AssertionError(f"unexpected link payload: {payload!r}")
+                return payload
+
+        return FakeProcPath
+
+
+class ListenerCandidateDiscoveryTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.expected_argv = ["/trusted/java", "-jar", "/trusted/launcher.jar"]
+        self.java = Path("/trusted/java")
+        self.run_dir = Path("/safe/run")
+
+    def test_discovery_requires_exactly_one_candidate(self) -> None:
+        exact_candidates = {
+            42_001: supervisor.ListenerCandidate(42_001, 101),
+            42_002: supervisor.ListenerCandidate(42_002, 102),
+        }
+        probes = {
+            pid: supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MATCH, candidate)
+            for pid, candidate in exact_candidates.items()
+        }
+        cases = (
+            (
+                "zero",
+                [42_001],
+                {42_001: supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MISMATCH)},
+                "listener-candidate-absent",
+            ),
+            (
+                "one",
+                [42_001],
+                {42_001: probes[42_001]},
+                "listener-candidate",
+            ),
+            (
+                "multiple",
+                [42_001, 42_002],
+                probes,
+                "listener-candidate-ambiguous",
+            ),
+        )
+        for label, pids, identities, expected_reason in cases:
+            with self.subTest(label=label):
+                candidate, reason = self._find(pids=pids, identities=identities)
+                self.assertEqual(expected_reason, reason)
+                if label == "one":
+                    self.assertEqual(exact_candidates[42_001], candidate)
+                else:
+                    self.assertIsNone(candidate)
+
+    def test_discovery_fails_closed_for_unavailable_or_malformed_current_user_identity(self) -> None:
+        with self.subTest("proc-root-unavailable"):
+            candidate, reason = self._find(pids=[], root_error=OSError("proc unavailable"))
+            self.assertIsNone(candidate)
+            self.assertEqual("listener-candidate-proc-unavailable", reason)
+
+        with self.subTest("current-user-entry-unavailable"):
+            candidate, reason = self._find(
+                pids=[42_001],
+                stat_errors={42_001: PermissionError("entry unavailable")},
             )
-            stack.enter_context(
-                mock.patch.object(
-                    supervisor,
-                    "current_uid_socket_holders",
-                    side_effect=[actual_holders, (pid,)],
+            self.assertIsNone(candidate)
+            self.assertEqual("listener-candidate-proc-unavailable", reason)
+
+        for status, expected_reason in (
+            (supervisor.IDENTITY_PROC_UNAVAILABLE, "listener-candidate-proc-unavailable"),
+            (supervisor.IDENTITY_PROC_MALFORMED, "listener-candidate-proc-malformed"),
+        ):
+            with self.subTest(identity_status=status):
+                candidate, reason = self._find(
+                    pids=[42_001],
+                    identities={42_001: supervisor.ListenerCandidateIdentityProbe(status)},
                 )
+                self.assertIsNone(candidate)
+                self.assertEqual(expected_reason, reason)
+
+    def test_disappeared_race_is_ignored_but_readable_mismatch_does_not_block_exact_candidate(self) -> None:
+        with self.subTest("disappeared-entry-is-not-a-candidate"):
+            candidate, reason = self._find(
+                pids=[42_001],
+                stat_errors={42_001: FileNotFoundError("entry disappeared")},
             )
-            stack.enter_context(mock.patch.object(supervisor, "proc_is_live", return_value=True))
-            stack.enter_context(mock.patch.object(supervisor, "proc_stat", return_value=(0, 0, self.start_ticks)))
-            stack.enter_context(mock.patch.object(supervisor, "trusted_java_executable", return_value=actual_java))
-            stack.enter_context(mock.patch.object(supervisor, "command_line", return_value=actual_command))
-            stack.enter_context(mock.patch.object(supervisor, "is_descendant_of", return_value=ancestor))
-            stack.enter_context(mock.patch.object(supervisor, "Path", side_effect=FakeProcPath))
-            return supervisor.prove_owned_loopback_launcher(
-                port=24_570,
-                run_id=self.run_id,
-                run_dir=run_dir,
-                artifact_root=self.artifact_root,
-                repo_root=root,
-                exercise_pid=40_001,
-                exercise_start_ticks=40_002,
+            self.assertIsNone(candidate)
+            self.assertEqual("listener-candidate-absent", reason)
+
+        exact = supervisor.ListenerCandidate(42_002, 102)
+        candidate, reason = self._find(
+            pids=[42_001, 42_002],
+            identities={
+                42_001: supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MISMATCH),
+                42_002: supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MATCH, exact),
+            },
+        )
+        self.assertEqual("listener-candidate", reason)
+        self.assertEqual(exact, candidate)
+
+    def _find(
+        self,
+        *,
+        pids: list[int],
+        identities: dict[int, object] | None = None,
+        root_error: OSError | None = None,
+        stat_errors: dict[int, BaseException] | None = None,
+    ) -> tuple[object | None, str]:
+        identities = identities or {}
+        stat_errors = stat_errors or {}
+
+        class FakeProcEntry:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+                self.name = str(pid)
+
+            def stat(self) -> SimpleNamespace:
+                error = stat_errors.get(self.pid)
+                if error is not None:
+                    raise error
+                return SimpleNamespace(st_uid=os.getuid())
+
+        class FakeProcRoot:
+            def iterdir(self) -> tuple[FakeProcEntry, ...]:
+                if root_error is not None:
+                    raise root_error
+                return tuple(FakeProcEntry(pid) for pid in pids)
+
+        def exact_identity(*, pid: int, **_kwargs: object) -> object:
+            return identities.get(
+                pid,
+                supervisor.ListenerCandidateIdentityProbe(supervisor.IDENTITY_MISMATCH),
+            )
+
+        with mock.patch.object(supervisor, "Path", return_value=FakeProcRoot()), mock.patch.object(
+            supervisor,
+            "exact_launcher_candidate_identity",
+            side_effect=exact_identity,
+        ):
+            return supervisor.find_exact_launcher_candidate(
+                expected_argv=self.expected_argv,
+                java=self.java,
+                run_dir=self.run_dir,
+                exercise_pid=41_999,
+                exercise_start_ticks=99,
             )
 
 
 class ListenerSocketProbeTest(unittest.TestCase):
-    def test_socket_probe_returns_only_fixed_fail_closed_reasons(self) -> None:
+    def test_candidate_socket_probe_returns_only_fixed_fail_closed_reasons(self) -> None:
         port = 24_570
         header = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode"
         loopback_listener = self._tcp_line(f"0100007F:{port:04X}", inode="789012")
@@ -713,7 +1298,8 @@ class ListenerSocketProbeTest(unittest.TestCase):
 
     @staticmethod
     def _probe(port: int, *, tcp: object, tcp6: object) -> tuple[int | None, str]:
-        payloads = {"/proc/net/tcp": tcp, "/proc/net/tcp6": tcp6}
+        pid = 42_424
+        payloads = {f"/proc/{pid}/net/tcp": tcp, f"/proc/{pid}/net/tcp6": tcp6}
 
         class FakeProcNetPath:
             def __init__(self, raw_path: object) -> None:
@@ -729,7 +1315,241 @@ class ListenerSocketProbeTest(unittest.TestCase):
                 return payload
 
         with mock.patch.object(supervisor, "Path", side_effect=FakeProcNetPath):
-            return supervisor.listener_socket_probe_for_loopback_port(port)
+            return supervisor.listener_socket_probe_for_candidate(port, pid)
+
+
+@unittest.skipUnless(Path("/proc/self/net/tcp").is_file(), "Linux procfs is required")
+class ListenerProcTopologyTest(unittest.TestCase):
+    def test_outer_parent_held_child_exact_ipv4_listener_has_real_proc_lineage_and_ownership(self) -> None:
+        topology_process = self._start_topology()
+        try:
+            if topology_process.stdout is None or topology_process.stdin is None:
+                self.fail("isolated topology pipes were not captured")
+            ready, _, _ = select.select([topology_process.stdout], [], [], 5.0)
+            if not ready:
+                self.fail("isolated topology did not publish its test-owned listener")
+            topology = json.loads(topology_process.stdout.readline())
+            self.assertEqual({"outerPid", "childPid", "port"}, set(topology))
+            outer_pid = int(topology["outerPid"])
+            child_pid = int(topology["childPid"])
+            port = int(topology["port"])
+
+            self.assertGreater(outer_pid, 1)
+            self.assertGreater(child_pid, 1)
+            self.assertGreaterEqual(port, 1)
+            self.assertLessEqual(port, 65_535)
+
+            topology_process.stdin.write("verify\n")
+            topology_process.stdin.flush()
+            ready, _, _ = select.select([topology_process.stdout], [], [], 5.0)
+            if not ready:
+                self.fail("isolated topology did not publish procfs verification")
+            evidence = json.loads(topology_process.stdout.readline())
+
+            self.assertEqual(outer_pid, evidence["outerPid"])
+            self.assertEqual(child_pid, evidence["childPid"])
+            self.assertEqual(port, evidence["port"])
+            self.assertGreater(int(evidence["outerStartTicks"]), 0)
+            self.assertEqual(outer_pid, evidence["observedParentPid"])
+            self.assertTrue(evidence["descendant"])
+            self.assertEqual("socket-listener", evidence["listenerReason"])
+            self.assertTrue(evidence["listenerInodePresent"])
+            self.assertTrue(evidence["candidateHoldsSocket"])
+            self.assertEqual([child_pid], evidence["currentUidSocketHolders"])
+            self.assertEqual("MATCH", evidence["identityStatus"])
+            self.assertEqual(child_pid, evidence["identityCandidatePid"])
+            self.assertEqual("listener-candidate", evidence["candidateReason"])
+            self.assertEqual(child_pid, evidence["candidatePid"])
+            self.assertTrue(evidence["ownedLoopbackProofOk"])
+            self.assertEqual(
+                "uid+java+argv+cwd+ancestor+socket+startTicks",
+                evidence["ownedLoopbackProofReason"],
+            )
+        finally:
+            returncode, stderr = self._stop_topology(topology_process)
+
+        self.assertEqual(0, returncode, stderr)
+
+    @staticmethod
+    def _start_topology() -> subprocess.Popen[str]:
+        unshare = shutil.which("unshare")
+        if unshare is None:
+            raise unittest.SkipTest("unshare is required for an isolated real procfs topology")
+        child_code = (
+            "import json, os, socket, sys\n"
+            "listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "listener.bind(('127.0.0.1', 0))\n"
+            "listener.listen()\n"
+            "print(json.dumps({'childPid': os.getpid(), 'port': listener.getsockname()[1]}), flush=True)\n"
+            "command = sys.stdin.readline().strip()\n"
+            "listener.close()\n"
+            "raise SystemExit(0 if command == 'stop' else 3)\n"
+        )
+        outer_code = (
+            "import json, os, subprocess, sys\n"
+            "from pathlib import Path\n"
+            f"child_code = {child_code!r}\n"
+            "python = str(Path(sys.executable).resolve())\n"
+            "child = subprocess.Popen([python, '-c', child_code], "
+            "stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)\n"
+            "try:\n"
+            "    child_line = child.stdout.readline() if child.stdout is not None else ''\n"
+            "    child_topology = json.loads(child_line)\n"
+            "    print(json.dumps({'outerPid': os.getpid(), **child_topology}), flush=True)\n"
+            "    command = sys.stdin.readline().strip()\n"
+            "    if child.stdin is not None:\n"
+            "        child.stdin.write('stop\\n' if command == 'stop' else 'abort\\n')\n"
+            "        child.stdin.flush()\n"
+            "        child.stdin.close()\n"
+            "    raise SystemExit(child.wait(timeout=5))\n"
+            "finally:\n"
+            "    if child.poll() is None:\n"
+            "        child.terminate()\n"
+            "        try:\n"
+            "            child.wait(timeout=5)\n"
+            "        except subprocess.TimeoutExpired:\n"
+            "            child.kill()\n"
+            "            child.wait(timeout=5)\n"
+        )
+        verifier_code = (
+            "import importlib.util, json, subprocess, sys\n"
+            "from pathlib import Path\n"
+            f"supervisor_path = {str(SUPERVISOR_PATH)!r}\n"
+            f"child_code = {child_code!r}\n"
+            f"outer_code = {outer_code!r}\n"
+            "module_name = 'int001_real_proc_topology_target'\n"
+            "spec = importlib.util.spec_from_file_location(module_name, supervisor_path)\n"
+            "if spec is None or spec.loader is None:\n"
+            "    raise RuntimeError('could not load supervisor')\n"
+            "target = importlib.util.module_from_spec(spec)\n"
+            "sys.modules[module_name] = target\n"
+            "spec.loader.exec_module(target)\n"
+            "outer = subprocess.Popen([sys.executable, '-c', outer_code], "
+            "stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)\n"
+            "try:\n"
+            "    topology_line = outer.stdout.readline() if outer.stdout is not None else ''\n"
+            "    topology = json.loads(topology_line)\n"
+            "    print(json.dumps(topology), flush=True)\n"
+            "    command = sys.stdin.readline().strip()\n"
+            "    if command == 'verify':\n"
+            "        outer_pid = int(topology['outerPid'])\n"
+            "        child_pid = int(topology['childPid'])\n"
+            "        port = int(topology['port'])\n"
+            "        outer_start_ticks = target.proc_stat(outer_pid)[2]\n"
+            "        java = Path(sys.executable).resolve()\n"
+            "        expected_argv = [str(java), '-c', child_code]\n"
+            "        run_dir = Path.cwd().resolve()\n"
+            "        identity = target.exact_launcher_candidate_identity(\n"
+            "            pid=child_pid, expected_start_ticks=None, expected_argv=expected_argv,\n"
+            "            java=java, run_dir=run_dir, exercise_pid=outer_pid,\n"
+            "            exercise_start_ticks=outer_start_ticks,\n"
+            "        )\n"
+            "        candidate, candidate_reason = target.find_exact_launcher_candidate(\n"
+            "            expected_argv=expected_argv, java=java, run_dir=run_dir,\n"
+            "            exercise_pid=outer_pid, exercise_start_ticks=outer_start_ticks,\n"
+            "        )\n"
+            "        inode, reason = target.listener_socket_probe_for_candidate(port, child_pid)\n"
+            "        holders = target.current_uid_socket_holders(inode) if inode is not None else None\n"
+            "        target.safe_run_directory = lambda run_dir, artifact_root: True\n"
+            "        target.expected_launcher_argv = lambda repo_root, run_id: expected_argv\n"
+            "        target.trusted_java_executable = lambda: java\n"
+            "        proof = target.prove_owned_loopback_launcher(\n"
+            "            port=port, run_id='test-owned-real-proc', run_dir=run_dir,\n"
+            "            artifact_root=run_dir.parent, repo_root=run_dir,\n"
+            "            exercise_pid=outer_pid, exercise_start_ticks=outer_start_ticks,\n"
+            "        )\n"
+            "        evidence = {\n"
+            "            'outerPid': outer_pid,\n"
+            "            'childPid': child_pid,\n"
+            "            'port': port,\n"
+            "            'outerStartTicks': outer_start_ticks,\n"
+            "            'observedParentPid': target.proc_parent_pid(child_pid),\n"
+            "            'descendant': target.is_descendant_of(child_pid, outer_pid, outer_start_ticks),\n"
+            "            'listenerReason': reason,\n"
+            "            'listenerInodePresent': inode is not None,\n"
+            "            'candidateHoldsSocket': (\n"
+            "                target.candidate_holds_socket(child_pid, inode) if inode is not None else False\n"
+            "            ),\n"
+            "            'currentUidSocketHolders': list(holders) if holders is not None else None,\n"
+            "            'identityStatus': identity.status,\n"
+            "            'identityCandidatePid': (identity.candidate.pid if identity.candidate is not None else None),\n"
+            "            'candidateReason': candidate_reason,\n"
+            "            'candidatePid': candidate.pid if candidate is not None else None,\n"
+            "            'ownedLoopbackProofOk': proof.ok,\n"
+            "            'ownedLoopbackProofReason': proof.reason,\n"
+            "        }\n"
+            "        print(json.dumps(evidence), flush=True)\n"
+            "        command = sys.stdin.readline().strip()\n"
+            "    if outer.stdin is not None:\n"
+            "        outer.stdin.write('stop\\n' if command == 'stop' else 'abort\\n')\n"
+            "        outer.stdin.flush()\n"
+            "        outer.stdin.close()\n"
+            "    raise SystemExit(outer.wait(timeout=5))\n"
+            "finally:\n"
+            "    if outer.poll() is None:\n"
+            "        outer.terminate()\n"
+            "        try:\n"
+            "            outer.wait(timeout=5)\n"
+            "        except subprocess.TimeoutExpired:\n"
+            "            outer.kill()\n"
+            "            outer.wait(timeout=5)\n"
+        )
+        return subprocess.Popen(
+            [
+                unshare,
+                "--user",
+                "--map-current-user",
+                "--pid",
+                "--fork",
+                "--mount-proc",
+                sys.executable,
+                "-c",
+                verifier_code,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+            env={"LANG": "C.UTF-8", "PYTHONUNBUFFERED": "1"},
+        )
+
+    @staticmethod
+    def _stop_topology(topology_process: subprocess.Popen[str]) -> tuple[int, str]:
+        if topology_process.poll() is None and topology_process.stdin is not None:
+            try:
+                topology_process.stdin.write("stop\n")
+                topology_process.stdin.flush()
+                topology_process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        try:
+            returncode = topology_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(topology_process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                returncode = topology_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(topology_process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                returncode = topology_process.wait(timeout=5)
+        if returncode != 0:
+            try:
+                os.killpg(topology_process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        stderr = topology_process.stderr.read() if topology_process.stderr is not None else ""
+        if topology_process.stdout is not None:
+            topology_process.stdout.close()
+        if topology_process.stderr is not None:
+            topology_process.stderr.close()
+        return returncode, stderr
 
 
 class ExerciseParentProofTest(unittest.TestCase):
@@ -985,9 +1805,11 @@ class SupervisorOrchestrationTest(unittest.TestCase):
             "socket-owner",
             "listener-java",
             "launcher-expected",
-            "listener-cwd",
-            "listener-argv",
-            "listener-ancestor",
+            "listener-candidate-absent",
+            "listener-candidate-ambiguous",
+            "listener-candidate-proc-unavailable",
+            "listener-start-ticks",
+            "listener-inode",
         )
         for reason in reasons:
             with self.subTest(reason=reason), contextlib.ExitStack() as stack:
@@ -1493,6 +2315,75 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         )
         self.assertEqual("CHILD_EXITED_BEFORE_HEALTH", projection["outcome"])
         self.assertEqual(set(supervisor.PROJECTION_FIELDS), set(projection))
+
+    def test_health_ready_receipt_cannot_override_candidate_ineligible_zero_term_outcome(self) -> None:
+        outcome = supervisor.RehearsalOutcome(
+            health_precondition=False,
+            parent_proof=None,
+            listener_proof=supervisor.ListenerProof(False, "listener-candidate-absent"),
+            term_dispatches=0,
+            dispatch_safe=False,
+            child_exit=512,
+            listener_proof_ever_eligible=False,
+        )
+        receipt = {
+            "mode": "0600",
+            "schemaVersion": 4,
+            "result": "CLEANED",
+            "failureStage": "UNKNOWN",
+            "rehearsalLifecycleObservation": "HOLD_TIMEOUT",
+            "launcherReadinessObservation": "HEALTH_READY",
+            "launcherFailureClass": "NOT_APPLICABLE",
+            "secretsRedacted": True,
+        }
+        output = io.StringIO()
+        with self._base_patches(docker_socket_safe=True) as stack:
+            stack.enter_context(mock.patch.object(supervisor, "start_exercise", return_value=(42_422, 100)))
+            stack.enter_context(mock.patch.object(supervisor, "supervise_exercise", return_value=outcome))
+            stack.enter_context(mock.patch.object(supervisor, "read_redacted_receipt", return_value=receipt))
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "run_root_snapshot",
+                    return_value=supervisor.RunRootSnapshot(True, 0),
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "docker_residue_counts",
+                    return_value={"container": 0, "network": 0, "volume": 0},
+                )
+            )
+            kill = stack.enter_context(mock.patch.object(supervisor.os, "kill"))
+
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(1, supervisor.main())
+
+        kill.assert_not_called()
+        summary_lines = output.getvalue().splitlines()
+        self.assertEqual(1, len(summary_lines))
+        summary = json.loads(summary_lines[0])
+        self.assertFalse(summary["controlledHealthPrecondition"])
+        self.assertEqual("NOT_ATTEMPTED", summary["parentProof"])
+        self.assertEqual("listener-candidate-absent", summary["listenerProof"])
+        self.assertFalse(summary["listenerProofEverEligible"])
+        self.assertEqual(0, summary["termDispatches"])
+        self.assertFalse(summary["dispatchSafe"])
+        self.assertEqual("EXIT_2", summary["exerciseExit"])
+        self.assertEqual(receipt, summary["receipt"])
+
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+        self.assertEqual("COMPLETE", projection["phase"])
+        self.assertEqual("CHILD_EXITED_BEFORE_HEALTH", projection["outcome"])
+        self.assertNotEqual("SUCCESS_GATE_MET", projection["outcome"])
+        self.assertEqual("VALID", projection["receiptState"])
+        self.assertEqual("COMPLETE", projection["rootSnapshotState"])
+        self.assertEqual("EMITTED", projection["stdoutSummaryState"])
 
     def test_stdout_emit_failure_keeps_projection_non_authoritative_and_non_emitted(self) -> None:
         outcome = supervisor.RehearsalOutcome(

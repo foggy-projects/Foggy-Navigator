@@ -1294,6 +1294,32 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(result.output).not.toContain(SYNTHETIC_SECRET);
   });
 
+  test('keeps HEALTH_READY as a low-authority observation that cannot turn HOLD_TIMEOUT into SIGNAL', () => {
+    const run = createRun('health-ready-hold-timeout');
+
+    // HEALTH_READY records only what the held child observed at readiness
+    // time. It proves neither listener ownership, parent authorization, nor
+    // TERM dispatch, so a later hold timeout must remain fail closed.
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'LAUNCHER_READINESS_OBSERVATION=HEALTH_READY',
+        'LAUNCHER_FAILURE_CLASS=NOT_APPLICABLE',
+        'REHEARSAL_LIFECYCLE_OBSERVATION=HOLD_TIMEOUT',
+        'write_cleanup_report "$3" CLEANED UNKNOWN'
+      ].join('\n')
+    );
+    const receipt = JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')) as Record<string, unknown>;
+
+    expect(result.status, result.output).toBe(0);
+    expect(receipt.launcherReadinessObservation).toBe('HEALTH_READY');
+    expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_TIMEOUT');
+    expect(receipt.result).toBe('CLEANED');
+    expect(receipt.failureStage).toBe('UNKNOWN');
+    expect(receipt.failureStage).not.toBe('SIGNAL');
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
   test('records a held wait failure as a fixed diagnostic while owned cleanup remains fail closed', () => {
     const run = createRun('run-hold-wait-failure');
     writeSyntheticPrivateCarrier(run, 'stack.env');
