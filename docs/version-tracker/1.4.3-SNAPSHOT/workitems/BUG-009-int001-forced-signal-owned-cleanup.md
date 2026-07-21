@@ -10,7 +10,9 @@ bug_source: acceptance-found
 approved_by: project-owner-user-confirmed
 approved_at: 2026-07-21
 continued_authorization: 2026-07-21-project-owner-user-confirmed
-open_questions: []
+replan_approved_at: 2026-07-21
+open_questions:
+  - strict-listener-proof-vs-held-child-health-ready
 ---
 
 # Delivery Spec: INT-001 forced-SIGNAL owned cleanup returns FAILED_CLEANUP
@@ -85,13 +87,33 @@ open_questions: []
 | Keep Open API/Gateway semantics unchanged | BUG-009 is a harness lifecycle repair, not an authorization or exposure change. | `NAVIGATOR_EXTERNAL_ENABLED=true` stays a disposable route gate; Gateway external remains false. |
 | Keep evidence non-secret | Cleanup diagnosis must not trade confidentiality for observability. | No profile, credential, payload, private carrier, raw log or historical child artifact may enter durable evidence. |
 
+## Approved Replan: Fixed-Enum Execution Projection
+
+- approval: Project Owner approved ordered execution of P0-P3 on 2026-07-21.
+- target: Add one supervisor-owned, artifact-root-level execution projection for a new run so an absent stdout summary can be distinguished from an early supervisor/child failure without reading the run's `private/`, `children/`, logs, profile, payload, process tree or Docker objects.
+- location and lifecycle:
+  - The projection is a sibling of the run directory under the already verified `temp/test-artifacts/INT-001/` root, not an entry inside the run directory.
+  - It is created only for a fresh requested runId, as a non-symlink regular file owned by the current user with mode `0600` and one link.
+  - It may remain as diagnostic evidence after either success or failure; it is not counted as run-owned cleanup residue and must never be used to authorize cleanup.
+- fixed contract:
+  - The document contains only `schemaVersion`, `runId`, `phase`, `outcome`, `receiptState`, `rootSnapshotState`, `stdoutSummaryState`, and `secretsRedacted`.
+  - `phase`, `outcome`, and the three state fields use code-defined allow-listed enums. Unknown fields, duplicate keys, wrong types, unknown enum values, unsafe file shape or mismatched runId fail closed.
+  - No PID, argv, cwd, port, inode, socket identifier, filename inventory, log, exception text, profile, credential, payload, timestamp from a private source, or Docker identifier/count is permitted in the projection.
+- authority boundary:
+  - The projection is diagnostic only. `phase=COMPLETE` or any success-shaped projection value does not prove parent ownership, listener ownership, exact TERM dispatch, private-carrier removal, Docker cleanup or forced-SIGNAL success.
+  - The existing completion gate remains unchanged: strict parent/listener proof, exactly one TERM, `dispatchSafe=true`, child completion, a valid root `CLEANED/SIGNAL` receipt, absent private carrier, zero run-root residue and zero run-owned Docker residue.
+  - If the projection is absent, malformed, incomplete or contradicts the existing evidence, the rehearsal remains fail closed.
+- execution limit:
+  - Complete offline regression and static validation first.
+  - After those gates pass, execute at most one new loopback-only disposable rehearsal. Read only its validated projection, root receipt and permitted root-name/redacted residue evidence. On failure, record and stop without retry.
+
 ## Acceptance Criteria
 
 - [x] AC-1: A stable automated regression demonstrates the relevant parent-TERM ownership/cleanup classification and proves that unproven ownership remains fail closed.
 - [ ] AC-2: A fresh, healthy, loopback-only harness run proves its exercise parent by command line, cwd and runId, receives exactly one parent `TERM`, and its root-level redacted receipt reports `CLEANED/SIGNAL`.
 - [ ] AC-3: The AC-2 run leaves no private carrier and no run-owned process/container/volume/file resource; evidence records only redacted receipt fields and ownership checks.
 - [x] AC-4: 除新建、loopback-only、run-owned disposable target 内的 `NAVIGATOR_EXTERNAL_ENABLED=true` `/api/v1/open/**` 路由门禁外，不得读取、修改、启用或使用任何共享/真实 target、upstream profile、existing Worker、TMS/SIM resource、Worker Gateway external 或 production configuration；该唯一例外不表示 Provider、Gateway 或 production readiness，且 `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false` 必须得到验证。
-- [ ] AC-5: Relevant unit/integration/script checks actually pass; the work item, runbook and test record state exact commands, results, deviations and residual risk. Completion is at most `READY_FOR_SIGNOFF`.
+- [x] AC-5: Relevant unit/integration/script checks actually pass; the work item, runbook and test record state exact commands, results, deviations and residual risk. Completion is at most `READY_FOR_SIGNOFF`.
 
 ## Contract / Data / Security Constraints
 
@@ -137,7 +159,7 @@ open_questions: []
   - The original failure may not reproduce on a fresh run. In that case do not claim a fix; record the exact result and use `BLOCKED` or `NEEDS_REPLAN` if a new scope is necessary.
   - A real cleanup defect can look fixed if ownership proof is weakened. Preserve explicit failure for unknown processes/resources.
   - This work does not make INT-001 accepted, real upstream integration ready, Gateway external, Provider ready or production ready without a new independent signoff.
-- open_questions: none; implementation root cause and local file structure are Ultra decisions inside the approved boundary.
+- open_questions: Why the supervisor's strict listener proof remained `socket-listener-absent` while the held child independently recorded `HEALTH_READY`; resolving this requires a newly approved static diagnosis/fix plan and must not weaken ownership proof.
 
 ## Ultra Execution Contract
 
@@ -149,7 +171,7 @@ open_questions: []
 
 ## Implementation Result
 
-- implementation_summary: The approved harness-only topology correction keeps the supervisor's exact outer `exercise --forced-signal-rehearsal` parent alive while a separately-sessioned canonical `run --hold-for-parent-term` child owns the healthy Launcher lifecycle. The outer process forwards its one received TERM only after re-proving that held child; the held child then uses the existing ownership-checked cleanup path. Receipt schema v4 now also rejects duplicate JSON object keys in both the supervisor reader and the parent-adoption reader. Offline regression coverage passes, but none of the fresh runtime attempts produced the required redacted `CLEANED/SIGNAL` evidence. The two latest attempts had no redacted summary available to this session and their permitted root snapshots lacked `cleanup-report.json`, retained `private/`, and contained seven non-receipt entries. The work therefore requires a new bounded diagnostic plan rather than another blind retry or any private-artifact inspection.
+- implementation_summary: The approved replan added a strict artifact-root-level fixed-enum execution projection without changing the run-root residue or forced-SIGNAL authorization gates. Its reader rejects duplicate keys, unknown fields/enums, wrong types, mismatched runId, unsafe permissions and link shapes. All offline gates passed. The single approved fresh rehearsal produced the intended projection and captured redacted stdout, but the supervisor never obtained its strict listener proof, sent zero TERM, and the held child timed out with `CLEANED/UNKNOWN` plus `HOLD_TIMEOUT`. AC-2 and AC-3 remain unmet, so the work returns to `NEEDS_REPLAN` rather than entering signoff.
 - changed_paths:
   - `tools/navigator-upstream/scripts/synthetic-upstream-harness.sh`
   - `tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py`
@@ -158,39 +180,42 @@ open_questions: []
   - `docs/version-tracker/1.4.3-SNAPSHOT/runbooks/INT-001-synthetic-upstream-integration-harness.md`
   - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-forced-signal-runtime-2026-07-21-k6f8m2q9.md`
   - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-forced-signal-runtime-follow-up-2026-07-21.md`
+  - `docs/version-tracker/1.4.3-SNAPSHOT/test-records/BUG-009-int001-fixed-enum-projection-runtime-2026-07-21.md`
   - this canonical work item and the version index
 - tests_and_results:
-  - `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/fixtures/synthetic-integration/test_forced_signal_supervisor.py` — PASS, 39 offline tests.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/fixtures/synthetic-integration/test_forced_signal_supervisor.py` — PASS, 46 offline tests, including projection schema/file-shape, duplicate-key, unknown enum, missing projection/receipt, child early-exit and stdout failure paths.
   - `bash -n tools/navigator-upstream/scripts/synthetic-upstream-harness.sh tools/navigator-upstream/scripts/synthetic-upstream-bootstrap.sh tools/navigator-upstream/scripts/synthetic-upstream-runtime-audit.sh` — PASS.
   - `(cd business-agent-module/integration-tests && env -u INT001_SYNTHETIC_UPSTREAM_HARNESS -u INT001_RUNTIME_PROBE npm run test:synthetic)` — PASS, 93 passed / 1 skipped, including the parent-adoption duplicate-key regression.
   - `(cd business-agent-module/integration-tests && npm run typecheck)` — PASS.
   - `git diff --check` — PASS.
   - Fresh foreground supervisor rehearsal `int001-bug009-20260721-k6f8m2q9` — FAIL CLOSED, exit `1`; it did not dispatch TERM and cannot satisfy AC-2/AC-3.
   - Fresh foreground supervisor rehearsals `int001-bug009-20260721-r6a1p9k4` and `int001-bug009-20260721-v2m8q4z7` — NOT SUCCESSFUL; this session received no redacted supervisor summary from the execution wrapper. Each permitted root-name snapshot had no `cleanup-report.json`, retained `private/`, and had seven non-receipt entries. Neither can satisfy AC-2/AC-3.
-- manual_or_experience_evidence: Only allowed redacted output and root-level name snapshots were read. The historical `k6f8m2q9` summary remains recorded in its test record. For `r6a1p9k4` and `v2m8q4z7`, no supervisor summary was available to this session; their snapshots are recorded in the follow-up test record. No private carrier contents, `children/` metadata, log, profile, payload, process detail, or Docker object was inspected.
-- deviations: The two latest fresh rehearsals were deliberately not retried after their redacted root evidence was insufficient. The `socket-listener` enum in the earlier run is only a fixed supervisor reason and is not a license to weaken listener or ownership proof. The duplicate-key correction was added after an independent static review found the parent-adoption parser gap; it is covered by an offline regression and does not reinterpret any prior runtime evidence.
+  - Single approved fixed-enum rehearsal `int001-bug009-20260721-p7m3c6r2` — FAIL CLOSED, exit `1`; projection `COMPLETE/CHILD_EXITED_BEFORE_HEALTH`, supervisor listener proof `socket-listener-absent`, zero TERM, receipt `CLEANED/UNKNOWN` with `HOLD_TIMEOUT`, private absent, root residue `0`, redacted Docker residue counts `0/0/0`.
+- manual_or_experience_evidence: Only the new run's fixed-enum projection, redacted supervisor stdout, root receipt and root-name/redacted residue evidence were read. No historical run, private carrier contents, `children/` metadata, log, profile, payload, process detail or Docker object was inspected.
+- deviations: The approved projection behaved as designed and closed the wrapper-observability gap, but the one-run runtime gate failed before TERM dispatch. The run was not retried. The strict listener proof was not weakened or bypassed.
 - residual_risks:
   - POSIX cannot atomically combine the final pending-signal observation and `kill()`; the explicit commit-point rule remains fail closed.
   - No positive runtime evidence exists for exactly one TERM, `dispatchSafe=true`, `CLEANED/SIGNAL`, or the required controlled-health/strict listener proof.
   - The historical run and all three failed fresh runs remain read-prohibited beyond their recorded redacted facts; no private carrier, children metadata, log, profile, payload, process, Docker object, retry, or manual cleanup was accessed.
-  - The missing redacted supervisor outcome/root receipt in the two latest runs cannot be diagnosed under the approved evidence boundary. Further work needs a new plan for a fixed-enum, root-level diagnostic or an independently verified execution-wrapper projection; it must not authorize private-artifact access.
+  - The projection now proves the latest execution reached supervision and emitted stdout, but static/runtime-safe evidence does not yet explain why strict supervisor listener proof remained `socket-listener-absent` while the held child recorded `HEALTH_READY`.
 - readiness: NEEDS_REPLAN
-- signoff_eligibility: no; AC-2 and AC-3 still require a new approved diagnostic/rehearsal plan and later positive runtime evidence.
+- signoff_eligibility: no; AC-2 and AC-3 still require a later positive `CLEANED/SIGNAL` proof.
 
-## Continuation Authorization
+## Historical Continuation Authorization
 
-On 2026-07-21, after the recorded fail-closed rehearsal, the Project Owner explicitly authorized continued isolated diagnosis and fresh retries. This reopens execution only inside the existing harness-only boundary: every retry must use a new loopback-only disposable run, preserve strict ownership proof and redacted root-level evidence, and must not read, enumerate, retry, clean, or otherwise touch either historical failed run. It does not authorize access to real TMS/SIM, shared `8112`, profiles or credentials, Workers, Gateway, Pool, identity, Codex routing, external enablement, or production configuration.
+On 2026-07-21, after the recorded fail-closed rehearsal, the Project Owner explicitly authorized continued isolated diagnosis and fresh retries. That authorization remained inside the existing harness-only boundary: every retry used a new loopback-only disposable run, preserved strict ownership proof and redacted root-level evidence, and did not read, enumerate, retry, clean, or otherwise touch historical failed runs. It did not authorize access to real TMS/SIM, shared `8112`, profiles or credentials, Workers, Gateway, Pool, identity, Codex routing, external enablement, or production configuration. The later approved fixed-enum projection plan limited runtime to the single `p7m3c6r2` rehearsal; that limit is now exhausted and supersedes the earlier general retry authorization.
 
 ## Execution Stop and Replan Trigger
 
 - The authorized follow-up runs `r6a1p9k4` and `v2m8q4z7` were each fresh, loopback-only, and evidence-limited. They did not produce the required redacted completion evidence; their permitted root snapshots showed no receipt, retained `private/`, and seven root non-receipt entries.
-- Do not create a further blind retry. A follow-on plan must first define a fixed-enum, root-level diagnostic surface or independently establish why the execution wrapper did not provide the existing redacted supervisor projection. It must preserve `env -i`, strict owner/listener proof, no private/children/log/profile/payload access, no manual cleanup, and all existing external/Gateway/production exclusions.
+- Do not create a further blind retry. The fixed-enum projection has closed the execution-wrapper observability gap; a follow-on plan must instead statically diagnose and, if justified, correct why strict supervisor listener proof remained `socket-listener-absent` while the held child recorded `HEALTH_READY`. It must preserve `env -i`, strict owner/listener proof, no private/children/log/profile/payload access, no manual cleanup, and all existing external/Gateway/production exclusions.
+- The approved projection plan was implemented and the single permitted run `p7m3c6r2` completed with usable redacted evidence. It sent zero TERM because strict listener proof remained `socket-listener-absent`; the child later produced `CLEANED/UNKNOWN` with `HOLD_TIMEOUT`. The run limit is exhausted. Any further runtime or listener-proof change requires a new approved plan.
 
 ## Blocking Effect
 
 - INT-001: independent signoff must be recorded as rejected on AC-2 until a fresh proof returns `CLEANED/SIGNAL`.
 - BUG-008: independently signed off as `accepted-with-risks` on its normal owner-context proof. That risk-bounded decision explicitly excludes, does not accept, and does not remediate INT-001's rejected forced-SIGNAL cleanup or BUG-009.
-- BUG-009: `NEEDS_REPLAN`; the bounded duplicate-key correction is committed as regression protection, but a separate approved diagnostic/rehearsal plan is required before runtime work resumes.
+- BUG-009: `NEEDS_REPLAN`; the projection implementation and offline regression are complete, but the only approved rehearsal failed before TERM dispatch. A new plan must address the strict-listener/held-health evidence mismatch without weakening ownership proof.
 
 ## References
 
