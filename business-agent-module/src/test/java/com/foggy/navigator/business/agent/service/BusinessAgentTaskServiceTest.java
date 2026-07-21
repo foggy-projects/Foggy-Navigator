@@ -479,6 +479,12 @@ class BusinessAgentTaskServiceTest {
     void createTask_withDirectPhysicalWorkerAgent_launchesWithoutWorkerPoolLookup() {
         form.setDirectoryId("dir_01");
 
+        ClientAppEntity clientApp = new ClientAppEntity();
+        clientApp.setClientAppId("app_01");
+        clientApp.setTenantId("tenant_01");
+        clientApp.setUpstreamSystemId("foggy-world-sim");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01")).thenReturn(clientApp);
+
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
                 taskRepository,
                 tokenRepository,
@@ -562,6 +568,7 @@ class BusinessAgentTaskServiceTest {
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals("worker_01", requestCaptor.getValue().getWorkerPoolId());
         assertEquals("worker_01", requestCaptor.getValue().getPhysicalWorkerId());
+        assertEquals("foggy-world-sim", requestCaptor.getValue().getUpstreamSystemId());
         assertEquals("LANGGRAPH_BIZ", requestCaptor.getValue().getWorkerBackend());
         assertEquals("dir_01", requestCaptor.getValue().getDirectoryId());
         assertEquals("CLIENT_APP_SHARED", requestCaptor.getValue().getWorkspaceScope());
@@ -827,6 +834,10 @@ class BusinessAgentTaskServiceTest {
                 workerIdentityRepository,
                 tokenLifecycleService,
                 List.of(workerTaskLauncher));
+        ClientAppEntity activeClientApp = new ClientAppEntity();
+        activeClientApp.setUpstreamSystemId("  trusted-upstream  ");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(activeClientApp);
         when(resourceResolver.resolveRequiredModelConfigId(
                 "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
                 .thenReturn("model_01");
@@ -839,6 +850,7 @@ class BusinessAgentTaskServiceTest {
                         .workerPoolOwnerType(ResourceOwnerType.PLATFORM)
                         .workerPoolOwnerId("tenant_01")
                         .workerBackend("LANGGRAPH_BIZ")
+                        .upstreamSystemId("caller-controlled-upstream")
                         .build();
 
         BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
@@ -861,17 +873,77 @@ class BusinessAgentTaskServiceTest {
         assertEquals("worker_01", selectionRequest.getSelectedWorkerId());
         assertEquals(prepared.workerLeaseId(), selectionRequest.getWorkerLeaseId());
 
+        ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
+                ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
                 ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenLifecycleService).issuePreboundToken(
+        InOrder preparationOrder = inOrder(workerTaskLauncher, tokenLifecycleService);
+        preparationOrder.verify(workerTaskLauncher).resolveWorkerId(requestCaptor.capture());
+        preparationOrder.verify(tokenLifecycleService).issuePreboundToken(
                 tokenCaptor.capture(),
                 eq(prepared.plainToken()),
                 eq("worker_01"),
                 eq(prepared.workerLeaseId()));
+        assertEquals("trusted-upstream", requestCaptor.getValue().getUpstreamSystemId());
+        assertEquals("trusted-upstream", selectionRequest.getUpstreamSystemId());
         BusinessTaskScopedTokenEntity persisted = tokenCaptor.getValue();
         assertEquals("worker_01", persisted.getWorkerId());
         assertEquals(prepared.workerLeaseId(), persisted.getWorkerLeaseId());
         assertEquals("pool_01", persisted.getWorkerPoolId());
+        verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedToken_doesNotPersistOrDispatchWhenWorkerResolutionFails() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                List.of(workerTaskLauncher));
+        ClientAppEntity activeClientApp = new ClientAppEntity();
+        activeClientApp.setUpstreamSystemId("trusted-upstream");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(activeClientApp);
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenThrow(new SecurityException("worker owner scope rejected"));
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerPoolId("pool_01")
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .upstreamSystemId("caller-controlled-upstream")
+                        .build();
+
+        SecurityException error = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.prepareOpenApiTaskScopedToken(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest));
+
+        assertEquals("worker owner scope rejected", error.getMessage());
+        ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
+                ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
+        verify(workerTaskLauncher).resolveWorkerId(requestCaptor.capture());
+        assertEquals("trusted-upstream", requestCaptor.getValue().getUpstreamSystemId());
+        verifyNoInteractions(tokenRepository);
+        verify(tokenLifecycleService, never()).issuePreboundToken(
+                any(BusinessTaskScopedTokenEntity.class), anyString(), anyString(), anyString());
         verify(workerTaskLauncher, never()).launch(any());
     }
 

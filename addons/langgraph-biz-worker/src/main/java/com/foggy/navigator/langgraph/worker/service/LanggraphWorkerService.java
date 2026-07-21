@@ -76,7 +76,9 @@ public class LanggraphWorkerService {
      * match that pool owner exactly. Platform identities retain the existing
      * shared-infrastructure exception, but only for the canonical
      * {@code (PLATFORM, platform)} owner. With no real pool (physical-only
-     * compatibility), only that canonical platform identity is trusted.</p>
+     * compatibility), that canonical platform identity remains available when
+     * no owner scope is resolved; an upstream-system identity requires an
+     * exact, server-resolved {@code UPSTREAM_SYSTEM} owner scope.</p>
      */
     public LanggraphWorkerEntity getBusinessAgentWorkerEntity(
             String workerId,

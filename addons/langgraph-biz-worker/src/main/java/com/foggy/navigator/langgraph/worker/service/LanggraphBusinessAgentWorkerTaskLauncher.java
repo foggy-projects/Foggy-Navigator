@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantServi
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
@@ -120,10 +121,18 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         if (!routeId.equals(physicalWorkerId)) {
             throw new IllegalStateException("worker pool not found: " + routeId);
         }
-        // A physical-only request does not carry an independently trusted
-        // upstream owner. The identity service therefore accepts only the
-        // canonical shared PLATFORM/platform identity in this compatibility path.
-        return workerService.getBusinessAgentWorkerEntity(physicalWorkerId, null, null);
+        // Physical routes are resolved by A2AgentResourceResolver before this
+        // request is built. Preserve that server-resolved ClientApp scope for
+        // the second identity lookup; never infer it from an Open API caller.
+        // A missing scope deliberately retains the canonical PLATFORM-only
+        // compatibility behavior in LanggraphWorkerService.
+        String upstreamSystemId = StringUtils.hasText(request.getUpstreamSystemId())
+                ? request.getUpstreamSystemId().trim()
+                : null;
+        return workerService.getBusinessAgentWorkerEntity(
+                physicalWorkerId,
+                upstreamSystemId != null ? ResourceOwnerType.UPSTREAM_SYSTEM : null,
+                upstreamSystemId);
     }
 
     private String resolvePoolMemberWorkerId(

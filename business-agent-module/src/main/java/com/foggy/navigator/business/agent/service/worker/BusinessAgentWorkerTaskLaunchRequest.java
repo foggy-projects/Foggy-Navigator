@@ -15,6 +15,8 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String sessionId;
     private String contextId;
     private String clientAppId;
+    /** Server-resolved ClientApp upstream scope used for physical Worker visibility checks. */
+    private String upstreamSystemId;
     private String upstreamUserId;
     private String agentId;
     private String skillId;

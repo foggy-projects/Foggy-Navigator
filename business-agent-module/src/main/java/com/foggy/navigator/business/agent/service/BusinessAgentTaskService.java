@@ -379,7 +379,10 @@ public class BusinessAgentTaskService {
             return null;
         }
 
-        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        ClientAppEntity activeClientApp = clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        if (activeClientApp == null) {
+            throw new IllegalStateException("active client app lookup returned no client app");
+        }
         userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
         skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
 
@@ -392,6 +395,8 @@ public class BusinessAgentTaskService {
         selectionRequest.setTenantId(tenantId);
         selectionRequest.setActorUserId(actorUserId);
         selectionRequest.setClientAppId(clientAppId);
+        // This is a server-resolved dispatch context, never a caller-selected scope.
+        selectionRequest.setUpstreamSystemId(trimToNull(activeClientApp.getUpstreamSystemId()));
         selectionRequest.setUpstreamUserId(upstreamUserId);
         selectionRequest.setSkillId(skillId);
         selectionRequest.setSessionId(sessionId);
@@ -604,6 +609,7 @@ public class BusinessAgentTaskService {
                         .sessionId(task.getSessionId())
                         .contextId(contextId)
                         .clientAppId(task.getClientAppId())
+                        .upstreamSystemId(clientApp != null ? trimToNull(clientApp.getUpstreamSystemId()) : null)
                         .upstreamUserId(task.getUpstreamUserId())
                         .agentId(task.getAgentId())
                         .skillId(task.getSkillId())

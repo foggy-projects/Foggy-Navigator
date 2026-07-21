@@ -206,6 +206,23 @@ class LanggraphWorkerServiceTest {
     }
 
     @Test
+    void getBusinessAgentWorkerEntityAllowsCanonicalPlatformIdentityOnPhysicalOnlyRoute() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setOwnerType(ResourceOwnerType.PLATFORM);
+        identity.setOwnerId(BizWorkerPoolService.PLATFORM_OWNER_ID);
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        LanggraphWorkerEntity resolved = serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", null, null);
+
+        assertEquals("biz_worker_01", resolved.getWorkerId());
+    }
+
+    @Test
     void getBusinessAgentWorkerEntityRejectsNonCanonicalPlatformIdentityOwner() {
         LanggraphWorkerService serviceWithIdentity =
                 new LanggraphWorkerService(workerRepository, workerIdentityRepository);

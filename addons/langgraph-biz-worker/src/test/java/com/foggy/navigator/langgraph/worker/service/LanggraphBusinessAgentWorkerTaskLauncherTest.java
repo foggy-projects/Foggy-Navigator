@@ -423,6 +423,68 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
     }
 
     @Test
+    void resolveWorkerId_preservesServerResolvedUpstreamScopeForPhysicalRoute() {
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setWorkerPoolId("worker_upstream_01");
+        request.setPhysicalWorkerId("worker_upstream_01");
+        request.setUpstreamSystemId("ups_01");
+        when(poolRepository.findByPoolIdAndTenantId("worker_upstream_01", "tenant_01"))
+                .thenReturn(Optional.empty());
+        when(poolRepository.findByPoolId("worker_upstream_01")).thenReturn(Optional.empty());
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_upstream_01");
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_upstream_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01"))
+                .thenReturn(worker);
+
+        assertEquals("worker_upstream_01", launcher.resolveWorkerId(request));
+        verify(workerService).getBusinessAgentWorkerEntity(
+                "worker_upstream_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01");
+    }
+
+    @Test
+    void resolveWorkerId_keepsCanonicalPlatformCompatibilityWhenPhysicalScopeIsBlank() {
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setWorkerPoolId("worker_platform_01");
+        request.setPhysicalWorkerId("worker_platform_01");
+        request.setUpstreamSystemId("  ");
+        when(poolRepository.findByPoolIdAndTenantId("worker_platform_01", "tenant_01"))
+                .thenReturn(Optional.empty());
+        when(poolRepository.findByPoolId("worker_platform_01")).thenReturn(Optional.empty());
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_platform_01");
+        when(workerService.getBusinessAgentWorkerEntity("worker_platform_01", null, null))
+                .thenReturn(worker);
+
+        assertEquals("worker_platform_01", launcher.resolveWorkerId(request));
+        verify(workerService).getBusinessAgentWorkerEntity("worker_platform_01", null, null);
+    }
+
+    @Test
+    void launch_rejectsPhysicalUpstreamIdentityMismatchBeforeTaskDispatch() {
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setWorkerPoolId("worker_upstream_01");
+        request.setPhysicalWorkerId("worker_upstream_01");
+        request.setSelectedWorkerId("worker_upstream_01");
+        request.setUpstreamSystemId("ups_other");
+        when(poolRepository.findByPoolIdAndTenantId("worker_upstream_01", "tenant_01"))
+                .thenReturn(Optional.empty());
+        when(poolRepository.findByPoolId("worker_upstream_01")).thenReturn(Optional.empty());
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_upstream_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_other"))
+                .thenThrow(new SecurityException("LangGraph worker identity is not visible to worker pool"));
+
+        assertThrows(SecurityException.class, () -> launcher.launch(request));
+
+        verify(workerService).getBusinessAgentWorkerEntity(
+                "worker_upstream_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_other");
+        verify(workerService, never()).getBusinessAgentWorkerEntity("worker_upstream_01", null, null);
+        verifyNoInteractions(poolMemberRepository, taskService);
+    }
+
+    @Test
     void launch_rejectsPoolBackendMismatch() {
         BizWorkerPoolEntity pool = platformPool();
         pool.setWorkerBackend("CODEX");

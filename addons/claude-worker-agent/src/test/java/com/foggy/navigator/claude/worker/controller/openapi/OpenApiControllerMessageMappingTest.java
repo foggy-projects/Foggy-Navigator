@@ -1518,6 +1518,148 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_doesNotForwardCallerUpstreamSystemIdIntoServerResolvedWorkerSelection() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        OpenApiAgentRouteService routeService = mock(OpenApiAgentRouteService.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                taskService,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                routeService,
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "server-root-agent",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "resource-skill-id",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "LANGGRAPH_BIZ",
+                        "server-physical-worker",
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "server-upstream-system",
+                        "BIZ_WORKER_IDENTITY",
+                        "model-default",
+                        null,
+                        "dir-default",
+                        "AGENT:CLIENT_APP");
+        A2AgentResourceResolver.ResolvedModelResource modelResource =
+                new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-default",
+                        "model-default",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "qwen-plus",
+                        "MODEL_CONFIG_DEFAULT",
+                        "LANGGRAPH_BIZ",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource =
+                new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-default",
+                        "directory-physical-worker",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/home/navigator/server-workspace",
+                        List.of("/home/navigator/server-workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE");
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("run route composition smoke");
+        form.setMetadata(Map.of(
+                "upstreamSystemId", "caller-injected-upstream-system",
+                "workerId", "caller-injected-worker"));
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(routeService.resolve(eq("public-route-agent"), any(ResolvedClientAppCredentialDTO.class)))
+                .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
+                        "server-root-agent",
+                        "server-route-skill",
+                        "app-1",
+                        true,
+                        false));
+        when(resourceResolver.resolveRequiredAgent(
+                "tenant-1", "app-1", "upstream-a", "server-root-agent"))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                eq("model-default"),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource);
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                "tenant-1", "app-1", "upstream-a", agentResource, "dir-default"))
+                .thenReturn(workspaceResource);
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("server-route-skill"),
+                any(),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(new BusinessAgentTaskService.PreparedOpenApiTaskScopedToken(
+                        "btt_route_composition",
+                        "tst_route_composition",
+                        "server-physical-worker",
+                        "bwl_route_composition",
+                        "server-physical-worker",
+                        "LANGGRAPH_BIZ"));
+        when(agentResolver.resolveAgent(eq("server-root-agent"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-route-composition")
+                .contextId("ctx-route-composition")
+                .metadata(Map.of(
+                        "sessionId", "session-route-composition",
+                        "workerId", "server-physical-worker"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("public-route-agent", form, request);
+
+        assertNotNull(result.getData());
+        var selectionCaptor = org.mockito.ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
+        verify(taskService).prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("server-route-skill"),
+                any(),
+                nullable(String.class),
+                selectionCaptor.capture());
+        BusinessAgentWorkerTaskLaunchRequest selection = selectionCaptor.getValue();
+        assertNull(selection.getUpstreamSystemId());
+        assertEquals("server-root-agent", selection.getAgentId());
+        assertEquals("server-route-skill", selection.getSkillId());
+        assertEquals("server-physical-worker", selection.getPhysicalWorkerId());
+        assertEquals("server-physical-worker", selection.getWorkerPoolId());
+        verify(agentResolver, atLeastOnce()).resolveAgent(eq("server-root-agent"), any());
+    }
+
+    @Test
     void askAgent_forwardsTopLevelExecutionPolicyWithoutDirectSkillName() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
