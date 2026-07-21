@@ -8,6 +8,7 @@ export default defineConfig({
     hookTimeout: 60000,
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
+    exclude: ['tests/05-synthetic-*.test.ts'],
     reporters: ['verbose'],
     sequence: {
       setupFiles: 'list'

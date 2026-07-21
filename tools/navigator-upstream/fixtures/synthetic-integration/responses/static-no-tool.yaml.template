@@ -1,0 +1,12 @@
+responses:
+  - name: "int001-static-no-tool"
+    match:
+      keywords: ["INT001_STATIC_NO_TOOL"]
+    response:
+      content: "INT001_STATIC_NO_TOOL___INT001_RUN_ID__"
+
+  - name: "int001-default"
+    match:
+      default: true
+    response:
+      content: "INT001 synthetic Mock LLM only. No TMS or SIM upstream was contacted."
