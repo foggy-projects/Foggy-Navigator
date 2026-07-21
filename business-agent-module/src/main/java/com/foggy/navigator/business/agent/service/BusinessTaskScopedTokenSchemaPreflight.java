@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -27,6 +28,7 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
 
     private static final String TABLE_NAME = "business_task_scoped_token";
     private static final String MIGRATION_PATH = "docs/migration/2026-07-14-business-task-token-v2.sql";
+    private static final int H2_LONGTEXT_ALIAS_COLUMN_SIZE = 1_000_000_000;
     private static final Set<String> REQUIRED_COLUMNS = Set.of(
             "id",
             "row_version",
@@ -78,12 +80,14 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
     public void validate() {
         try (Connection connection = dataSource.getConnection()) {
             TableReference table = resolveTable(connection);
-            Set<String> actualColumns = readColumns(connection.getMetaData(), table);
-            List<String> missingColumns = missing(REQUIRED_COLUMNS, actualColumns);
-            Map<String, IndexDefinition> actualIndexes = readIndexes(connection.getMetaData(), table);
+            DatabaseMetaData metadata = connection.getMetaData();
+            Map<String, ColumnDefinition> actualColumns = readColumns(metadata, table);
+            List<String> missingColumns = missing(REQUIRED_COLUMNS, actualColumns.keySet());
+            List<String> invalidColumnDefinitions = invalidColumnDefinitions(metadata, actualColumns);
+            Map<String, IndexDefinition> actualIndexes = readIndexes(metadata, table);
             List<String> invalidIndexes = invalidIndexes(actualIndexes);
-            if (!missingColumns.isEmpty() || !invalidIndexes.isEmpty()) {
-                throw incompatibleSchema(missingColumns, invalidIndexes);
+            if (!missingColumns.isEmpty() || !invalidColumnDefinitions.isEmpty() || !invalidIndexes.isEmpty()) {
+                throw incompatibleSchema(missingColumns, invalidColumnDefinitions, invalidIndexes);
             }
         } catch (SQLException exception) {
             throw new IllegalStateException(
@@ -109,7 +113,7 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
                 }
             }
         }
-        throw incompatibleSchema(List.of("table " + TABLE_NAME), List.of());
+        throw incompatibleSchema(List.of("table " + TABLE_NAME), List.of(), List.of());
     }
 
     private Collection<String> schemaCandidates(Connection connection) throws SQLException {
@@ -125,14 +129,58 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
         return List.of(TABLE_NAME, TABLE_NAME.toUpperCase(Locale.ROOT));
     }
 
-    private Set<String> readColumns(DatabaseMetaData metadata, TableReference table) throws SQLException {
-        Set<String> columns = new LinkedHashSet<>();
+    private Map<String, ColumnDefinition> readColumns(DatabaseMetaData metadata, TableReference table) throws SQLException {
+        Map<String, ColumnDefinition> columns = new LinkedHashMap<>();
         try (ResultSet resultSet = metadata.getColumns(table.catalog(), table.schema(), table.name(), null)) {
             while (resultSet.next()) {
-                columns.add(normalize(resultSet.getString("COLUMN_NAME")));
+                columns.put(
+                        normalize(resultSet.getString("COLUMN_NAME")),
+                        new ColumnDefinition(
+                                resultSet.getString("TYPE_NAME"),
+                                resultSet.getInt("DATA_TYPE"),
+                                resultSet.getInt("COLUMN_SIZE"),
+                                resultSet.getInt("NULLABLE")
+                        )
+                );
             }
         }
         return columns;
+    }
+
+    private List<String> invalidColumnDefinitions(DatabaseMetaData metadata,
+                                                   Map<String, ColumnDefinition> actualColumns) throws SQLException {
+        ColumnDefinition functionScope = actualColumns.get("function_scope_json");
+        if (functionScope == null || isFunctionScopeCompatible(metadata, functionScope)) {
+            return List.of();
+        }
+        return List.of("function_scope_json " + functionScope.describe());
+    }
+
+    private boolean isFunctionScopeCompatible(DatabaseMetaData metadata, ColumnDefinition column) throws SQLException {
+        if (column.nullable() != DatabaseMetaData.columnNoNulls) {
+            return false;
+        }
+        if (isMySqlFamily(metadata)) {
+            return "longtext".equals(normalize(column.typeName()));
+        }
+        if (isH2(metadata)) {
+            return column.dataType() == Types.CLOB
+                    || (column.dataType() == Types.VARCHAR
+                    && column.columnSize() >= H2_LONGTEXT_ALIAS_COLUMN_SIZE);
+        }
+        return column.dataType() == Types.CLOB;
+    }
+
+    private boolean isMySqlFamily(DatabaseMetaData metadata) throws SQLException {
+        return hasDatabaseProduct(metadata, "mysql") || hasDatabaseProduct(metadata, "mariadb");
+    }
+
+    private boolean isH2(DatabaseMetaData metadata) throws SQLException {
+        return hasDatabaseProduct(metadata, "h2");
+    }
+
+    private boolean hasDatabaseProduct(DatabaseMetaData metadata, String product) throws SQLException {
+        return normalize(metadata.getDatabaseProductName()).contains(product);
     }
 
     private Map<String, IndexDefinition> readIndexes(DatabaseMetaData metadata, TableReference table) throws SQLException {
@@ -189,10 +237,15 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
         return index == null ? List.of() : index.columns();
     }
 
-    private IllegalStateException incompatibleSchema(List<String> missingColumns, List<String> invalidIndexes) {
+    private IllegalStateException incompatibleSchema(List<String> missingColumns,
+                                                      List<String> invalidColumnDefinitions,
+                                                      List<String> invalidIndexes) {
         List<String> details = new ArrayList<>();
         if (!missingColumns.isEmpty()) {
             details.add("missing columns " + missingColumns);
+        }
+        if (!invalidColumnDefinitions.isEmpty()) {
+            details.add("invalid column definitions " + invalidColumnDefinitions);
         }
         if (!invalidIndexes.isEmpty()) {
             details.add("missing or invalid indexes " + invalidIndexes);
@@ -204,7 +257,7 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
     }
 
     private String normalize(String value) {
-        return value.toLowerCase(Locale.ROOT);
+        return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
     private record TableReference(String catalog, String schema, String name) {
@@ -214,5 +267,12 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
     }
 
     private record IndexDefinition(boolean nonUnique, List<String> columns) {
+    }
+
+    private record ColumnDefinition(String typeName, int dataType, int columnSize, int nullable) {
+
+        private String describe() {
+            return "[type=" + typeName + ", size=" + columnSize + ", nullable=" + nullable + "]";
+        }
     }
 }

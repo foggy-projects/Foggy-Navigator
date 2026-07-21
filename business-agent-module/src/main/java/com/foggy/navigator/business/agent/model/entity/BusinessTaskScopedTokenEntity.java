@@ -74,8 +74,7 @@ public class BusinessTaskScopedTokenEntity {
     @Column(length = 64, nullable = false)
     private String identityAssurance;
 
-    @Lob
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "LONGTEXT")
     private String functionScopeJson;
 
     @Column(length = 128)

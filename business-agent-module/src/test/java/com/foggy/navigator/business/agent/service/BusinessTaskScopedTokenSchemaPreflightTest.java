@@ -1,5 +1,8 @@
 package com.foggy.navigator.business.agent.service;
 
+import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import jakarta.persistence.Column;
+import jakarta.persistence.Lob;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 
@@ -7,8 +10,13 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.lang.reflect.Field;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -66,6 +74,57 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
         assertDoesNotThrow(() -> new BusinessTaskScopedTokenSchemaPreflight(dataSource).validate());
     }
 
+    @Test
+    void validate_acceptsH2LongTextAliasGeneratedForMigrationCompatibleEntity() throws SQLException {
+        DataSource dataSource = dataSource("compatible-h2-longtext");
+        createTable(dataSource, true, "LONGTEXT NOT NULL");
+        createIndexes(dataSource, true, true);
+
+        assertDoesNotThrow(() -> new BusinessTaskScopedTokenSchemaPreflight(dataSource).validate());
+    }
+
+    @Test
+    void validate_failsClosedWhenFunctionScopeColumnIsUndersized() throws SQLException {
+        DataSource dataSource = dataSource("function-scope-undersized");
+        createTable(dataSource, true, "VARCHAR(64) NOT NULL");
+        createIndexes(dataSource, true, true);
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> new BusinessTaskScopedTokenSchemaPreflight(dataSource).validate()
+        );
+
+        assertTrue(error.getMessage().contains("invalid column definitions [function_scope_json"));
+        assertTrue(error.getMessage().contains("2026-07-14-business-task-token-v2.sql"));
+    }
+
+    @Test
+    void validate_failsClosedWhenFunctionScopeColumnIsNullable() throws SQLException {
+        DataSource dataSource = dataSource("function-scope-nullable");
+        createTable(dataSource, true, "CLOB");
+        createIndexes(dataSource, true, true);
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> new BusinessTaskScopedTokenSchemaPreflight(dataSource).validate()
+        );
+
+        assertTrue(error.getMessage().contains("invalid column definitions [function_scope_json"));
+    }
+
+    @Test
+    void functionScopeEntityExplicitlyDeclaresLongTextMigrationContract() throws NoSuchFieldException {
+        Field field = BusinessTaskScopedTokenEntity.class.getDeclaredField("functionScopeJson");
+        Column column = field.getAnnotation(Column.class);
+
+        assertAll(
+                () -> assertNotNull(column),
+                () -> assertEquals("LONGTEXT", column.columnDefinition()),
+                () -> assertFalse(column.nullable()),
+                () -> assertFalse(field.isAnnotationPresent(Lob.class))
+        );
+    }
+
     private DataSource dataSource(String databaseName) {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:" + databaseName + ";DB_CLOSE_DELAY=-1");
@@ -73,8 +132,12 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
     }
 
     private void createTable(DataSource dataSource, boolean withIssuedAt) throws SQLException {
+        createTable(dataSource, withIssuedAt, "CLOB NOT NULL");
+    }
+
+    private void createTable(DataSource dataSource, boolean withIssuedAt, String functionScopeColumnDefinition) throws SQLException {
         String issuedAt = withIssuedAt ? ", issued_at TIMESTAMP NOT NULL" : "";
-        execute(dataSource, """
+        execute(dataSource, ("""
                 CREATE TABLE business_task_scoped_token (
                     id BIGINT PRIMARY KEY,
                     token_id VARCHAR(64) NOT NULL,
@@ -96,7 +159,7 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
                     generation INT NOT NULL,
                     audience VARCHAR(64) NOT NULL,
                     identity_assurance VARCHAR(64) NOT NULL,
-                    function_scope_json CLOB NOT NULL,
+                    function_scope_json %s,
                     worker_id VARCHAR(128),
                     worker_lease_id VARCHAR(128),
                     revoked_at TIMESTAMP,
@@ -105,7 +168,7 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
                     expires_at TIMESTAMP NOT NULL,
                     created_at TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP NOT NULL
-                """ + issuedAt + ")");
+                %s)""").formatted(functionScopeColumnDefinition, issuedAt));
     }
 
     private void createIndexes(DataSource dataSource, boolean withWorkerTaskIndex) throws SQLException {
