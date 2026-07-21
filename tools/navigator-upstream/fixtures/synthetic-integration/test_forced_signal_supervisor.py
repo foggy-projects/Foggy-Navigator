@@ -299,6 +299,169 @@ class ReceiptBoundaryTest(unittest.TestCase):
         return receipt
 
 
+class ExecutionProjectionBoundaryTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.repository_root = Path(self.temporary_directory.name)
+        self.artifact_root = self.repository_root / "temp" / "test-artifacts" / "INT-001"
+        self.artifact_root.mkdir(parents=True, mode=0o700)
+        os.chmod(self.artifact_root, 0o700)
+        self.run_id = "int001-projection-boundary"
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_writer_and_reader_keep_only_the_fixed_redacted_contract(self) -> None:
+        writer = supervisor.open_execution_projection(self.artifact_root, self.run_id)
+        writer.write(
+            phase="COMPLETE",
+            outcome="SUCCESS_GATE_NOT_MET",
+            receipt_state="MISSING_OR_INVALID",
+            root_snapshot_state="UNAVAILABLE",
+            stdout_summary_state="EMITTED",
+        )
+        writer.close()
+
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+
+        self.assertEqual(
+            {
+                "schemaVersion": 1,
+                "runId": self.run_id,
+                "phase": "COMPLETE",
+                "outcome": "SUCCESS_GATE_NOT_MET",
+                "receiptState": "MISSING_OR_INVALID",
+                "rootSnapshotState": "UNAVAILABLE",
+                "stdoutSummaryState": "EMITTED",
+                "secretsRedacted": True,
+            },
+            projection,
+        )
+        raw = supervisor.execution_projection_path(self.artifact_root, self.run_id).read_text(encoding="utf-8")
+        for prohibited in (
+            "pid",
+            "argv",
+            "cwd",
+            "port",
+            "inode",
+            "socket",
+            "profile",
+            "credential",
+            "payload",
+            "exception",
+            "private",
+            "dockerResidueCounts",
+        ):
+            self.assertNotIn(prohibited, raw)
+
+    def test_missing_projection_is_not_inferred_as_any_execution_state(self) -> None:
+        self.assertIsNone(
+            supervisor.read_execution_projection(
+                self.repository_root,
+                self.artifact_root,
+                "int001-projection-missing",
+            )
+        )
+
+    def test_reader_rejects_duplicate_unknown_mismatched_and_unsafe_projection(self) -> None:
+        cases = (
+            (
+                "duplicate-key",
+                '{"schemaVersion":1,"schemaVersion":1,"runId":"int001-projection-duplicate",'
+                '"phase":"FAILED","outcome":"UNEXPECTED_FAILURE","receiptState":"NOT_SAMPLED",'
+                '"rootSnapshotState":"NOT_SAMPLED","stdoutSummaryState":"NOT_EMITTED",'
+                '"secretsRedacted":true}',
+                "int001-projection-duplicate",
+            ),
+            (
+                "unknown-enum",
+                json.dumps(
+                    supervisor.execution_projection_value(
+                        run_id="int001-projection-unknown",
+                        phase="FAILED",
+                        outcome="UNEXPECTED_FAILURE",
+                        receipt_state="NOT_SAMPLED",
+                        root_snapshot_state="NOT_SAMPLED",
+                        stdout_summary_state="NOT_EMITTED",
+                    )
+                    | {"phase": "PRIVATE_LOG_READ"}
+                ),
+                "int001-projection-unknown",
+            ),
+            (
+                "extra-field",
+                json.dumps(
+                    supervisor.execution_projection_value(
+                        run_id="int001-projection-extra",
+                        phase="FAILED",
+                        outcome="UNEXPECTED_FAILURE",
+                        receipt_state="NOT_SAMPLED",
+                        root_snapshot_state="NOT_SAMPLED",
+                        stdout_summary_state="NOT_EMITTED",
+                    )
+                    | {"detail": "unsafe"}
+                ),
+                "int001-projection-extra",
+            ),
+            (
+                "wrong-run",
+                json.dumps(
+                    supervisor.execution_projection_value(
+                        run_id="int001-projection-other",
+                        phase="FAILED",
+                        outcome="UNEXPECTED_FAILURE",
+                        receipt_state="NOT_SAMPLED",
+                        root_snapshot_state="NOT_SAMPLED",
+                        stdout_summary_state="NOT_EMITTED",
+                    )
+                ),
+                "int001-projection-wrong",
+            ),
+        )
+        for label, raw, run_id in cases:
+            with self.subTest(label=label):
+                path = supervisor.execution_projection_path(self.artifact_root, run_id)
+                path.write_text(raw, encoding="utf-8")
+                os.chmod(path, 0o600)
+                self.assertIsNone(
+                    supervisor.read_execution_projection(self.repository_root, self.artifact_root, run_id)
+                )
+
+        unsafe_run_id = "int001-projection-world-readable"
+        writer = supervisor.open_execution_projection(self.artifact_root, unsafe_run_id)
+        writer.close()
+        os.chmod(supervisor.execution_projection_path(self.artifact_root, unsafe_run_id), 0o644)
+        self.assertIsNone(
+            supervisor.read_execution_projection(self.repository_root, self.artifact_root, unsafe_run_id)
+        )
+
+        linked_run_id = "int001-projection-hard-linked"
+        writer = supervisor.open_execution_projection(self.artifact_root, linked_run_id)
+        writer.close()
+        source = supervisor.execution_projection_path(self.artifact_root, linked_run_id)
+        os.link(source, self.artifact_root / "projection-copy.json")
+        self.assertIsNone(
+            supervisor.read_execution_projection(self.repository_root, self.artifact_root, linked_run_id)
+        )
+
+    def test_projection_is_a_sibling_and_never_changes_run_root_residue(self) -> None:
+        run_dir = self.artifact_root / self.run_id
+        run_dir.mkdir(mode=0o700)
+        os.chmod(run_dir, 0o700)
+        writer = supervisor.open_execution_projection(self.artifact_root, self.run_id)
+        writer.close()
+
+        snapshot = supervisor.run_root_snapshot(run_dir, self.artifact_root)
+
+        self.assertEqual(supervisor.RunRootSnapshot(True, 0), snapshot)
+        self.assertEqual(self.artifact_root, supervisor.execution_projection_path(self.artifact_root, self.run_id).parent)
+        self.assertNotEqual(run_dir, supervisor.execution_projection_path(self.artifact_root, self.run_id).parent)
+
+
 class DockerPreflightTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -707,6 +870,14 @@ class SupervisorOrchestrationTest(unittest.TestCase):
                 supervisor.main()
 
         start.assert_not_called()
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+        self.assertEqual("FAILED", projection["phase"])
+        self.assertEqual("PREFLIGHT_FAILED", projection["outcome"])
+        self.assertEqual("NOT_EMITTED", projection["stdoutSummaryState"])
 
     def test_preblocked_control_mask_blocks_before_child_start(self) -> None:
         with self._base_patches(docker_socket_safe=True) as stack:
@@ -1230,6 +1401,142 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         self.assertEqual(snapshot, emit.call_args.kwargs["docker_snapshot"])
         self.assertEqual(root_snapshot, emit.call_args.kwargs["root_snapshot"])
         self.assertTrue(emit.call_args.kwargs["listener_proof_ever_eligible"])
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+        self.assertEqual("COMPLETE", projection["phase"])
+        self.assertEqual("SUCCESS_GATE_MET", projection["outcome"])
+        self.assertEqual("VALID", projection["receiptState"])
+        self.assertEqual("COMPLETE", projection["rootSnapshotState"])
+        self.assertEqual("EMITTED", projection["stdoutSummaryState"])
+
+    def test_missing_receipt_is_projected_without_authorizing_success(self) -> None:
+        outcome = supervisor.RehearsalOutcome(
+            health_precondition=True,
+            parent_proof=supervisor.ParentProof(True, "parent-proof", 100),
+            listener_proof=self._listener_proof(),
+            term_dispatches=1,
+            dispatch_safe=True,
+            child_exit=0,
+            listener_proof_ever_eligible=True,
+        )
+        with self._base_patches(docker_socket_safe=True) as stack:
+            stack.enter_context(mock.patch.object(supervisor, "start_exercise", return_value=(42_422, 100)))
+            stack.enter_context(mock.patch.object(supervisor, "supervise_exercise", return_value=outcome))
+            stack.enter_context(mock.patch.object(supervisor, "read_redacted_receipt", return_value=None))
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "run_root_snapshot",
+                    return_value=supervisor.RunRootSnapshot(False, 7),
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "docker_residue_counts",
+                    return_value={"container": 0, "network": 0, "volume": 0},
+                )
+            )
+            stack.enter_context(mock.patch.object(supervisor, "emit_summary"))
+
+            self.assertEqual(1, supervisor.main())
+
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+        self.assertEqual("RECEIPT_MISSING_OR_INVALID", projection["outcome"])
+        self.assertEqual("MISSING_OR_INVALID", projection["receiptState"])
+        self.assertEqual("COMPLETE", projection["rootSnapshotState"])
+        self.assertEqual("EMITTED", projection["stdoutSummaryState"])
+
+    def test_child_early_exit_is_projected_as_fixed_enum_only(self) -> None:
+        outcome = supervisor.RehearsalOutcome(
+            health_precondition=False,
+            parent_proof=None,
+            listener_proof=None,
+            term_dispatches=0,
+            dispatch_safe=False,
+            child_exit=256,
+            listener_proof_ever_eligible=False,
+        )
+        with self._base_patches(docker_socket_safe=True) as stack:
+            stack.enter_context(mock.patch.object(supervisor, "start_exercise", return_value=(42_422, 100)))
+            stack.enter_context(mock.patch.object(supervisor, "supervise_exercise", return_value=outcome))
+            stack.enter_context(mock.patch.object(supervisor, "read_redacted_receipt", return_value=None))
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "run_root_snapshot",
+                    return_value=supervisor.RunRootSnapshot(False, 7),
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "docker_residue_counts",
+                    return_value={"container": 1, "network": 1, "volume": 1},
+                )
+            )
+            stack.enter_context(mock.patch.object(supervisor, "emit_summary"))
+
+            self.assertEqual(1, supervisor.main())
+
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+        self.assertEqual("CHILD_EXITED_BEFORE_HEALTH", projection["outcome"])
+        self.assertEqual(set(supervisor.PROJECTION_FIELDS), set(projection))
+
+    def test_stdout_emit_failure_keeps_projection_non_authoritative_and_non_emitted(self) -> None:
+        outcome = supervisor.RehearsalOutcome(
+            health_precondition=True,
+            parent_proof=supervisor.ParentProof(True, "parent-proof", 100),
+            listener_proof=self._listener_proof(),
+            term_dispatches=1,
+            dispatch_safe=True,
+            child_exit=0,
+            listener_proof_ever_eligible=True,
+        )
+        with self._base_patches(docker_socket_safe=True) as stack:
+            stack.enter_context(mock.patch.object(supervisor, "start_exercise", return_value=(42_422, 100)))
+            stack.enter_context(mock.patch.object(supervisor, "supervise_exercise", return_value=outcome))
+            stack.enter_context(mock.patch.object(supervisor, "read_redacted_receipt", return_value=None))
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "run_root_snapshot",
+                    return_value=supervisor.RunRootSnapshot(False, 7),
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "docker_residue_counts",
+                    return_value={"container": 0, "network": 0, "volume": 0},
+                )
+            )
+            stack.enter_context(mock.patch.object(supervisor, "emit_summary", side_effect=BrokenPipeError))
+
+            with self.assertRaises(BrokenPipeError):
+                supervisor.main()
+
+        projection = supervisor.read_execution_projection(
+            self.repository_root,
+            self.artifact_root,
+            self.run_id,
+        )
+        self.assertEqual("FAILED", projection["phase"])
+        self.assertEqual("UNEXPECTED_FAILURE", projection["outcome"])
+        self.assertEqual("MISSING_OR_INVALID", projection["receiptState"])
+        self.assertEqual("COMPLETE", projection["rootSnapshotState"])
+        self.assertEqual("NOT_EMITTED", projection["stdoutSummaryState"])
 
     def test_redacted_summary_exposes_listener_eligibility_once_without_process_identifiers(self) -> None:
         receipt = {

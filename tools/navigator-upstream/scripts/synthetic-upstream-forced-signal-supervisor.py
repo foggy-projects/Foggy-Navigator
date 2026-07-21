@@ -100,6 +100,48 @@ REHEARSAL_LIFECYCLE_OBSERVATIONS = {
     "HOLD_WAIT_FAILURE",
     "HOLD_SIGNAL_RECEIVED",
 }
+PROJECTION_FIELDS = {
+    "schemaVersion",
+    "runId",
+    "phase",
+    "outcome",
+    "receiptState",
+    "rootSnapshotState",
+    "stdoutSummaryState",
+    "secretsRedacted",
+}
+PROJECTION_PHASES = {
+    "SUPERVISOR_STARTED",
+    "PREFLIGHT_COMPLETE",
+    "EXERCISE_STARTED",
+    "SUPERVISION_COMPLETE",
+    "EVIDENCE_SAMPLED",
+    "STDOUT_EMITTED",
+    "COMPLETE",
+    "FAILED",
+}
+PROJECTION_OUTCOMES = {
+    "IN_PROGRESS",
+    "PREFLIGHT_FAILED",
+    "EXERCISE_START_FAILED",
+    "SUPERVISION_FAILED",
+    "CHILD_EXITED_BEFORE_HEALTH",
+    "HEALTH_OR_OWNERSHIP_INELIGIBLE",
+    "TERM_NOT_DISPATCHED",
+    "TERM_DISPATCH_INELIGIBLE",
+    "SUPERVISOR_INTERRUPTED",
+    "RECEIPT_MISSING_OR_INVALID",
+    "ROOT_SNAPSHOT_UNAVAILABLE",
+    "DOCKER_SNAPSHOT_UNAVAILABLE",
+    "SUCCESS_GATE_NOT_MET",
+    "SUCCESS_GATE_MET",
+    "UNEXPECTED_FAILURE",
+}
+PROJECTION_RECEIPT_STATES = {"NOT_SAMPLED", "VALID", "MISSING_OR_INVALID", "SUPPRESSED"}
+PROJECTION_ROOT_SNAPSHOT_STATES = {"NOT_SAMPLED", "COMPLETE", "UNAVAILABLE", "SUPPRESSED"}
+PROJECTION_STDOUT_STATES = {"NOT_EMITTED", "EMITTED"}
+PROJECTION_SUFFIX = ".forced-signal-projection.json"
+MAX_PROJECTION_BYTES = 4096
 SOCKET_LISTENER_ABSENT = "socket-listener-absent"
 SOCKET_LISTENER_AMBIGUOUS = "socket-listener-ambiguous"
 SOCKET_LISTENER_NONLOOPBACK_OR_IPV6 = "socket-listener-nonloopback-or-ipv6"
@@ -156,11 +198,174 @@ class RehearsalOutcome:
     listener_proof_ever_eligible: bool = False
 
 
+@dataclass
+class ExecutionProjectionWriter:
+    """Keep one non-authoritative, fixed-enum execution projection open.
+
+    The file is outside the run directory so it cannot change the cleanup
+    residue contract. A partial or malformed update is diagnostic failure,
+    never permission to signal or clean anything.
+    """
+
+    descriptor: int
+    run_id: str
+
+    def write(
+        self,
+        *,
+        phase: str,
+        outcome: str,
+        receipt_state: str,
+        root_snapshot_state: str,
+        stdout_summary_state: str,
+    ) -> None:
+        value = execution_projection_value(
+            run_id=self.run_id,
+            phase=phase,
+            outcome=outcome,
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
+        raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(raw) > MAX_PROJECTION_BYTES:
+            raise RuntimeError("execution projection exceeds its fixed size bound")
+        os.lseek(self.descriptor, 0, os.SEEK_SET)
+        os.ftruncate(self.descriptor, 0)
+        remaining = memoryview(raw)
+        while remaining:
+            written = os.write(self.descriptor, remaining)
+            if written <= 0:
+                raise RuntimeError("execution projection write failed")
+            remaining = remaining[written:]
+        os.fsync(self.descriptor)
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+
 def repository_root() -> Path:
     root = Path(__file__).resolve().parents[3]
     if not (root / "pom.xml").is_file():
         raise RuntimeError("repository root cannot be verified")
     return root
+
+
+def execution_projection_path(artifact_root: Path, run_id: str) -> Path:
+    return artifact_root / f"{run_id}{PROJECTION_SUFFIX}"
+
+
+def execution_projection_value(
+    *,
+    run_id: str,
+    phase: str,
+    outcome: str,
+    receipt_state: str,
+    root_snapshot_state: str,
+    stdout_summary_state: str,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "schemaVersion": 1,
+        "runId": run_id,
+        "phase": phase,
+        "outcome": outcome,
+        "receiptState": receipt_state,
+        "rootSnapshotState": root_snapshot_state,
+        "stdoutSummaryState": stdout_summary_state,
+        "secretsRedacted": True,
+    }
+    if not valid_execution_projection(value, run_id):
+        raise RuntimeError("execution projection contains an invalid fixed enum")
+    return value
+
+
+def valid_execution_projection(value: Any, run_id: str) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == PROJECTION_FIELDS
+        and type(value.get("schemaVersion")) is int
+        and value["schemaVersion"] == 1
+        and value.get("runId") == run_id
+        and value.get("secretsRedacted") is True
+        and isinstance(value.get("phase"), str)
+        and value["phase"] in PROJECTION_PHASES
+        and isinstance(value.get("outcome"), str)
+        and value["outcome"] in PROJECTION_OUTCOMES
+        and isinstance(value.get("receiptState"), str)
+        and value["receiptState"] in PROJECTION_RECEIPT_STATES
+        and isinstance(value.get("rootSnapshotState"), str)
+        and value["rootSnapshotState"] in PROJECTION_ROOT_SNAPSHOT_STATES
+        and isinstance(value.get("stdoutSummaryState"), str)
+        and value["stdoutSummaryState"] in PROJECTION_STDOUT_STATES
+    )
+
+
+def open_execution_projection(artifact_root: Path, run_id: str) -> ExecutionProjectionWriter:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None or not safe_directory(artifact_root, 0o700):
+        raise RuntimeError("execution projection root is unsafe")
+    path = execution_projection_path(artifact_root, run_id)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | nofollow
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.getuid()
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
+            raise RuntimeError("execution projection file is unsafe")
+        writer = ExecutionProjectionWriter(descriptor, run_id)
+        writer.write(
+            phase="SUPERVISOR_STARTED",
+            outcome="IN_PROGRESS",
+            receipt_state="NOT_SAMPLED",
+            root_snapshot_state="NOT_SAMPLED",
+            stdout_summary_state="NOT_EMITTED",
+        )
+        return writer
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def read_execution_projection(
+    repo_root: Path,
+    artifact_root: Path,
+    run_id: str,
+) -> dict[str, Any] | None:
+    """Read only the allow-listed artifact-root execution projection."""
+    if not artifact_root_is_safe(repo_root, artifact_root):
+        return None
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        return None
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            execution_projection_path(artifact_root, run_id),
+            os.O_RDONLY | os.O_CLOEXEC | nofollow,
+        )
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.getuid()
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
+            return None
+        raw = os.read(descriptor, MAX_PROJECTION_BYTES + 1)
+        if len(raw) > MAX_PROJECTION_BYTES:
+            return None
+        value = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=reject_duplicate_json_keys)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return value if valid_execution_projection(value, run_id) else None
 
 
 def parse_args() -> argparse.Namespace:
@@ -1124,6 +1329,57 @@ def emit_summary(
     print(json.dumps(summary, sort_keys=True, separators=(",", ":")), flush=True)
 
 
+def projection_receipt_state(receipt: dict[str, Any] | None, *, suppressed: bool) -> str:
+    if suppressed:
+        return "SUPPRESSED"
+    return "VALID" if receipt is not None else "MISSING_OR_INVALID"
+
+
+def projection_root_snapshot_state(root_snapshot: RunRootSnapshot, *, suppressed: bool) -> str:
+    if suppressed:
+        return "SUPPRESSED"
+    if root_snapshot.private_absent is None or root_snapshot.nonreceipt_residue_count is None:
+        return "UNAVAILABLE"
+    return "COMPLETE"
+
+
+def classify_projection_outcome(
+    outcome: RehearsalOutcome,
+    receipt: dict[str, Any] | None,
+    root_snapshot: RunRootSnapshot,
+    docker_snapshot: dict[str, int | None],
+    complete: bool,
+) -> str:
+    """Return one fixed diagnostic label without changing the completion gate."""
+    if SUPERVISOR_INTERRUPTION is not None:
+        return "SUPERVISOR_INTERRUPTED"
+    if outcome.child_exit is not None and not outcome.health_precondition:
+        return "CHILD_EXITED_BEFORE_HEALTH"
+    if not outcome.health_precondition or outcome.parent_proof is None or not outcome.parent_proof.ok:
+        return "HEALTH_OR_OWNERSHIP_INELIGIBLE"
+    if outcome.term_dispatches != 1:
+        return "TERM_NOT_DISPATCHED"
+    if not outcome.dispatch_safe or outcome.listener_proof is None or not outcome.listener_proof.ok:
+        return "TERM_DISPATCH_INELIGIBLE"
+    if receipt is None:
+        return "RECEIPT_MISSING_OR_INVALID"
+    if root_snapshot.private_absent is None or root_snapshot.nonreceipt_residue_count is None:
+        return "ROOT_SNAPSHOT_UNAVAILABLE"
+    if any(value is None for value in docker_snapshot.values()):
+        return "DOCKER_SNAPSHOT_UNAVAILABLE"
+    return "SUCCESS_GATE_MET" if complete else "SUCCESS_GATE_NOT_MET"
+
+
+def projection_exception_outcome(phase: str) -> str:
+    if phase == "SUPERVISOR_STARTED":
+        return "PREFLIGHT_FAILED"
+    if phase == "PREFLIGHT_COMPLETE":
+        return "EXERCISE_START_FAILED"
+    if phase == "EXERCISE_STARTED":
+        return "SUPERVISION_FAILED"
+    return "UNEXPECTED_FAILURE"
+
+
 def main() -> int:
     global SUPERVISOR_INTERRUPTION
     SUPERVISOR_INTERRUPTION = None
@@ -1131,86 +1387,158 @@ def main() -> int:
     install_supervisor_signal_handlers()
     assert_control_signal_startable()
     repo_root = repository_root()
-    harness = repo_root / "tools/navigator-upstream/scripts/synthetic-upstream-harness.sh"
     artifact_root = assert_artifact_root(repo_root)
+    projection = open_execution_projection(artifact_root, args.run_id)
+    projection_phase = "SUPERVISOR_STARTED"
+    receipt_state = "NOT_SAMPLED"
+    root_snapshot_state = "NOT_SAMPLED"
+    stdout_summary_state = "NOT_EMITTED"
+    harness = repo_root / "tools/navigator-upstream/scripts/synthetic-upstream-harness.sh"
     run_dir = artifact_root / args.run_id
-    if not harness.is_file() or harness.is_symlink():
-        raise RuntimeError("synthetic upstream harness is missing or unsafe")
-    if os.path.lexists(run_dir):
-        raise RuntimeError("runId already exists; supervisor only accepts a fresh run")
-    if not local_docker_socket_is_safe():
-        raise RuntimeError("INT-001 requires a non-symlink local Docker Unix socket")
-    navigator_port = args.navigator_port if args.navigator_port is not None else choose_navigator_port()
-    if not port_is_unused(navigator_port):
-        raise RuntimeError("selected disposable Navigator port is already in use")
-    # Repeat immediately before fork so no child can inherit an unsafe mask
-    # or start after a control signal became observable during preflight.
-    assert_control_signal_startable()
-    child_pid, initial_start_ticks = start_exercise(repo_root, harness, args.run_id, navigator_port)
-    expected_argv = exact_child_argv(harness, args.run_id, navigator_port)
-    outcome = supervise_exercise(
-        child_pid=child_pid,
-        initial_start_ticks=initial_start_ticks,
-        repo_root=repo_root,
-        expected_argv=expected_argv,
-        run_id=args.run_id,
-        run_dir=run_dir,
-        artifact_root=artifact_root,
-        navigator_port=navigator_port,
-        health_timeout_seconds=args.health_timeout_seconds,
-        post_term_timeout_seconds=args.post_term_timeout_seconds,
-    )
-    # Collect each evidence source at most once.  The summary and completion
-    # decision consume the same snapshot, so a changing Docker state cannot
-    # make the recorded result disagree with the exit code.
-    receipt: dict[str, Any] | None = None
-    root_snapshot = RunRootSnapshot(None, None)
-    docker_snapshot: dict[str, int | None] = {"container": None, "network": None, "volume": None}
-    if not latch_pending_control_signal():
-        receipt = read_redacted_receipt(run_dir, args.run_id, artifact_root)
-        if not latch_pending_control_signal():
-            root_snapshot = run_root_snapshot(run_dir, artifact_root)
-        if not latch_pending_control_signal():
-            docker_snapshot = docker_residue_counts(args.run_id)
-    # A supervisor interruption makes this rehearsal ineligible even if it
-    # arrived after a deliberate TERM.  Do not serialize stale success-shaped
-    # evidence that was sampled while an external stop was pending.
-    if latch_pending_control_signal():
-        receipt = None
+    try:
+        if not harness.is_file() or harness.is_symlink():
+            raise RuntimeError("synthetic upstream harness is missing or unsafe")
+        if os.path.lexists(run_dir):
+            raise RuntimeError("runId already exists; supervisor only accepts a fresh run")
+        if not local_docker_socket_is_safe():
+            raise RuntimeError("INT-001 requires a non-symlink local Docker Unix socket")
+        navigator_port = args.navigator_port if args.navigator_port is not None else choose_navigator_port()
+        if not port_is_unused(navigator_port):
+            raise RuntimeError("selected disposable Navigator port is already in use")
+        # Repeat immediately before fork so no child can inherit an unsafe mask
+        # or start after a control signal became observable during preflight.
+        assert_control_signal_startable()
+        projection_phase = "PREFLIGHT_COMPLETE"
+        projection.write(
+            phase=projection_phase,
+            outcome="IN_PROGRESS",
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
+        child_pid, initial_start_ticks = start_exercise(repo_root, harness, args.run_id, navigator_port)
+        projection_phase = "EXERCISE_STARTED"
+        projection.write(
+            phase=projection_phase,
+            outcome="IN_PROGRESS",
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
+        expected_argv = exact_child_argv(harness, args.run_id, navigator_port)
+        outcome = supervise_exercise(
+            child_pid=child_pid,
+            initial_start_ticks=initial_start_ticks,
+            repo_root=repo_root,
+            expected_argv=expected_argv,
+            run_id=args.run_id,
+            run_dir=run_dir,
+            artifact_root=artifact_root,
+            navigator_port=navigator_port,
+            health_timeout_seconds=args.health_timeout_seconds,
+            post_term_timeout_seconds=args.post_term_timeout_seconds,
+        )
+        projection_phase = "SUPERVISION_COMPLETE"
+        projection.write(
+            phase=projection_phase,
+            outcome="IN_PROGRESS",
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
+        # Collect each evidence source at most once.  The summary and
+        # completion decision consume the same snapshot, so a changing Docker
+        # state cannot make the recorded result disagree with the exit code.
+        receipt: dict[str, Any] | None = None
         root_snapshot = RunRootSnapshot(None, None)
-        docker_snapshot = {"container": None, "network": None, "volume": None}
+        docker_snapshot: dict[str, int | None] = {"container": None, "network": None, "volume": None}
+        if not latch_pending_control_signal():
+            receipt = read_redacted_receipt(run_dir, args.run_id, artifact_root)
+            if not latch_pending_control_signal():
+                root_snapshot = run_root_snapshot(run_dir, artifact_root)
+            if not latch_pending_control_signal():
+                docker_snapshot = docker_residue_counts(args.run_id)
+        # A supervisor interruption makes this rehearsal ineligible even if
+        # it arrived after a deliberate TERM. Do not serialize stale
+        # success-shaped evidence sampled while an external stop was pending.
+        suppressed = latch_pending_control_signal()
+        if suppressed:
+            receipt = None
+            root_snapshot = RunRootSnapshot(None, None)
+            docker_snapshot = {"container": None, "network": None, "volume": None}
+        receipt_state = projection_receipt_state(receipt, suppressed=suppressed)
+        root_snapshot_state = projection_root_snapshot_state(root_snapshot, suppressed=suppressed)
+        projection_phase = "EVIDENCE_SAMPLED"
+        projection.write(
+            phase=projection_phase,
+            outcome="IN_PROGRESS",
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
 
-    emit_summary(
-        run_id=args.run_id,
-        health_precondition=outcome.health_precondition,
-        parent_proof=outcome.parent_proof,
-        listener_proof=outcome.listener_proof,
-        listener_proof_ever_eligible=outcome.listener_proof_ever_eligible,
-        term_dispatches=outcome.term_dispatches,
-        dispatch_safe=outcome.dispatch_safe,
-        child_exit=outcome.child_exit,
-        receipt=receipt,
-        root_snapshot=root_snapshot,
-        docker_snapshot=docker_snapshot,
-    )
-    complete = (
-        not latch_pending_control_signal()
-        and outcome.health_precondition
-        and outcome.parent_proof is not None
-        and outcome.parent_proof.ok
-        and outcome.listener_proof is not None
-        and outcome.listener_proof.ok
-        and outcome.term_dispatches == 1
-        and outcome.dispatch_safe
-        and outcome.child_exit is not None
-        and receipt is not None
-        and receipt["result"] == "CLEANED"
-        and receipt["failureStage"] == "SIGNAL"
-        and root_snapshot.private_absent is True
-        and root_snapshot.nonreceipt_residue_count == 0
-        and docker_snapshot == {"container": 0, "network": 0, "volume": 0}
-    )
-    return 0 if complete else 1
+        emit_summary(
+            run_id=args.run_id,
+            health_precondition=outcome.health_precondition,
+            parent_proof=outcome.parent_proof,
+            listener_proof=outcome.listener_proof,
+            listener_proof_ever_eligible=outcome.listener_proof_ever_eligible,
+            term_dispatches=outcome.term_dispatches,
+            dispatch_safe=outcome.dispatch_safe,
+            child_exit=outcome.child_exit,
+            receipt=receipt,
+            root_snapshot=root_snapshot,
+            docker_snapshot=docker_snapshot,
+        )
+        stdout_summary_state = "EMITTED"
+        projection_phase = "STDOUT_EMITTED"
+        projection.write(
+            phase=projection_phase,
+            outcome="IN_PROGRESS",
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
+        complete = (
+            not latch_pending_control_signal()
+            and outcome.health_precondition
+            and outcome.parent_proof is not None
+            and outcome.parent_proof.ok
+            and outcome.listener_proof is not None
+            and outcome.listener_proof.ok
+            and outcome.term_dispatches == 1
+            and outcome.dispatch_safe
+            and outcome.child_exit is not None
+            and receipt is not None
+            and receipt["result"] == "CLEANED"
+            and receipt["failureStage"] == "SIGNAL"
+            and root_snapshot.private_absent is True
+            and root_snapshot.nonreceipt_residue_count == 0
+            and docker_snapshot == {"container": 0, "network": 0, "volume": 0}
+        )
+        projection_phase = "COMPLETE"
+        projection.write(
+            phase=projection_phase,
+            outcome=classify_projection_outcome(outcome, receipt, root_snapshot, docker_snapshot, complete),
+            receipt_state=receipt_state,
+            root_snapshot_state=root_snapshot_state,
+            stdout_summary_state=stdout_summary_state,
+        )
+        return 0 if complete else 1
+    except Exception:
+        try:
+            projection.write(
+                phase="FAILED",
+                outcome=projection_exception_outcome(projection_phase),
+                receipt_state=receipt_state,
+                root_snapshot_state=root_snapshot_state,
+                stdout_summary_state=stdout_summary_state,
+            )
+        except Exception:
+            pass
+        raise
+    finally:
+        projection.close()
 
 
 if __name__ == "__main__":
