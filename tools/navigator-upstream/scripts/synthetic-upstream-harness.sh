@@ -42,6 +42,7 @@ readonly DYNAMIC_PORT_MAX=29999
 # only after the owned Launcher is health-ready; expiry takes the same
 # ownership-checked cleanup path and cannot produce a SIGNAL success receipt.
 readonly PARENT_TERM_REHEARSAL_HOLD_SECONDS=180
+readonly CLEANUP_RECEIPT_SCHEMA_VERSION=4
 # `start_child` reserves this status for a process that did begin but exited
 # before its ownership metadata could be recorded. It is distinct from local
 # setup/exec preparation failures so the Launcher's fixed-enum classifier can
@@ -180,6 +181,11 @@ LAUNCHER_READINESS_OBSERVATION='NOT_OBSERVED'
 # verified private process log and writes this allow-listed enum to the root
 # cleanup receipt after the private carrier is removed.
 LAUNCHER_FAILURE_CLASS='NOT_APPLICABLE'
+# This fixed, non-secret observation describes only the held child lifecycle
+# inside the BUG-009 rehearsal. It never proves that an outer parent was
+# authorized to forward TERM, that TERM was dispatched, or that cleanup was
+# successful. Normal lifecycle paths retain NOT_REHEARSAL.
+REHEARSAL_LIFECYCLE_OBSERVATION='NOT_REHEARSAL'
 
 usage() {
   cat <<'USAGE'
@@ -279,6 +285,14 @@ lifecycle_signal_cleanup() {
     run_dir="$LIFECYCLE_SIGNAL_RUN_DIR"
     LIFECYCLE_SIGNAL_CLEANUP_ARMED=0
     LIFECYCLE_SIGNAL_RUN_DIR=""
+    # Record only the narrow fact that the actual held `run` lifecycle was
+    # signalled after it entered the parent-TERM hold.  A signal while the
+    # ordinary run is still starting, or a signal in any other action, keeps
+    # its default NOT_REHEARSAL observation and cannot be relabelled later.
+    if [[ "$ACTION" == run && "$HOLD_FOR_PARENT_TERM" == 1 \
+      && "$REHEARSAL_LIFECYCLE_OBSERVATION" == HOLD_ENTERED ]]; then
+      REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_SIGNAL_RECEIVED'
+    fi
     set_lifecycle_failure_stage SIGNAL
     note "lifecycle received $signal; attempting owned cleanup"
     # A signal is the lifecycle failure.  `FAILED_CLEANUP` is reserved for a
@@ -325,6 +339,17 @@ launcher_readiness_observation_allowed() {
 launcher_failure_class_allowed() {
   case "$1" in
     NOT_APPLICABLE|START_EXEC_FAILURE|PORT_BIND_CONFLICT|DATABASE_CONNECTIVITY|DATABASE_AUTHORIZATION|DATABASE_SCHEMA|SPRING_CONFIGURATION|JVM_OR_ARTIFACT|APPLICATION_INITIALIZATION|HEALTH_TIMEOUT|OWNERSHIP_UNPROVEN|UNKNOWN)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+rehearsal_lifecycle_observation_allowed() {
+  case "$1" in
+    NOT_REHEARSAL|HOLD_ENTERED|HOLD_TIMEOUT|HOLD_WAIT_FAILURE|HOLD_SIGNAL_RECEIVED)
       return 0
       ;;
     *)
@@ -1948,13 +1973,16 @@ hold_for_parent_term() {
     || die "parent TERM hold may run only inside the exact run lifecycle"
   [[ "$LIFECYCLE_SIGNAL_CLEANUP_ARMED" == 1 && "$LIFECYCLE_SIGNAL_RUN_DIR" == "$run_dir" ]] \
     || die "parent TERM hold requires armed owned cleanup"
+  REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_ENTERED'
   deadline=$((SECONDS + PARENT_TERM_REHEARSAL_HOLD_SECONDS))
   note "run=HOLDING_PARENT_TERM runId=$RUN_ID"
   while (( SECONDS < deadline )); do
     if ! sleep 1; then
+      REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_WAIT_FAILURE'
       fail_lifecycle_stage "$run_dir" UNKNOWN "parent TERM rehearsal hold wait failed; owned runtime resources were sent through fail-closed cleanup"
     fi
   done
+  REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_TIMEOUT'
   fail_lifecycle_stage "$run_dir" UNKNOWN "parent TERM rehearsal timed out; owned runtime resources were sent through fail-closed cleanup"
 }
 
@@ -2213,15 +2241,18 @@ write_cleanup_report() {
     || die "cleanup receipt Launcher readiness observation is unsafe"
   launcher_failure_class_allowed "$LAUNCHER_FAILURE_CLASS" \
     || die "cleanup receipt Launcher failure class is unsafe"
+  rehearsal_lifecycle_observation_allowed "$REHEARSAL_LIFECYCLE_OBSERVATION" \
+    || die "cleanup receipt rehearsal lifecycle observation is unsafe"
   file="$run_dir/$CLEANUP_REPORT_NAME"
   assert_private_dir "$run_dir"
   [[ ! -e "$file" && ! -L "$file" ]] || die "cleanup report already exists or is unsafe"
   if ! (set -o noclobber; {
     printf '{\n'
-    printf '  "schemaVersion": 3,\n'
+    printf '  "schemaVersion": %s,\n' "$CLEANUP_RECEIPT_SCHEMA_VERSION"
     printf '  "runId": "%s",\n' "$RUN_ID"
     printf '  "result": "%s",\n' "$result"
     printf '  "failureStage": "%s",\n' "$failure_stage"
+    printf '  "rehearsalLifecycleObservation": "%s",\n' "$REHEARSAL_LIFECYCLE_OBSERVATION"
     printf '  "launcherReadinessObservation": "%s",\n' "$LAUNCHER_READINESS_OBSERVATION"
     printf '  "launcherFailureClass": "%s",\n' "$LAUNCHER_FAILURE_CLASS"
     printf '  "finishedAtUtc": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -2255,22 +2286,36 @@ import re
 import sys
 
 path, expected_run_id, expected_failure_stage = sys.argv[1:]
+
+def reject_duplicate_object_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
 try:
     with open(path, encoding="utf-8") as handle:
-        value = json.load(handle)
-except (OSError, json.JSONDecodeError):
+        value = json.load(handle, object_pairs_hook=reject_duplicate_object_keys)
+except (OSError, json.JSONDecodeError, ValueError):
     raise SystemExit(1)
 
 if not isinstance(value, dict) or set(value) != {
-    "schemaVersion", "runId", "result", "failureStage", "launcherReadinessObservation",
-    "launcherFailureClass", "finishedAtUtc", "secretsRedacted"
+    "schemaVersion", "runId", "result", "failureStage", "rehearsalLifecycleObservation",
+    "launcherReadinessObservation", "launcherFailureClass", "finishedAtUtc", "secretsRedacted"
 }:
     raise SystemExit(1)
-if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 3:
+if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 4:
     raise SystemExit(1)
-if value["runId"] != expected_run_id or value["result"] != "CLEANED":
+if (
+    type(value["runId"]) is not str
+    or value["runId"] != expected_run_id
+    or type(value["result"]) is not str
+    or value["result"] != "CLEANED"
+):
     raise SystemExit(1)
-if value["failureStage"] not in {
+if type(value["failureStage"]) is not str or value["failureStage"] not in {
     "NONE", "PREPARE", "PREFLIGHT", "BUILD", "COMPOSE", "DIRECTORY_FACADE",
     "BIZ_WORKER", "BIZ_INGRESS_PROXY", "LAUNCHER", "BOOTSTRAP", "AUDIT",
     "MANIFEST", "SIGNAL", "UNKNOWN"
@@ -2278,12 +2323,16 @@ if value["failureStage"] not in {
     raise SystemExit(1)
 if expected_failure_stage and value["failureStage"] != expected_failure_stage:
     raise SystemExit(1)
-if value["launcherReadinessObservation"] not in {
+if type(value["rehearsalLifecycleObservation"]) is not str or value["rehearsalLifecycleObservation"] not in {
+    "NOT_REHEARSAL", "HOLD_ENTERED", "HOLD_TIMEOUT", "HOLD_WAIT_FAILURE", "HOLD_SIGNAL_RECEIVED"
+}:
+    raise SystemExit(1)
+if type(value["launcherReadinessObservation"]) is not str or value["launcherReadinessObservation"] not in {
     "NOT_OBSERVED", "START_FAILED", "HEALTH_READY", "CHILD_EXITED_BEFORE_HEALTH",
     "CHILD_OWNERSHIP_UNPROVEN", "CHILD_ALIVE_AT_HEALTH_TIMEOUT"
 }:
     raise SystemExit(1)
-if value["launcherFailureClass"] not in {
+if type(value["launcherFailureClass"]) is not str or value["launcherFailureClass"] not in {
     "NOT_APPLICABLE", "START_EXEC_FAILURE", "PORT_BIND_CONFLICT", "DATABASE_CONNECTIVITY",
     "DATABASE_AUTHORIZATION", "DATABASE_SCHEMA", "SPRING_CONFIGURATION", "JVM_OR_ARTIFACT",
     "APPLICATION_INITIALIZATION", "HEALTH_TIMEOUT", "OWNERSHIP_UNPROVEN", "UNKNOWN"

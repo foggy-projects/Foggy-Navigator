@@ -48,6 +48,7 @@ RECEIPT_FIELDS = {
     "runId",
     "result",
     "failureStage",
+    "rehearsalLifecycleObservation",
     "launcherReadinessObservation",
     "launcherFailureClass",
     "finishedAtUtc",
@@ -92,6 +93,18 @@ LAUNCHER_FAILURE_CLASSES = {
     "OWNERSHIP_UNPROVEN",
     "UNKNOWN",
 }
+REHEARSAL_LIFECYCLE_OBSERVATIONS = {
+    "NOT_REHEARSAL",
+    "HOLD_ENTERED",
+    "HOLD_TIMEOUT",
+    "HOLD_WAIT_FAILURE",
+    "HOLD_SIGNAL_RECEIVED",
+}
+SOCKET_LISTENER_ABSENT = "socket-listener-absent"
+SOCKET_LISTENER_AMBIGUOUS = "socket-listener-ambiguous"
+SOCKET_LISTENER_NONLOOPBACK_OR_IPV6 = "socket-listener-nonloopback-or-ipv6"
+SOCKET_LISTENER_PROC_UNAVAILABLE = "socket-listener-proc-unavailable"
+SOCKET_LISTENER_PROC_MALFORMED = "socket-listener-proc-malformed"
 SIGNAL_LABELS = {signal.SIGHUP: "HUP", signal.SIGINT: "INT", signal.SIGTERM: "TERM"}
 CONTROL_SIGNALS = frozenset(SIGNAL_LABELS)
 CONTROL_SIGNAL_ORDER = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
@@ -140,6 +153,7 @@ class RehearsalOutcome:
     child_exit: int | None
     listener_proof: ListenerProof | None = None
     dispatch_safe: bool = False
+    listener_proof_ever_eligible: bool = False
 
 
 def repository_root() -> Path:
@@ -338,41 +352,57 @@ def expected_launcher_argv(repo_root: Path, run_id: str) -> list[str] | None:
     ]
 
 
-def listener_inode_for_loopback_port(port: int) -> int | None:
-    """Return one IPv4 loopback LISTEN inode, rejecting every ambiguity."""
+def listener_socket_probe_for_loopback_port(port: int) -> tuple[int | None, str]:
+    """Return one strict loopback LISTEN inode or a fixed fail-closed reason."""
     if not 1 <= port <= 65535:
-        return None
+        return None, SOCKET_LISTENER_ABSENT
     port_hex = f"{port:04X}"
     expected_inodes: list[int] = []
     for proc_net in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
         try:
             lines = proc_net.read_text(encoding="utf-8").splitlines()
         except OSError:
-            return None
+            return None, SOCKET_LISTENER_PROC_UNAVAILABLE
+        except UnicodeDecodeError:
+            return None, SOCKET_LISTENER_PROC_MALFORMED
         if not lines:
-            return None
+            return None, SOCKET_LISTENER_PROC_MALFORMED
         for raw in lines[1:]:
             fields = raw.split()
             if len(fields) < 10:
-                return None
+                return None, SOCKET_LISTENER_PROC_MALFORMED
             local_address = fields[1]
             state = fields[3]
             address, separator, observed_port = local_address.rpartition(":")
             if (
                 not separator
+                or len(address) != (8 if proc_net.name == "tcp" else 32)
+                or any(character not in "0123456789ABCDEFabcdef" for character in address)
                 or len(observed_port) != 4
                 or any(character not in "0123456789ABCDEFabcdef" for character in observed_port)
+                or len(state) != 2
+                or any(character not in "0123456789ABCDEFabcdef" for character in state)
+                or not fields[9].isdigit()
             ):
-                return None
+                return None, SOCKET_LISTENER_PROC_MALFORMED
             if state != "0A" or observed_port.upper() != port_hex:
                 continue
             # The Launcher is configured for literal 127.0.0.1.  A wildcard,
             # non-loopback, or IPv6 listener on the same port makes the health
             # endpoint ambiguous, even if a loopback socket also exists.
-            if proc_net.name != "tcp" or address != "0100007F" or not fields[9].isdigit():
-                return None
+            if proc_net.name != "tcp" or address != "0100007F":
+                return None, SOCKET_LISTENER_NONLOOPBACK_OR_IPV6
             expected_inodes.append(int(fields[9]))
-    return expected_inodes[0] if len(expected_inodes) == 1 else None
+    if not expected_inodes:
+        return None, SOCKET_LISTENER_ABSENT
+    if len(expected_inodes) != 1:
+        return None, SOCKET_LISTENER_AMBIGUOUS
+    return expected_inodes[0], "socket-listener"
+
+
+def listener_inode_for_loopback_port(port: int) -> int | None:
+    """Compatibility helper for callers that need only the safe inode."""
+    return listener_socket_probe_for_loopback_port(port)[0]
 
 
 def current_uid_socket_holders(socket_inode: int) -> tuple[int, ...] | None:
@@ -463,9 +493,9 @@ def prove_owned_loopback_launcher(
     expected_argv = expected_launcher_argv(repo_root, run_id)
     if expected_argv is None:
         return ListenerProof(False, "launcher-expected")
-    socket_inode = listener_inode_for_loopback_port(port)
+    socket_inode, socket_reason = listener_socket_probe_for_loopback_port(port)
     if socket_inode is None:
-        return ListenerProof(False, "socket-listener")
+        return ListenerProof(False, socket_reason)
     holders = current_uid_socket_holders(socket_inode)
     if holders is None or len(holders) != 1:
         return ListenerProof(False, "socket-owner")
@@ -485,7 +515,10 @@ def prove_owned_loopback_launcher(
             return ListenerProof(False, "listener-ancestor")
         if proc_stat(pid)[2] != initial_start_ticks or not proc_is_live(pid):
             return ListenerProof(False, "listener-start-ticks")
-        if listener_inode_for_loopback_port(port) != socket_inode:
+        final_socket_inode, final_socket_reason = listener_socket_probe_for_loopback_port(port)
+        if final_socket_inode is None:
+            return ListenerProof(False, final_socket_reason)
+        if final_socket_inode != socket_inode:
             return ListenerProof(False, "listener-inode")
         if current_uid_socket_holders(socket_inode) != (pid,):
             return ListenerProof(False, "socket-owner")
@@ -730,7 +763,12 @@ def dispatch_owned_parent_term(
                     exercise_pid=child_pid,
                     exercise_start_ticks=initial_start_ticks,
                 )
-                if not same_listener(prior_listener_proof, listener_proof):
+                if not listener_proof.ok:
+                    # Preserve a concrete re-proof failure (for example a
+                    # malformed /proc socket table) instead of collapsing it
+                    # into a generic listener-change diagnosis.
+                    pass
+                elif not same_listener(prior_listener_proof, listener_proof):
                     listener_proof = ListenerProof(False, "listener-changed")
                 elif not latch_pending_control_signal():
                     # This final observation is the deliberate dispatch
@@ -784,6 +822,7 @@ def supervise_exercise(
     health_precondition = False
     parent_proof: ParentProof | None = None
     listener_proof: ListenerProof | None = None
+    listener_proof_ever_eligible = False
     term_dispatches = 0
     dispatch_safe = False
 
@@ -804,6 +843,7 @@ def supervise_exercise(
         if not listener_proof_a.ok:
             time.sleep(0.5)
             continue
+        listener_proof_ever_eligible = True
         if SUPERVISOR_INTERRUPTION is not None:
             break
         parent_proof = prove_exercise_parent(child_pid, initial_start_ticks, repo_root, expected_argv)
@@ -822,6 +862,12 @@ def supervise_exercise(
             exercise_start_ticks=initial_start_ticks,
         )
         listener_proof = listener_proof_b
+        listener_proof_ever_eligible = listener_proof_ever_eligible or listener_proof_b.ok
+        if not listener_proof_b.ok:
+            # Keep a precise re-proof diagnosis (such as a socket-table
+            # failure) rather than rewriting every failed second proof as an
+            # identity change.
+            break
         if not same_listener(listener_proof_a, listener_proof_b):
             listener_proof = ListenerProof(False, "listener-changed")
             break
@@ -840,6 +886,7 @@ def supervise_exercise(
             navigator_port=navigator_port,
             prior_listener_proof=listener_proof_b,
         )
+        listener_proof_ever_eligible = listener_proof_ever_eligible or listener_proof.ok
         if term_dispatches != 1:
             break
         child_exit = wait_for_child_exit(child_pid, post_term_timeout_seconds)
@@ -854,6 +901,7 @@ def supervise_exercise(
         child_exit,
         listener_proof,
         dispatch_safe,
+        listener_proof_ever_eligible,
     )
 
 
@@ -908,26 +956,40 @@ def read_redacted_receipt(run_dir: Path, run_id: str, artifact_root: Path) -> di
         return None
     if (
         type(value.get("schemaVersion")) is not int
-        or value["schemaVersion"] != 3
+        or value["schemaVersion"] != 4
         or value.get("runId") != run_id
         or value.get("secretsRedacted") is not True
     ):
         return None
-    if value.get("result") not in CLEANUP_RESULTS:
+    if not isinstance(value.get("result"), str) or value["result"] not in CLEANUP_RESULTS:
         return None
-    if value.get("failureStage") not in CLEANUP_FAILURE_STAGES:
+    if not isinstance(value.get("failureStage"), str) or value["failureStage"] not in CLEANUP_FAILURE_STAGES:
         return None
-    if value.get("launcherReadinessObservation") not in LAUNCHER_READINESS_OBSERVATIONS:
+    if (
+        not isinstance(value.get("launcherReadinessObservation"), str)
+        or value["launcherReadinessObservation"] not in LAUNCHER_READINESS_OBSERVATIONS
+    ):
         return None
-    if value.get("launcherFailureClass") not in LAUNCHER_FAILURE_CLASSES:
+    if (
+        not isinstance(value.get("launcherFailureClass"), str)
+        or value["launcherFailureClass"] not in LAUNCHER_FAILURE_CLASSES
+    ):
+        return None
+    if (
+        not isinstance(value.get("rehearsalLifecycleObservation"), str)
+        or value["rehearsalLifecycleObservation"] not in REHEARSAL_LIFECYCLE_OBSERVATIONS
+    ):
         return None
     if not isinstance(value.get("finishedAtUtc"), str) or not UTC_TIMESTAMP_RE.fullmatch(value["finishedAtUtc"]):
         return None
     return {
         "mode": "0600",
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "result": value["result"],
         "failureStage": value["failureStage"],
+        "rehearsalLifecycleObservation": value["rehearsalLifecycleObservation"],
+        "launcherReadinessObservation": value["launcherReadinessObservation"],
+        "launcherFailureClass": value["launcherFailureClass"],
         "secretsRedacted": True,
     }
 
@@ -1035,6 +1097,7 @@ def emit_summary(
     health_precondition: bool,
     parent_proof: ParentProof | None,
     listener_proof: ListenerProof | None,
+    listener_proof_ever_eligible: bool,
     term_dispatches: int,
     dispatch_safe: bool,
     child_exit: int | None,
@@ -1048,6 +1111,7 @@ def emit_summary(
         "controlledHealthPrecondition": health_precondition,
         "parentProof": parent_proof.reason if parent_proof else "NOT_ATTEMPTED",
         "listenerProof": listener_proof.reason if listener_proof else "NOT_ATTEMPTED",
+        "listenerProofEverEligible": listener_proof_ever_eligible,
         "termDispatches": term_dispatches,
         "dispatchSafe": dispatch_safe,
         "exerciseExit": exit_summary(child_exit),
@@ -1121,6 +1185,7 @@ def main() -> int:
         health_precondition=outcome.health_precondition,
         parent_proof=outcome.parent_proof,
         listener_proof=outcome.listener_proof,
+        listener_proof_ever_eligible=outcome.listener_proof_ever_eligible,
         term_dispatches=outcome.term_dispatches,
         dispatch_safe=outcome.dispatch_safe,
         child_exit=outcome.child_exit,

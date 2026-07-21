@@ -50,6 +50,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 - 最后一项无 pending signal 检查是 deliberate dispatch commit point。POSIX 无法将该检查与对另一 PID 的 `kill()` 合成原子操作：commit 前已观测到的 control signal 必须是 `0 TERM`；commit 后观测到的 signal 最多保留事实上的 `1 TERM`，但必须令本次 run `dispatchSafe=false`、不读取成功形态 evidence 且以非零退出。不得将这种 run 解释为成功。
 - 不要把 stdout 重定向到 run 根目录；成功时根目录除 `cleanup-report.json` 外必须没有 residue。只允许读取 supervisor 的脱敏 JSON 和新 run 根级 receipt/名称快照，绝不读取 `private/`、`children/`、日志、profile 或 payload。失败不重试、不手工 cleanup，也不检查历史 failed run。
 
+### Receipt v4 与诊断边界
+
+- 新 `cleanup-report.json` 固定为 schema v4，只允许 `schemaVersion`、`runId`、`result`、`failureStage`、`rehearsalLifecycleObservation`、`launcherReadinessObservation`、`launcherFailureClass`、`finishedAtUtc`、`secretsRedacted`；v3、重复 JSON object key、额外字段、未知或非字符串枚举均 fail closed，包含 parent-adoption reader。
+- `rehearsalLifecycleObservation` 仅是 held-child 的脱敏诊断：`NOT_REHEARSAL`、`HOLD_ENTERED`、`HOLD_TIMEOUT`、`HOLD_WAIT_FAILURE` 或 `HOLD_SIGNAL_RECEIVED`。`HOLD_SIGNAL_RECEIVED` 只说明 held child 观察到了其生命周期信号；它不证明 outer parent 已获授权、TERM 已精确派发、资源归属、cleanup 成功，且不参与 supervisor completion 判定。
+- `listenerProofEverEligible` 只会出现在 supervisor 的脱敏 JSON，不会写入 root receipt。它只表示“曾出现过一个合格 listener proof”，不含 PID、argv、cwd、port、inode 或 socket 标识，也不能授权 TERM、cleanup 或成功结论。后续 A→B/final re-proof 失败仍必须拒绝。
+
 合格的 forced-SIGNAL 成功证据必须同时含 `controlledHealthPrecondition=true`、parent proof `commandLine+cwd+runId+uid+session+startTicks`、listener proof `uid+java+argv+cwd+ancestor+socket+startTicks`、`termDispatches=1`、`dispatchSafe=true`、`CLEANED/SIGNAL`、`privateAbsent=true`、root non-receipt residue `0` 以及 Docker container/network/volume residue 各为 `0`。任何一项缺失均为 fail-closed 失败，不能由额外检查私有产物补证。
 
 ## Read only the redacted receipts (ordinary exercise only)

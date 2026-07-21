@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib.util
+import io
 import json
 import os
 import signal
@@ -165,9 +166,19 @@ class ReceiptBoundaryTest(unittest.TestCase):
 
         receipt = supervisor.read_redacted_receipt(run_dir, self.run_id, self.artifact_root)
 
-        self.assertIsNotNone(receipt)
-        self.assertEqual("CLEANED", receipt["result"])
-        self.assertEqual("SIGNAL", receipt["failureStage"])
+        self.assertEqual(
+            {
+                "mode": "0600",
+                "schemaVersion": 4,
+                "result": "CLEANED",
+                "failureStage": "SIGNAL",
+                "rehearsalLifecycleObservation": "HOLD_SIGNAL_RECEIVED",
+                "launcherReadinessObservation": "HEALTH_READY",
+                "launcherFailureClass": "NOT_APPLICABLE",
+                "secretsRedacted": True,
+            },
+            receipt,
+        )
 
     def test_rejects_unsafe_receipt_and_run_directory_shapes(self) -> None:
         with self.subTest("world-readable-receipt"):
@@ -201,11 +212,25 @@ class ReceiptBoundaryTest(unittest.TestCase):
             self._write_receipt(run_dir, overrides={"failureStage": "UNSAFE"})
             self.assertIsNone(supervisor.read_redacted_receipt(run_dir, self.run_id, self.artifact_root))
 
+        with self.subTest("legacy-schema-v3"):
+            run_dir = self._new_run_dir("legacy-schema")
+            self._write_receipt(run_dir, overrides={"schemaVersion": 3})
+            self.assertIsNone(supervisor.read_redacted_receipt(run_dir, self.run_id, self.artifact_root))
+
+        with self.subTest("unsafe-lifecycle-observation"):
+            run_dir = self._new_run_dir("unsafe-lifecycle-observation")
+            self._write_receipt(
+                run_dir,
+                overrides={"rehearsalLifecycleObservation": "private-log-derived-value"},
+            )
+            self.assertIsNone(supervisor.read_redacted_receipt(run_dir, self.run_id, self.artifact_root))
+
     def test_rejects_duplicate_json_keys(self) -> None:
         run_dir = self._new_run_dir("duplicate-json")
         raw = (
-            '{"schemaVersion":3,"schemaVersion":3,'
+            '{"schemaVersion":4,"schemaVersion":4,'
             f'"runId":"{self.run_id}","result":"CLEANED","failureStage":"SIGNAL",'
+            '"rehearsalLifecycleObservation":"HOLD_SIGNAL_RECEIVED",'
             '"launcherReadinessObservation":"HEALTH_READY",'
             '"launcherFailureClass":"NOT_APPLICABLE",'
             '"finishedAtUtc":"2026-07-21T00:00:00Z","secretsRedacted":true}'
@@ -256,10 +281,11 @@ class ReceiptBoundaryTest(unittest.TestCase):
         overrides: dict[str, object] | None = None,
     ) -> Path:
         value: dict[str, object] = {
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "runId": self.run_id,
             "result": "CLEANED",
             "failureStage": "SIGNAL",
+            "rehearsalLifecycleObservation": "HOLD_SIGNAL_RECEIVED",
             "launcherReadinessObservation": "HEALTH_READY",
             "launcherFailureClass": "NOT_APPLICABLE",
             "finishedAtUtc": "2026-07-21T00:00:00Z",
@@ -400,6 +426,7 @@ class ListenerProofGateTest(unittest.TestCase):
         self,
         *,
         holders: tuple[int, ...] | None = None,
+        socket_probe: tuple[int | None, str] | None = None,
         java: Path | None | object = ...,
         expected_argv: list[str] | None | object = ...,
         cwd: Path | None = None,
@@ -411,6 +438,9 @@ class ListenerProofGateTest(unittest.TestCase):
         actual_cwd = self.run_dir if cwd is None else cwd
         actual_command = self.expected_argv if command is None else command
         actual_holders = (self.pid,) if holders is None else holders
+        actual_socket_probe = (
+            (self.socket_inode, "socket-listener") if socket_probe is None else socket_probe
+        )
         pid = self.pid
         root = self.root
         run_dir = self.run_dir
@@ -438,8 +468,8 @@ class ListenerProofGateTest(unittest.TestCase):
             stack.enter_context(
                 mock.patch.object(
                     supervisor,
-                    "listener_inode_for_loopback_port",
-                    side_effect=[self.socket_inode, self.socket_inode],
+                    "listener_socket_probe_for_loopback_port",
+                    side_effect=[actual_socket_probe, actual_socket_probe],
                 )
             )
             stack.enter_context(
@@ -464,6 +494,79 @@ class ListenerProofGateTest(unittest.TestCase):
                 exercise_pid=40_001,
                 exercise_start_ticks=40_002,
             )
+
+
+class ListenerSocketProbeTest(unittest.TestCase):
+    def test_socket_probe_returns_only_fixed_fail_closed_reasons(self) -> None:
+        port = 24_570
+        header = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode"
+        loopback_listener = self._tcp_line(f"0100007F:{port:04X}", inode="789012")
+        alternate_loopback_listener = self._tcp_line(f"0100007F:{port:04X}", inode="789013")
+        wildcard_listener = self._tcp_line(f"00000000:{port:04X}", inode="789012")
+        malformed_inode = self._tcp_line(f"0100007F:{port:04X}", inode="not-an-inode")
+        cases: tuple[tuple[str, object, object, tuple[int | None, str]], ...] = (
+            (
+                "strict-loopback-listener",
+                f"{header}\n{loopback_listener}\n",
+                f"{header}\n",
+                (789012, "socket-listener"),
+            ),
+            ("absent", f"{header}\n", f"{header}\n", (None, "socket-listener-absent")),
+            (
+                "ambiguous",
+                f"{header}\n{loopback_listener}\n{alternate_loopback_listener}\n",
+                f"{header}\n",
+                (None, "socket-listener-ambiguous"),
+            ),
+            (
+                "nonloopback-or-ipv6",
+                f"{header}\n{wildcard_listener}\n",
+                f"{header}\n",
+                (None, "socket-listener-nonloopback-or-ipv6"),
+            ),
+            (
+                "proc-unavailable",
+                OSError("offline proc unavailable"),
+                f"{header}\n",
+                (None, "socket-listener-proc-unavailable"),
+            ),
+            (
+                "proc-malformed",
+                f"{header}\n{malformed_inode}\n",
+                f"{header}\n",
+                (None, "socket-listener-proc-malformed"),
+            ),
+        )
+        for label, tcp, tcp6, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(expected, self._probe(port, tcp=tcp, tcp6=tcp6))
+
+    @staticmethod
+    def _tcp_line(local_address: str, *, inode: str) -> str:
+        return (
+            f"0: {local_address} 00000000:0000 0A 00000000:00000000 "
+            f"00:00000000 00000000 1000 0 {inode} 1"
+        )
+
+    @staticmethod
+    def _probe(port: int, *, tcp: object, tcp6: object) -> tuple[int | None, str]:
+        payloads = {"/proc/net/tcp": tcp, "/proc/net/tcp6": tcp6}
+
+        class FakeProcNetPath:
+            def __init__(self, raw_path: object) -> None:
+                self.raw_path = os.fspath(raw_path)
+                self.name = self.raw_path.rsplit("/", 1)[-1]
+
+            def read_text(self, *, encoding: str) -> str:
+                payload = payloads[self.raw_path]
+                if isinstance(payload, BaseException):
+                    raise payload
+                if not isinstance(payload, str):
+                    raise AssertionError(f"unexpected proc payload: {payload!r}")
+                return payload
+
+        with mock.patch.object(supervisor, "Path", side_effect=FakeProcNetPath):
+            return supervisor.listener_socket_probe_for_loopback_port(port)
 
 
 class ExerciseParentProofTest(unittest.TestCase):
@@ -656,6 +759,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         wait.assert_not_called()
         self.assertFalse(outcome.health_precondition)
         self.assertEqual(0, outcome.term_dispatches)
+        self.assertFalse(outcome.listener_proof_ever_eligible)
 
     def test_foreign_200_up_listener_never_dispatches_parent_term(self) -> None:
         foreign = supervisor.ListenerProof(False, "socket-owner")
@@ -675,6 +779,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         kill.assert_not_called()
         self.assertEqual("socket-owner", outcome.listener_proof.reason)
         self.assertEqual(0, outcome.term_dispatches)
+        self.assertFalse(outcome.listener_proof_ever_eligible)
 
     def test_valid_listener_with_noncanonical_rehearsal_parent_never_health_checks_or_dispatches(self) -> None:
         listener_proof = self._listener_proof()
@@ -702,6 +807,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         self.assertFalse(outcome.health_precondition)
         self.assertEqual("argv", outcome.parent_proof.reason)
         self.assertEqual(0, outcome.term_dispatches)
+        self.assertTrue(outcome.listener_proof_ever_eligible)
 
     def test_each_listener_identity_mismatch_never_dispatches_parent_term(self) -> None:
         reasons = (
@@ -733,6 +839,42 @@ class SupervisorOrchestrationTest(unittest.TestCase):
             kill.assert_not_called()
             self.assertEqual(0, outcome.term_dispatches)
             self.assertEqual(reason, outcome.listener_proof.reason)
+            self.assertFalse(outcome.listener_proof_ever_eligible)
+
+    def test_each_socket_probe_failure_never_health_checks_parent_or_dispatches(self) -> None:
+        reasons = (
+            "socket-listener-absent",
+            "socket-listener-ambiguous",
+            "socket-listener-nonloopback-or-ipv6",
+            "socket-listener-proc-unavailable",
+            "socket-listener-proc-malformed",
+        )
+        for reason in reasons:
+            with self.subTest(reason=reason), contextlib.ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch.object(
+                        supervisor,
+                        "prove_owned_loopback_launcher",
+                        return_value=supervisor.ListenerProof(False, reason),
+                    )
+                )
+                parent = stack.enter_context(mock.patch.object(supervisor, "prove_exercise_parent"))
+                health = stack.enter_context(mock.patch.object(supervisor, "health_ready"))
+                stack.enter_context(mock.patch.object(supervisor, "poll_child_exit", return_value=None))
+                stack.enter_context(mock.patch.object(supervisor.time, "sleep"))
+                stack.enter_context(mock.patch.object(supervisor.time, "monotonic", side_effect=[0.0, 0.1, 31.0]))
+                dispatch = stack.enter_context(mock.patch.object(supervisor, "dispatch_owned_parent_term"))
+                kill = stack.enter_context(mock.patch.object(supervisor.os, "kill"))
+
+                outcome = self._supervise()
+
+            parent.assert_not_called()
+            health.assert_not_called()
+            dispatch.assert_not_called()
+            kill.assert_not_called()
+            self.assertEqual(0, outcome.term_dispatches)
+            self.assertEqual(reason, outcome.listener_proof.reason)
+            self.assertFalse(outcome.listener_proof_ever_eligible)
 
     def test_listener_change_between_a_and_b_never_dispatches(self) -> None:
         baseline = self._listener_proof()
@@ -770,6 +912,45 @@ class SupervisorOrchestrationTest(unittest.TestCase):
             self.assertFalse(outcome.listener_proof.ok)
             self.assertEqual("listener-changed", outcome.listener_proof.reason)
             self.assertEqual(0, outcome.term_dispatches)
+            self.assertTrue(outcome.listener_proof_ever_eligible)
+
+    def test_a_to_b_socket_probe_failure_is_preserved_and_never_authorizes_dispatch(self) -> None:
+        baseline = self._listener_proof()
+        socket_failure = supervisor.ListenerProof(False, "socket-listener-proc-malformed")
+        with contextlib.ExitStack() as stack:
+            listener = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "prove_owned_loopback_launcher",
+                    side_effect=[baseline, socket_failure],
+                )
+            )
+            parent = stack.enter_context(
+                mock.patch.object(
+                    supervisor,
+                    "prove_exercise_parent",
+                    return_value=supervisor.ParentProof(True, "parent-proof", 100),
+                )
+            )
+            health = stack.enter_context(mock.patch.object(supervisor, "health_ready", return_value=True))
+            stack.enter_context(mock.patch.object(supervisor, "poll_child_exit", return_value=None))
+            stack.enter_context(mock.patch.object(supervisor.time, "monotonic", side_effect=[0.0, 0.1]))
+            dispatch = stack.enter_context(mock.patch.object(supervisor, "dispatch_owned_parent_term"))
+            kill = stack.enter_context(mock.patch.object(supervisor.os, "kill"))
+
+            outcome = self._supervise()
+
+        self.assertEqual(2, listener.call_count)
+        parent.assert_called_once()
+        health.assert_called_once()
+        dispatch.assert_not_called()
+        kill.assert_not_called()
+        self.assertFalse(outcome.health_precondition)
+        self.assertEqual("socket-listener-proc-malformed", outcome.listener_proof.reason)
+        self.assertEqual(0, outcome.term_dispatches)
+        # This is a summary diagnostic only: a once-eligible listener cannot
+        # authorize dispatch after the required B re-proof has failed.
+        self.assertTrue(outcome.listener_proof_ever_eligible)
 
     def test_listener_change_during_masked_final_reproof_never_dispatches(self) -> None:
         baseline = self._listener_proof()
@@ -794,6 +975,25 @@ class SupervisorOrchestrationTest(unittest.TestCase):
             self.assertEqual("listener-changed", listener.reason)
             self.assertEqual(0, dispatches)
             self.assertFalse(dispatch_safe)
+
+    def test_final_socket_probe_failure_is_preserved_and_never_dispatches(self) -> None:
+        baseline = self._listener_proof()
+        final_failure = supervisor.ListenerProof(False, "socket-listener-proc-malformed")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(supervisor.signal, "pthread_sigmask", return_value=set()))
+            stack.enter_context(mock.patch.object(supervisor.signal, "sigpending", return_value=set()))
+            kill = stack.enter_context(mock.patch.object(supervisor.os, "kill"))
+
+            _parent, listener, dispatches, dispatch_safe = self._dispatch(
+                baseline,
+                final_listener=final_failure,
+            )
+
+        kill.assert_not_called()
+        self.assertFalse(listener.ok)
+        self.assertEqual("socket-listener-proc-malformed", listener.reason)
+        self.assertEqual(0, dispatches)
+        self.assertFalse(dispatch_safe)
 
     def test_stable_a_b_and_final_listener_proof_dispatches_exactly_one_term(self) -> None:
         proof = self._listener_proof()
@@ -822,6 +1022,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         self.assertTrue(outcome.parent_proof.ok)
         self.assertTrue(outcome.dispatch_safe)
         self.assertEqual(1, outcome.term_dispatches)
+        self.assertTrue(outcome.listener_proof_ever_eligible)
 
     def test_interruption_before_dispatch_never_sends_term(self) -> None:
         supervisor.SUPERVISOR_INTERRUPTION = "INT"
@@ -916,6 +1117,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
             term_dispatches=1,
             dispatch_safe=True,
             child_exit=0,
+            listener_proof_ever_eligible=True,
         )
 
         def interrupted_supervision(**_kwargs: object) -> object:
@@ -949,6 +1151,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
             term_dispatches=1,
             dispatch_safe=False,
             child_exit=0,
+            listener_proof_ever_eligible=True,
         )
         pending_after_supervision = False
 
@@ -980,12 +1183,17 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         docker.assert_not_called()
         self.assertEqual("TERM", supervisor.SUPERVISOR_INTERRUPTION)
 
-    def test_success_path_collects_one_docker_snapshot_and_reuses_it(self) -> None:
+    def test_success_path_collects_one_docker_snapshot_without_gating_on_lifecycle_diagnostic(self) -> None:
         receipt = {
             "mode": "0600",
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "result": "CLEANED",
             "failureStage": "SIGNAL",
+            # The fixed lifecycle enum is projected for diagnosis, not made
+            # a substitute for the complete ownership/TERM/residue gate.
+            "rehearsalLifecycleObservation": "NOT_REHEARSAL",
+            "launcherReadinessObservation": "HEALTH_READY",
+            "launcherFailureClass": "NOT_APPLICABLE",
             "secretsRedacted": True,
         }
         snapshot = {"container": 0, "network": 0, "volume": 0}
@@ -1003,6 +1211,7 @@ class SupervisorOrchestrationTest(unittest.TestCase):
                         term_dispatches=1,
                         dispatch_safe=True,
                         child_exit=0,
+                        listener_proof_ever_eligible=True,
                     ),
                 )
             )
@@ -1020,6 +1229,44 @@ class SupervisorOrchestrationTest(unittest.TestCase):
         self.assertEqual(1, docker_counts.call_count)
         self.assertEqual(snapshot, emit.call_args.kwargs["docker_snapshot"])
         self.assertEqual(root_snapshot, emit.call_args.kwargs["root_snapshot"])
+        self.assertTrue(emit.call_args.kwargs["listener_proof_ever_eligible"])
+
+    def test_redacted_summary_exposes_listener_eligibility_once_without_process_identifiers(self) -> None:
+        receipt = {
+            "mode": "0600",
+            "schemaVersion": 4,
+            "result": "CLEANED",
+            "failureStage": "SIGNAL",
+            "rehearsalLifecycleObservation": "HOLD_SIGNAL_RECEIVED",
+            "launcherReadinessObservation": "HEALTH_READY",
+            "launcherFailureClass": "NOT_APPLICABLE",
+            "secretsRedacted": True,
+        }
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            supervisor.emit_summary(
+                run_id=self.run_id,
+                health_precondition=True,
+                parent_proof=supervisor.ParentProof(True, "parent-proof", 100),
+                listener_proof=self._listener_proof(),
+                listener_proof_ever_eligible=True,
+                term_dispatches=1,
+                dispatch_safe=True,
+                child_exit=0,
+                receipt=receipt,
+                root_snapshot=supervisor.RunRootSnapshot(True, 0),
+                docker_snapshot={"container": 0, "network": 0, "volume": 0},
+            )
+
+        lines = output.getvalue().splitlines()
+        self.assertEqual(1, len(lines))
+        summary = json.loads(lines[0])
+        self.assertTrue(summary["listenerProofEverEligible"])
+        self.assertEqual("uid+java+argv+cwd+ancestor+socket+startTicks", summary["listenerProof"])
+        self.assertEqual(receipt, summary["receipt"])
+        for prohibited in ("pid", "argv", "cwd", "port", "inode", "socketInode"):
+            self.assertNotIn(prohibited, summary)
 
     def _listener_proof(
         self,

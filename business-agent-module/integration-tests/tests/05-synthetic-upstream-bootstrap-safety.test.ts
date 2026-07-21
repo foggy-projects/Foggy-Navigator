@@ -85,6 +85,13 @@ const CLEANUP_LAUNCHER_FAILURE_CLASSES = new Set([
   'OWNERSHIP_UNPROVEN',
   'UNKNOWN'
 ]);
+const CLEANUP_REHEARSAL_LIFECYCLE_OBSERVATIONS = new Set([
+  'NOT_REHEARSAL',
+  'HOLD_ENTERED',
+  'HOLD_TIMEOUT',
+  'HOLD_WAIT_FAILURE',
+  'HOLD_SIGNAL_RECEIVED'
+]);
 let sequence = 0;
 const cleanupPaths = new Set<string>();
 
@@ -161,19 +168,24 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
       'finishedAtUtc',
       'launcherFailureClass',
       'launcherReadinessObservation',
+      'rehearsalLifecycleObservation',
       'result',
       'runId',
       'schemaVersion',
       'secretsRedacted'
     ]);
-    expect(receipt.schemaVersion).toBe(3);
+    expect(receipt.schemaVersion).toBe(4);
     expect(receipt.runId).toBe(run.id);
     expect(receipt.result).toBe('FAILED_CLEANUP');
     expect(receipt.failureStage).toBe('NONE');
+    expect(receipt.rehearsalLifecycleObservation).toBe('NOT_REHEARSAL');
     expect(receipt.launcherReadinessObservation).toBe('NOT_OBSERVED');
     expect(receipt.launcherFailureClass).toBe('NOT_APPLICABLE');
     expect(CLEANUP_RESULTS.has(receipt.result as string)).toBe(true);
     expect(CLEANUP_FAILURE_STAGES.has(receipt.failureStage as string)).toBe(true);
+    expect(
+      CLEANUP_REHEARSAL_LIFECYCLE_OBSERVATIONS.has(receipt.rehearsalLifecycleObservation as string)
+    ).toBe(true);
     expect(
       CLEANUP_LAUNCHER_READINESS_OBSERVATIONS.has(
         receipt.launcherReadinessObservation as string
@@ -197,6 +209,7 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(result.status).toBe(0);
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('PREPARE');
+    expect(receipt.rehearsalLifecycleObservation).toBe('NOT_REHEARSAL');
     expect(CLEANUP_RESULTS.has(receipt.result as string)).toBe(true);
     expect(CLEANUP_FAILURE_STAGES.has(receipt.failureStage as string)).toBe(true);
 
@@ -204,6 +217,18 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     const invalid = invokeHarnessLibrary(invalidRun, 'write_cleanup_report "$3" UNSAFE PREPARE');
     expect(invalid.status).toBe(2);
     expect(existsSync(join(invalidRun.dir, 'cleanup-report.json'))).toBe(false);
+
+    const invalidLifecycleRun = createRun('cleanup-receipt-invalid-lifecycle');
+    const invalidLifecycle = invokeHarnessLibrary(
+      invalidLifecycleRun,
+      [
+        "REHEARSAL_LIFECYCLE_OBSERVATION='private-log-derived-value'",
+        'write_cleanup_report "$3" CLEANED PREPARE'
+      ].join('\n')
+    );
+    expect(invalidLifecycle.status).toBe(2);
+    expect(invalidLifecycle.output).toContain('cleanup receipt rehearsal lifecycle observation is unsafe');
+    expect(existsSync(join(invalidLifecycleRun.dir, 'cleanup-report.json'))).toBe(false);
   });
 
   test('does not inspect a private Launcher log and emits UNKNOWN for a pre-health child exit', () => {
@@ -821,6 +846,33 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
       (run: RunFixture) => writeRootCleanupReceiptText(run, '{"schemaVersion":1')
     ],
     [
+      'a receipt with a duplicate JSON key',
+      (run: RunFixture) =>
+        writeRootCleanupReceiptText(
+          run,
+          JSON.stringify(
+            {
+              schemaVersion: 4,
+              runId: run.id,
+              result: 'CLEANED',
+              failureStage: 'PREPARE',
+              rehearsalLifecycleObservation: 'NOT_REHEARSAL',
+              launcherReadinessObservation: 'NOT_OBSERVED',
+              launcherFailureClass: 'NOT_APPLICABLE',
+              finishedAtUtc: '2026-07-21T00:00:00Z',
+              secretsRedacted: true
+            },
+            null,
+            2
+          )
+            .replace('"result": "CLEANED"', '"result": "FAILED_CLEANUP",\n  "result": "CLEANED"')
+        )
+    ],
+    [
+      'a legacy schema v3 receipt',
+      (run: RunFixture) => writeRootCleanupReceipt(run, { schemaVersion: 3 })
+    ],
+    [
       'a receipt with an extra field',
       (run: RunFixture) => writeRootCleanupReceipt(run, { unexpected: 'not-allowed' })
     ],
@@ -833,6 +885,11 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
       'a receipt with an invalid launcher failure class',
       (run: RunFixture) =>
         writeRootCleanupReceipt(run, { launcherFailureClass: 'private-log-derived-value' })
+    ],
+    [
+      'a receipt with an invalid rehearsal lifecycle observation',
+      (run: RunFixture) =>
+        writeRootCleanupReceipt(run, { rehearsalLifecycleObservation: 'private-log-derived-value' })
     ],
     [
       'a receipt whose mode is not private',
@@ -937,6 +994,7 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(result.status).toBe(128);
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('NOT_REHEARSAL');
     expect(receipt.runId).toBe(run.id);
     expect(receipt.secretsRedacted).toBe(true);
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
@@ -961,6 +1019,7 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(result.parentOwnershipProven).toBe(true);
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('NOT_REHEARSAL');
     expect(receipt.runId).toBe(run.id);
     expect(receipt.secretsRedacted).toBe(true);
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
@@ -991,6 +1050,7 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect((result.output.match(/exercise forwarding TERM cleanup/g) ?? [])).toHaveLength(1);
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_SIGNAL_RECEIVED');
     expect(receipt.runId).toBe(run.id);
     expect(receipt.secretsRedacted).toBe(true);
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
@@ -1229,6 +1289,43 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('UNKNOWN');
     expect(receipt.failureStage).not.toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_TIMEOUT');
+    expect(existsSync(join(run.dir, 'private'))).toBe(false);
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('records a held wait failure as a fixed diagnostic while owned cleanup remains fail closed', () => {
+    const run = createRun('run-hold-wait-failure');
+    writeSyntheticPrivateCarrier(run, 'stack.env');
+
+    // This invokes the real hold path but shadows only `sleep` in the
+    // source-as-library process. It cannot launch any service, Docker,
+    // Worker, profile parser, or runtime request.
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'ACTION=run',
+        'HOLD_FOR_PARENT_TERM=1',
+        'load_prepared_profiles() {',
+        '  STACK_ENV=()',
+        '  STACK_ENV[INT001_COMPOSE_PROJECT]="int001-offline-$RUN_ID"',
+        '}',
+        'stop_owned_child() { return 0; }',
+        'assert_all_docker_resources_owned() { return 0; }',
+        'docker_compose_for_run() { return 0; }',
+        'assert_no_docker_resources_remain() { return 0; }',
+        'write_manifest() { return 0; }',
+        'sleep() { return 1; }',
+        'arm_lifecycle_signal_cleanup "$3"',
+        'hold_for_parent_term "$3"'
+      ].join('\n')
+    );
+    const receipt = JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')) as Record<string, unknown>;
+
+    expect(result.status, result.output).toBe(2);
+    expect(receipt.result).toBe('CLEANED');
+    expect(receipt.failureStage).toBe('UNKNOWN');
+    expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_WAIT_FAILURE');
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
     expect(result.output).not.toContain(SYNTHETIC_SECRET);
   });
@@ -1260,6 +1357,7 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(result.status).toBe(128);
     expect(receipt.result).toBe('FAILED_CLEANUP');
     expect(receipt.failureStage).toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('NOT_REHEARSAL');
     expect(receipt.runId).toBe(run.id);
     expect(receipt.secretsRedacted).toBe(true);
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
@@ -1725,10 +1823,11 @@ function writeRootCleanupReceipt(
     run,
     `${JSON.stringify(
       {
-        schemaVersion: 3,
+        schemaVersion: 4,
         runId: run.id,
         result: 'CLEANED',
         failureStage: 'PREPARE',
+        rehearsalLifecycleObservation: 'NOT_REHEARSAL',
         launcherReadinessObservation: 'NOT_OBSERVED',
         launcherFailureClass: 'NOT_APPLICABLE',
         finishedAtUtc: '2026-07-21T00:00:00Z',
