@@ -1,11 +1,11 @@
 ---
 doc_type: version-index
 version: 1.4.3-SNAPSHOT
-status: p1c-a-accepted-owner-decisions-pending
-canonical_delivery_spec: workitems/GOV-001-upstream-permission-and-trust-boundary.md
+status: int001-rejected-bug008-accepted-with-risks-bug009-ultra-executing
+canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-19
+last_updated: 2026-07-21
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -20,13 +20,13 @@ last_updated: 2026-07-19
 
 ## Current Status
 
-- phase: p1c-a-accepted-owner-decisions-pending
+- phase: int001-rejected-bug008-accepted-with-risks-bug009-ultra-executing
 - architecture_review: passed-with-complexity-guardrails
 - p0_5_status: complete
 - implementation_started: p1a-accepted-p1b-a-accepted-p1b-b0-accepted-p1c-a-accepted
 - canonical_status: P1A_ACCEPTED_P1B_A_ACCEPTED_P1B_B0_ACCEPTED_P1C_A_ACCEPTED
 - p1a_acceptance_status: accepted
-- active_repair_spec: workitems/BUG-002-p1a-required-section-contract.md
+- active_repair_spec: workitems/BUG-009-int001-forced-signal-owned-cleanup.md
 - p1a_repair_status: ACCEPTED
 - observer_bff_p1a_disposition: catalog-and-test-only
 - p1b_a_status: ACCEPTED
@@ -35,21 +35,35 @@ last_updated: 2026-07-19
 - p1b_b0_acceptance_status: accepted
 - p1c_a_status: ACCEPTED
 - p1c_a_acceptance_status: accepted
+- dev_s1_s2_integration_mvp_status: ACCEPTED
+- dev_s1_s2_integration_mvp_acceptance_status: accepted
+- synthetic_runtime_validation_spec: workitems/INT-001-synthetic-upstream-integration-harness.md
+- owner_context_repair_spec: workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md
+- int001_status: REJECTED
+- int001_acceptance_status: rejected
+- bug008_status: ACCEPTED
+- bug008_acceptance_status: accepted-with-risks
+- bug009_status: ULTRA_EXECUTING
 - external_enablement: no
 - production_enablement: no
-- current_scenario: P1A foundation/shadow、P1B-A fixture-only typed-management authentication core、P1B-B0 pure-offline pre-seed inventory validator 与 P1C-A CLI/SKILL permission visibility 均已独立 accepted。P1C-A 不 seed、签发或验证真实 SIM/TMS 主体、凭据、mapping 或 owner approval，且不构成 external 或 production readiness
-- next_action: Project Owner 已记录 P1B-B=`DEFER`、P2=`CONTROLLED_EXCHANGE_JWS`、P3=`PRIVATE_STAGED_DESIGN`、P4=`DEFER` 的设计方向；[P1B-B/P2/P3/P4 decision intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) 仍须由具名 owner 在受控系统补齐脱敏事实与 immutable approval reference，才可按每个 gate 单独创建 `APPROVED` 实施契约。Gateway strict、Worker external 与 production 均未自动启动
+- current_scenario: P1A foundation/shadow、P1B-A fixture-only typed-management authentication core、P1B-B0 pure-offline pre-seed inventory validator 与 P1C-A CLI/SKILL permission visibility 均已独立 accepted。P1C-A 不 seed、签发或验证真实 SIM/TMS 主体、凭据、mapping 或 owner approval，且不构成 external 或 production readiness。开发期 SIM/TMS 联调 MVP 已通过独立签核；它只验收代码、CLI、手册和本地 preflight，仍未验证真实上游 runtime。BUG-007 已修复 task capability schema contract 并完成本机 MySQL validate；runtime retry 因 TMS private profile 非 `0600` 被 fail-closed 阻断，未发起 runtime task。INT-001 正常 disposable runtime 链路通过，但独立 forced-SIGNAL cleanup 以 `FAILED_CLEANUP/SIGNAL` 失败，故 INT-001 被拒绝；BUG-008 server-derived owner-context 修复以 `accepted-with-risks` 签收。BUG-009 已完成批准的 held-child topology 与离线回归；唯一 fresh post-correction rehearsal `int001-bug009-20260721-k6f8m2q9` 在 controlled-health/strict-listener proof 前 fail closed，`termDispatches=0`、root receipt 为 `CLEANED/UNKNOWN`。Project Owner 已明确授权在原有 strict ownership、全新 disposable target 与 redacted evidence 边界内继续诊断和 fresh retry；BUG-009 当前为 `ULTRA_EXECUTING`。以上均不替代真实上游验收。
+- next_action: [BUG-009](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) 的 [fresh runtime record](./test-records/BUG-009-int001-forced-signal-runtime-2026-07-21-k6f8m2q9.md) 已如实记录 topology 修复后的唯一 rehearsal 未满足 controlled-health/strict listener proof，未发送 TERM；不得读取、重试或手工清理该 failed run，也不得把 `CLEANED/UNKNOWN` 误作 forced-SIGNAL 成功。Project Owner 已授权在既有 harness-only 边界内继续静态诊断和创建全新 run；每次 retry 必须保留 strict ownership proof、只使用新的 loopback-only disposable target 和 root-level redacted evidence，且不接触真实 TMS/SIM、shared `8112`、profile/credential、Worker、Gateway、Pool、identity、Codex route、external 或 production。BUG-009 未具备独立签核资格，INT-001 仍为 rejected，不能开始真实上游 acceptance。P1B-B/P2/P3/P4、Gateway strict、Worker external 与 production 均保持 deferred。
 
-P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rejected` 记录原样保留；[BUG-002](./workitems/BUG-002-p1a-required-section-contract.md) 修复已通过 [独立 re-signoff](./evidence/BUG-002-p1a-required-section-independent-resignoff.md)，P1A foundation/shadow 状态为 accepted。P1B-A 新增五条 canonical typed-management auth route 及 fixture-only credential/token verifier contract，现已通过 [独立签核](./evidence/GOV-001-p1b-a-independent-signoff.md)；它不 seed 或签发真实 SIM/TMS principal、grant、tenant authority 或 credential。P1B-B0 已通过 [独立签核](./evidence/GOV-001-p1b-b0-independent-signoff.md)：它只提供 synthetic/securely supplied inventory 的离线、无回显、无审批 classification，绝不读取真实 profile/secret/DB/network 或执行 seed。P1C-A 已通过 [独立签核](./evidence/GOV-001-p1c-a-independent-signoff.md)：它只使用 fixture、不能证明真实 S1/S2 principal 或 production readiness。Observer BFF 在 P1A 仍仅为 catalog/test-only，其 runtime shadow/audit 与 production hardening 延后为独立设计，BFF 仍只能 local/trusted dev、production blocked。Owner 批准的 `GET /actuator` 第 415 条 route 和 200→404 唯一兼容例外继续有效。当前仍不包含业务数据 seed、真实上游联调、Worker 路由修改或任何 external/production enablement；`NAVIGATOR_EXTERNAL_ENABLED=true` 仍绝不表示 Provider、Worker Gateway 或 production ready。
+P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rejected` 记录原样保留；[BUG-002](./workitems/BUG-002-p1a-required-section-contract.md) 修复已通过 [独立 re-signoff](./evidence/BUG-002-p1a-required-section-independent-resignoff.md)，P1A foundation/shadow 状态为 accepted。P1B-A 新增五条 canonical typed-management auth route 及 fixture-only credential/token verifier contract，现已通过 [独立签核](./evidence/GOV-001-p1b-a-independent-signoff.md)；它不 seed 或签发真实 SIM/TMS principal、grant、tenant authority 或 credential。P1B-B0 已通过 [独立签核](./evidence/GOV-001-p1b-b0-independent-signoff.md)：它只提供 synthetic/securely supplied inventory 的离线、无回显、无审批 classification，绝不读取真实 profile/secret/DB/network 或执行 seed。P1C-A 已通过 [独立签核](./evidence/GOV-001-p1c-a-independent-signoff.md)：它只使用 fixture、不能证明真实 S1/S2 principal 或 production readiness。[开发期 S1/S2 联调 MVP](./workitems/GOV-001-dev-s1-s2-integration-mvp.md) 已通过 [独立签核](./evidence/GOV-001-dev-s1-s2-integration-mvp-independent-signoff.md)：只覆盖动态 tenant list、CLI/手册 lane 边界和本地 preflight，不证明 real SIM/TMS runtime、Gateway external 或 production。Observer BFF 在 P1A 仍仅为 catalog/test-only，其 runtime shadow/audit 与 production hardening 延后为独立设计，BFF 仍只能 local/trusted dev、production blocked。Owner 批准的 `GET /actuator` 第 415 条 route 和 200→404 唯一兼容例外继续有效。[INT-001](./workitems/INT-001-synthetic-upstream-integration-harness.md) 的 [独立签核](./evidence/INT-001-independent-signoff.md) 为 `rejected`：AC-2 的 forced-SIGNAL cleanup 根 receipt 为 `FAILED_CLEANUP/SIGNAL`。Project Owner 已批准 [BUG-009](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) 的独立、harness-only diagnosis/fix；它仍禁止读取、重试或手工清理失败 run，并要求新的 `CLEANED/SIGNAL` 证明才可重新签核 INT-001。 [BUG-008](./workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md) 通过 [独立签核](./evidence/BUG-008-independent-signoff.md) 为 `accepted-with-risks`：只修复 server-internal LangGraph physical identity owner-context 传播，不创建/改绑 Worker、BizWorkerIdentity、Pool member，也不涉及 Codex 或 Gateway。当前仍不包含业务数据 seed、真实上游联调、Gateway/external/prod enablement；`NAVIGATOR_EXTERNAL_ENABLED=true` 仍绝不表示 Provider、Worker Gateway 或 production ready。
 
 ## Workitems
 
 | Workitem | Scope | Status |
 |---|---|---|
-| [GOV-001 上游权限体系与多场景信任边界](./workitems/GOV-001-upstream-permission-and-trust-boundary.md) | 当前权限模型基线、`foggy-world-sim` 专属实例 root、`tms-x3` SaaS 平台/租户分层，以及外部第三方的默认拒绝设计边界 | P1A、[P1B-A](./workitems/GOV-001-p1b-a-typed-management-auth-core.md)、[P1B-B0](./workitems/GOV-001-p1b-b0-preseed-inventory-and-owner-approval.md) 与 [P1C-A](./workitems/GOV-001-p1c-a-cli-skill-operator-ux.md) accepted；real P1B-B factual gate pending |
-| [GOV-001 P1B-B/P2/P3/P4 Owner Decision Intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) | 具名责任人、脱敏事实、架构/生产/迁移决策及 immutable approval reference 占位 | `PENDING_OWNER_INPUT`; 不解除任何 `DRAFT + BLOCKED` gate |
+| [GOV-001 开发期 S1/S2 联调 MVP](./workitems/GOV-001-dev-s1-s2-integration-mvp.md) | SIM 专属实例和 TMS 平台/租户的本地联调路径；动态 tenant ClientApp list、CLI lane 提示、runtime-only 交付手册 | ACCEPTED；仅本地 preflight，非 live/runtime acceptance |
+| [GOV-001 上游权限体系与多场景信任边界](./workitems/GOV-001-upstream-permission-and-trust-boundary.md) | 历史权限模型基线、S1 最终 instance root、S2 最终 SaaS platform/tenant 分层及 S3 默认拒绝边界 | 已接受基础切片保留；宽泛 P1B-B/P2/P3/P4 为当前开发期 MVP `NEEDS_REPLAN` / deferred |
+| [GOV-001 P1B-B/P2/P3/P4 Owner Decision Intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) | 具名责任人、脱敏事实、架构/生产/迁移决策及 immutable approval reference 占位 | `PENDING_OWNER_INPUT` / deferred；不解除任何 `DRAFT + BLOCKED` gate |
 | [GOV-001 P1C-A CLI/SKILL 权限可见性](./workitems/GOV-001-p1c-a-cli-skill-operator-ux.md) | typed-management-only whoami/permissions/non-binding explain、三态 config check、help/FAQ/runbook、canonical-manifest-derived input guard/provenance | ACCEPTED; no route cutover or release |
 | [BUG-002 P1A action required-section 合同缺失](./workitems/BUG-002-p1a-required-section-contract.md) | 修复 action-specific required-section catalog/context/validator 缺口和 runtime capability 误分类 | ACCEPTED |
+| [BUG-007 task capability function-scope schema contract](./workitems/BUG-007-task-token-function-scope-schema-contract.md) | 对齐 task-scoped token 的 `function_scope_json` mapping/preflight/migration 契约，并重试本机 TMS runtime-only safe ask | ULTRA_EXECUTING；runtime credential file-safety gate BLOCKED |
+| [INT-001 Synthetic Upstream Integration Harness](./workitems/INT-001-synthetic-upstream-integration-harness.md) | 可销毁、独立的 synthetic upstream runtime harness；用于本机发现/复现通用权限与运行时问题 | REJECTED；AC-2 forced-SIGNAL cleanup 为 `FAILED_CLEANUP/SIGNAL`，不替代真实 TMS/SIM 验收、Gateway external 或 production |
+| [BUG-008 Open API upstream physical LangGraph owner context](./workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md) | runtime-authenticated ClientApp 的 server-resolved upstream scope 进入 exact physical LangGraph identity lookup | ACCEPTED_WITH_RISKS；无 API/lane/Gateway/production 扩张 |
+| [BUG-009 INT-001 forced-SIGNAL owned cleanup](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) | acceptance-found harness lifecycle defect；健康 disposable stack 的 parent-TERM cleanup 仍返回 `FAILED_CLEANUP` | ULTRA_EXECUTING；approved held-child topology 与离线回归已完成，唯一 post-correction fresh run 未通过 controlled-health/strict listener proof、未发送 TERM；Project Owner 已授权在既有 strict boundary 内继续隔离诊断与 fresh retry；见 [runtime record](./test-records/BUG-009-int001-forced-signal-runtime-2026-07-21-k6f8m2q9.md) |
 | [BUG-004 Codex 真实中止闭环与再次中止状态确认](./workitems/BUG-004-codex-cancel-execution-and-retry-confirmation.md) | SDK Worker 真实进程退出闭环；App Server exact thread/turn 状态检查与再次中止确认 | READY_FOR_SIGNOFF |
 
 ## Scenario Sequence
