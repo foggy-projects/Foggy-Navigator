@@ -2282,6 +2282,64 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void manualPidKillAllowsSuperAdminForPlatformScopedTask() {
+        CodexTaskEntity entity = createTask(
+                "task-platform-manual-kill", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 22, 9, 0));
+        entity.setTenantId(null);
+        entity.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskIdForUpdate("task-platform-manual-kill")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.hasActiveOperationForTask("task-platform-manual-kill")).thenReturn(false);
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to_platform_manual_pid");
+            operation.setSchemaVersion(1);
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            operation.setExpectedPid(command.expectedPid());
+            operation.setExpectedProcessIdentity(command.expectedProcessIdentity());
+            return operation;
+        });
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        CodexTaskService.ManualPidKillRequest request = service.prepareManualPidKill(
+                "task-platform-manual-kill", "worker-1", "super-admin-1", "SUPER_ADMIN_MANUAL", null, true,
+                321, "codex-cli:321:2026-07-22T01:00:00.000Z", "worker-token");
+
+        assertEquals("to_platform_manual_pid", request.operationId());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(terminationOperationService).accept(any());
+    }
+
+    @Test
+    void manualPidKillRejectsTenantAdministratorForPlatformScopedTask() {
+        CodexTaskEntity entity = createTask(
+                "task-platform-tenant-admin", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 22, 9, 0));
+        entity.setTenantId(null);
+        entity.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskIdForUpdate("task-platform-tenant-admin")).thenReturn(Optional.of(entity));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.prepareManualPidKill("task-platform-tenant-admin", "worker-1", "tenant-admin-1",
+                        "TENANT_ADMIN_MANUAL", null, true, 321,
+                        "codex-cli:321:2026-07-22T01:00:00.000Z", "worker-token"));
+
+        assertEquals("TERMINATION_TASK_ACCESS_DENIED", error.getMessage());
+        verify(terminationOperationService, never()).accept(any());
+    }
+
+    @Test
     void manualPidKillRejectsOrdinaryTaskOwnerDespiteFreshProcessBinding() {
         CodexTaskEntity entity = createTask(
                 "task-owner-cannot-kill", "session-1", "worker-1", "dir-1", "RUNNING",

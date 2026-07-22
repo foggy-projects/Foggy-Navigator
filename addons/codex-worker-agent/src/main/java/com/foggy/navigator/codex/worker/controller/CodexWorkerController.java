@@ -27,6 +27,18 @@ import java.util.concurrent.TimeoutException;
 @RequiredArgsConstructor
 public class CodexWorkerController {
 
+    private static final Set<String> SAFE_TERMINATION_ERROR_CODES = Set.of(
+            "TERMINATION_MANUAL_PID_REQUIRED",
+            "TERMINATION_PROCESS_IDENTITY_REQUIRED",
+            "TERMINATION_WORKER_TASK_MISMATCH",
+            "TERMINATION_TASK_ACCESS_DENIED",
+            "TERMINATION_TASK_ALREADY_TERMINAL",
+            "TERMINATION_AUDIT_UNAVAILABLE",
+            "TERMINATION_OPERATION_PENDING",
+            "TERMINATION_PROCESS_IDENTITY_MISMATCH",
+            "REMOTE_TASK_ID_UNAVAILABLE"
+    );
+
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskService taskService;
@@ -82,7 +94,8 @@ public class CodexWorkerController {
             // PID termination is an administrator-only, audited operation.  The
             // method-level role gate above is intentionally stronger than the
             // ordinary Worker ownership check used for diagnostic reads.
-            operation = taskService.prepareManualPidKill(taskId, workerId, userId, "TENANT_ADMIN_MANUAL",
+            String actorType = UserContext.isSuperAdmin() ? "SUPER_ADMIN_MANUAL" : "TENANT_ADMIN_MANUAL";
+            operation = taskService.prepareManualPidKill(taskId, workerId, userId, actorType,
                     UserContext.getCurrentTenantId(), true, pid, processIdentity,
                     client.terminationSigningSecret());
             Map<String, Object> workerResult = client.killCliProcess(pid, force, operation.capability())
@@ -151,7 +164,7 @@ public class CodexWorkerController {
      * or credentials.  The control-plane UI and lifecycle logs expose only a
      * stable code; full details remain inside the Worker-side protected logs.
      */
-    private String safeWorkerErrorCode(Exception error) {
+    static String safeWorkerErrorCode(Exception error) {
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Throwable current = error;
         for (int depth = 0; current != null && depth < 8 && visited.add(current); depth++, current = current.getCause()) {
@@ -164,11 +177,14 @@ public class CodexWorkerController {
             if (current instanceof WebClientRequestException) {
                 return "CODEX_WORKER_CONNECTION_UNAVAILABLE";
             }
+            if (SAFE_TERMINATION_ERROR_CODES.contains(current.getMessage())) {
+                return current.getMessage();
+            }
         }
         return "CODEX_WORKER_REQUEST_UNCONFIRMED";
     }
 
-    private boolean isBlockingTimeout(Throwable error) {
+    private static boolean isBlockingTimeout(Throwable error) {
         return error instanceof IllegalStateException
                 && error.getMessage() != null
                 && error.getMessage().startsWith("Timeout on blocking read for ");

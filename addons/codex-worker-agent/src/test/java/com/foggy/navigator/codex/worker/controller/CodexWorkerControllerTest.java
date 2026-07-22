@@ -2,6 +2,7 @@ package com.foggy.navigator.codex.worker.controller;
 
 import com.foggy.navigator.common.annotation.RequireAuth;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -46,5 +47,21 @@ class CodexWorkerControllerTest {
 
         assertNotNull(authorization);
         assertTrue(Arrays.asList(authorization.roles()).contains("TENANT_ADMIN"));
+    }
+
+    @Test
+    void exposesStableLocalTerminationCodesWithoutLeakingArbitraryMessages() {
+        assertEquals("TERMINATION_TASK_ACCESS_DENIED",
+                CodexWorkerController.safeWorkerErrorCode(
+                        new IllegalArgumentException("TERMINATION_TASK_ACCESS_DENIED")));
+        assertEquals("TERMINATION_OPERATION_PENDING",
+                CodexWorkerController.safeWorkerErrorCode(
+                        new IllegalStateException("TERMINATION_OPERATION_PENDING")));
+        assertEquals("CODEX_WORKER_HTTP_409",
+                CodexWorkerController.safeWorkerErrorCode(WebClientResponseException.create(
+                        409, "Conflict", null, null, null)));
+        assertEquals("CODEX_WORKER_REQUEST_UNCONFIRMED",
+                CodexWorkerController.safeWorkerErrorCode(
+                        new IllegalArgumentException("sensitive internal detail")));
     }
 }

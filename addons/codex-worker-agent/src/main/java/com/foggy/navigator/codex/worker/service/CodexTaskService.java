@@ -2069,14 +2069,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             throw new IllegalArgumentException("TERMINATION_WORKER_TASK_MISMATCH");
         }
         // A task owner may inspect its Worker, but must not gain signal
-        // authority merely through ownership.  Only trusted admin entrypoints
-        // set both this actor type and the tenant-scoped authorization flag.
-        boolean trustedManualAdministrator = ("TENANT_ADMIN_MANUAL".equals(actorType)
+        // authority merely through ownership. Only trusted administrator
+        // entrypoints set these internal actor types after role checks.
+        boolean tenantScopedManualAdministrator = ("TENANT_ADMIN_MANUAL".equals(actorType)
                 || "UPSTREAM_ADMIN_MANUAL".equals(actorType))
                 && actorId != null && !actorId.isBlank()
                 && crossUserAuthorized && authorizedTenantId != null
                 && authorizedTenantId.equals(entity.getTenantId());
-        if (!trustedManualAdministrator) {
+        boolean platformSuperAdministrator = "SUPER_ADMIN_MANUAL".equals(actorType)
+                && actorId != null && !actorId.isBlank()
+                && crossUserAuthorized
+                && authorizedTenantId == null
+                && entity.getTenantId() == null;
+        if (!tenantScopedManualAdministrator && !platformSuperAdministrator) {
             throw new IllegalArgumentException("TERMINATION_TASK_ACCESS_DENIED");
         }
     }
