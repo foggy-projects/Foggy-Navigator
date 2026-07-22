@@ -18,6 +18,7 @@
 | Worker 能启动，但 Claude / Codex / Gemini CLI 太旧 | [升级底层本体](#升级底层本体) |
 | 前端模型名变了，想知道真实模型 | [模型名称说明](#模型名称说明) |
 | 装完后不知道是否成功 | [安装后检查](#安装后检查) |
+| Worker 在另一个 WSL，端口或鉴权发生漂移 | [跨 WSL Worker 运维与运行态漂移排查](./cross-wsl-worker-operations.md) |
 
 ## Worker 是什么
 

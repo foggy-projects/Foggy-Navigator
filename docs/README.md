@@ -15,6 +15,7 @@
 | [PC Workers 操作与体验检查清单](./test-cases/pc-workers-experience-checklist.md) | 桌面端 Workers 页面操作手册、体验清单与 Playwright 执行基线 | 已新增 |
 | [PC Workers Playwright 报告（2026-04-11）](./test-reports/pc-workers-playwright-report-2026-04-11.md) | 按 PC Workers 清单执行的首轮真实浏览器验证报告 | 已新增 |
 | [Worker 重新安装与本体升级指南](./worker-reinstall-and-upgrade-guide.md) | Claude / Codex / Gemini Worker 重装、底层 CLI 升级与模型 alias 映射说明 | 已新增 |
+| [跨 WSL Worker 运维与运行态漂移排查](./cross-wsl-worker-operations.md) | 跨发行版 Worker 的身份确认、恢复边界、token 漂移诊断与验收顺序 | 已新增 |
 | [Agent 框架需求](./agent-framework-requirements.md) | 公共 Agent 框架接口与实现要求 | 已完成 |
 | [Agent 框架指南](./agent-framework-guide.md) | 框架使用指南 | 已完成 |
 | [认证快速上手](./auth-quickstart.md) | JWT 认证配置 | 已完成 |
