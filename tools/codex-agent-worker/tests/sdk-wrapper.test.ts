@@ -379,7 +379,7 @@ test('thread item error is emitted as a non-terminal warning', () => {
   assert.equal(events[0]?.type, 'warning')
   assert.equal(events[0]?.task_id, 'task-warning')
   assert.equal(events[0]?.session_id, 'thread-warning')
-  assert.equal(events[0]?.content, 'Codex 执行进程异常退出')
+  assert.equal(events[0]?.content, 'Codex 运行时返回未分类错误')
   assert.equal(events[0]?.error_code, 'CODEX_WORKER_REMOTE_ERROR')
   assert.equal(events[0]?.diagnostic_text, 'CODEX_WORKER_REMOTE_ERROR')
   assert.equal(events[0]?.subtype, 'sdk_diagnostic')

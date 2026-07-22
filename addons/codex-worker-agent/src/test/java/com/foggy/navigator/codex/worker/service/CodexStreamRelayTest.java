@@ -1304,6 +1304,47 @@ class CodexStreamRelayTest {
         verify(taskService, never()).reconcileAbortedTask(any(), any(), any());
         verify(taskService).recordWorkerProgress(
                 "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        AgentMessage recovery = assertInstanceOf(AgentMessage.class, eventCaptor.getValue());
+        assertEquals(MessageType.STATE_SYNC, recovery.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) recovery.getPayload();
+        assertEquals("CODEX_RUNTIME_RESULT_UNKNOWN", payload.get("content"));
+        assertEquals("reconnect_pending", payload.get("subtype"));
+        assertEquals(true, payload.get("reconnectable"));
+    }
+
+    @Test
+    void processUnverifiedLifecycleWarningUsesRecoverableStatusInsteadOfGenericWarning() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "warning",
+                "subtype", "lifecycle_attention",
+                "attention_status", "PROCESS_UNVERIFIED",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "content", "Codex SDK stream ended without a provider terminal observation"));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicInteger(0));
+
+        verify(taskService).markLifecycleAttention("local-task-1", "PROCESS_UNVERIFIED");
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        AgentMessage recovery = assertInstanceOf(AgentMessage.class, eventCaptor.getValue());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) recovery.getPayload();
+        assertEquals("CODEX_RUNTIME_RESULT_UNKNOWN", payload.get("content"));
+        assertEquals("reconnect_pending", payload.get("subtype"));
+        verifyNoInteractions(sessionEventListener);
     }
 
     @Test
@@ -1398,7 +1439,7 @@ class CodexStreamRelayTest {
     }
 
     @Test
-    void lateTerminalEventOnlyAdvancesCursorWithoutPublishingContradictoryOutcome() {
+    void lateTerminalEventIsIgnoredWithoutAdvancingCursorOrPublishingContradictoryOutcome() {
         CodexTaskEntity entity = stubAppServerTask("TERMINAL");
         entity.setWorkerTaskId("worker-task-1");
         entity.setStatus("COMPLETED");
@@ -1410,11 +1451,30 @@ class CodexStreamRelayTest {
                 new java.util.concurrent.atomic.AtomicReference<String>(),
                 new java.util.concurrent.atomic.AtomicInteger(0));
 
-        verify(taskService).recordWorkerProgress(
-                "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
-        verify(taskService, never()).failTask(any(), any(), any(), any());
+        verifyNoInteractions(taskService);
         verifyNoInteractions(sessionEventListener);
         verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void terminalTaskSseErrorIsIgnoredWithoutSchedulingRecovery() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("COMPLETED");
+        entity.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseError",
+                "local-task-1", "session-1", "worker-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                0, null, new IllegalStateException("post-terminal callback failure"));
+
+        verifyNoInteractions(taskService);
+        verifyNoInteractions(eventPublisher);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> recoveries = (Map<String, Object>)
+                ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        assertTrue(recoveries.isEmpty());
     }
 
     @Test

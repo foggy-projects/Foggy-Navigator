@@ -93,6 +93,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-008 Open API upstream physical LangGraph owner context](./workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md) | runtime-authenticated ClientApp 的 server-resolved upstream scope 进入 exact physical LangGraph identity lookup | ACCEPTED_WITH_RISKS；无 API/lane/Gateway/production 扩张 |
 | [BUG-009 INT-001 forced-SIGNAL owned cleanup](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) | acceptance-found harness lifecycle defect；forced-SIGNAL cleanup 必须证明全部 run-owned process resource 清空 | READY_FOR_SIGNOFF；BUG-010 已补 PGID-empty fail-closed 证明，等待独立 re-signoff |
 | [BUG-010 INT-001 process-group-empty cleanup proof](./workitems/BUG-010-int001-process-group-empty-proof.md) | 修复 BUG-009 拒签发现的 leader-dead / descendant-alive false-clean 缺口 | READY_FOR_SIGNOFF；仅离线 harness/test 修复，无 runtime 权限 |
+| [BUG-013 Codex 待核验状态与终态后 SSE 异常](./workitems/BUG-013-codex-unverified-state-and-post-terminal-sse.md) | 将 `PROCESS_UNVERIFIED` 收敛为可查询状态卡，并阻止终态后的 SSE 错误触发恢复 | READY_FOR_SIGNOFF；需部署本提交后进行 live 验证 |
 | [BUG-004 Codex 真实中止闭环与再次中止状态确认](./workitems/BUG-004-codex-cancel-execution-and-retry-confirmation.md) | SDK Worker 真实进程退出闭环；App Server exact thread/turn 状态检查与再次中止确认 | READY_FOR_SIGNOFF |
 
 ## Scenario Sequence

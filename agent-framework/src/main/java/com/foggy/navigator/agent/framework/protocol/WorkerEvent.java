@@ -125,6 +125,14 @@ public class WorkerEvent {
     private String subtype;
     private Map<String, Object> data;
 
+    /**
+     * Non-terminal lifecycle attention supplied by a Worker. This remains
+     * additive so relays that do not understand the field can keep their
+     * existing warning behavior.
+     */
+    @JsonProperty("attention_status")
+    private String attentionStatus;
+
     // ── ESN (Event Sequence Number) ──
 
     /** Monotonically increasing sequence number injected by Worker EventBroadcast.

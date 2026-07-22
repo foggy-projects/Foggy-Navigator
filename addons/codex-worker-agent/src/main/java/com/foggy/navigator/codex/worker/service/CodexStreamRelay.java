@@ -571,6 +571,12 @@ public class CodexStreamRelay {
             scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
             return;
         }
+        if (isLocalTerminal(task)) {
+            log.info("Ignoring Codex SSE error after terminal task: taskId={}, status={}, type={}",
+                    taskId, task.getStatus(), exceptionType(error));
+            clearStreamTracking(taskId);
+            return;
+        }
         if (task == null || task.getWorkerTaskId() == null || task.getWorkerTaskId().isBlank()) {
             failStreamTask(taskId, sessionId, providerType, detectedCodexThreadId,
                     "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE");
@@ -905,13 +911,15 @@ public class CodexStreamRelay {
         try {
             WorkerEvent event = objectMapper.readValue(data, WorkerEvent.class);
 
-            if (!isNextWorkerEvent(event, taskId, seqTracker)) {
+            CodexTaskEntity currentTask = taskRepository.findByTaskId(taskId).orElse(null);
+            if (isLocalTerminal(currentTask)) {
+                log.info("Ignoring Codex SSE event after terminal task: taskId={}, status={}, type={}, seq={}",
+                        taskId, currentTask.getStatus(), event.getType(), event.getSeq());
+                clearStreamTracking(taskId);
                 return;
             }
 
-            CodexTaskEntity currentTask = taskRepository.findByTaskId(taskId).orElse(null);
-            if (isLocalTerminal(currentTask)) {
-                acknowledgeWorkerEvent(taskId, event, false);
+            if (!isNextWorkerEvent(event, taskId, seqTracker)) {
                 return;
             }
 
@@ -987,6 +995,11 @@ public class CodexStreamRelay {
                     // Worker diagnostics may contain command lines, workspace paths, or
                     // credentials.  Keep a warning non-terminal, but never relay its
                     // raw diagnostic text into durable session state/SSE.
+                    if (isProcessUnverifiedAttention(event)) {
+                        taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
+                        publishResultUnknown(sessionId, providerType, taskId);
+                        break;
+                    }
                     String warning = ErrorDiagnosticSanitizer.sanitize(event.getContent());
                     publishBuilt(mb.stateSync(warning != null ? warning : "CODEX_WORKER_WARNING", "warning"),
                             workerMessageId(taskId, event));
@@ -1056,8 +1069,8 @@ public class CodexStreamRelay {
                         // the CLI has exited.  It never proves a terminal task
                         // outcome unless the Worker supplies explicit evidence.
                         taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
-                        publishBuilt(mb.stateSync("PROCESS_UNVERIFIED", "PROCESS_UNVERIFIED"),
-                                workerMessageId(taskId, event));
+                        log.info("Codex task awaits verified terminal outcome: taskId={}, errorCode={}, seq={}",
+                                taskId, failure, event.getSeq());
                         publishResultUnknown(sessionId, providerType, taskId);
                         break;
                     }
@@ -1174,6 +1187,12 @@ public class CodexStreamRelay {
 
     private boolean isTerminalWorkerEvent(WorkerEvent event) {
         return event != null && ("result".equals(event.getType()) || isVerifiedTerminalError(event));
+    }
+
+    private boolean isProcessUnverifiedAttention(WorkerEvent event) {
+        return event != null
+                && "lifecycle_attention".equals(event.getSubtype())
+                && "PROCESS_UNVERIFIED".equals(event.getAttentionStatus());
     }
 
     /**

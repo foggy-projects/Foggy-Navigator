@@ -86,7 +86,7 @@ function safeMessage(code: string): string {
     case 'CODEX_WORKER_NETWORK_ERROR': return 'Codex Worker 与运行时连接异常'
     case 'CODEX_STREAM_UNCONFIRMED': return 'Codex 运行时报告了待核验错误，任务状态尚未终态'
     case 'CODEX_THREAD_NOT_FOUND': return 'Codex 会话在当前 Worker Home 中不存在'
-    default: return 'Codex 执行进程异常退出'
+    default: return 'Codex 运行时返回未分类错误'
   }
 }
 
