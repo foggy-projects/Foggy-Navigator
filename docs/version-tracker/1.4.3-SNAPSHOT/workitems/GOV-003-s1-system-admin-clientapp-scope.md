@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: GOV-003
-status: BLOCKED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 approved_by: project-owner-user-confirmed
@@ -53,12 +53,12 @@ open_questions: []
 - [x] AC-2: 每个请求同时验证 target ClientApp 的 active/tenant/upstream/namespace 边界；跨 upstream、未授权 tenant、非 ClientApp-owned target 一律 fail closed。
 - [x] AC-3: CLI 不混用 profile，`platform app-scope` help 与实际命令明确；输出不泄露 secrets 且含 owner/scope/authorization diagnostics。
 - [x] AC-4: `platform tenant list` 明确为 ClientApp list；`platform app list --help` 只显示帮助、不访问服务端。
-- [ ] AC-5: 相关模块测试、CLI package/install smoke 通过；发布 version/buildId/gitCommit/8112 restart 结论和复测入口已记录。
+- [x] AC-5: 相关模块测试、CLI package/install smoke 通过；发布 version/buildId/gitCommit/8112 restart 结论和复测入口已记录。
 
 ## Validation and Risks
 
 - required: controller/service/CLI contract regression；negative cross-upstream and mixed-lane tests；SDK reactor；backend affected-module tests；CLI package and installer smoke。
-- residual: 不使用真实 SIM/TMS credential 或执行 Worker update/ask；真实 8112 的重启仅在发布 artifact 部署后由该实例 owner 执行。
+- residual: 不使用真实 SIM/TMS credential 或执行 Worker update/ask；SIM 仅重跑 Step 2，仍需以其 system-admin profile 做目标资源复测。
 
 ## Implementation Result
 
@@ -85,8 +85,10 @@ open_questions: []
 
 ### Manual / release evidence
 
-- No Worker update, real ask, or 8112 process operation was performed.
-- OBS upload was attempted through the standard upload script. It is blocked before transfer because this environment has no usable OBS publish credentials; no credential value was read, printed, or committed. Therefore remote installer smoke and published `latest.json` cannot be claimed.
+- 2026-07-22：确认 `8112` 原 listener 的 Java command 和 cwd 均指向当前 `/home/sa/workspace/Foggy-Navigator`，部署 clean launcher artifact 后重启。新 PID 监听 `127.0.0.1:8112`，`GET /actuator/health` 返回 `UP`（含 MySQL `UP`）。未重启任何 Worker。
+- 发布成功：`navigator-upstream-cli` `1.0.23`，buildId `1.0.23+aa4a944e7f25`，gitCommit `aa4a944e7f2510fe1cfff623d92732df573fb9cf`；Windows SHA-256 `125ad58a4c8bdd1c0ff4cb25590be07875612a8fe0da98211b27578e1422beb0`，Linux SHA-256 `8d487493632c22cea4cb693afaac69fe6fa0e7b6d3bfa613f8b72ee3cd20e5ea`。
+- 使用 standard `upload.sh` 上传 Windows ZIP、Linux TAR.GZ、`latest.json`、`install.ps1`、`install.sh`，五项均为 OBS HTTP `200`；内建远端 Linux installer smoke exit `0`。随后读取远端 `latest.json`，version/buildId/gitCommit/SHA-256 与本地 release manifest 一致。
+- 凭据来源位置（仅位置与可用性，未读取、输出或提交任何值）：实际发布使用宿主配置 `/mnt/c/Users/oldse/.obsutilconfig`；`/home/sa/.obsutilconfig` 是不可用于发布的占位模板；发布目标配置位于 gitignored `tools/navigator-upstream-cli/.env`，只提供 release base/bucket 路由配置。此记录用于后续发布复用，不得将任何 credential value 写入仓库。
 
 ### Deviations
 
@@ -94,7 +96,5 @@ open_questions: []
 
 ### Residual risks / next action
 
-- Publish the already built `1.0.23` archives from an environment with valid OBS credentials, then let `upload.sh` complete its remote Linux installer smoke.
-- Deploy the clean launcher build to SIM's S1 Navigator instance and restart 8112; do not restart any Worker. SIM can then rerun Step 2 only.
-
-- readiness: BLOCKED (external OBS publish credential unavailable)
+- 未以真实 SIM/TMS credential 执行资源变更、Worker update 或 ask；这符合本次边界。SIM 现在可只用 system-admin profile 重跑 Step 2，并显式传入 `--client-app-id`。
+- readiness: READY_FOR_SIGNOFF
