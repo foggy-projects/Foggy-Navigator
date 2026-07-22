@@ -43,6 +43,7 @@ readonly DYNAMIC_PORT_MAX=29999
 # ownership-checked cleanup path and cannot produce a SIGNAL success receipt.
 readonly PARENT_TERM_REHEARSAL_HOLD_SECONDS=180
 readonly CLEANUP_RECEIPT_SCHEMA_VERSION=4
+readonly PORT_RESERVATION_SCHEMA_VERSION=1
 # `start_child` reserves this status for a process that did begin but exited
 # before its ownership metadata could be recorded. It is distinct from local
 # setup/exec preparation failures so the Launcher's fixed-enum classifier can
@@ -104,6 +105,9 @@ readonly BIZ_INGRESS_PROXY_LOG_NAME='biz-ingress-proxy.log'
 readonly DIRECTORY_FACADE_LOG_NAME='directory-facade.log'
 readonly BOOTSTRAP_PLAN_NAME='bootstrap-plan.txt'
 readonly CLEANUP_REPORT_NAME='cleanup-report.json'
+readonly CLEANUP_REPORT_PENDING_NAME='.cleanup-report.pending'
+readonly PORT_RESERVATION_DIRECTORY_NAME='.port-reservations'
+readonly PORT_RESERVATION_SUFFIX='.ports'
 readonly BIZ_INGRESS_COUNTER_NAME='biz-ingress-count'
 readonly BIZ_INGRESS_LOCK_NAME='biz-ingress-count.lock'
 readonly -a LEGACY_ROOT_PRIVATE_CARRIER_NAMES=(
@@ -147,6 +151,15 @@ declare -A CHILD_META=()
 # credential carriers are scrubbed even when a Docker/ownership check fails.
 CLEANUP_SCRUB_RUN_DIR=""
 CLEANUP_SCRUB_COMPLETED=0
+# A prepare reserves all six ports before it creates any credential carrier.
+# Its EXIT path may release only that exact reservation while no service has
+# started. A completed prepare disarms this release so later lifecycle cleanup
+# remains the sole authority that can return the ports to the registry.
+PREPARE_PORT_RESERVATION_RELEASE_ARMED=0
+PREPARE_PORT_RESERVATION_PATH=""
+# `exclusive` is held by prepare; lifecycle readers take `shared`; successful
+# cleanup takes `exclusive` only after all owned process/Docker cleanup proof.
+PORT_RESERVATION_LOCK_MODE=""
 # `run`, `bootstrap`, and `audit` are independently invokable lifecycle
 # stages.  Once one has accepted a prepared run, an interrupt must follow the
 # same ownership-checked cleanup path as a normal stage failure.  This state
@@ -228,6 +241,8 @@ Safety boundary:
   - cleanup refuses to signal or delete anything without run-id, cwd, PID-start,
     process-group, Compose-project, and INT-001 label ownership proof.
   - generated secret carriers are 0600 files under temp/test-artifacts/INT-001.
+  - cross-run port coordination reads only the root-level non-secret
+    .port-reservations registry; it never opens another run's private carrier.
   - NAVIGATOR_EXTERNAL_ENABLED only opens the disposable target's Open API
     routes; it does not enable Gateway external, Provider, or production.
 USAGE
@@ -245,6 +260,11 @@ note() {
 cleanup_exit_trap() {
   local status="$?"
   trap - EXIT
+  if [[ "$PREPARE_PORT_RESERVATION_RELEASE_ARMED" == 1 ]]; then
+    if ! (trap - EXIT; release_current_port_reservation); then
+      note "prepare failed; exact port reservation retained for explicit remediation"
+    fi
+  fi
   # Do not turn an operational cleanup failure into a credential-residue
   # failure.  This helper never follows symlinks or emits private values.
   if [[ -n "$CLEANUP_SCRUB_RUN_DIR" && "$CLEANUP_SCRUB_COMPLETED" != 1 ]]; then
@@ -818,6 +838,11 @@ schema_keys() {
         INT001_A_AGENT_ID INT001_A_UPSTREAM_USER_ID INT001_A_MODEL_CONFIG_ID INT001_A_DIRECTORY_ID \
         INT001_B_AGENT_ID INT001_C_AGENT_ID
       ;;
+    port-reservation)
+      printf '%s\n' INT001_PORT_RESERVATION_SCHEMA INT001_RUN_ID INT001_NAVIGATOR_PORT \
+        INT001_MYSQL_PORT INT001_MOCK_LLM_PORT INT001_BIZ_PORT \
+        INT001_BIZ_INGRESS_PROXY_PORT INT001_DIRECTORY_FACADE_PORT
+      ;;
     child)
       printf '%s\n' INT001_CHILD_NAME PID START_TICKS PGID SID CWD COMMAND_FRAGMENT
       ;;
@@ -906,20 +931,98 @@ finally:
 PY
 }
 
-port_is_used_by_other_prepared_run() {
-  local candidate="$1" file other_run_dir
+port_reservation_directory() {
+  printf '%s/%s\n' "$ARTIFACT_ROOT" "$PORT_RESERVATION_DIRECTORY_NAME"
+}
+
+port_reservation_path() {
+  local run_id="$1"
+  [[ "$run_id" =~ $RUN_ID_PATTERN && "$run_id" != *--* && "$run_id" != *- ]] \
+    || die "port reservation runId is unsafe"
+  printf '%s/%s%s\n' "$(port_reservation_directory)" "$run_id" "$PORT_RESERVATION_SUFFIX"
+}
+
+ensure_port_reservation_directory() {
+  local dir owner mode
+  dir="$(port_reservation_directory)"
+  if [[ -e "$dir" || -L "$dir" ]]; then
+    [[ -d "$dir" && ! -L "$dir" ]] || die "port reservation directory is unsafe"
+  else
+    mkdir -m 700 -- "$dir" || die "cannot create port reservation directory"
+  fi
+  mode="$(stat -c '%a' -- "$dir" 2>/dev/null)" || die "cannot inspect port reservation directory mode"
+  owner="$(stat -c '%u' -- "$dir" 2>/dev/null)" || die "cannot inspect port reservation directory owner"
+  [[ "$mode" == 700 && "$owner" == "$(id -u)" ]] || die "port reservation directory ownership or mode is unsafe"
+}
+
+assert_port_reservation_directory() {
+  local dir owner mode
+  dir="$(port_reservation_directory)"
+  [[ -d "$dir" && ! -L "$dir" ]] || die "port reservation directory is absent or unsafe"
+  mode="$(stat -c '%a' -- "$dir" 2>/dev/null)" || die "cannot inspect port reservation directory mode"
+  owner="$(stat -c '%u' -- "$dir" 2>/dev/null)" || die "cannot inspect port reservation directory owner"
+  [[ "$mode" == 700 && "$owner" == "$(id -u)" ]] || die "port reservation directory ownership or mode is unsafe"
+}
+
+parse_port_reservation() {
+  local file="$1" target_name="$2" file_name reservation_run_id
+  local -n reservation_out="$target_name"
+  file_name="$(basename -- "$file")"
+  [[ "$file_name" == *"$PORT_RESERVATION_SUFFIX" ]] || die "unknown port reservation entry"
+  reservation_run_id="${file_name%$PORT_RESERVATION_SUFFIX}"
+  [[ -n "$reservation_run_id" && "$reservation_run_id" != "$file_name" ]] || die "unknown port reservation entry"
+  [[ "$reservation_run_id" =~ $RUN_ID_PATTERN && "$reservation_run_id" != *--* && "$reservation_run_id" != *- ]] \
+    || die "port reservation filename has an unsafe runId"
+  parse_strict_env "$file" port-reservation "$target_name"
+  [[ "${reservation_out[INT001_PORT_RESERVATION_SCHEMA]}" == "$PORT_RESERVATION_SCHEMA_VERSION" ]] \
+    || die "port reservation schema is unsupported"
+  [[ "${reservation_out[INT001_RUN_ID]}" == "$reservation_run_id" ]] \
+    || die "port reservation runId does not match its filename"
+  validate_port "reservation Navigator port" "${reservation_out[INT001_NAVIGATOR_PORT]}"
+  validate_port "reservation MySQL port" "${reservation_out[INT001_MYSQL_PORT]}"
+  validate_port "reservation Mock LLM port" "${reservation_out[INT001_MOCK_LLM_PORT]}"
+  validate_port "reservation Biz Worker port" "${reservation_out[INT001_BIZ_PORT]}"
+  validate_port "reservation Biz ingress proxy port" "${reservation_out[INT001_BIZ_INGRESS_PROXY_PORT]}"
+  validate_port "reservation directory facade port" "${reservation_out[INT001_DIRECTORY_FACADE_PORT]}"
+  local -a ports=(
+    "${reservation_out[INT001_NAVIGATOR_PORT]}" "${reservation_out[INT001_MYSQL_PORT]}"
+    "${reservation_out[INT001_MOCK_LLM_PORT]}" "${reservation_out[INT001_BIZ_PORT]}"
+    "${reservation_out[INT001_BIZ_INGRESS_PROXY_PORT]}" "${reservation_out[INT001_DIRECTORY_FACADE_PORT]}"
+  )
+  [[ "$(printf '%s\n' "${ports[@]}" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" == 0 ]] \
+    || die "ports inside one reservation must be unique"
+}
+
+validate_port_reservation_registry() {
+  local dir file key port
+  local -A reservation=() seen_ports=()
   local -a port_keys=(INT001_NAVIGATOR_PORT INT001_MYSQL_PORT INT001_MOCK_LLM_PORT INT001_BIZ_PORT INT001_BIZ_INGRESS_PROXY_PORT INT001_DIRECTORY_FACADE_PORT)
-  local key
-  local -A other_stack=()
-  shopt -s nullglob
-  for file in "$ARTIFACT_ROOT"/*/"$PRIVATE_DIRECTORY_NAME"/"$STACK_ENV_NAME"; do
-    other_run_dir="$(dirname "$(dirname "$file")")"
-    [[ "$(realpath -m "$other_run_dir")" == "$(realpath -m "$(run_dir_for "$RUN_ID")")" ]] && continue
-    # Allocation can inspect another prepared run before this run has written
-    # its profile. Never clobber the current lifecycle profile while doing so.
-    parse_strict_env "$file" stack other_stack
+  assert_port_reservation_directory
+  dir="$(port_reservation_directory)"
+  shopt -s nullglob dotglob
+  for file in "$dir"/*; do
+    [[ -f "$file" && ! -L "$file" ]] || die "port reservation registry contains an unsafe entry"
+    parse_port_reservation "$file" reservation
     for key in "${port_keys[@]}"; do
-      [[ "${other_stack[$key]}" == "$candidate" ]] && {
+      port="${reservation[$key]}"
+      [[ -z "${seen_ports[$port]+present}" ]] || die "port reservation registry contains a duplicate port"
+      seen_ports["$port"]="${reservation[INT001_RUN_ID]}"
+    done
+  done
+  shopt -u nullglob dotglob
+}
+
+port_is_reserved_by_other_run() {
+  local candidate="$1" file key
+  local -A reservation=()
+  local -a port_keys=(INT001_NAVIGATOR_PORT INT001_MYSQL_PORT INT001_MOCK_LLM_PORT INT001_BIZ_PORT INT001_BIZ_INGRESS_PROXY_PORT INT001_DIRECTORY_FACADE_PORT)
+  validate_port_reservation_registry
+  shopt -s nullglob
+  for file in "$(port_reservation_directory)"/*"$PORT_RESERVATION_SUFFIX"; do
+    parse_port_reservation "$file" reservation
+    [[ "${reservation[INT001_RUN_ID]}" == "$RUN_ID" ]] && continue
+    for key in "${port_keys[@]}"; do
+      [[ "${reservation[$key]}" == "$candidate" ]] && {
         shopt -u nullglob
         return 0
       }
@@ -929,13 +1032,97 @@ port_is_used_by_other_prepared_run() {
   return 1
 }
 
+create_current_port_reservation_file() {
+  local file
+  local -A reservation=()
+  file="$(port_reservation_path "$RUN_ID")"
+  [[ ! -e "$file" && ! -L "$file" ]] || die "port reservation already exists for this runId"
+  if ! (set -o noclobber; {
+    printf 'INT001_PORT_RESERVATION_SCHEMA=%s\n' "$PORT_RESERVATION_SCHEMA_VERSION"
+    printf 'INT001_RUN_ID=%s\n' "$RUN_ID"
+    printf 'INT001_NAVIGATOR_PORT=%s\n' "$NAVIGATOR_PORT"
+    printf 'INT001_MYSQL_PORT=%s\n' "$MYSQL_PORT"
+    printf 'INT001_MOCK_LLM_PORT=%s\n' "$MOCK_LLM_PORT"
+    printf 'INT001_BIZ_PORT=%s\n' "$BIZ_PORT"
+    printf 'INT001_BIZ_INGRESS_PROXY_PORT=%s\n' "$BIZ_INGRESS_PROXY_PORT"
+    printf 'INT001_DIRECTORY_FACADE_PORT=%s\n' "$DIRECTORY_FACADE_PORT"
+  } > "$file") 2>/dev/null; then
+    die "could not create current run port reservation"
+  fi
+  chmod 600 -- "$file" || die "cannot protect current run port reservation"
+  parse_port_reservation "$file" reservation
+}
+
+write_current_port_reservation() {
+  local file
+  validate_port_reservation_registry
+  create_current_port_reservation_file
+  file="$(port_reservation_path "$RUN_ID")"
+  PREPARE_PORT_RESERVATION_PATH="$file"
+  PREPARE_PORT_RESERVATION_RELEASE_ARMED=1
+}
+
+assert_current_port_reservation_matches() {
+  local file
+  local -A reservation=()
+  validate_port_reservation_registry
+  file="$(port_reservation_path "$RUN_ID")"
+  [[ -e "$file" || -L "$file" ]] || die "current run has no port reservation; legacy prepared runs cannot be resumed"
+  parse_port_reservation "$file" reservation
+  [[ "${reservation[INT001_NAVIGATOR_PORT]}" == "$NAVIGATOR_PORT" \
+    && "${reservation[INT001_MYSQL_PORT]}" == "$MYSQL_PORT" \
+    && "${reservation[INT001_MOCK_LLM_PORT]}" == "$MOCK_LLM_PORT" \
+    && "${reservation[INT001_BIZ_PORT]}" == "$BIZ_PORT" \
+    && "${reservation[INT001_BIZ_INGRESS_PROXY_PORT]}" == "$BIZ_INGRESS_PROXY_PORT" \
+    && "${reservation[INT001_DIRECTORY_FACADE_PORT]}" == "$DIRECTORY_FACADE_PORT" ]] \
+    || die "current run port reservation does not match its prepared profile"
+}
+
+assert_current_port_reservation_absent() {
+  local file
+  validate_port_reservation_registry
+  file="$(port_reservation_path "$RUN_ID")"
+  [[ ! -e "$file" && ! -L "$file" ]] \
+    || die "a CLEANED receipt cannot be accepted while its exact port reservation remains"
+}
+
+release_current_port_reservation() {
+  local file
+  local -A reservation=()
+  validate_port_reservation_registry
+  if [[ -n "$PREPARE_PORT_RESERVATION_PATH" ]]; then
+    file="$PREPARE_PORT_RESERVATION_PATH"
+  else
+    file="$(port_reservation_path "$RUN_ID")"
+  fi
+  if [[ ! -e "$file" && ! -L "$file" ]]; then
+    PREPARE_PORT_RESERVATION_RELEASE_ARMED=0
+    PREPARE_PORT_RESERVATION_PATH=""
+    return 0
+  fi
+  parse_port_reservation "$file" reservation
+  [[ "${reservation[INT001_RUN_ID]}" == "$RUN_ID" \
+    && "${reservation[INT001_NAVIGATOR_PORT]}" == "$NAVIGATOR_PORT" \
+    && "${reservation[INT001_MYSQL_PORT]}" == "$MYSQL_PORT" \
+    && "${reservation[INT001_MOCK_LLM_PORT]}" == "$MOCK_LLM_PORT" \
+    && "${reservation[INT001_BIZ_PORT]}" == "$BIZ_PORT" \
+    && "${reservation[INT001_BIZ_INGRESS_PROXY_PORT]}" == "$BIZ_INGRESS_PROXY_PORT" \
+    && "${reservation[INT001_DIRECTORY_FACADE_PORT]}" == "$DIRECTORY_FACADE_PORT" ]] \
+    || die "refusing to release a mismatched port reservation"
+  rm -f -- "$file" || return 1
+  [[ ! -e "$file" && ! -L "$file" ]] || return 1
+  PREPARE_PORT_RESERVATION_RELEASE_ARMED=0
+  PREPARE_PORT_RESERVATION_PATH=""
+  return 0
+}
+
 assert_port_available() {
   local label="$1" port="$2"
   port_can_bind "$port" || die "$label port $port is already listening or cannot bind loopback"
-  if port_is_used_by_other_prepared_run "$port"; then
+  if port_is_reserved_by_other_run "$port"; then
     die "$label port $port is already reserved by another prepared INT-001 run"
   fi
-  # `port_is_used_by_other_prepared_run` deliberately returns 1 when the
+  # `port_is_reserved_by_other_run` deliberately returns 1 when the
   # candidate is free.  Do not leak that expected negative result as this
   # helper's return status under `set -e`.
   return 0
@@ -957,7 +1144,7 @@ PY
 )" || die "could not choose a candidate loopback port for $label"
     if [[ "$port" != "$NAVIGATOR_PORT" && "$port" != "$MYSQL_PORT" && "$port" != "$MOCK_LLM_PORT" \
       && "$port" != "$BIZ_PORT" && "$port" != "$BIZ_INGRESS_PROXY_PORT" && "$port" != "$DIRECTORY_FACADE_PORT" ]]; then
-      if validate_port "$label" "$port" && port_can_bind "$port" && ! port_is_used_by_other_prepared_run "$port"; then
+      if validate_port "$label" "$port" && port_can_bind "$port" && ! port_is_reserved_by_other_run "$port"; then
         # The bind probe intentionally closes before this function returns.
         # It narrows accidental collisions but cannot reserve a host port
         # against an external racer. Compose startup and its post-start TCP
@@ -978,6 +1165,38 @@ acquire_prepare_lock() {
   # while retaining a process-scoped advisory lock for concurrent prepares.
   exec 9<"$ARTIFACT_ROOT" || die "cannot open INT-001 artifact root for locking"
   flock -n 9 || die "another INT-001 prepare is in progress"
+  PORT_RESERVATION_LOCK_MODE=exclusive
+  ensure_port_reservation_directory
+}
+
+acquire_port_reservation_shared_lock() {
+  [[ "$PORT_RESERVATION_LOCK_MODE" == exclusive || "$PORT_RESERVATION_LOCK_MODE" == shared ]] && return 0
+  assert_artifact_root_path_chain
+  assert_private_dir "$ARTIFACT_ROOT"
+  exec 9<"$ARTIFACT_ROOT" || die "cannot open INT-001 artifact root for port reservation locking"
+  flock -n -s 9 || die "INT-001 port reservation registry is busy"
+  PORT_RESERVATION_LOCK_MODE=shared
+  assert_port_reservation_directory
+}
+
+acquire_port_reservation_cleanup_lock() {
+  [[ "$PORT_RESERVATION_LOCK_MODE" == exclusive ]] && return 0
+  if [[ "$PORT_RESERVATION_LOCK_MODE" == shared ]]; then
+    flock -u 9 || return 1
+    exec 9>&-
+    PORT_RESERVATION_LOCK_MODE=""
+  fi
+  [[ -z "$PORT_RESERVATION_LOCK_MODE" ]] || return 1
+  assert_artifact_root_path_chain || return 1
+  assert_private_dir "$ARTIFACT_ROOT" || return 1
+  exec 9<"$ARTIFACT_ROOT" || return 1
+  flock -n -x 9 || return 1
+  PORT_RESERVATION_LOCK_MODE=exclusive
+  # A legacy prepared run may predate the registry. Cleanup is still allowed
+  # to prove and remove only its owned runtime resources; create an empty,
+  # non-secret registry under the exclusive root lock rather than reading or
+  # migrating that run's private profile to synthesize a reservation.
+  ensure_port_reservation_directory || return 1
 }
 
 acquire_run_lock() {
@@ -1327,6 +1546,8 @@ doctor_prepared_run() {
   assert_no_legacy_root_private_carriers "$run_dir"
   [[ "$(manifest_state "$manifest")" == PREPARED ]] || die "doctor only accepts a PREPARED run; cleanup stale/running runs first"
   load_prepared_profiles "$run_dir"
+  acquire_port_reservation_shared_lock
+  assert_current_port_reservation_matches
   assert_generated_response "$run_dir"
   assert_ports_unused
   assert_tooling
@@ -1360,6 +1581,10 @@ prepare_run() {
   [[ -n "$DIRECTORY_FACADE_PORT" ]] || DIRECTORY_FACADE_PORT="$(allocate_port DirectoryFacade)"
   validate_port_set
   assert_ports_unused
+  # Reserve the complete port set before any run directory or credential
+  # carrier exists. The prepare EXIT trap releases only this exact reservation
+  # until a fully validated PREPARED lifecycle disarms it below.
+  write_current_port_reservation
 
   mkdir -m 700 "$run_dir"
   # From this point a failed prepare may have generated credential carriers.
@@ -1400,6 +1625,8 @@ prepare_run() {
   doctor_prepared_run "$run_dir"
   CLEANUP_SCRUB_COMPLETED=1
   CLEANUP_SCRUB_RUN_DIR=""
+  PREPARE_PORT_RESERVATION_RELEASE_ARMED=0
+  PREPARE_PORT_RESERVATION_PATH=""
   note "prepare=PASS runId=$RUN_ID artifacts=$run_dir"
 }
 
@@ -1413,6 +1640,8 @@ assert_running_run() {
   [[ "$state" == "$expected_state" ]] \
     || die "this lifecycle action requires a $expected_state run; current state is $state"
   load_prepared_profiles "$run_dir"
+  acquire_port_reservation_shared_lock
+  assert_current_port_reservation_matches
   assert_generated_response "$run_dir"
   assert_tooling
   project="${STACK_ENV[INT001_COMPOSE_PROJECT]}"
@@ -1968,20 +2197,17 @@ run_stack() {
 }
 
 hold_for_parent_term() {
-  local run_dir="$1" deadline
+  local run_dir="$1"
   [[ "$ACTION" == run && "$HOLD_FOR_PARENT_TERM" == 1 ]] \
     || die "parent TERM hold may run only inside the exact run lifecycle"
   [[ "$LIFECYCLE_SIGNAL_CLEANUP_ARMED" == 1 && "$LIFECYCLE_SIGNAL_RUN_DIR" == "$run_dir" ]] \
     || die "parent TERM hold requires armed owned cleanup"
   REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_ENTERED'
-  deadline=$((SECONDS + PARENT_TERM_REHEARSAL_HOLD_SECONDS))
   note "run=HOLDING_PARENT_TERM runId=$RUN_ID"
-  while (( SECONDS < deadline )); do
-    if ! sleep 1; then
-      REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_WAIT_FAILURE'
-      fail_lifecycle_stage "$run_dir" UNKNOWN "parent TERM rehearsal hold wait failed; owned runtime resources were sent through fail-closed cleanup"
-    fi
-  done
+  if ! sleep "$PARENT_TERM_REHEARSAL_HOLD_SECONDS"; then
+    REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_WAIT_FAILURE'
+    fail_lifecycle_stage "$run_dir" UNKNOWN "parent TERM rehearsal hold wait failed; owned runtime resources were sent through fail-closed cleanup"
+  fi
   REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_TIMEOUT'
   fail_lifecycle_stage "$run_dir" UNKNOWN "parent TERM rehearsal timed out; owned runtime resources were sent through fail-closed cleanup"
 }
@@ -2017,6 +2243,31 @@ child_is_proven_dead() {
     return 0
   fi
   ! child_is_alive "$pid" && [[ ! -e "/proc/$pid" ]]
+}
+
+# Prove that the exact recorded process group no longer exists without
+# enumerating host processes.  Only ESRCH is absence; EPERM and every other
+# syscall/interpreter failure remain unproven so cleanup stays fail closed.
+process_group_is_proven_absent() {
+  local pgid="$1"
+  [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || return 2
+  env -i "PATH=$SAFE_CHILD_PATH" "HOME=/tmp" python3 - "$pgid" <<'PY'
+import errno
+import os
+import sys
+
+pgid = int(sys.argv[1])
+try:
+    os.kill(-pgid, 0)
+except ProcessLookupError:
+    raise SystemExit(0)
+except PermissionError:
+    raise SystemExit(2)
+except OSError as error:
+    raise SystemExit(0 if error.errno == errno.ESRCH else 2)
+else:
+    raise SystemExit(1)
+PY
 }
 
 parse_child_meta_for_probe() {
@@ -2098,7 +2349,9 @@ stop_owned_child() {
     case "$ownership_state" in
       10)
         # Only a strictly parsed, current-user-owned metadata file may be
-        # removed after its recorded PID is proven dead.
+        # removed after its recorded PID is proven dead and the exact group
+        # it anchored is proven absent.
+        process_group_is_proven_absent "${CHILD_META[PGID]}" || return 1
         rm -f -- "$meta" || return 1
         return 0
         ;;
@@ -2113,17 +2366,41 @@ stop_owned_child() {
   fi
   pid="${CHILD_META[PID]}"
   pgid="${CHILD_META[PGID]}"
-  kill -TERM -- "-$pgid" || return 1
-  while ! child_is_proven_dead "$pid" && (( attempt < 20 )); do
+  # The process may complete naturally after the final ownership proof but
+  # before the signal syscall commits. Accept that narrow ESRCH-style race
+  # only after the exact recorded PID is independently proven dead; every
+  # live, inaccessible, or substituted process remains fail closed.
+  if ! kill -TERM -- "-$pgid"; then
+    child_is_proven_dead "$pid" || return 1
+    process_group_is_proven_absent "$pgid" || return 1
+    rm -f -- "$meta" || return 1
+    return 0
+  fi
+  while (( attempt < 20 )); do
+    if child_is_proven_dead "$pid" && process_group_is_proven_absent "$pgid"; then
+      break
+    fi
     sleep 0.25 || return 1
     ((attempt += 1))
   done
-  if ! child_is_proven_dead "$pid"; then
+  if ! child_is_proven_dead "$pid" || ! process_group_is_proven_absent "$pgid"; then
+    # Once the recorded leader is gone it can no longer anchor a destructive
+    # re-proof. A surviving or unprovable group must retain metadata for
+    # explicit remediation instead of risking a signal to a reused PGID.
+    child_is_proven_dead "$pid" && return 1
     validate_owned_child "$run_dir" "$name" "$fragment" || return 1
     kill -KILL -- "-$pgid" || return 1
-    sleep 0.25 || return 1
-    child_is_proven_dead "$pid" || return 1
+    attempt=0
+    while (( attempt < 20 )); do
+      if child_is_proven_dead "$pid" && process_group_is_proven_absent "$pgid"; then
+        break
+      fi
+      sleep 0.25 || return 1
+      ((attempt += 1))
+    done
   fi
+  child_is_proven_dead "$pid" || return 1
+  process_group_is_proven_absent "$pgid" || return 1
   rm -f -- "$meta" || return 1
   return 0
 }
@@ -2233,8 +2510,8 @@ safe_remove_run_path() {
   return 0
 }
 
-write_cleanup_report() {
-  local run_dir="$1" result="$2" failure_stage="${3:-NONE}" file
+write_cleanup_report_file() {
+  local run_dir="$1" result="$2" failure_stage="$3" file="$4"
   cleanup_result_allowed "$result" || die "cleanup receipt result is unsafe"
   failure_stage_allowed "$failure_stage" || die "cleanup receipt failure stage is unsafe"
   launcher_readiness_observation_allowed "$LAUNCHER_READINESS_OBSERVATION" \
@@ -2243,8 +2520,9 @@ write_cleanup_report() {
     || die "cleanup receipt Launcher failure class is unsafe"
   rehearsal_lifecycle_observation_allowed "$REHEARSAL_LIFECYCLE_OBSERVATION" \
     || die "cleanup receipt rehearsal lifecycle observation is unsafe"
-  file="$run_dir/$CLEANUP_REPORT_NAME"
   assert_private_dir "$run_dir"
+  [[ "$file" == "$run_dir/$CLEANUP_REPORT_NAME" || "$file" == "$run_dir/$CLEANUP_REPORT_PENDING_NAME" ]] \
+    || die "cleanup report path is unsafe"
   [[ ! -e "$file" && ! -L "$file" ]] || die "cleanup report already exists or is unsafe"
   if ! (set -o noclobber; {
     printf '{\n'
@@ -2265,22 +2543,74 @@ write_cleanup_report() {
   assert_private_file "$file"
 }
 
+write_cleanup_report() {
+  local run_dir="$1" result="$2" failure_stage="${3:-NONE}"
+  write_cleanup_report_file "$run_dir" "$result" "$failure_stage" "$run_dir/$CLEANUP_REPORT_NAME"
+}
+
+assert_cleanup_report_targets_absent() {
+  local run_dir="$1" target
+  assert_private_dir "$run_dir"
+  for target in "$run_dir/$CLEANUP_REPORT_NAME" "$run_dir/$CLEANUP_REPORT_PENDING_NAME"; do
+    [[ ! -e "$target" && ! -L "$target" ]] || return 1
+  done
+}
+
+stage_cleanup_report() {
+  local run_dir="$1" result="$2" failure_stage="$3"
+  write_cleanup_report_file "$run_dir" "$result" "$failure_stage" "$run_dir/$CLEANUP_REPORT_PENDING_NAME"
+}
+
+publish_staged_cleanup_report() {
+  local run_dir="$1" pending="$run_dir/$CLEANUP_REPORT_PENDING_NAME" final="$run_dir/$CLEANUP_REPORT_NAME"
+  local mode owner links
+  [[ -f "$pending" && ! -L "$pending" ]] || return 1
+  mode="$(stat -c '%a' -- "$pending" 2>/dev/null)" || return 1
+  owner="$(stat -c '%u' -- "$pending" 2>/dev/null)" || return 1
+  links="$(stat -c '%h' -- "$pending" 2>/dev/null)" || return 1
+  [[ "$mode" == 600 && "$owner" == "$(id -u)" && "$links" == 1 ]] || return 1
+  [[ ! -e "$final" && ! -L "$final" ]] || return 1
+  # The same-filesystem hard link is an atomic create-if-absent publication.
+  # Removing the staging name restores the durable receipt to nlink=1.
+  ln -- "$pending" "$final" || return 1
+  if ! rm -f -- "$pending"; then
+    rm -f -- "$final" || true
+    return 1
+  fi
+  [[ -f "$final" && ! -L "$final" ]] || return 1
+  mode="$(stat -c '%a' -- "$final" 2>/dev/null)" || return 1
+  owner="$(stat -c '%u' -- "$final" 2>/dev/null)" || return 1
+  links="$(stat -c '%h' -- "$final" 2>/dev/null)" || return 1
+  [[ "$mode" == 600 && "$owner" == "$(id -u)" && "$links" == 1 ]]
+}
+
 # The parent one-shot lifecycle may observe a child that has already removed
 # its private carriers.  Treat its root receipt as a security boundary, not as
 # a mere presence marker: only the exact fixed schema for this run and a
 # positively completed cleanup can satisfy the parent cleanup invariant.
 assert_cleaned_cleanup_receipt() {
   local file="$1" expected_failure_stage="${2:-}"
-  # A parent lifecycle may only adopt a child cleanup receipt for the same
-  # fixed failure stage.  In particular, a parent TERM cannot turn an older
-  # successful cleanup such as CLEANED/PREPARE into evidence for
-  # CLEANED/SIGNAL.
-  [[ -z "$expected_failure_stage" ]] || failure_stage_allowed "$expected_failure_stage" \
-    || die "cleanup receipt expected failure stage is unsafe"
-  if ! (trap - EXIT; assert_private_file "$file"); then
-    return 1
-  fi
-  python3 - "$file" "$RUN_ID" "$expected_failure_stage" <<'PY' || return 1
+  # Receipt adoption is one fail-closed operation. Keep lock acquisition,
+  # reservation validation and receipt parsing in the same controlled
+  # subshell so the shared lock covers the whole composite proof while any
+  # internal `die()` becomes a normal rejection to the outer signal handler.
+  # This preserves terminal exit 128 without weakening registry or receipt
+  # validation and releases the subshell-owned lock only after parsing ends.
+  if ! (
+    trap - EXIT
+    # A parent lifecycle may only adopt a child cleanup receipt for the same
+    # fixed failure stage. In particular, a parent TERM cannot turn an older
+    # successful cleanup such as CLEANED/PREPARE into CLEANED/SIGNAL evidence.
+    [[ -z "$expected_failure_stage" ]] || failure_stage_allowed "$expected_failure_stage" \
+      || die "cleanup receipt expected failure stage is unsafe"
+    # Receipt publication and reservation release are one logical commit. The
+    # shared artifact-root lock serializes this reader with cleanup finalization;
+    # a valid receipt is never success evidence while the exact reservation (or
+    # any unsafe registry state) remains.
+    acquire_port_reservation_shared_lock
+    assert_current_port_reservation_absent
+    assert_private_file "$file"
+    python3 - "$file" "$RUN_ID" "$expected_failure_stage" <<'PY'
 import json
 import re
 import sys
@@ -2345,7 +2675,9 @@ if not isinstance(value["finishedAtUtc"], str) or not re.fullmatch(
 ):
     raise SystemExit(1)
 PY
-  return 0
+  ); then
+    return 1
+  fi
 }
 
 scrub_legacy_root_private_carriers() {
@@ -2400,6 +2732,8 @@ scrub_after_failed_cleanup() {
   # failed cleanup look successful and eliminate the information needed to
   # safely resolve the process later.
   delete_private_run_artifacts "$run_dir" true || return 1
+  [[ ! -d "$run_dir/$CLEANUP_REPORT_PENDING_NAME" || -L "$run_dir/$CLEANUP_REPORT_PENDING_NAME" ]] || return 1
+  rm -f -- "$run_dir/$CLEANUP_REPORT_PENDING_NAME" || return 1
   write_cleanup_report "$run_dir" FAILED_CLEANUP "$LIFECYCLE_FAILURE_STAGE" || return 1
   CLEANUP_SCRUB_COMPLETED=1
   note "cleanup=FAILED_CLEANUP runId=$RUN_ID localSecretsScrubbed=true"
@@ -2418,6 +2752,10 @@ cleanup_run() {
   load_prepared_profiles "$run_dir" || return 1
   project="${STACK_ENV[INT001_COMPOSE_PROJECT]}"
   manifest="$(private_file_path "$run_dir" "$RUN_MANIFEST_NAME")"
+  # Reject an unpublishable or pre-existing receipt before the first process
+  # signal or Docker mutation. A cleanup that cannot commit an auditable final
+  # result must retain its reservation and leave owned resources untouched.
+  assert_cleanup_report_targets_absent "$run_dir" || return 1
 
   # Process-group signal is allowed only after all live PID ownership proofs.
   stop_owned_child "$run_dir" launcher launcher-1.0.0-SNAPSHOT.jar || return 1
@@ -2431,10 +2769,26 @@ cleanup_run() {
 
   write_manifest "$manifest" "$cleanup_result" "$run_dir" "$project" || return 1
   delete_private_run_artifacts "$run_dir" || return 1
-  write_cleanup_report "$run_dir" "$cleanup_result" "$failure_stage" || return 1
+  # Finalization is serialized under the registry's exclusive lock. Stage and
+  # atomically publish the receipt before releasing the reservation so every
+  # report-write failure remains fail-closed. Cooperative readers cannot adopt
+  # the brief pre-release receipt because they require the shared root lock.
+  acquire_port_reservation_cleanup_lock || return 1
+  stage_cleanup_report "$run_dir" "$cleanup_result" "$failure_stage" || return 1
+  if ! publish_staged_cleanup_report "$run_dir"; then
+    rm -f -- "$run_dir/$CLEANUP_REPORT_PENDING_NAME" "$run_dir/$CLEANUP_REPORT_NAME" || true
+    return 1
+  fi
+  if ! release_current_port_reservation; then
+    rm -f -- "$run_dir/$CLEANUP_REPORT_NAME" || true
+    return 1
+  fi
   CLEANUP_SCRUB_COMPLETED=1
   CLEANUP_SCRUB_RUN_DIR=""
-  note "cleanup=PASS runId=$RUN_ID result=$cleanup_result"
+  # Reservation release is the final fallible commit step. A closed stdout
+  # consumer must not turn an already committed receipt/release into a false
+  # cleanup failure or trigger the EXIT failure path.
+  note "cleanup=PASS runId=$RUN_ID result=$cleanup_result" || true
   return 0
 }
 

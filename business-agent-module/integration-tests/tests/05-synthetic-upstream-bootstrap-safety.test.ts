@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -126,11 +126,13 @@ interface WrongRunIdDelegatedChildSignalResult extends BootstrapResult {
 
 interface HeldLifecycleTopologyResult extends BootstrapResult {
   readonly outerOwnershipProven: boolean;
+  readonly outerTermDispatches: number;
   readonly outerParentPid: number;
   readonly heldLifecyclePid: number;
   readonly fakeLauncherPid: number;
   readonly fakeLauncherAncestorPids: readonly number[];
   readonly fakeLauncherTerminalObservation: string;
+  readonly ownedServiceTerminalObservations: readonly string[];
 }
 
 interface ShellStartupInjectionFixture {
@@ -318,7 +320,7 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
         'BIZ_PORT=""',
         'BIZ_INGRESS_PROXY_PORT=""',
         'DIRECTORY_FACADE_PORT=""',
-        'port_is_used_by_other_prepared_run() { return 1; }',
+        'ensure_port_reservation_directory',
         'port="$(allocate_port test)"',
         '[[ "$port" -ge "$DYNAMIC_PORT_MIN" && "$port" -le "$DYNAMIC_PORT_MAX" ]]',
         'validate_port "explicit user override" 45678',
@@ -332,6 +334,466 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     const port = Number(allocation?.[1]);
     expect(port).toBeGreaterThanOrEqual(20_000);
     expect(port).toBeLessThanOrEqual(29_999);
+  });
+
+  test('allocates a fresh port without opening another run private carrier', () => {
+    const isolatedRoot = createIsolatedArtifactRoot('port-private-isolation');
+    const current = createRunUnderArtifactRoot(isolatedRoot, 'fresh-port-owner');
+    const historical = createRunUnderArtifactRoot(isolatedRoot, 'historical-private-poison');
+    const historicalPrivate = join(historical.dir, 'private');
+    mkdirSync(historicalPrivate, { recursive: false, mode: 0o700 });
+    chmodSync(historicalPrivate, 0o700);
+    const poison = join(historicalPrivate, 'stack.env');
+    writeFileSync(poison, `PRIVATE_SENTINEL_${historical.id}\n`, { mode: 0o600 });
+    chmodSync(poison, 0o600);
+
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      current,
+      isolatedRoot,
+      [
+        'NAVIGATOR_PORT=""',
+        'MYSQL_PORT=""',
+        'MOCK_LLM_PORT=""',
+        'BIZ_PORT=""',
+        'BIZ_INGRESS_PROXY_PORT=""',
+        'DIRECTORY_FACADE_PORT=""',
+        'ensure_port_reservation_directory',
+        'port="$(allocate_port private-isolation)"',
+        'printf "fresh-port=%s\\n" "$port"'
+      ].join('\n')
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.output).toMatch(/fresh-port=\d+/);
+    expect(result.output).not.toContain(`PRIVATE_SENTINEL_${historical.id}`);
+  });
+
+  test('writes only the fixed non-secret reservation schema with private single-link metadata', () => {
+    const isolatedRoot = createIsolatedArtifactRoot('port-reservation-writer');
+    const current = createRunUnderArtifactRoot(isolatedRoot, 'reservation-writer');
+    createPortReservationDirectory(isolatedRoot);
+    const ports = [23101, 23102, 23103, 23104, 23105, 23106] as const;
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      current,
+      isolatedRoot,
+      [
+        ...sixPortAssignments(ports),
+        'write_current_port_reservation',
+        'PREPARE_PORT_RESERVATION_RELEASE_ARMED=0',
+        'PREPARE_PORT_RESERVATION_PATH=""'
+      ].join('\n')
+    );
+    const reservation = join(isolatedRoot, '.port-reservations', `${current.id}.ports`);
+    const text = readFileSync(reservation, 'utf8');
+
+    expect(result.status, result.output).toBe(0);
+    expect(text).toBe(`${reservationLines(current.id, ports).join('\n')}\n`);
+    expect(statSync(reservation).mode & 0o777).toBe(0o600);
+    expect(statSync(reservation).nlink).toBe(1);
+    expect(text).not.toMatch(/SECRET|TOKEN|PASSWORD|PATH|PID|TIME|DOCKER/i);
+  });
+
+  test('fails closed on malformed or unsafe reservation registry entries', () => {
+    const cases: Array<{
+      readonly label: string;
+      readonly arrange: (root: string, run: RunFixture) => void;
+    }> = [
+      {
+        label: 'missing-key',
+        arrange: (root, run) => writePortReservation(root, run.id, undefined, reservationLines(run.id).slice(0, -1))
+      },
+      {
+        label: 'duplicate-key',
+        arrange: (root, run) => writePortReservation(root, run.id, undefined, [...reservationLines(run.id), 'INT001_NAVIGATOR_PORT=23999'])
+      },
+      {
+        label: 'extra-key',
+        arrange: (root, run) => writePortReservation(root, run.id, undefined, [...reservationLines(run.id), 'INT001_EXTRA=forbidden'])
+      },
+      {
+        label: 'schema-mismatch',
+        arrange: (root, run) => writePortReservation(root, run.id, undefined, reservationLines(run.id).map((line) => line === 'INT001_PORT_RESERVATION_SCHEMA=1' ? 'INT001_PORT_RESERVATION_SCHEMA=2' : line))
+      },
+      {
+        label: 'run-id-mismatch',
+        arrange: (root, run) => writePortReservation(root, run.id, undefined, reservationLines(nextRunId('wrong-reservation-owner')))
+      },
+      {
+        label: 'reserved-port',
+        arrange: (root, run) => writePortReservation(root, run.id, [8112, 23002, 23003, 23004, 23005, 23006])
+      },
+      {
+        label: 'out-of-range',
+        arrange: (root, run) => writePortReservation(root, run.id, [70000, 23002, 23003, 23004, 23005, 23006])
+      },
+      {
+        label: 'within-file-duplicate',
+        arrange: (root, run) => writePortReservation(root, run.id, [23001, 23001, 23003, 23004, 23005, 23006])
+      },
+      {
+        label: 'wrong-mode',
+        arrange: (root, run) => writePortReservation(root, run.id, undefined, undefined, 0o644)
+      },
+      {
+        label: 'hardlink',
+        arrange: (root, run) => {
+          const source = writePortReservation(root, run.id);
+          linkSync(source, join(root, '.port-reservations', `${nextRunId('hardlink-alias')}.ports`));
+        }
+      },
+      {
+        label: 'file-symlink',
+        arrange: (root, run) => {
+          createPortReservationDirectory(root);
+          const target = join(root, 'reservation-target');
+          writeFileSync(target, `${reservationLines(run.id).join('\n')}\n`, { mode: 0o600 });
+          symlinkSync(target, join(root, '.port-reservations', `${run.id}.ports`));
+        }
+      },
+      {
+        label: 'unknown-entry',
+        arrange: (root) => {
+          createPortReservationDirectory(root);
+          writeFileSync(join(root, '.port-reservations', 'unexpected.entry'), 'not-a-reservation\n', { mode: 0o600 });
+        }
+      }
+    ];
+
+    for (const testCase of cases) {
+      const root = createIsolatedArtifactRoot(`reservation-${testCase.label}`);
+      const run = createRunUnderArtifactRoot(root, `reservation-${testCase.label}`);
+      testCase.arrange(root, run);
+      const result = invokeHarnessLibraryAtArtifactRoot(run, root, 'validate_port_reservation_registry');
+      expect(result.status, `${testCase.label}: ${result.output}`).toBe(2);
+    }
+
+    const symlinkRoot = createIsolatedArtifactRoot('reservation-dir-symlink');
+    const symlinkRun = createRunUnderArtifactRoot(symlinkRoot, 'reservation-dir-symlink');
+    const targetDirectory = mkdtempSync(join(tmpdir(), 'int001-reservation-dir-target-'));
+    cleanupPaths.add(targetDirectory);
+    chmodSync(targetDirectory, 0o700);
+    symlinkSync(targetDirectory, join(symlinkRoot, '.port-reservations'));
+    const symlinkResult = invokeHarnessLibraryAtArtifactRoot(symlinkRun, symlinkRoot, 'validate_port_reservation_registry');
+    expect(symlinkResult.status, symlinkResult.output).toBe(2);
+  });
+
+  test('rejects duplicate ports across reservations and detects explicit reservation collisions', () => {
+    const duplicateRoot = createIsolatedArtifactRoot('reservation-cross-duplicate');
+    const duplicateCurrent = createRunUnderArtifactRoot(duplicateRoot, 'reservation-cross-current');
+    writePortReservation(duplicateRoot, nextRunId('reservation-a'), [23201, 23202, 23203, 23204, 23205, 23206]);
+    writePortReservation(duplicateRoot, nextRunId('reservation-b'), [23201, 23302, 23303, 23304, 23305, 23306]);
+    const duplicate = invokeHarnessLibraryAtArtifactRoot(duplicateCurrent, duplicateRoot, 'validate_port_reservation_registry');
+    expect(duplicate.status, duplicate.output).toBe(2);
+
+    const collisionRoot = createIsolatedArtifactRoot('reservation-explicit-collision');
+    const collisionCurrent = createRunUnderArtifactRoot(collisionRoot, 'reservation-collision-current');
+    writePortReservation(collisionRoot, nextRunId('reservation-owner'), [23401, 23402, 23403, 23404, 23405, 23406]);
+    const collision = invokeHarnessLibraryAtArtifactRoot(
+      collisionCurrent,
+      collisionRoot,
+      [
+        'if port_is_reserved_by_other_run 23401; then printf "reserved=yes\\n"; else exit 9; fi',
+        'if port_is_reserved_by_other_run 23501; then exit 10; else printf "free=yes\\n"; fi'
+      ].join('\n')
+    );
+    expect(collision.status, collision.output).toBe(0);
+    expect(collision.output).toContain('reserved=yes');
+    expect(collision.output).toContain('free=yes');
+  });
+
+  test('keeps sequential dynamic allocations distinct from existing reservations and each other', () => {
+    const isolatedRoot = createIsolatedArtifactRoot('reservation-dynamic-distinct');
+    const current = createRunUnderArtifactRoot(isolatedRoot, 'reservation-dynamic-current');
+    writePortReservation(isolatedRoot, nextRunId('reservation-existing'));
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      current,
+      isolatedRoot,
+      [
+        'NAVIGATOR_PORT=""',
+        'MYSQL_PORT=""',
+        'MOCK_LLM_PORT=""',
+        'BIZ_PORT=""',
+        'BIZ_INGRESS_PROXY_PORT=""',
+        'DIRECTORY_FACADE_PORT=""',
+        'first="$(allocate_port first)"',
+        'NAVIGATOR_PORT="$first"',
+        'second="$(allocate_port second)"',
+        '[[ "$first" != "$second" ]]',
+        'printf "dynamic=%s,%s\\n" "$first" "$second"'
+      ].join('\n')
+    );
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toMatch(/dynamic=\d+,\d+/);
+  });
+
+  test('matches the current prepared profile exactly and rejects a missing or mismatched reservation', () => {
+    const root = createIsolatedArtifactRoot('reservation-profile-match');
+    const current = createRunUnderArtifactRoot(root, 'reservation-profile-current');
+    const ports = [23601, 23602, 23603, 23604, 23605, 23606] as const;
+    writePortReservation(root, current.id, ports);
+    const matched = invokeHarnessLibraryAtArtifactRoot(
+      current,
+      root,
+      [...sixPortAssignments(ports), 'acquire_port_reservation_shared_lock', 'assert_current_port_reservation_matches'].join('\n')
+    );
+    expect(matched.status, matched.output).toBe(0);
+
+    const mismatched = invokeHarnessLibraryAtArtifactRoot(
+      current,
+      root,
+      [...sixPortAssignments([23611, ...ports.slice(1)]), 'acquire_port_reservation_shared_lock', 'assert_current_port_reservation_matches'].join('\n')
+    );
+    expect(mismatched.status, mismatched.output).toBe(2);
+    expect(mismatched.output).toContain('does not match its prepared profile');
+
+    const legacyRoot = createIsolatedArtifactRoot('reservation-legacy-resume');
+    const legacy = createRunUnderArtifactRoot(legacyRoot, 'reservation-legacy-run');
+    createPortReservationDirectory(legacyRoot);
+    const commonStubs = [
+      ...sixPortAssignments(ports),
+      'assert_expected_run_path() { return 0; }',
+      'assert_private_dir() { return 0; }',
+      'assert_no_legacy_root_private_carriers() { return 0; }',
+      'manifest_state() { printf PREPARED; }',
+      'load_prepared_profiles() { return 0; }'
+    ];
+    const legacyDoctor = invokeHarnessLibraryAtArtifactRoot(
+      legacy,
+      legacyRoot,
+      [...commonStubs, 'doctor_prepared_run "$3"'].join('\n')
+    );
+    expect(legacyDoctor.status, legacyDoctor.output).toBe(2);
+    expect(legacyDoctor.output).toContain('legacy prepared runs cannot be resumed');
+
+    const legacyRunning = invokeHarnessLibraryAtArtifactRoot(
+      legacy,
+      legacyRoot,
+      [...commonStubs, 'assert_running_run "$3" PREPARED'].join('\n')
+    );
+    expect(legacyRunning.status, legacyRunning.output).toBe(2);
+    expect(legacyRunning.output).toContain('legacy prepared runs cannot be resumed');
+  });
+
+  test('releases only its own reservation on failed prepare and retains it after prepare commit', () => {
+    const root = createIsolatedArtifactRoot('reservation-prepare-lifecycle');
+    const failing = createRunUnderArtifactRoot(root, 'reservation-prepare-failing');
+    const siblingId = nextRunId('reservation-prepare-sibling');
+    writePortReservation(root, siblingId, [23701, 23702, 23703, 23704, 23705, 23706]);
+    const failingPorts = [23711, 23712, 23713, 23714, 23715, 23716] as const;
+    const failed = invokeHarnessLibraryAtArtifactRoot(
+      failing,
+      root,
+      [...sixPortAssignments(failingPorts), 'write_current_port_reservation', 'false'].join('\n')
+    );
+    expect(failed.status).not.toBe(0);
+    expect(existsSync(join(root, '.port-reservations', `${failing.id}.ports`))).toBe(false);
+    expect(existsSync(join(root, '.port-reservations', `${siblingId}.ports`))).toBe(true);
+
+    const committed = createRunUnderArtifactRoot(root, 'reservation-prepare-committed');
+    const committedPorts = [23721, 23722, 23723, 23724, 23725, 23726] as const;
+    const success = invokeHarnessLibraryAtArtifactRoot(
+      committed,
+      root,
+      [
+        ...sixPortAssignments(committedPorts),
+        'write_current_port_reservation',
+        'PREPARE_PORT_RESERVATION_RELEASE_ARMED=0',
+        'PREPARE_PORT_RESERVATION_PATH=""'
+      ].join('\n')
+    );
+    expect(success.status, success.output).toBe(0);
+    expect(existsSync(join(root, '.port-reservations', `${committed.id}.ports`))).toBe(true);
+    expect(existsSync(join(root, '.port-reservations', `${siblingId}.ports`))).toBe(true);
+  });
+
+  test('releases on successful cleanup while every cleanup failure retains the reservation', () => {
+    const successRoot = createIsolatedArtifactRoot('reservation-cleanup-success');
+    const successRun = createRunUnderArtifactRoot(successRoot, 'reservation-cleanup-success-run');
+    const successPorts = [23801, 23802, 23803, 23804, 23805, 23806] as const;
+    const siblingId = nextRunId('reservation-cleanup-sibling');
+    writePortReservation(successRoot, successRun.id, successPorts);
+    writePortReservation(successRoot, siblingId, [23811, 23812, 23813, 23814, 23815, 23816]);
+    const success = invokeHarnessLibraryAtArtifactRoot(
+      successRun,
+      successRoot,
+      cleanupLifecycleStatement(successPorts)
+    );
+    expect(success.status, success.output).toBe(0);
+    expect(existsSync(join(successRoot, '.port-reservations', `${successRun.id}.ports`))).toBe(false);
+    expect(existsSync(join(successRoot, '.port-reservations', `${siblingId}.ports`))).toBe(true);
+    expect(JSON.parse(readFileSync(join(successRun.dir, 'cleanup-report.json'), 'utf8')).result).toBe('CLEANED');
+
+    const closedOutputRoot = createIsolatedArtifactRoot('reservation-cleanup-closed-output');
+    const closedOutputRun = createRunUnderArtifactRoot(closedOutputRoot, 'reservation-cleanup-closed-output-run');
+    const closedOutputPorts = [23821, 23822, 23823, 23824, 23825, 23826] as const;
+    writePortReservation(closedOutputRoot, closedOutputRun.id, closedOutputPorts);
+    const closedOutput = invokeHarnessLibraryAtArtifactRoot(
+      closedOutputRun,
+      closedOutputRoot,
+      cleanupLifecycleStatement(closedOutputPorts, 'note() { return 1; }')
+    );
+    expect(closedOutput.status, closedOutput.output).toBe(0);
+    expect(existsSync(join(closedOutputRoot, '.port-reservations', `${closedOutputRun.id}.ports`))).toBe(false);
+    expect(JSON.parse(readFileSync(join(closedOutputRun.dir, 'cleanup-report.json'), 'utf8')).result).toBe('CLEANED');
+
+    for (const failure of [
+      { label: 'owned-child', override: 'stop_owned_child() { return 1; }' },
+      { label: 'receipt-publish', override: 'publish_staged_cleanup_report() { return 1; }' },
+      { label: 'reservation-release', override: 'release_current_port_reservation() { return 1; }' }
+    ]) {
+      const root = createIsolatedArtifactRoot(`reservation-cleanup-${failure.label}`);
+      const run = createRunUnderArtifactRoot(root, `reservation-cleanup-${failure.label}-run`);
+      const ports = [23901, 23902, 23903, 23904, 23905, 23906] as const;
+      writePortReservation(root, run.id, ports);
+      const result = invokeHarnessLibraryAtArtifactRoot(
+        run,
+        root,
+        `${cleanupLifecycleStatement(ports, failure.override)}\nexit 7`
+      );
+      expect(result.status, `${failure.label}: ${result.output}`).toBe(7);
+      expect(existsSync(join(root, '.port-reservations', `${run.id}.ports`))).toBe(true);
+      const receipt = JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')) as Record<string, unknown>;
+      expect(receipt.result).toBe('FAILED_CLEANUP');
+    }
+  });
+
+  test('rejects an existing cleanup receipt before external cleanup and allows legacy cleanup without backfill', () => {
+    const blockedRoot = createIsolatedArtifactRoot('reservation-cleanup-receipt-blocked');
+    const blockedRun = createRunUnderArtifactRoot(blockedRoot, 'reservation-cleanup-receipt-blocked-run');
+    const ports = [24001, 24002, 24003, 24004, 24005, 24006] as const;
+    writePortReservation(blockedRoot, blockedRun.id, ports);
+    writeFileSync(join(blockedRun.dir, 'cleanup-report.json'), '{}\n', { mode: 0o600 });
+    const marker = join(blockedRun.dir, 'external-cleanup-started');
+    const blocked = invokeHarnessLibraryAtArtifactRoot(
+      blockedRun,
+      blockedRoot,
+      cleanupLifecycleStatement(ports, `stop_owned_child() { /usr/bin/touch ${shellLiteral(marker)}; return 0; }`)
+    );
+    expect(blocked.status).not.toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(blockedRoot, '.port-reservations', `${blockedRun.id}.ports`))).toBe(true);
+
+    const legacyRoot = createIsolatedArtifactRoot('reservation-cleanup-legacy');
+    const legacyRun = createRunUnderArtifactRoot(legacyRoot, 'reservation-cleanup-legacy-run');
+    const legacy = invokeHarnessLibraryAtArtifactRoot(
+      legacyRun,
+      legacyRoot,
+      cleanupLifecycleStatement(ports)
+    );
+    expect(legacy.status, legacy.output).toBe(0);
+    expect(existsSync(join(legacyRoot, '.port-reservations', `${legacyRun.id}.ports`))).toBe(false);
+    expect(existsSync(join(legacyRoot, '.port-reservations'))).toBe(true);
+  });
+
+  test('rejects a success-shaped receipt when cleanup crashes before reservation release', () => {
+    const root = createIsolatedArtifactRoot('reservation-cleanup-publish-crash');
+    const run = createRunUnderArtifactRoot(root, 'reservation-cleanup-publish-crash-run');
+    const ports = [24021, 24022, 24023, 24024, 24025, 24026] as const;
+    writePortReservation(root, run.id, ports);
+    const crashed = invokeHarnessLibraryAtArtifactRoot(
+      run,
+      root,
+      cleanupLifecycleStatement(ports, 'release_current_port_reservation() { kill -KILL "$$"; }')
+    );
+    expect(crashed.status).not.toBe(0);
+    expect(existsSync(join(root, '.port-reservations', `${run.id}.ports`))).toBe(true);
+    expect(JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')).result).toBe('CLEANED');
+
+    const adoption = invokeHarnessLibraryAtArtifactRoot(
+      run,
+      root,
+      [
+        ...sixPortAssignments(ports),
+        `if assert_cleaned_cleanup_receipt "$3/cleanup-report.json" NONE; then exit 8; fi`,
+        'exit 17'
+      ].join('\n')
+    );
+    expect(adoption.status, adoption.output).toBe(17);
+    expect(adoption.output).toContain('cannot be accepted while its exact port reservation remains');
+  });
+
+  test('rejects a success-shaped receipt when release and compensating receipt deletion both fail', () => {
+    const root = createIsolatedArtifactRoot('reservation-cleanup-compensation-failure');
+    const run = createRunUnderArtifactRoot(root, 'cleanup-comp-fail');
+    const ports = [24031, 24032, 24033, 24034, 24035, 24036] as const;
+    writePortReservation(root, run.id, ports);
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      run,
+      root,
+      [
+        ...sixPortAssignments(ports),
+        'load_prepared_profiles() { STACK_ENV=(); STACK_ENV[INT001_COMPOSE_PROJECT]=int001-test; }',
+        'private_file_path() { printf "%s/private/%s" "$1" "$2"; }',
+        'stop_owned_child() { return 0; }',
+        'assert_all_docker_resources_owned() { return 0; }',
+        'docker_compose_for_run() { return 0; }',
+        'assert_no_docker_resources_remain() { return 0; }',
+        'write_manifest() { return 0; }',
+        'delete_private_run_artifacts() { return 0; }',
+        'release_current_port_reservation() { return 1; }',
+        'rm() { if [[ "$*" == *cleanup-report.json* ]]; then return 1; fi; command rm "$@"; }',
+        'if cleanup_run "$3" CLEANED NONE; then exit 9; fi',
+        'assert_cleaned_cleanup_receipt "$3/cleanup-report.json" NONE'
+      ].join('\n')
+    );
+    expect(result.status, result.output).toBe(2);
+    expect(result.output).toContain('cannot be accepted while its exact port reservation remains');
+    expect(existsSync(join(root, '.port-reservations', `${run.id}.ports`))).toBe(true);
+    expect(JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')).result).toBe('CLEANED');
+  });
+
+  test('fails closed when another prepare owns the artifact-root lock', () => {
+    const root = createIsolatedArtifactRoot('reservation-prepare-lock');
+    const run = createRunUnderArtifactRoot(root, 'reservation-prepare-lock-run');
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      run,
+      root,
+      [
+        'exec 7<"$ARTIFACT_ROOT"',
+        'flock -n -x 7',
+        'if (trap - EXIT; acquire_prepare_lock); then exit 9; fi',
+        'printf "prepare-lock=blocked\\n"'
+      ].join('\n')
+    );
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('prepare-lock=blocked');
+  });
+
+  test('rejects a real loopback bind collision without consulting private carriers', async () => {
+    const root = createIsolatedArtifactRoot('reservation-bind-collision');
+    const run = createRunUnderArtifactRoot(root, 'reservation-bind-collision-run');
+    createPortReservationDirectory(root);
+    const server = createServer();
+    await new Promise<void>((resolveListen, rejectListen) => {
+      server.once('error', rejectListen);
+      server.listen(0, '127.0.0.1', () => resolveListen());
+    });
+    try {
+      const address = server.address() as AddressInfo;
+      const result = invokeHarnessLibraryAtArtifactRoot(
+        run,
+        root,
+        `assert_port_available "occupied" ${address.port}`
+      );
+      expect(result.status, result.output).toBe(2);
+      expect(result.output).toContain('already listening or cannot bind loopback');
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  });
+
+  test('upgrades a prior shared registry validation before successful cleanup finalization', () => {
+    const root = createIsolatedArtifactRoot('reservation-shared-cleanup-upgrade');
+    const run = createRunUnderArtifactRoot(root, 'shared-cleanup-upgrade');
+    const ports = [24101, 24102, 24103, 24104, 24105, 24106] as const;
+    writePortReservation(root, run.id, ports);
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      run,
+      root,
+      `acquire_port_reservation_shared_lock\n${cleanupLifecycleStatement(ports)}`
+    );
+    expect(result.status, result.output).toBe(0);
+    expect(existsSync(join(root, '.port-reservations', `${run.id}.ports`))).toBe(false);
   });
 
   test('keeps Docker publishes loopback-bound, non-internal, and probes their host path without credentials', async () => {
@@ -470,6 +932,266 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
 
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain('monitor-mode-child=session-owned');
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('accepts a TERM commit race only after the exact owned child PID is proven dead', () => {
+    const run = createRun('stop-owned-child-term-race');
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'run_dir="$3"',
+        'meta="$run_dir/children/directory-facade.pid"',
+        'FAKE_PID=424242',
+        'PID_STATE=live',
+        'TERM_DISPATCHES=0',
+        'KILL_DISPATCHES=0',
+        'DEAD_PROBES=0',
+        'GROUP_PROBES=0',
+        'mkdir -m 700 "$run_dir/children"',
+        '{ printf "INT001_CHILD_NAME=directory-facade\\nPID=%s\\nSTART_TICKS=123456\\nPGID=%s\\nSID=%s\\nCWD=%s\\nCOMMAND_FRAGMENT=directory_facade.py\\n" "$FAKE_PID" "$FAKE_PID" "$FAKE_PID" "$run_dir"; } > "$meta"',
+        'chmod 600 "$meta"',
+        'probe_owned_child() {',
+        '  local probe_run_dir="$1" probe_name="$2" probe_fragment="$3"',
+        '  local probe_meta="$probe_run_dir/children/$probe_name.pid"',
+        '  parse_child_meta_for_probe "$probe_meta" || return 21',
+        '  [[ "$probe_run_dir" == "$run_dir" ]] || return 21',
+        '  [[ "$probe_name" == directory-facade && "$probe_fragment" == directory_facade.py ]] || return 21',
+        '  [[ "${CHILD_META[INT001_CHILD_NAME]}" == "$probe_name" ]] || return 21',
+        '  [[ "${CHILD_META[PID]}" == "$FAKE_PID" && "${CHILD_META[PGID]}" == "$FAKE_PID" ]] || return 21',
+        '  [[ "${CHILD_META[SID]}" == "$FAKE_PID" && "${CHILD_META[CWD]}" == "$run_dir" ]] || return 21',
+        '  [[ "${CHILD_META[COMMAND_FRAGMENT]}" == "$probe_fragment" ]] || return 21',
+        '  [[ "$PID_STATE" == live ]] || return 10',
+        '}',
+        'kill() {',
+        '  case "$1:$2:$3" in',
+        '    "-TERM:--:-$FAKE_PID")',
+        '      TERM_DISPATCHES=$((TERM_DISPATCHES + 1))',
+        '      PID_STATE=dead',
+        '      return 1',
+        '      ;;',
+        '    "-KILL:--:-$FAKE_PID")',
+        '      KILL_DISPATCHES=$((KILL_DISPATCHES + 1))',
+        '      return 1',
+        '      ;;',
+        '    *) return 99 ;;',
+        '  esac',
+        '}',
+        'child_is_proven_dead() {',
+        '  DEAD_PROBES=$((DEAD_PROBES + 1))',
+        '  [[ "$1" == "$FAKE_PID" && "$PID_STATE" == dead ]]',
+        '}',
+        'process_group_is_proven_absent() {',
+        '  GROUP_PROBES=$((GROUP_PROBES + 1))',
+        '  [[ "$1" == "$FAKE_PID" && "$PID_STATE" == dead ]]',
+        '}',
+        'if stop_owned_child "$run_dir" directory-facade directory_facade.py; then',
+        '  [[ "$TERM_DISPATCHES" == 1 ]]',
+        '  [[ "$DEAD_PROBES" == 1 ]]',
+        '  [[ "$GROUP_PROBES" == 1 ]]',
+        '  [[ "$KILL_DISPATCHES" == 0 ]]',
+        '  [[ ! -e "$meta" ]]',
+        '  printf "stop-owned-child-term-race=accepted\\n"',
+        'else',
+        '  printf "stop-owned-child-term-race=rejected term=%s deadProbes=%s kill=%s metadata=%s\\n" "$TERM_DISPATCHES" "$DEAD_PROBES" "$KILL_DISPATCHES" "$([[ -e "$meta" ]] && printf retained || printf absent)"',
+        '  exit 73',
+        'fi'
+      ].join('\n')
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('stop-owned-child-term-race=accepted');
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('retains metadata when a previously recorded leader is dead but its process group remains', () => {
+    const run = createRun('dead-leader-live-group');
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'run_dir="$3"',
+        'meta="$run_dir/children/directory-facade.pid"',
+        'FAKE_PID=424244',
+        'GROUP_PROBES=0',
+        'mkdir -m 700 "$run_dir/children"',
+        '{ printf "INT001_CHILD_NAME=directory-facade\\nPID=%s\\nSTART_TICKS=123458\\nPGID=%s\\nSID=%s\\nCWD=%s\\nCOMMAND_FRAGMENT=directory_facade.py\\n" "$FAKE_PID" "$FAKE_PID" "$FAKE_PID" "$run_dir"; } > "$meta"',
+        'chmod 600 "$meta"',
+        'probe_owned_child() {',
+        '  parse_child_meta_for_probe "$1/children/$2.pid" || return 21',
+        '  return 10',
+        '}',
+        'process_group_is_proven_absent() { GROUP_PROBES=$((GROUP_PROBES + 1)); return 1; }',
+        'if stop_owned_child "$run_dir" directory-facade directory_facade.py; then exit 75; fi',
+        '[[ "$GROUP_PROBES" == 1 ]]',
+        '[[ -e "$meta" ]]',
+        'printf "dead-leader-live-group=failed-closed\\n"'
+      ].join('\n')
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('dead-leader-live-group=failed-closed');
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('keeps bounded KILL escalation only while the exact leader remains owned', () => {
+    const run = createRun('owned-leader-kill-escalation');
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'run_dir="$3"',
+        'meta="$run_dir/children/directory-facade.pid"',
+        'FAKE_PID=424245',
+        'PID_STATE=live',
+        'GROUP_STATE=alive',
+        'TERM_DISPATCHES=0',
+        'KILL_DISPATCHES=0',
+        'mkdir -m 700 "$run_dir/children"',
+        '{ printf "INT001_CHILD_NAME=directory-facade\\nPID=%s\\nSTART_TICKS=123459\\nPGID=%s\\nSID=%s\\nCWD=%s\\nCOMMAND_FRAGMENT=directory_facade.py\\n" "$FAKE_PID" "$FAKE_PID" "$FAKE_PID" "$run_dir"; } > "$meta"',
+        'chmod 600 "$meta"',
+        'probe_owned_child() {',
+        '  parse_child_meta_for_probe "$1/children/$2.pid" || return 21',
+        '  [[ "$PID_STATE" == live ]] || return 10',
+        '}',
+        'validate_owned_child() { [[ "$PID_STATE" == live ]]; }',
+        'child_is_proven_dead() { [[ "$1" == "$FAKE_PID" && "$PID_STATE" == dead ]]; }',
+        'process_group_is_proven_absent() { [[ "$1" == "$FAKE_PID" && "$GROUP_STATE" == dead ]]; }',
+        'sleep() { return 0; }',
+        'kill() {',
+        '  case "$1:$2:$3" in',
+        '    "-TERM:--:-$FAKE_PID") TERM_DISPATCHES=$((TERM_DISPATCHES + 1)); return 0 ;;',
+        '    "-KILL:--:-$FAKE_PID") KILL_DISPATCHES=$((KILL_DISPATCHES + 1)); PID_STATE=dead; GROUP_STATE=dead; return 0 ;;',
+        '    *) return 99 ;;',
+        '  esac',
+        '}',
+        'stop_owned_child "$run_dir" directory-facade directory_facade.py',
+        '[[ "$TERM_DISPATCHES" == 1 && "$KILL_DISPATCHES" == 1 ]]',
+        '[[ ! -e "$meta" ]]',
+        'printf "owned-leader-kill-escalation=cleaned\\n"'
+      ].join('\n')
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('owned-leader-kill-escalation=cleaned');
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('fails closed when the owned leader exits after TERM but its exact process group remains', () => {
+    const run = createRun('stop-owned-child-term-resistant-descendant');
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'run_dir="$3"',
+        'meta="$run_dir/children/directory-facade.pid"',
+        'FAKE_PID=424243',
+        'PID_STATE=live',
+        'GROUP_STATE=alive',
+        'TERM_DISPATCHES=0',
+        'KILL_DISPATCHES=0',
+        'GROUP_PROBES=0',
+        'mkdir -m 700 "$run_dir/children"',
+        '{ printf "INT001_CHILD_NAME=directory-facade\\nPID=%s\\nSTART_TICKS=123457\\nPGID=%s\\nSID=%s\\nCWD=%s\\nCOMMAND_FRAGMENT=directory_facade.py\\n" "$FAKE_PID" "$FAKE_PID" "$FAKE_PID" "$run_dir"; } > "$meta"',
+        'chmod 600 "$meta"',
+        'probe_owned_child() {',
+        '  local probe_run_dir="$1" probe_name="$2" probe_fragment="$3"',
+        '  parse_child_meta_for_probe "$probe_run_dir/children/$probe_name.pid" || return 21',
+        '  [[ "$probe_run_dir" == "$run_dir" && "$probe_name" == directory-facade && "$probe_fragment" == directory_facade.py ]] || return 21',
+        '  [[ "${CHILD_META[PID]}" == "$FAKE_PID" && "${CHILD_META[PGID]}" == "$FAKE_PID" ]] || return 21',
+        '  [[ "$PID_STATE" == live ]] || return 10',
+        '}',
+        'kill() {',
+        '  case "$1:$2:$3" in',
+        '    "-TERM:--:-$FAKE_PID")',
+        '      TERM_DISPATCHES=$((TERM_DISPATCHES + 1))',
+        '      PID_STATE=dead',
+        '      return 0',
+        '      ;;',
+        '    "-KILL:--:-$FAKE_PID")',
+        '      KILL_DISPATCHES=$((KILL_DISPATCHES + 1))',
+        '      GROUP_STATE=dead',
+        '      return 0',
+        '      ;;',
+        '    *) return 99 ;;',
+        '  esac',
+        '}',
+        'child_is_proven_dead() { [[ "$1" == "$FAKE_PID" && "$PID_STATE" == dead ]]; }',
+        'sleep() { return 0; }',
+        'process_group_is_proven_absent() {',
+        '  GROUP_PROBES=$((GROUP_PROBES + 1))',
+        '  [[ "$1" == "$FAKE_PID" && "$GROUP_STATE" == dead ]]',
+        '}',
+        'if stop_owned_child "$run_dir" directory-facade directory_facade.py; then',
+        '  printf "term-resistant-descendant=false-clean term=%s kill=%s groupProbes=%s metadata=%s\\n" "$TERM_DISPATCHES" "$KILL_DISPATCHES" "$GROUP_PROBES" "$([[ -e "$meta" ]] && printf retained || printf absent)"',
+        '  exit 72',
+        'fi',
+        '[[ "$TERM_DISPATCHES" == 1 ]]',
+        '[[ "$KILL_DISPATCHES" == 0 ]]',
+        '[[ "$GROUP_PROBES" -ge 1 ]]',
+        '[[ -e "$meta" ]]',
+        'printf "term-resistant-descendant=failed-closed\\n"'
+      ].join('\n')
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('term-resistant-descendant=failed-closed');
+    expect(result.output).not.toContain('term-resistant-descendant=false-clean');
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('retains real ownership metadata when a same-group descendant survives the leader TERM', () => {
+    const run = createRun('real-term-resistant-descendant');
+    writeTermResistantDescendantFixture(run);
+    const result = invokeHarnessLibrary(
+      run,
+      [
+        'run_dir="$3"',
+        'mkdir -m 700 "$run_dir/private" "$run_dir/children"',
+        'leader_term="$run_dir/leader-term"',
+        'descendant_file="$run_dir/descendant.pid"',
+        'descendant_ready="$run_dir/descendant.ready"',
+        'fixture="$run_dir/directory_facade.py-term-resistant-fixture.sh"',
+        'log="$run_dir/private/directory-facade.log"',
+        'descendant_pid=""',
+        'descendant_start=""',
+        'cleanup_test_descendant() {',
+        '  if [[ "$descendant_pid" =~ ^[1-9][0-9]*$ && -n "$descendant_start" ]]; then',
+        '    current_start="$(pid_start_ticks "$descendant_pid" 2>/dev/null || true)"',
+        '    if [[ "$current_start" == "$descendant_start" ]]; then',
+        '      kill -KILL "$descendant_pid" 2>/dev/null || true',
+        '      cleanup_attempt=0',
+        '      while [[ -e "/proc/$descendant_pid" && "$cleanup_attempt" -lt 100 ]]; do sleep 0.01; ((cleanup_attempt += 1)); done',
+        '    fi',
+        '  fi',
+        '}',
+        'trap cleanup_test_descendant EXIT',
+        'start_child "$run_dir" directory-facade directory_facade.py "$log" /usr/bin/bash -p "$fixture" "$leader_term" "$descendant_file" "$descendant_ready"',
+        'attempt=0',
+        'while [[ ! -s "$descendant_ready" && "$attempt" -lt 100 ]]; do sleep 0.01; ((attempt += 1)); done',
+        '[[ -s "$descendant_ready" && -s "$descendant_file" ]]',
+        'parse_child_meta "$run_dir/children/directory-facade.pid"',
+        'leader_pid="${CHILD_META[PID]}"',
+        'owned_pgid="${CHILD_META[PGID]}"',
+        'descendant_pid="$(<"$descendant_file")"',
+        'descendant_start="$(pid_start_ticks "$descendant_pid")"',
+        '[[ "$(ps -o pgid= -p "$descendant_pid" | tr -d " ")" == "$owned_pgid" ]]',
+        'if stop_owned_child "$run_dir" directory-facade directory_facade.py; then',
+        '  printf "real-term-resistant-descendant=false-clean\\n"',
+        '  exit 74',
+        'fi',
+        '[[ ! -e "/proc/$leader_pid" ]] || child_is_zombie "$leader_pid"',
+        '[[ "$(<"$leader_term")" == TERM ]]',
+        '[[ -e "$run_dir/children/directory-facade.pid" ]]',
+        '[[ "$(pid_start_ticks "$descendant_pid")" == "$descendant_start" ]]',
+        '[[ "$(ps -o pgid= -p "$descendant_pid" | tr -d " ")" == "$owned_pgid" ]]',
+        'printf "real-term-resistant-descendant=failed-closed\\n"',
+        'cleanup_test_descendant',
+        '[[ ! -e "/proc/$descendant_pid" ]]',
+        'trap - EXIT'
+      ].join('\n')
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('real-term-resistant-descendant=failed-closed');
+    expect(result.output).not.toContain('real-term-resistant-descendant=false-clean');
     expect(result.output).not.toContain(SYNTHETIC_SECRET);
   });
 
@@ -686,6 +1408,8 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
         `lock_marker=${shellLiteral(lockMarker)}`,
         'manifest_state() { printf RUNNING; }',
         'load_prepared_profiles() { STACK_ENV=(); STACK_ENV[INT001_COMPOSE_PROJECT]=int001-test; }',
+        'acquire_port_reservation_shared_lock() { return 0; }',
+        'assert_current_port_reservation_matches() { return 0; }',
         'assert_generated_response() { return 0; }',
         'assert_tooling() { return 0; }',
         'assert_all_docker_resources_owned() { return 0; }',
@@ -791,11 +1515,12 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
 
     expect(result.status, result.output).toBe(0);
     expect(javaIndex).toBeGreaterThanOrEqual(0);
-    expect(launcherArgv.slice(javaIndex, javaIndex + 4)).toEqual([
+    expect(launcherArgv.slice(javaIndex, javaIndex + 5)).toEqual([
       '/usr/bin/java',
       `-Dint001.run-id=${run.id}`,
       '-jar',
-      join(REPO_ROOT, 'pom.xml')
+      join(REPO_ROOT, 'pom.xml'),
+      '--spring.profiles.active=mock'
     ]);
     expect(launcherArgv.filter((argument) => argument.startsWith('-D'))).toEqual([
       `-Dint001.run-id=${run.id}`
@@ -1027,8 +1752,58 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(result.output).not.toContain(run.dir);
   });
 
+  test('keeps the outer signal exit at 128 when child cleanup fails closed with its reservation retained', async () => {
+    const artifactRoot = createIsolatedArtifactRoot('parent-term-failed-cleanup');
+    const run = createRunUnderArtifactRoot(artifactRoot, 'parent-term-failed-cleanup-run');
+    writeSyntheticPrivateCarrier(run, 'stack.env');
+    const reservation = writePortReservation(artifactRoot, run.id);
+
+    // This is the real outer signal handler and delegated-child wait path. The
+    // test-owned child deliberately fails its first ownership stop, so its real
+    // EXIT scrub publishes FAILED_CLEANUP and conservatively retains the exact
+    // reservation. The parent must reject that receipt without allowing the
+    // reservation precondition's `die()` to replace the signal exit contract.
+    const result = await invokeFailedCleanupParentTermFixture(run, artifactRoot);
+    const receipt = JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')) as Record<string, unknown>;
+
+    expect(result.parentOwnershipProven).toBe(true);
+    expect(receipt.result).toBe('FAILED_CLEANUP');
+    expect(receipt.failureStage).toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_SIGNAL_RECEIVED');
+    expect(existsSync(join(run.dir, 'private'))).toBe(false);
+    expect(existsSync(reservation)).toBe(true);
+    expect(result.output).not.toContain('exercise=cleanup-already-completed');
+    expect(result.output).not.toContain('cleanup=PASS');
+    expect(result.status, result.output).toBe(128);
+  });
+
+  test('keeps the signal exit at 128 when receipt-adoption lock or registry setup fails closed', () => {
+    const artifactRoot = createIsolatedArtifactRoot('parent-term-receipt-lock-failure');
+    const run = createRunUnderArtifactRoot(artifactRoot, 'parent-term-receipt-lock-failure-run');
+
+    // Deliberately leave the reservation registry absent. The strict shared
+    // lock/adoption precondition must reject the receipt, but its internal
+    // `die()` must remain contained inside the signal handler's adoption
+    // boundary so the handler can preserve its terminal exit contract.
+    const result = invokeHarnessLibraryAtArtifactRoot(
+      run,
+      artifactRoot,
+      [
+        'trap \'if assert_cleaned_cleanup_receipt "$3/cleanup-report.json" SIGNAL; then exit 9; fi; exit 128\' TERM',
+        'kill -TERM "$$"',
+        'exit 10'
+      ].join('\n')
+    );
+
+    expect(result.status, result.output).toBe(128);
+    expect(existsSync(join(artifactRoot, '.port-reservations'))).toBe(false);
+    expect(existsSync(join(run.dir, 'cleanup-report.json'))).toBe(false);
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
   test('keeps a fake Launcher under the outer held-child lineage and cleans it only after one outer TERM', async () => {
-    const run = createRun('parent-term-held-launcher-topology');
+    const artifactRoot = createIsolatedArtifactRoot('parent-term-held-launcher-topology');
+    const run = createRunUnderArtifactRoot(artifactRoot, 'parent-term-held-launcher-topology');
     writeSyntheticPrivateCarrier(run, 'stack.env');
 
     // This is a real offline three-level lifecycle:
@@ -1043,10 +1818,12 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
 
     expect(result.status, result.output).toBe(128);
     expect(result.outerOwnershipProven).toBe(true);
+    expect(result.outerTermDispatches).toBe(1);
     expect(result.fakeLauncherAncestorPids).toContain(result.outerParentPid);
     expect(result.fakeLauncherAncestorPids).toContain(result.heldLifecyclePid);
     expect(result.fakeLauncherAncestorPids).not.toContain(result.fakeLauncherPid);
     expect(result.fakeLauncherTerminalObservation).toBe('TERM');
+    expect(result.ownedServiceTerminalObservations).toEqual(['TERM', 'TERM', 'TERM', 'TERM']);
     expect((result.output.match(/exercise forwarding TERM cleanup/g) ?? [])).toHaveLength(1);
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('SIGNAL');
@@ -1054,6 +1831,8 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(receipt.runId).toBe(run.id);
     expect(receipt.secretsRedacted).toBe(true);
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
+    expect(existsSync(join(artifactRoot, '.port-reservations', `${run.id}.ports`))).toBe(false);
+    expect(readdirSync(run.dir).filter((name) => name !== 'cleanup-report.json')).toEqual([]);
     expect(result.output).not.toContain(SYNTHETIC_SECRET);
   });
 
@@ -1289,6 +2068,53 @@ describe('05 - synthetic upstream bootstrap offline safety', () => {
     expect(receipt.result).toBe('CLEANED');
     expect(receipt.failureStage).toBe('UNKNOWN');
     expect(receipt.failureStage).not.toBe('SIGNAL');
+    expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_TIMEOUT');
+    expect(existsSync(join(run.dir, 'private'))).toBe(false);
+    expect(result.output).not.toContain(SYNTHETIC_SECRET);
+  });
+
+  test('holds with exactly one sleep using the complete fixed rehearsal duration', () => {
+    const run = createRun('run-hold-single-sleep');
+    const observationDirectory = mkdtempSync(join(tmpdir(), 'int001-hold-sleep-observation-'));
+    cleanupPaths.add(observationDirectory);
+    const sleepCalls = join(observationDirectory, 'sleep-calls.txt');
+    writeSyntheticPrivateCarrier(run, 'stack.env');
+
+    // Advance Bash's SECONDS clock inside the shadowed sleep so this remains
+    // a pure offline source-as-library regression. The production function
+    // must invoke sleep once with the whole fixed duration; a one-second loop
+    // records multiple "1" calls and fails this assertion immediately.
+    const result = invokeHarnessLibraryWithRehearsalHoldSeconds(
+      run,
+      7,
+      [
+        'ACTION=run',
+        'HOLD_FOR_PARENT_TERM=1',
+        `SLEEP_CALLS=${shellLiteral(sleepCalls)}`,
+        'load_prepared_profiles() {',
+        '  STACK_ENV=()',
+        '  STACK_ENV[INT001_COMPOSE_PROJECT]="int001-offline-$RUN_ID"',
+        '}',
+        'stop_owned_child() { return 0; }',
+        'assert_all_docker_resources_owned() { return 0; }',
+        'docker_compose_for_run() { return 0; }',
+        'assert_no_docker_resources_remain() { return 0; }',
+        'write_manifest() { return 0; }',
+        'sleep() {',
+        '  /usr/bin/printf "%s\\n" "$1" >> "$SLEEP_CALLS"',
+        '  SECONDS=$((SECONDS + $1))',
+        '  return 0',
+        '}',
+        'arm_lifecycle_signal_cleanup "$3"',
+        'hold_for_parent_term "$3"'
+      ].join('\n')
+    );
+    const receipt = JSON.parse(readFileSync(join(run.dir, 'cleanup-report.json'), 'utf8')) as Record<string, unknown>;
+
+    expect(result.status, result.output).toBe(2);
+    expect(readFileSync(sleepCalls, 'utf8')).toBe('7\n');
+    expect(receipt.result).toBe('CLEANED');
+    expect(receipt.failureStage).toBe('UNKNOWN');
     expect(receipt.rehearsalLifecycleObservation).toBe('HOLD_TIMEOUT');
     expect(existsSync(join(run.dir, 'private'))).toBe(false);
     expect(result.output).not.toContain(SYNTHETIC_SECRET);
@@ -1793,6 +2619,113 @@ function createRun(label: string): RunFixture {
   return { ...run, dir };
 }
 
+function writeTermResistantDescendantFixture(run: RunFixture): string {
+  const path = join(run.dir, 'directory_facade.py-term-resistant-fixture.sh');
+  const source = [
+    '#!/usr/bin/bash -p',
+    'set -euo pipefail',
+    'leader_term="$1"',
+    'descendant_file="$2"',
+    'descendant_ready="$3"',
+    'trap \'printf "%s" TERM > "$leader_term"; exit 0\' TERM',
+    '(',
+    '  trap "" TERM',
+    '  printf "%s" "$BASHPID" > "$descendant_file"',
+    '  printf "%s" ready > "$descendant_ready"',
+    '  exec /usr/bin/sleep 20',
+    ') &',
+    'while :; do /usr/bin/sleep 1; done'
+  ].join('\n');
+  writeFileSync(path, `${source}\n`, { mode: 0o700 });
+  chmodSync(path, 0o700);
+  return path;
+}
+
+function createIsolatedArtifactRoot(label: string): string {
+  const root = mkdtempSync(join(tmpdir(), `int001-${label}-`));
+  cleanupPaths.add(root);
+  chmodSync(root, 0o700);
+  return root;
+}
+
+function createRunUnderArtifactRoot(artifactRoot: string, label: string): RunFixture {
+  const id = nextRunId(label);
+  const dir = join(artifactRoot, id);
+  mkdirSync(dir, { recursive: false, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  return { id, dir };
+}
+
+function createPortReservationDirectory(artifactRoot: string): string {
+  const directory = join(artifactRoot, '.port-reservations');
+  mkdirSync(directory, { recursive: false, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  return directory;
+}
+
+function reservationLines(runId: string, ports: readonly number[] = [23001, 23002, 23003, 23004, 23005, 23006]): string[] {
+  if (ports.length !== 6) {
+    throw new Error('a synthetic reservation requires exactly six ports');
+  }
+  return [
+    'INT001_PORT_RESERVATION_SCHEMA=1',
+    `INT001_RUN_ID=${runId}`,
+    `INT001_NAVIGATOR_PORT=${ports[0]}`,
+    `INT001_MYSQL_PORT=${ports[1]}`,
+    `INT001_MOCK_LLM_PORT=${ports[2]}`,
+    `INT001_BIZ_PORT=${ports[3]}`,
+    `INT001_BIZ_INGRESS_PROXY_PORT=${ports[4]}`,
+    `INT001_DIRECTORY_FACADE_PORT=${ports[5]}`
+  ];
+}
+
+function writePortReservation(
+  artifactRoot: string,
+  runId: string,
+  ports: readonly number[] = [23001, 23002, 23003, 23004, 23005, 23006],
+  lines: readonly string[] = reservationLines(runId, ports),
+  mode = 0o600
+): string {
+  const directory = join(artifactRoot, '.port-reservations');
+  if (!existsSync(directory)) {
+    createPortReservationDirectory(artifactRoot);
+  }
+  const file = join(directory, `${runId}.ports`);
+  writeFileSync(file, `${lines.join('\n')}\n`, { mode });
+  chmodSync(file, mode);
+  return file;
+}
+
+function sixPortAssignments(ports: readonly number[]): string[] {
+  if (ports.length !== 6) {
+    throw new Error('six port assignments are required');
+  }
+  return [
+    `NAVIGATOR_PORT=${ports[0]}`,
+    `MYSQL_PORT=${ports[1]}`,
+    `MOCK_LLM_PORT=${ports[2]}`,
+    `BIZ_PORT=${ports[3]}`,
+    `BIZ_INGRESS_PROXY_PORT=${ports[4]}`,
+    `DIRECTORY_FACADE_PORT=${ports[5]}`
+  ];
+}
+
+function cleanupLifecycleStatement(ports: readonly number[], override = ''): string {
+  return [
+    ...sixPortAssignments(ports),
+    'load_prepared_profiles() { STACK_ENV=(); STACK_ENV[INT001_COMPOSE_PROJECT]=int001-test; }',
+    'private_file_path() { printf "%s/private/%s" "$1" "$2"; }',
+    'stop_owned_child() { return 0; }',
+    'assert_all_docker_resources_owned() { return 0; }',
+    'docker_compose_for_run() { return 0; }',
+    'assert_no_docker_resources_remain() { return 0; }',
+    'write_manifest() { return 0; }',
+    'delete_private_run_artifacts() { return 0; }',
+    override,
+    'if cleanup_run "$3" CLEANED NONE; then exit 0; else exit 7; fi'
+  ].filter(Boolean).join('\n');
+}
+
 function nextRunId(label: string): string {
   sequence += 1;
   return `int001-${label}-${process.pid}-${Date.now().toString(36)}-${sequence}`;
@@ -1944,13 +2877,38 @@ function invokeHarnessLibrary(run: RunFixture, statement: string): BootstrapResu
   return invokeScriptCommand(command, [library, run.id, run.dir, REPO_ROOT]);
 }
 
+function invokeHarnessLibraryAtArtifactRoot(
+  run: RunFixture,
+  artifactRoot: string,
+  statement: string
+): BootstrapResult {
+  const libraryDirectory = mkdtempSync(join(tmpdir(), 'int001-harness-isolated-library-'));
+  cleanupPaths.add(libraryDirectory);
+  const library = join(libraryDirectory, 'synthetic-upstream-harness-library.sh');
+  const source = readFileSync(HARNESS_SCRIPT, 'utf8');
+  const librarySource = source.replace(/\nmain "\$@"\s*$/, '\n');
+  if (librarySource === source) {
+    throw new Error('harness library dispatch footer was not found');
+  }
+  writeFileSync(library, librarySource, { mode: 0o600 });
+  chmodSync(library, 0o600);
+  const command = [
+    'source "$1"',
+    'REPO_ROOT="$5"',
+    'ARTIFACT_ROOT="$4"',
+    'RUN_ID="$2"',
+    statement
+  ].join('\n');
+  return invokeScriptCommand(command, [library, run.id, run.dir, artifactRoot, REPO_ROOT]);
+}
+
 function invokeHarnessLibraryWithRehearsalHoldSeconds(
   run: RunFixture,
   holdSeconds: number,
   statement: string
 ): BootstrapResult {
-  if (!Number.isInteger(holdSeconds) || holdSeconds < 0 || holdSeconds > 1) {
-    throw new Error('offline rehearsal hold must be a bounded integer of zero or one second');
+  if (!Number.isInteger(holdSeconds) || holdSeconds < 0 || holdSeconds > 180) {
+    throw new Error('offline rehearsal hold must be a bounded integer from zero through 180 seconds');
   }
   const libraryDirectory = mkdtempSync(join(tmpdir(), 'int001-harness-rehearsal-hold-library-'));
   cleanupPaths.add(libraryDirectory);
@@ -2020,11 +2978,31 @@ async function invokeHeldLifecycleLauncherTopologyFixture(
   cleanupPaths.add(fixtureDirectory);
   const library = join(fixtureDirectory, 'synthetic-upstream-harness-library.sh');
   const heldLifecycleChild = join(fixtureDirectory, 'held-lifecycle-child.sh');
-  const fakeLauncher = join(fixtureDirectory, 'fake-launcher-1.0.0-SNAPSHOT.jar.sh');
-  const ready = join(run.dir, 'held-lifecycle-ready');
+  const ownedServices = [
+    {
+      name: 'launcher',
+      script: join(fixtureDirectory, 'fake-launcher-1.0.0-SNAPSHOT.jar.sh')
+    },
+    {
+      name: 'biz-worker',
+      script: join(fixtureDirectory, 'fake-langgraph_biz_worker.main:app.sh')
+    },
+    {
+      name: 'biz-ingress-proxy',
+      script: join(fixtureDirectory, 'fake-biz_ingress_proxy.py.sh')
+    },
+    {
+      name: 'directory-facade',
+      script: join(fixtureDirectory, 'fake-directory_facade.py.sh')
+    }
+  ].map((service) => ({
+    ...service,
+    pidFile: join(fixtureDirectory, `${service.name}.pid`),
+    terminalObservation: join(fixtureDirectory, `${service.name}-terminal`)
+  }));
+  const ready = join(fixtureDirectory, 'held-lifecycle-ready');
   const heldPidFile = join(fixtureDirectory, 'held-lifecycle.pid');
-  const fakeLauncherPidFile = join(fixtureDirectory, 'fake-launcher.pid');
-  const fakeLauncherTerminal = join(fixtureDirectory, 'fake-launcher-terminal');
+  const ports = [24101, 24102, 24103, 24104, 24105, 24106] as const;
   const source = readFileSync(HARNESS_SCRIPT, 'utf8');
   const librarySource = source.replace(/\nmain "\$@"\s*$/, '\n');
   if (librarySource === source) {
@@ -2032,11 +3010,15 @@ async function invokeHeldLifecycleLauncherTopologyFixture(
   }
   writeFileSync(library, librarySource, { mode: 0o600 });
   chmodSync(library, 0o600);
-  writeFakeHeldLifecycleLauncher(fakeLauncher, fakeLauncherPidFile, fakeLauncherTerminal);
+  for (const service of ownedServices) {
+    writeFakeHeldLifecycleService(service.script, service.pidFile, service.terminalObservation);
+  }
+  writePortReservation(dirname(run.dir), run.id, ports);
   writeHeldLifecycleLauncherChild(
     heldLifecycleChild,
     library,
-    fakeLauncher,
+    ownedServices.map((service) => service.script),
+    ports,
     run,
     ready,
     heldPidFile
@@ -2074,7 +3056,7 @@ async function invokeHeldLifecycleLauncherTopologyFixture(
     output += chunk;
   });
   const exited = waitForExit(parentProcess);
-  let termSent = false;
+  let outerTermDispatches = 0;
 
   try {
     await waitForFile(ready);
@@ -2083,7 +3065,7 @@ async function invokeHeldLifecycleLauncherTopologyFixture(
       throw new Error('offline held Launcher topology fixture did not expose an outer PID');
     }
     const heldLifecyclePid = readFixturePid(heldPidFile, 'held lifecycle');
-    const fakeLauncherPid = readFixturePid(fakeLauncherPidFile, 'fake Launcher');
+    const fakeLauncherPid = readFixturePid(ownedServices[0].pidFile, 'fake Launcher');
     const fakeLauncherAncestorPids = readProcessAncestorPids(fakeLauncherPid);
     const heldArgv = readFileSync(`/proc/${heldLifecyclePid}/cmdline`, 'utf8')
       .split('\0')
@@ -2118,25 +3100,30 @@ async function invokeHeldLifecycleLauncherTopologyFixture(
     // parent. The fixture never signals a port, a process group, the held
     // child, or the fake Launcher directly on its successful path.
     parentProcess.kill('SIGTERM');
-    termSent = true;
+    outerTermDispatches += 1;
     const status = await exited;
     return {
       status,
       output,
       outerOwnershipProven,
+      outerTermDispatches,
       outerParentPid,
       heldLifecyclePid,
       fakeLauncherPid,
       fakeLauncherAncestorPids,
-      fakeLauncherTerminalObservation: readFileSync(fakeLauncherTerminal, 'utf8')
+      fakeLauncherTerminalObservation: readFileSync(ownedServices[0].terminalObservation, 'utf8'),
+      ownedServiceTerminalObservations: ownedServices.map((service) =>
+        readFileSync(service.terminalObservation, 'utf8')
+      )
     };
   } catch (error) {
     // This is exceptional test-fixture disposal only. The successful test
     // path above remains one outer-PID TERM; do not let an assertion failure
     // strand a deliberately long-lived fake child in the local test process.
     if (parentProcess.exitCode === null && parentProcess.pid) {
-      if (!termSent) {
+      if (outerTermDispatches === 0) {
         parentProcess.kill('SIGTERM');
+        outerTermDispatches += 1;
       }
       await exited;
     }
@@ -2200,6 +3187,80 @@ async function invokeOwnedParentTermFixture(run: RunFixture): Promise<OwnedParen
 
     // The test targets the exact spawned parent PID once. It never targets a
     // process group, port, fixture child, or a process outside this test.
+    parentProcess.kill('SIGTERM');
+    const status = await exited;
+    return { status, output, parentOwnershipProven };
+  } catch (error) {
+    if (parentProcess.exitCode === null && parentProcess.pid) {
+      parentProcess.kill('SIGKILL');
+      await exited;
+    }
+    throw error;
+  }
+}
+
+async function invokeFailedCleanupParentTermFixture(
+  run: RunFixture,
+  artifactRoot: string
+): Promise<OwnedParentTermResult> {
+  const fixtureDirectory = mkdtempSync(join(tmpdir(), 'int001-parent-term-failed-cleanup-fixture-'));
+  cleanupPaths.add(fixtureDirectory);
+  const library = join(fixtureDirectory, 'synthetic-upstream-harness-library.sh');
+  const child = join(fixtureDirectory, 'failed-cleanup-lifecycle-child.sh');
+  const ready = join(fixtureDirectory, 'failed-cleanup-lifecycle-child-ready');
+  const source = readFileSync(HARNESS_SCRIPT, 'utf8');
+  const librarySource = source.replace(/\nmain "\$@"\s*$/, '\n');
+  if (librarySource === source) {
+    throw new Error('harness library dispatch footer was not found');
+  }
+  writeFileSync(library, librarySource, { mode: 0o600 });
+  chmodSync(library, 0o600);
+  writeFailedCleanupLifecycleChild(child, library, run, artifactRoot, ready);
+
+  const command = [
+    'source "$1"',
+    'REPO_ROOT="$2"',
+    'RUN_ID="$3"',
+    'RUN_DIR="$4"',
+    'ARTIFACT_ROOT="$5"',
+    'HARNESS_SELF="$6"',
+    "trap 'exercise_signal_cleanup TERM \"$RUN_DIR\"' TERM",
+    'exercise_invoke_child run-hold run --allow-execute --build-launcher --run-id "$3" --hold-for-parent-term'
+  ].join('\n');
+  const parentProcess = spawn(
+    '/usr/bin/bash',
+    ['-p', '-c', command, 'bash', library, REPO_ROOT, run.id, run.dir, artifactRoot, child],
+    {
+      cwd: REPO_ROOT,
+      env: {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        HOME: tmpdir()
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
+  );
+  let output = '';
+  parentProcess.stdout?.setEncoding('utf8');
+  parentProcess.stderr?.setEncoding('utf8');
+  parentProcess.stdout?.on('data', (chunk: string) => {
+    output += chunk;
+  });
+  parentProcess.stderr?.on('data', (chunk: string) => {
+    output += chunk;
+  });
+  const exited = waitForExit(parentProcess);
+
+  try {
+    await waitForFile(ready);
+    const parentPid = parentProcess.pid;
+    if (!parentPid) {
+      throw new Error('offline failed-cleanup parent TERM fixture did not expose a PID');
+    }
+    const parentOwnershipProven =
+      realpathSync(`/proc/${parentPid}/cwd`) === REPO_ROOT &&
+      readFileSync(`/proc/${parentPid}/cmdline`, 'utf8').includes(run.id) &&
+      readFileSync(`/proc/${parentPid}/cmdline`, 'utf8').includes(child);
+
     parentProcess.kill('SIGTERM');
     const status = await exited;
     return { status, output, parentOwnershipProven };
@@ -2432,7 +3493,50 @@ function writeOwnedLifecycleChild(path: string, library: string, run: RunFixture
   chmodSync(path, 0o700);
 }
 
-function writeFakeHeldLifecycleLauncher(
+function writeFailedCleanupLifecycleChild(
+  path: string,
+  library: string,
+  run: RunFixture,
+  artifactRoot: string,
+  ready: string
+): void {
+  const source = [
+    '#!/usr/bin/bash -p',
+    'set -euo pipefail',
+    'case "$-" in *p*) ;; *) exit 90 ;; esac',
+    '[[ "$#" == 6 ]] || exit 91',
+    '[[ "$1" == run ]] || exit 92',
+    '[[ "$2" == --allow-execute ]] || exit 93',
+    '[[ "$3" == --build-launcher ]] || exit 94',
+    '[[ "$4" == --run-id ]] || exit 95',
+    `[[ "$5" == ${shellLiteral(run.id)} ]] || exit 96`,
+    '[[ "$6" == --hold-for-parent-term ]] || exit 97',
+    `source ${shellLiteral(library)}`,
+    `REPO_ROOT=${shellLiteral(REPO_ROOT)}`,
+    `RUN_ID=${shellLiteral(run.id)}`,
+    `RUN_DIR=${shellLiteral(run.dir)}`,
+    `ARTIFACT_ROOT=${shellLiteral(artifactRoot)}`,
+    'ACTION=run',
+    'HOLD_FOR_PARENT_TERM=1',
+    'load_prepared_profiles() {',
+    '  STACK_ENV=()',
+    '  STACK_ENV[INT001_COMPOSE_PROJECT]="int001-offline-$RUN_ID"',
+    '}',
+    'stop_owned_child() { return 1; }',
+    'assert_all_docker_resources_owned() { return 0; }',
+    'docker_compose_for_run() { return 0; }',
+    'assert_no_docker_resources_remain() { return 0; }',
+    'write_manifest() { return 0; }',
+    'arm_lifecycle_signal_cleanup "$RUN_DIR"',
+    "REHEARSAL_LIFECYCLE_OBSERVATION='HOLD_ENTERED'",
+    `/usr/bin/printf ready > ${shellLiteral(ready)}`,
+    'while :; do /usr/bin/sleep 1; done'
+  ].join('\n');
+  writeFileSync(path, `${source}\n`, { mode: 0o700 });
+  chmodSync(path, 0o700);
+}
+
+function writeFakeHeldLifecycleService(
   path: string,
   pidFile: string,
   terminalObservation: string
@@ -2454,11 +3558,15 @@ function writeFakeHeldLifecycleLauncher(
 function writeHeldLifecycleLauncherChild(
   path: string,
   library: string,
-  fakeLauncher: string,
+  ownedServiceScripts: readonly string[],
+  ports: readonly number[],
   run: RunFixture,
   ready: string,
   heldPidFile: string
 ): void {
+  if (ownedServiceScripts.length !== 4 || ports.length !== 6) {
+    throw new Error('held lifecycle cleanup seam requires four owned services and six reserved ports');
+  }
   const source = [
     '#!/usr/bin/bash -p',
     'set -euo pipefail',
@@ -2475,7 +3583,10 @@ function writeHeldLifecycleLauncherChild(
     `RUN_ID=${shellLiteral(run.id)}`,
     `RUN_DIR=${shellLiteral(run.dir)}`,
     'ARTIFACT_ROOT="$(dirname "$RUN_DIR")"',
-    `FAKE_LAUNCHER=${shellLiteral(fakeLauncher)}`,
+    `FAKE_LAUNCHER=${shellLiteral(ownedServiceScripts[0])}`,
+    `FAKE_BIZ_WORKER=${shellLiteral(ownedServiceScripts[1])}`,
+    `FAKE_BIZ_INGRESS_PROXY=${shellLiteral(ownedServiceScripts[2])}`,
+    `FAKE_DIRECTORY_FACADE=${shellLiteral(ownedServiceScripts[3])}`,
     `READY=${shellLiteral(ready)}`,
     `HELD_PID_FILE=${shellLiteral(heldPidFile)}`,
     'ACTION=run',
@@ -2483,6 +3594,12 @@ function writeHeldLifecycleLauncherChild(
     'load_prepared_profiles() {',
     '  STACK_ENV=()',
     '  STACK_ENV[INT001_COMPOSE_PROJECT]="int001-offline-$RUN_ID"',
+    `  NAVIGATOR_PORT=${ports[0]}`,
+    `  MYSQL_PORT=${ports[1]}`,
+    `  MOCK_LLM_PORT=${ports[2]}`,
+    `  BIZ_PORT=${ports[3]}`,
+    `  BIZ_INGRESS_PROXY_PORT=${ports[4]}`,
+    `  DIRECTORY_FACADE_PORT=${ports[5]}`,
     '}',
     'assert_all_docker_resources_owned() { return 0; }',
     'docker_compose_for_run() { return 0; }',
@@ -2491,6 +3608,9 @@ function writeHeldLifecycleLauncherChild(
     'mkdir -m 700 "$RUN_DIR/children"',
     'arm_lifecycle_signal_cleanup "$RUN_DIR"',
     'start_child "$RUN_DIR" launcher launcher-1.0.0-SNAPSHOT.jar "$RUN_DIR/private/launcher-process.log" "$TRUSTED_BASH" -p "$FAKE_LAUNCHER"',
+    'start_child "$RUN_DIR" biz-worker langgraph_biz_worker.main:app "$RUN_DIR/private/biz-worker.log" "$TRUSTED_BASH" -p "$FAKE_BIZ_WORKER"',
+    'start_child "$RUN_DIR" biz-ingress-proxy biz_ingress_proxy.py "$RUN_DIR/private/biz-ingress-proxy.log" "$TRUSTED_BASH" -p "$FAKE_BIZ_INGRESS_PROXY"',
+    'start_child "$RUN_DIR" directory-facade directory_facade.py "$RUN_DIR/private/directory-facade.log" "$TRUSTED_BASH" -p "$FAKE_DIRECTORY_FACADE"',
     '/usr/bin/printf "%s" "$$" > "$HELD_PID_FILE"',
     '/usr/bin/printf ready > "$READY"',
     'hold_for_parent_term "$RUN_DIR"'

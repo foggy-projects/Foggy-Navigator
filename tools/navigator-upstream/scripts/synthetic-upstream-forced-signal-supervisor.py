@@ -15,6 +15,7 @@ process metadata into durable evidence.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import http.client
 import json
 import os
@@ -43,6 +44,11 @@ RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
 UTC_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 MAX_HEALTH_BODY_BYTES = 4096
 DOCKER_COMMAND_TIMEOUT_SECONDS = 10
+MAX_DESCENDANT_DOMAIN_PROCESSES = 256
+MAX_DESCENDANT_DOMAIN_TASKS = 4096
+MAX_DESCENDANT_DOMAIN_DEPTH = 64
+MAX_STABLE_DESCENDANT_DOMAIN_ATTEMPTS = 8
+STABLE_DESCENDANT_DOMAIN_RETRY_SECONDS = 0.05
 RECEIPT_FIELDS = {
     "schemaVersion",
     "runId",
@@ -142,11 +148,28 @@ PROJECTION_ROOT_SNAPSHOT_STATES = {"NOT_SAMPLED", "COMPLETE", "UNAVAILABLE", "SU
 PROJECTION_STDOUT_STATES = {"NOT_EMITTED", "EMITTED"}
 PROJECTION_SUFFIX = ".forced-signal-projection.json"
 MAX_PROJECTION_BYTES = 4096
+PORT_RESERVATION_DIRECTORY_NAME = ".port-reservations"
+PORT_RESERVATION_SUFFIX = ".ports"
+PORT_RESERVATION_SCHEMA_VERSION = "1"
+PORT_RESERVATION_FIELDS = (
+    "INT001_PORT_RESERVATION_SCHEMA",
+    "INT001_RUN_ID",
+    "INT001_NAVIGATOR_PORT",
+    "INT001_MYSQL_PORT",
+    "INT001_MOCK_LLM_PORT",
+    "INT001_BIZ_PORT",
+    "INT001_BIZ_INGRESS_PROXY_PORT",
+    "INT001_DIRECTORY_FACADE_PORT",
+)
+PORT_RESERVATION_PORT_FIELDS = PORT_RESERVATION_FIELDS[2:]
+MAX_PORT_RESERVATION_BYTES = 4096
 SOCKET_LISTENER_ABSENT = "socket-listener-absent"
 SOCKET_LISTENER_AMBIGUOUS = "socket-listener-ambiguous"
 SOCKET_LISTENER_NONLOOPBACK_OR_IPV6 = "socket-listener-nonloopback-or-ipv6"
 SOCKET_LISTENER_PROC_UNAVAILABLE = "socket-listener-proc-unavailable"
 SOCKET_LISTENER_PROC_MALFORMED = "socket-listener-proc-malformed"
+PROC_TCP_IPV4_LOOPBACK = "0100007F"
+PROC_TCP6_IPV4_MAPPED_LOOPBACK = "0000000000000000FFFF00000100007F"
 LISTENER_CANDIDATE_ABSENT = "listener-candidate-absent"
 LISTENER_CANDIDATE_AMBIGUOUS = "listener-candidate-ambiguous"
 LISTENER_CANDIDATE_PROC_UNAVAILABLE = "listener-candidate-proc-unavailable"
@@ -155,6 +178,69 @@ IDENTITY_MATCH = "MATCH"
 IDENTITY_MISMATCH = "MISMATCH"
 IDENTITY_PROC_UNAVAILABLE = "PROC_UNAVAILABLE"
 IDENTITY_PROC_MALFORMED = "PROC_MALFORMED"
+LISTENER_IDENTITY_NOT_OBSERVED = "NOT_OBSERVED"
+LISTENER_IDENTITY_NO_TRUSTED_JAVA = "NO_TRUSTED_JAVA_CANDIDATE"
+LISTENER_IDENTITY_NO_EXACT_ARGV = "NO_EXACT_ARGV_MATCH"
+LISTENER_IDENTITY_CWD_MISMATCH = "ARGV_MATCH_CWD_MISMATCH"
+LISTENER_IDENTITY_EXE_MISMATCH = "ARGV_CWD_MATCH_EXE_MISMATCH"
+LISTENER_IDENTITY_LINEAGE_MISMATCH = "ARGV_CWD_EXE_MATCH_LINEAGE_MISMATCH"
+LISTENER_IDENTITY_STABILITY_MISMATCH = "IDENTITY_STABILITY_MISMATCH"
+LISTENER_IDENTITY_PROC_UNAVAILABLE = "PROC_UNAVAILABLE"
+LISTENER_IDENTITY_PROC_MALFORMED = "PROC_MALFORMED"
+LISTENER_IDENTITY_EXACT = "EXACT_CANDIDATE_FOUND"
+LISTENER_IDENTITY_EXACT_AMBIGUOUS = "EXACT_CANDIDATE_AMBIGUOUS"
+LISTENER_PROOF_STAGE_NOT_OBSERVED = "NOT_OBSERVED"
+LISTENER_PROOF_STAGE_EXACT_IDENTITY = "EXACT_IDENTITY_FOUND"
+LISTENER_PROOF_STAGE_SOCKET_FOUND = "LISTENER_SOCKET_FOUND"
+LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP = "INITIAL_OWNERSHIP_PROVED"
+LISTENER_PROOF_STAGE_FULL_ELIGIBLE = "FULL_ELIGIBLE"
+EXACT_PARENT_PROOF_REASON = "commandLine+cwd+runId+uid+session+startTicks"
+EXACT_LISTENER_PROOF_REASON = "uid+java+argv+cwd+ancestor+socket+startTicks"
+FORCED_SIGNAL_OUTER_EXIT_CODE = 128
+LISTENER_IDENTITY_DIAGNOSTICS = frozenset(
+    {
+        LISTENER_IDENTITY_NOT_OBSERVED,
+        LISTENER_IDENTITY_NO_TRUSTED_JAVA,
+        LISTENER_IDENTITY_NO_EXACT_ARGV,
+        LISTENER_IDENTITY_CWD_MISMATCH,
+        LISTENER_IDENTITY_EXE_MISMATCH,
+        LISTENER_IDENTITY_LINEAGE_MISMATCH,
+        LISTENER_IDENTITY_STABILITY_MISMATCH,
+        LISTENER_IDENTITY_PROC_UNAVAILABLE,
+        LISTENER_IDENTITY_PROC_MALFORMED,
+        LISTENER_IDENTITY_EXACT,
+        LISTENER_IDENTITY_EXACT_AMBIGUOUS,
+    }
+)
+LISTENER_IDENTITY_DIAGNOSTIC_RANK = {
+    LISTENER_IDENTITY_NOT_OBSERVED: 0,
+    LISTENER_IDENTITY_NO_TRUSTED_JAVA: 1,
+    LISTENER_IDENTITY_NO_EXACT_ARGV: 2,
+    LISTENER_IDENTITY_CWD_MISMATCH: 3,
+    LISTENER_IDENTITY_EXE_MISMATCH: 4,
+    LISTENER_IDENTITY_LINEAGE_MISMATCH: 5,
+    LISTENER_IDENTITY_STABILITY_MISMATCH: 6,
+    LISTENER_IDENTITY_EXACT: 7,
+    LISTENER_IDENTITY_EXACT_AMBIGUOUS: 8,
+    LISTENER_IDENTITY_PROC_UNAVAILABLE: 9,
+    LISTENER_IDENTITY_PROC_MALFORMED: 10,
+}
+LISTENER_PROOF_STAGES = frozenset(
+    {
+        LISTENER_PROOF_STAGE_NOT_OBSERVED,
+        LISTENER_PROOF_STAGE_EXACT_IDENTITY,
+        LISTENER_PROOF_STAGE_SOCKET_FOUND,
+        LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+        LISTENER_PROOF_STAGE_FULL_ELIGIBLE,
+    }
+)
+LISTENER_PROOF_STAGE_RANK = {
+    LISTENER_PROOF_STAGE_NOT_OBSERVED: 0,
+    LISTENER_PROOF_STAGE_EXACT_IDENTITY: 1,
+    LISTENER_PROOF_STAGE_SOCKET_FOUND: 2,
+    LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP: 3,
+    LISTENER_PROOF_STAGE_FULL_ELIGIBLE: 4,
+}
 SIGNAL_LABELS = {signal.SIGHUP: "HUP", signal.SIGINT: "INT", signal.SIGTERM: "TERM"}
 CONTROL_SIGNALS = frozenset(SIGNAL_LABELS)
 CONTROL_SIGNAL_ORDER = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
@@ -187,6 +273,8 @@ class ListenerProof:
     pid: int | None = None
     start_ticks: int | None = None
     socket_inode: int | None = None
+    identity_diagnostic: str = LISTENER_IDENTITY_NOT_OBSERVED
+    proof_stage_diagnostic: str = LISTENER_PROOF_STAGE_NOT_OBSERVED
 
 
 @dataclass(frozen=True)
@@ -203,6 +291,16 @@ class ListenerCandidateIdentityProbe:
 
     status: str
     candidate: ListenerCandidate | None = None
+    identity_diagnostic: str = LISTENER_IDENTITY_NOT_OBSERVED
+
+
+@dataclass(frozen=True, order=True)
+class DescendantDomainIdentity:
+    """One stable process edge in the exercise-parent descendant domain."""
+
+    pid: int
+    parent_pid: int
+    start_ticks: int
 
 
 @dataclass(frozen=True)
@@ -220,6 +318,8 @@ class RehearsalOutcome:
     listener_proof: ListenerProof | None = None
     dispatch_safe: bool = False
     listener_proof_ever_eligible: bool = False
+    furthest_listener_identity_diagnostic: str = LISTENER_IDENTITY_NOT_OBSERVED
+    furthest_listener_proof_stage_diagnostic: str = LISTENER_PROOF_STAGE_NOT_OBSERVED
 
 
 @dataclass
@@ -620,10 +720,17 @@ def listener_socket_probe_from_tables(
                 return None, SOCKET_LISTENER_PROC_MALFORMED
             if state != "0A" or observed_port.upper() != port_hex:
                 continue
-            # The Launcher is configured for literal 127.0.0.1.  A wildcard,
-            # non-loopback, or IPv6 listener on the same port makes the health
-            # endpoint ambiguous, even if a loopback socket also exists.
-            if proc_net.name != "tcp" or address != "0100007F":
+            # Tomcat opens the JDK-default server channel. On an IPv6-capable
+            # Linux host that may carry an exact 127.0.0.1 bind as the
+            # canonical IPv4-mapped address in tcp6. Accept only those two
+            # procfs representations; native IPv6, wildcard, and any other
+            # mapped address remain ineligible.
+            expected_address = (
+                PROC_TCP_IPV4_LOOPBACK
+                if proc_net.name == "tcp"
+                else PROC_TCP6_IPV4_MAPPED_LOOPBACK
+            )
+            if address.upper() != expected_address:
                 return None, SOCKET_LISTENER_NONLOOPBACK_OR_IPV6
             expected_inodes.append(int(fields[9]))
     if not expected_inodes:
@@ -684,6 +791,95 @@ def current_uid_socket_holders(socket_inode: int) -> tuple[int, ...] | None:
         if has_socket:
             holders.append(int(proc_dir.name))
     return tuple(sorted(holders))
+
+
+def process_socket_holder_status(pid: int, socket_inode: int) -> bool | None:
+    """Return exact-inode ownership, or None when this process FD view is incomplete."""
+    target = f"socket:[{socket_inode}]"
+    fd_root = Path(f"/proc/{pid}/fd")
+    try:
+        fd_entries = tuple(fd_root.iterdir())
+    except OSError:
+        return None
+    found = False
+    for fd in fd_entries:
+        try:
+            if os.readlink(fd) == target:
+                found = True
+        except OSError:
+            # The caller decides whether this PID is inside or outside the
+            # run-owned domain.  Never reinterpret an unreadable FD as a
+            # disappeared FD here: in-domain uncertainty must fail closed,
+            # while unrelated out-of-domain uncertainty may be ignored only
+            # by the bounded holder proof below.
+            return None
+    return found
+
+
+def readable_current_uid_process_ids() -> tuple[int, ...] | None:
+    """Return readable current-user proc entries, omitting unrelated uncertainty."""
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    pids: list[int] = []
+    for proc_dir in proc_entries:
+        if not proc_dir.name.isdecimal():
+            continue
+        try:
+            if proc_dir.stat().st_uid == os.getuid():
+                pids.append(int(proc_dir.name))
+        except OSError:
+            continue
+    return tuple(sorted(pids))
+
+
+def run_owned_socket_holder_is_exclusive(
+    *,
+    socket_inode: int,
+    candidate: ListenerCandidate,
+    exercise_pid: int,
+    exercise_start_ticks: int,
+) -> bool:
+    """Prove exact holder exclusivity in the stable run-owned process domain.
+
+    In-domain procfs and FD views are mandatory. Readable out-of-domain
+    current-user processes still veto an observed shared holder, while an
+    unrelated unreadable host process cannot make the owned domain unknown.
+    The local disposable harness threat model already trusts the single
+    same-UID operator; this function does not grant authority outside the
+    exact parent/candidate lineage.
+    """
+    initial_domain, status = stable_exercise_descendant_domain(exercise_pid, exercise_start_ticks)
+    if status != IDENTITY_MATCH or initial_domain is None:
+        return False
+    domain_by_pid = {identity.pid: identity for identity in initial_domain}
+    candidate_identity = domain_by_pid.get(candidate.pid)
+    if candidate_identity is None or candidate_identity.start_ticks != candidate.start_ticks:
+        return False
+
+    in_domain_holders: list[int] = []
+    for identity in initial_domain:
+        holder = process_socket_holder_status(identity.pid, socket_inode)
+        if holder is None:
+            return False
+        if holder:
+            in_domain_holders.append(identity.pid)
+    if in_domain_holders != [candidate.pid]:
+        return False
+
+    readable_current_uid_pids = readable_current_uid_process_ids()
+    if readable_current_uid_pids is None:
+        return False
+    for pid in readable_current_uid_pids:
+        if pid in domain_by_pid:
+            continue
+        holder = process_socket_holder_status(pid, socket_inode)
+        if holder is True:
+            return False
+
+    final_domain, status = stable_exercise_descendant_domain(exercise_pid, exercise_start_ticks)
+    return status == IDENTITY_MATCH and final_domain == initial_domain
 
 
 def command_line(pid: int) -> list[str] | None:
@@ -784,6 +980,234 @@ def launcher_lineage_identity_status(pid: int, ancestor_pid: int, ancestor_start
     return IDENTITY_MISMATCH
 
 
+def identity_failure_diagnostic(status: str, mismatch_diagnostic: str) -> str:
+    if status == IDENTITY_PROC_MALFORMED:
+        return LISTENER_IDENTITY_PROC_MALFORMED
+    if status == IDENTITY_PROC_UNAVAILABLE:
+        return LISTENER_IDENTITY_PROC_UNAVAILABLE
+    return mismatch_diagnostic
+
+
+def furthest_identity_diagnostic(current: str, observed: str) -> str:
+    """Merge only allow-listed stages using a deterministic fail-closed order."""
+    safe_current = current if current in LISTENER_IDENTITY_DIAGNOSTICS else LISTENER_IDENTITY_NOT_OBSERVED
+    safe_observed = observed if observed in LISTENER_IDENTITY_DIAGNOSTICS else LISTENER_IDENTITY_NOT_OBSERVED
+    if LISTENER_IDENTITY_DIAGNOSTIC_RANK[safe_observed] > LISTENER_IDENTITY_DIAGNOSTIC_RANK[safe_current]:
+        return safe_observed
+    return safe_current
+
+
+def furthest_temporal_identity_diagnostic(current: str, observed: str) -> str:
+    """Retain the furthest identity progress observed across supervision time.
+
+    Discovery within one snapshot keeps procfs uncertainty above a readable
+    candidate because that snapshot cannot authorize a signal.  Across time,
+    however, a previously completed exact identity proof is durable redacted
+    diagnostic evidence and must not be overwritten by cleanup-time absence or
+    procfs failure.  A later exact proof likewise supersedes an earlier failure.
+    """
+    safe_current = current if current in LISTENER_IDENTITY_DIAGNOSTICS else LISTENER_IDENTITY_NOT_OBSERVED
+    safe_observed = observed if observed in LISTENER_IDENTITY_DIAGNOSTICS else LISTENER_IDENTITY_NOT_OBSERVED
+    if safe_current == LISTENER_IDENTITY_EXACT or safe_observed == LISTENER_IDENTITY_EXACT:
+        return LISTENER_IDENTITY_EXACT
+    return furthest_identity_diagnostic(safe_current, safe_observed)
+
+
+def redacted_listener_proof_stage(listener_proof: ListenerProof | None) -> str:
+    """Return only the fixed non-authorizing proof-stage enum."""
+    if listener_proof is None or listener_proof.proof_stage_diagnostic not in LISTENER_PROOF_STAGES:
+        return LISTENER_PROOF_STAGE_NOT_OBSERVED
+    return listener_proof.proof_stage_diagnostic
+
+
+def furthest_temporal_listener_proof_stage(current: str, observed: str) -> str:
+    """Retain the furthest safe listener stage reached across supervision time."""
+    safe_current = current if current in LISTENER_PROOF_STAGES else LISTENER_PROOF_STAGE_NOT_OBSERVED
+    safe_observed = observed if observed in LISTENER_PROOF_STAGES else LISTENER_PROOF_STAGE_NOT_OBSERVED
+    if LISTENER_PROOF_STAGE_RANK[safe_observed] > LISTENER_PROOF_STAGE_RANK[safe_current]:
+        return safe_observed
+    return safe_current
+
+
+def proc_task_ids(pid: int) -> tuple[tuple[int, ...] | None, str]:
+    """Read one bounded current-user task set for an in-domain process."""
+    task_root = Path(f"/proc/{pid}/task")
+    try:
+        task_entries = tuple(task_root.iterdir())
+    except FileNotFoundError:
+        return None, IDENTITY_MISMATCH
+    except OSError:
+        return None, IDENTITY_PROC_UNAVAILABLE
+
+    task_ids: list[int] = []
+    for task_dir in task_entries:
+        if not task_dir.name.isdecimal():
+            continue
+        if len(task_ids) >= MAX_DESCENDANT_DOMAIN_TASKS:
+            return None, IDENTITY_PROC_MALFORMED
+        try:
+            if task_dir.stat().st_uid != os.getuid():
+                return None, IDENTITY_PROC_MALFORMED
+        except FileNotFoundError:
+            return None, IDENTITY_MISMATCH
+        except OSError:
+            return None, IDENTITY_PROC_UNAVAILABLE
+        task_ids.append(int(task_dir.name))
+    if not task_ids:
+        return None, proc_identity_failure_status(pid, malformed=True)
+    return tuple(sorted(task_ids)), IDENTITY_MATCH
+
+
+def proc_task_child_pids(pid: int, task_id: int) -> tuple[tuple[int, ...] | None, str]:
+    """Read one task's child PID list with strict fixed-shape validation."""
+    children_path = Path(f"/proc/{pid}/task/{task_id}/children")
+    try:
+        raw_children = children_path.read_bytes()
+    except FileNotFoundError:
+        return None, IDENTITY_MISMATCH
+    except OSError:
+        return None, IDENTITY_PROC_UNAVAILABLE
+    try:
+        text_children = raw_children.decode("ascii", "strict").strip()
+    except UnicodeDecodeError:
+        return None, IDENTITY_PROC_MALFORMED
+    if not text_children:
+        return (), IDENTITY_MATCH
+
+    children: set[int] = set()
+    for value in text_children.split():
+        if not value.isdecimal():
+            return None, IDENTITY_PROC_MALFORMED
+        child_pid = int(value)
+        if child_pid <= 1:
+            return None, IDENTITY_PROC_MALFORMED
+        children.add(child_pid)
+        if len(children) > MAX_DESCENDANT_DOMAIN_PROCESSES:
+            return None, IDENTITY_PROC_MALFORMED
+    return tuple(sorted(children)), IDENTITY_MATCH
+
+
+def proc_task_children(pid: int) -> tuple[tuple[int, ...] | None, str]:
+    """Read every thread's children and require a stable task set."""
+    initial_task_ids, status = proc_task_ids(pid)
+    if status != IDENTITY_MATCH or initial_task_ids is None:
+        return None, status
+
+    children: set[int] = set()
+    for task_id in initial_task_ids:
+        task_children, status = proc_task_child_pids(pid, task_id)
+        if status != IDENTITY_MATCH or task_children is None:
+            return None, status
+        children.update(task_children)
+        if len(children) > MAX_DESCENDANT_DOMAIN_PROCESSES:
+            return None, IDENTITY_PROC_MALFORMED
+
+    final_task_ids, status = proc_task_ids(pid)
+    if status != IDENTITY_MATCH or final_task_ids is None:
+        return None, status
+    if final_task_ids != initial_task_ids:
+        return None, IDENTITY_MISMATCH
+    return tuple(sorted(children)), IDENTITY_MATCH
+
+
+def exercise_descendant_domain_snapshot(
+    exercise_pid: int,
+    exercise_start_ticks: int,
+) -> tuple[tuple[DescendantDomainIdentity, ...] | None, str]:
+    """Collect one complete bounded descendant snapshot from a proven root."""
+    root_snapshot, status = proc_identity_snapshot(exercise_pid)
+    if status != IDENTITY_MATCH or root_snapshot is None:
+        return None, status
+    root_state, root_parent_pid, root_start_ticks = root_snapshot
+    if root_state == "Z" or root_start_ticks != exercise_start_ticks:
+        return None, IDENTITY_MISMATCH
+
+    identities: dict[int, DescendantDomainIdentity] = {
+        exercise_pid: DescendantDomainIdentity(exercise_pid, root_parent_pid, root_start_ticks)
+    }
+    queue: list[tuple[int, int]] = [(exercise_pid, 0)]
+    queue_index = 0
+    while queue_index < len(queue):
+        pid, depth = queue[queue_index]
+        queue_index += 1
+        if depth > MAX_DESCENDANT_DOMAIN_DEPTH:
+            return None, IDENTITY_PROC_MALFORMED
+        expected = identities[pid]
+        current_snapshot, status = proc_identity_snapshot(pid)
+        if status != IDENTITY_MATCH or current_snapshot is None:
+            return None, status
+        state, parent_pid, start_ticks = current_snapshot
+        if state == "Z" or parent_pid != expected.parent_pid or start_ticks != expected.start_ticks:
+            return None, IDENTITY_MISMATCH
+
+        child_pids, status = proc_task_children(pid)
+        if status != IDENTITY_MATCH or child_pids is None:
+            return None, status
+        for child_pid in child_pids:
+            existing = identities.get(child_pid)
+            if existing is not None:
+                if existing.parent_pid != pid:
+                    return None, IDENTITY_PROC_MALFORMED
+                continue
+            if len(identities) >= MAX_DESCENDANT_DOMAIN_PROCESSES:
+                return None, IDENTITY_PROC_MALFORMED
+            child_snapshot, status = proc_identity_snapshot(child_pid)
+            if status != IDENTITY_MATCH or child_snapshot is None:
+                return None, status
+            child_state, child_parent_pid, child_start_ticks = child_snapshot
+            if child_state == "Z" or child_parent_pid != pid:
+                return None, IDENTITY_MISMATCH
+            identities[child_pid] = DescendantDomainIdentity(
+                child_pid,
+                child_parent_pid,
+                child_start_ticks,
+            )
+            queue.append((child_pid, depth + 1))
+
+    for identity in identities.values():
+        final_snapshot, status = proc_identity_snapshot(identity.pid)
+        if status != IDENTITY_MATCH or final_snapshot is None:
+            return None, status
+        final_state, final_parent_pid, final_start_ticks = final_snapshot
+        if (
+            final_state == "Z"
+            or final_parent_pid != identity.parent_pid
+            or final_start_ticks != identity.start_ticks
+        ):
+            return None, IDENTITY_MISMATCH
+    return tuple(sorted(identities.values())), IDENTITY_MATCH
+
+
+def stable_exercise_descendant_domain(
+    exercise_pid: int,
+    exercise_start_ticks: int,
+) -> tuple[tuple[DescendantDomainIdentity, ...] | None, str]:
+    """Require two identical complete snapshots within a bounded retry window.
+
+    A JVM may add or retire a native thread while one complete task/children
+    snapshot is being read. That transient mismatch cannot authorize a
+    candidate, but it also must not permanently hide a later pair of complete,
+    identical snapshots. Procfs unavailability or malformed data still fails
+    immediately; every successful attempt retains the full task-set proof.
+    """
+    for _attempt in range(MAX_STABLE_DESCENDANT_DOMAIN_ATTEMPTS):
+        first, status = exercise_descendant_domain_snapshot(exercise_pid, exercise_start_ticks)
+        if status in (IDENTITY_PROC_UNAVAILABLE, IDENTITY_PROC_MALFORMED):
+            return None, status
+        if status != IDENTITY_MATCH or first is None:
+            if _attempt + 1 < MAX_STABLE_DESCENDANT_DOMAIN_ATTEMPTS:
+                time.sleep(STABLE_DESCENDANT_DOMAIN_RETRY_SECONDS)
+            continue
+        second, status = exercise_descendant_domain_snapshot(exercise_pid, exercise_start_ticks)
+        if status in (IDENTITY_PROC_UNAVAILABLE, IDENTITY_PROC_MALFORMED):
+            return None, status
+        if status == IDENTITY_MATCH and second is not None and first == second:
+            return first, IDENTITY_MATCH
+        if _attempt + 1 < MAX_STABLE_DESCENDANT_DOMAIN_ATTEMPTS:
+            time.sleep(STABLE_DESCENDANT_DOMAIN_RETRY_SECONDS)
+    return None, IDENTITY_MISMATCH
+
+
 def exact_launcher_candidate_identity(
     *,
     pid: int,
@@ -801,40 +1225,107 @@ def exact_launcher_candidate_identity(
     """
     initial_snapshot, status = proc_identity_snapshot(pid)
     if status != IDENTITY_MATCH or initial_snapshot is None:
-        return ListenerCandidateIdentityProbe(status)
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(
+                status,
+                LISTENER_IDENTITY_NOT_OBSERVED,
+            ),
+        )
     state, _parent_pid, start_ticks = initial_snapshot
-    if state == "Z" or (expected_start_ticks is not None and start_ticks != expected_start_ticks):
-        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+    if state == "Z":
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=(
+                LISTENER_IDENTITY_STABILITY_MISMATCH
+                if expected_start_ticks is not None
+                else LISTENER_IDENTITY_NOT_OBSERVED
+            ),
+        )
+    if expected_start_ticks is not None and start_ticks != expected_start_ticks:
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=LISTENER_IDENTITY_STABILITY_MISMATCH,
+        )
+
+    initial_executable, status = proc_link_identity_probe(pid, "exe")
+    if status != IDENTITY_MATCH:
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(
+                status,
+                LISTENER_IDENTITY_NO_TRUSTED_JAVA,
+            ),
+        )
+    if initial_executable != java:
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=LISTENER_IDENTITY_NO_TRUSTED_JAVA,
+        )
 
     argv, status = command_line_identity_probe(pid)
     if status != IDENTITY_MATCH:
-        return ListenerCandidateIdentityProbe(status)
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(status, LISTENER_IDENTITY_NO_EXACT_ARGV),
+        )
     if argv != expected_argv:
-        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=LISTENER_IDENTITY_NO_EXACT_ARGV,
+        )
 
     cwd, status = proc_link_identity_probe(pid, "cwd")
     if status != IDENTITY_MATCH:
-        return ListenerCandidateIdentityProbe(status)
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(status, LISTENER_IDENTITY_CWD_MISMATCH),
+        )
     if cwd != run_dir:
-        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=LISTENER_IDENTITY_CWD_MISMATCH,
+        )
 
     executable, status = proc_link_identity_probe(pid, "exe")
     if status != IDENTITY_MATCH:
-        return ListenerCandidateIdentityProbe(status)
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(status, LISTENER_IDENTITY_EXE_MISMATCH),
+        )
     if executable != java:
-        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=LISTENER_IDENTITY_EXE_MISMATCH,
+        )
 
     status = launcher_lineage_identity_status(pid, exercise_pid, exercise_start_ticks)
     if status != IDENTITY_MATCH:
-        return ListenerCandidateIdentityProbe(status)
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(status, LISTENER_IDENTITY_LINEAGE_MISMATCH),
+        )
 
     final_snapshot, status = proc_identity_snapshot(pid)
     if status != IDENTITY_MATCH or final_snapshot is None:
-        return ListenerCandidateIdentityProbe(status)
+        return ListenerCandidateIdentityProbe(
+            status,
+            identity_diagnostic=identity_failure_diagnostic(
+                status,
+                LISTENER_IDENTITY_STABILITY_MISMATCH,
+            ),
+        )
     final_state, _final_parent_pid, final_start_ticks = final_snapshot
     if final_state == "Z" or final_start_ticks != start_ticks:
-        return ListenerCandidateIdentityProbe(IDENTITY_MISMATCH)
-    return ListenerCandidateIdentityProbe(IDENTITY_MATCH, ListenerCandidate(pid, start_ticks))
+        return ListenerCandidateIdentityProbe(
+            IDENTITY_MISMATCH,
+            identity_diagnostic=LISTENER_IDENTITY_STABILITY_MISMATCH,
+        )
+    return ListenerCandidateIdentityProbe(
+        IDENTITY_MATCH,
+        ListenerCandidate(pid, start_ticks),
+        LISTENER_IDENTITY_EXACT,
+    )
 
 
 def find_exact_launcher_candidate(
@@ -844,51 +1335,51 @@ def find_exact_launcher_candidate(
     run_dir: Path,
     exercise_pid: int,
     exercise_start_ticks: int,
-) -> tuple[ListenerCandidate | None, str]:
-    """Find exactly one current-run Launcher before inspecting any socket.
-
-    An uninspectable live current-user process makes discovery fail closed:
-    without reading its identity we cannot prove that the candidate set is
-    complete. Processes that disappear during enumeration are harmless races.
-    """
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
-        return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE
+) -> tuple[ListenerCandidate | None, str, str]:
+    """Find exactly one Launcher in the stable exercise descendant domain."""
+    domain, domain_status = stable_exercise_descendant_domain(
+        exercise_pid,
+        exercise_start_ticks,
+    )
+    if domain_status == IDENTITY_PROC_MALFORMED:
+        return None, LISTENER_CANDIDATE_PROC_MALFORMED, LISTENER_IDENTITY_PROC_MALFORMED
+    if domain_status == IDENTITY_PROC_UNAVAILABLE:
+        return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE, LISTENER_IDENTITY_PROC_UNAVAILABLE
+    if domain_status != IDENTITY_MATCH or domain is None:
+        return None, LISTENER_CANDIDATE_ABSENT, LISTENER_IDENTITY_STABILITY_MISMATCH
 
     candidates: list[ListenerCandidate] = []
-    for proc_dir in proc_entries:
-        if not proc_dir.name.isdecimal():
-            continue
-        try:
-            owner = proc_dir.stat().st_uid
-        except FileNotFoundError:
-            continue
-        except OSError:
-            return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE
-        if owner != os.getuid():
-            continue
-        pid = int(proc_dir.name)
+    identity_diagnostic = LISTENER_IDENTITY_NOT_OBSERVED
+    for domain_identity in domain:
+        pid = domain_identity.pid
         identity = exact_launcher_candidate_identity(
             pid=pid,
-            expected_start_ticks=None,
+            expected_start_ticks=domain_identity.start_ticks,
             expected_argv=expected_argv,
             java=java,
             run_dir=run_dir,
             exercise_pid=exercise_pid,
             exercise_start_ticks=exercise_start_ticks,
         )
+        observed_diagnostic = identity.identity_diagnostic
         if identity.status == IDENTITY_PROC_UNAVAILABLE:
-            return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE
-        if identity.status == IDENTITY_PROC_MALFORMED:
-            return None, LISTENER_CANDIDATE_PROC_MALFORMED
+            observed_diagnostic = LISTENER_IDENTITY_PROC_UNAVAILABLE
+        elif identity.status == IDENTITY_PROC_MALFORMED:
+            observed_diagnostic = LISTENER_IDENTITY_PROC_MALFORMED
+        elif identity.status == IDENTITY_MATCH:
+            observed_diagnostic = LISTENER_IDENTITY_EXACT
+        identity_diagnostic = furthest_identity_diagnostic(identity_diagnostic, observed_diagnostic)
         if identity.status == IDENTITY_MATCH and identity.candidate is not None:
             candidates.append(identity.candidate)
+    if identity_diagnostic == LISTENER_IDENTITY_PROC_MALFORMED:
+        return None, LISTENER_CANDIDATE_PROC_MALFORMED, identity_diagnostic
+    if identity_diagnostic == LISTENER_IDENTITY_PROC_UNAVAILABLE:
+        return None, LISTENER_CANDIDATE_PROC_UNAVAILABLE, identity_diagnostic
     if not candidates:
-        return None, LISTENER_CANDIDATE_ABSENT
+        return None, LISTENER_CANDIDATE_ABSENT, identity_diagnostic
     if len(candidates) != 1:
-        return None, LISTENER_CANDIDATE_AMBIGUOUS
-    return candidates[0], "listener-candidate"
+        return None, LISTENER_CANDIDATE_AMBIGUOUS, LISTENER_IDENTITY_EXACT_AMBIGUOUS
+    return candidates[0], "listener-candidate", LISTENER_IDENTITY_EXACT
 
 
 def candidate_holds_socket(pid: int, socket_inode: int) -> bool:
@@ -957,7 +1448,7 @@ def prove_owned_loopback_launcher(
     java = trusted_java_executable()
     if java is None:
         return ListenerProof(False, "listener-java")
-    candidate, candidate_reason = find_exact_launcher_candidate(
+    candidate, candidate_reason, identity_diagnostic = find_exact_launcher_candidate(
         expected_argv=expected_argv,
         java=java,
         run_dir=run_dir,
@@ -965,16 +1456,46 @@ def prove_owned_loopback_launcher(
         exercise_start_ticks=exercise_start_ticks,
     )
     if candidate is None:
-        return ListenerProof(False, candidate_reason)
+        proof_stage = (
+            LISTENER_PROOF_STAGE_EXACT_IDENTITY
+            if identity_diagnostic in {LISTENER_IDENTITY_EXACT, LISTENER_IDENTITY_EXACT_AMBIGUOUS}
+            else LISTENER_PROOF_STAGE_NOT_OBSERVED
+        )
+        return ListenerProof(
+            False,
+            candidate_reason,
+            identity_diagnostic=identity_diagnostic,
+            proof_stage_diagnostic=proof_stage,
+        )
     pid = candidate.pid
     initial_start_ticks = candidate.start_ticks
     socket_inode, socket_reason = listener_socket_probe_for_candidate(port, pid)
     if socket_inode is None:
-        return ListenerProof(False, socket_reason)
+        return ListenerProof(
+            False,
+            socket_reason,
+            identity_diagnostic=identity_diagnostic,
+            proof_stage_diagnostic=LISTENER_PROOF_STAGE_EXACT_IDENTITY,
+        )
     if not candidate_holds_socket(pid, socket_inode):
-        return ListenerProof(False, "socket-owner")
-    if current_uid_socket_holders(socket_inode) != (pid,):
-        return ListenerProof(False, "socket-owner")
+        return ListenerProof(
+            False,
+            "socket-owner",
+            identity_diagnostic=identity_diagnostic,
+            proof_stage_diagnostic=LISTENER_PROOF_STAGE_SOCKET_FOUND,
+        )
+    if not run_owned_socket_holder_is_exclusive(
+        socket_inode=socket_inode,
+        candidate=candidate,
+        exercise_pid=exercise_pid,
+        exercise_start_ticks=exercise_start_ticks,
+    ):
+        return ListenerProof(
+            False,
+            "socket-owner",
+            identity_diagnostic=identity_diagnostic,
+            proof_stage_diagnostic=LISTENER_PROOF_STAGE_SOCKET_FOUND,
+        )
     try:
         reproved = exact_launcher_candidate_identity(
             pid=pid,
@@ -986,20 +1507,60 @@ def prove_owned_loopback_launcher(
             exercise_start_ticks=exercise_start_ticks,
         )
         if reproved.status == IDENTITY_PROC_UNAVAILABLE:
-            return ListenerProof(False, LISTENER_CANDIDATE_PROC_UNAVAILABLE)
+            return ListenerProof(
+                False,
+                LISTENER_CANDIDATE_PROC_UNAVAILABLE,
+                identity_diagnostic=reproved.identity_diagnostic,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         if reproved.status == IDENTITY_PROC_MALFORMED:
-            return ListenerProof(False, LISTENER_CANDIDATE_PROC_MALFORMED)
+            return ListenerProof(
+                False,
+                LISTENER_CANDIDATE_PROC_MALFORMED,
+                identity_diagnostic=reproved.identity_diagnostic,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         if reproved.status != IDENTITY_MATCH or reproved.candidate != candidate:
-            return ListenerProof(False, "listener-start-ticks")
+            return ListenerProof(
+                False,
+                "listener-start-ticks",
+                identity_diagnostic=reproved.identity_diagnostic,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         final_socket_inode, final_socket_reason = listener_socket_probe_for_candidate(port, pid)
         if final_socket_inode is None:
-            return ListenerProof(False, final_socket_reason)
+            return ListenerProof(
+                False,
+                final_socket_reason,
+                identity_diagnostic=LISTENER_IDENTITY_EXACT,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         if final_socket_inode != socket_inode:
-            return ListenerProof(False, "listener-inode")
+            return ListenerProof(
+                False,
+                "listener-inode",
+                identity_diagnostic=LISTENER_IDENTITY_EXACT,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         if not candidate_holds_socket(pid, socket_inode):
-            return ListenerProof(False, "socket-owner")
-        if current_uid_socket_holders(socket_inode) != (pid,):
-            return ListenerProof(False, "socket-owner")
+            return ListenerProof(
+                False,
+                "socket-owner",
+                identity_diagnostic=LISTENER_IDENTITY_EXACT,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
+        if not run_owned_socket_holder_is_exclusive(
+            socket_inode=socket_inode,
+            candidate=candidate,
+            exercise_pid=exercise_pid,
+            exercise_start_ticks=exercise_start_ticks,
+        ):
+            return ListenerProof(
+                False,
+                "socket-owner",
+                identity_diagnostic=LISTENER_IDENTITY_EXACT,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         final_identity = exact_launcher_candidate_identity(
             pid=pid,
             expected_start_ticks=initial_start_ticks,
@@ -1010,14 +1571,42 @@ def prove_owned_loopback_launcher(
             exercise_start_ticks=exercise_start_ticks,
         )
         if final_identity.status == IDENTITY_PROC_UNAVAILABLE:
-            return ListenerProof(False, LISTENER_CANDIDATE_PROC_UNAVAILABLE)
+            return ListenerProof(
+                False,
+                LISTENER_CANDIDATE_PROC_UNAVAILABLE,
+                identity_diagnostic=final_identity.identity_diagnostic,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         if final_identity.status == IDENTITY_PROC_MALFORMED:
-            return ListenerProof(False, LISTENER_CANDIDATE_PROC_MALFORMED)
+            return ListenerProof(
+                False,
+                LISTENER_CANDIDATE_PROC_MALFORMED,
+                identity_diagnostic=final_identity.identity_diagnostic,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
         if final_identity.status != IDENTITY_MATCH or final_identity.candidate != candidate:
-            return ListenerProof(False, "listener-start-ticks")
-        return ListenerProof(True, "uid+java+argv+cwd+ancestor+socket+startTicks", pid, initial_start_ticks, socket_inode)
+            return ListenerProof(
+                False,
+                "listener-start-ticks",
+                identity_diagnostic=final_identity.identity_diagnostic,
+                proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+            )
+        return ListenerProof(
+            True,
+            EXACT_LISTENER_PROOF_REASON,
+            pid,
+            initial_start_ticks,
+            socket_inode,
+            LISTENER_IDENTITY_EXACT,
+            LISTENER_PROOF_STAGE_FULL_ELIGIBLE,
+        )
     except (OSError, ValueError, RuntimeError):
-        return ListenerProof(False, "unavailable")
+        return ListenerProof(
+            False,
+            "unavailable",
+            identity_diagnostic=LISTENER_IDENTITY_PROC_UNAVAILABLE,
+            proof_stage_diagnostic=LISTENER_PROOF_STAGE_INITIAL_OWNERSHIP,
+        )
 
 
 def exact_child_argv(harness: Path, run_id: str, navigator_port: int) -> list[str]:
@@ -1062,7 +1651,7 @@ def prove_exercise_parent(
         final_start_ticks = proc_stat(pid)[2]
         if final_start_ticks != initial_start_ticks:
             return ParentProof(False, "start-ticks", final_start_ticks)
-        return ParentProof(True, "commandLine+cwd+runId+uid+session+startTicks", final_start_ticks)
+        return ParentProof(True, EXACT_PARENT_PROOF_REASON, final_start_ticks)
     except (OSError, ValueError, RuntimeError):
         return ParentProof(False, "unavailable")
 
@@ -1220,7 +1809,11 @@ def dispatch_owned_parent_term(
     if not callable(signal_mask):
         return (
             ParentProof(False, "signal-mask-unavailable"),
-            ListenerProof(False, "signal-mask-unavailable"),
+            ListenerProof(
+                False,
+                "signal-mask-unavailable",
+                identity_diagnostic=prior_listener_proof.identity_diagnostic,
+            ),
             0,
             False,
         )
@@ -1229,13 +1822,21 @@ def dispatch_owned_parent_term(
     except (OSError, RuntimeError, ValueError, TypeError):
         return (
             ParentProof(False, "signal-mask-unavailable"),
-            ListenerProof(False, "signal-mask-unavailable"),
+            ListenerProof(
+                False,
+                "signal-mask-unavailable",
+                identity_diagnostic=prior_listener_proof.identity_diagnostic,
+            ),
             0,
             False,
         )
 
     parent_proof = ParentProof(False, "not-reproved")
-    listener_proof = ListenerProof(False, "not-reproved")
+    listener_proof = ListenerProof(
+        False,
+        "not-reproved",
+        identity_diagnostic=prior_listener_proof.identity_diagnostic,
+    )
     term_dispatches = 0
     dispatch_safe = False
     try:
@@ -1243,7 +1844,11 @@ def dispatch_owned_parent_term(
             # ``main`` rejects this before fork, but the helper also refuses a
             # direct caller whose child could have inherited a blocked mask.
             parent_proof = ParentProof(False, "signal-mask-preblocked")
-            listener_proof = ListenerProof(False, "signal-mask-preblocked")
+            listener_proof = ListenerProof(
+                False,
+                "signal-mask-preblocked",
+                identity_diagnostic=prior_listener_proof.identity_diagnostic,
+            )
         elif not latch_pending_control_signal():
             parent_proof = prove_exercise_parent(child_pid, initial_start_ticks, repo_root, expected_argv)
             if parent_proof.ok:
@@ -1262,7 +1867,11 @@ def dispatch_owned_parent_term(
                     # into a generic listener-change diagnosis.
                     pass
                 elif not same_listener(prior_listener_proof, listener_proof):
-                    listener_proof = ListenerProof(False, "listener-changed")
+                    listener_proof = ListenerProof(
+                        False,
+                        "listener-changed",
+                        identity_diagnostic=listener_proof.identity_diagnostic,
+                    )
                 elif not latch_pending_control_signal():
                     # This final observation is the deliberate dispatch
                     # commit point. POSIX cannot atomically test pending
@@ -1272,19 +1881,31 @@ def dispatch_owned_parent_term(
                     os.kill(child_pid, signal.SIGTERM)
                     term_dispatches = 1
                     if latch_pending_control_signal():
-                        listener_proof = ListenerProof(False, "signal-pending-after-dispatch")
+                        listener_proof = ListenerProof(
+                            False,
+                            "signal-pending-after-dispatch",
+                            identity_diagnostic=listener_proof.identity_diagnostic,
+                        )
                     else:
                         dispatch_safe = True
         elif SUPERVISOR_INTERRUPTION is None:
             parent_proof = ParentProof(False, "signal-pending")
-            listener_proof = ListenerProof(False, "signal-pending")
+            listener_proof = ListenerProof(
+                False,
+                "signal-pending",
+                identity_diagnostic=prior_listener_proof.identity_diagnostic,
+            )
     except (OSError, TypeError):
         pass
     finally:
         try:
             signal_mask(signal.SIG_SETMASK, prior_mask)
         except (OSError, RuntimeError, ValueError, TypeError):
-            listener_proof = ListenerProof(False, "signal-mask-restore")
+            listener_proof = ListenerProof(
+                False,
+                "signal-mask-restore",
+                identity_diagnostic=listener_proof.identity_diagnostic,
+            )
             dispatch_safe = False
         if latch_pending_control_signal():
             dispatch_safe = False
@@ -1316,12 +1937,17 @@ def supervise_exercise(
     parent_proof: ParentProof | None = None
     listener_proof: ListenerProof | None = None
     listener_proof_ever_eligible = False
+    furthest_listener_identity_diagnostic = LISTENER_IDENTITY_NOT_OBSERVED
+    furthest_listener_proof_stage_diagnostic = LISTENER_PROOF_STAGE_NOT_OBSERVED
     term_dispatches = 0
     dispatch_safe = False
 
     while SUPERVISOR_INTERRUPTION is None and time.monotonic() < deadline:
         child_exit = poll_child_exit(child_pid)
         if child_exit is not None:
+            break
+        parent_proof = prove_exercise_parent(child_pid, initial_start_ticks, repo_root, expected_argv)
+        if not parent_proof.ok or SUPERVISOR_INTERRUPTION is not None:
             break
         listener_proof_a = prove_owned_loopback_launcher(
             port=navigator_port,
@@ -1333,18 +1959,26 @@ def supervise_exercise(
             exercise_start_ticks=initial_start_ticks,
         )
         listener_proof = listener_proof_a
+        furthest_listener_identity_diagnostic = furthest_temporal_identity_diagnostic(
+            furthest_listener_identity_diagnostic,
+            redacted_listener_identity_diagnostic(listener_proof_a),
+        )
+        furthest_listener_proof_stage_diagnostic = furthest_temporal_listener_proof_stage(
+            furthest_listener_proof_stage_diagnostic,
+            redacted_listener_proof_stage(listener_proof_a),
+        )
         if not listener_proof_a.ok:
             time.sleep(0.5)
             continue
         listener_proof_ever_eligible = True
         if SUPERVISOR_INTERRUPTION is not None:
             break
-        parent_proof = prove_exercise_parent(child_pid, initial_start_ticks, repo_root, expected_argv)
-        if not parent_proof.ok or SUPERVISOR_INTERRUPTION is not None:
-            break
         if not health_ready(navigator_port):
             time.sleep(0.5)
             continue
+        parent_proof = prove_exercise_parent(child_pid, initial_start_ticks, repo_root, expected_argv)
+        if not parent_proof.ok or SUPERVISOR_INTERRUPTION is not None:
+            break
         listener_proof_b = prove_owned_loopback_launcher(
             port=navigator_port,
             run_id=run_id,
@@ -1355,6 +1989,14 @@ def supervise_exercise(
             exercise_start_ticks=initial_start_ticks,
         )
         listener_proof = listener_proof_b
+        furthest_listener_identity_diagnostic = furthest_temporal_identity_diagnostic(
+            furthest_listener_identity_diagnostic,
+            redacted_listener_identity_diagnostic(listener_proof_b),
+        )
+        furthest_listener_proof_stage_diagnostic = furthest_temporal_listener_proof_stage(
+            furthest_listener_proof_stage_diagnostic,
+            redacted_listener_proof_stage(listener_proof_b),
+        )
         listener_proof_ever_eligible = listener_proof_ever_eligible or listener_proof_b.ok
         if not listener_proof_b.ok:
             # Keep a precise re-proof diagnosis (such as a socket-table
@@ -1362,7 +2004,11 @@ def supervise_exercise(
             # identity change.
             break
         if not same_listener(listener_proof_a, listener_proof_b):
-            listener_proof = ListenerProof(False, "listener-changed")
+            listener_proof = ListenerProof(
+                False,
+                "listener-changed",
+                identity_diagnostic=listener_proof_b.identity_diagnostic,
+            )
             break
         parent_proof = prove_exercise_parent(child_pid, initial_start_ticks, repo_root, expected_argv)
         if not parent_proof.ok or SUPERVISOR_INTERRUPTION is not None:
@@ -1380,6 +2026,14 @@ def supervise_exercise(
             prior_listener_proof=listener_proof_b,
         )
         listener_proof_ever_eligible = listener_proof_ever_eligible or listener_proof.ok
+        furthest_listener_identity_diagnostic = furthest_temporal_identity_diagnostic(
+            furthest_listener_identity_diagnostic,
+            redacted_listener_identity_diagnostic(listener_proof),
+        )
+        furthest_listener_proof_stage_diagnostic = furthest_temporal_listener_proof_stage(
+            furthest_listener_proof_stage_diagnostic,
+            redacted_listener_proof_stage(listener_proof),
+        )
         if term_dispatches != 1:
             break
         child_exit = wait_for_child_exit(child_pid, post_term_timeout_seconds)
@@ -1395,6 +2049,8 @@ def supervise_exercise(
         listener_proof,
         dispatch_safe,
         listener_proof_ever_eligible,
+        furthest_listener_identity_diagnostic,
+        furthest_listener_proof_stage_diagnostic,
     )
 
 
@@ -1485,6 +2141,118 @@ def read_redacted_receipt(run_dir: Path, run_id: str, artifact_root: Path) -> di
         "launcherFailureClass": value["launcherFailureClass"],
         "secretsRedacted": True,
     }
+
+
+def current_run_reservation_absent(artifact_root: Path, run_id: str) -> bool:
+    """Fail closed unless the strict registry is safe and this run has no reservation."""
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None or not RUN_ID_RE.fullmatch(run_id):
+        return False
+    root_fd: int | None = None
+    registry_fd: int | None = None
+    try:
+        root_fd = os.open(artifact_root, os.O_RDONLY | os.O_CLOEXEC | nofollow | directory)
+        root_details = os.fstat(root_fd)
+        if (
+            not stat.S_ISDIR(root_details.st_mode)
+            or root_details.st_uid != os.getuid()
+            or stat.S_IMODE(root_details.st_mode) != 0o700
+        ):
+            return False
+        fcntl.flock(root_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        registry_fd = os.open(
+            PORT_RESERVATION_DIRECTORY_NAME,
+            os.O_RDONLY | os.O_CLOEXEC | nofollow | directory,
+            dir_fd=root_fd,
+        )
+        registry_details = os.fstat(registry_fd)
+        if (
+            not stat.S_ISDIR(registry_details.st_mode)
+            or registry_details.st_uid != os.getuid()
+            or stat.S_IMODE(registry_details.st_mode) != 0o700
+        ):
+            return False
+        seen_ports: set[int] = set()
+        exact_name = f"{run_id}{PORT_RESERVATION_SUFFIX}"
+        for name in os.listdir(registry_fd):
+            if not name.endswith(PORT_RESERVATION_SUFFIX):
+                return False
+            reservation_run_id = name[: -len(PORT_RESERVATION_SUFFIX)]
+            if not RUN_ID_RE.fullmatch(reservation_run_id) or reservation_run_id.endswith("-") or "--" in reservation_run_id:
+                return False
+            file_fd: int | None = None
+            try:
+                file_fd = os.open(name, os.O_RDONLY | os.O_CLOEXEC | nofollow, dir_fd=registry_fd)
+                details = os.fstat(file_fd)
+                if (
+                    not stat.S_ISREG(details.st_mode)
+                    or details.st_uid != os.getuid()
+                    or stat.S_IMODE(details.st_mode) != 0o600
+                    or details.st_nlink != 1
+                    or details.st_size > MAX_PORT_RESERVATION_BYTES
+                ):
+                    return False
+                chunks = bytearray()
+                while len(chunks) <= MAX_PORT_RESERVATION_BYTES:
+                    chunk = os.read(
+                        file_fd,
+                        min(4096, MAX_PORT_RESERVATION_BYTES + 1 - len(chunks)),
+                    )
+                    if not chunk:
+                        break
+                    chunks.extend(chunk)
+                if len(chunks) > MAX_PORT_RESERVATION_BYTES or len(chunks) != details.st_size:
+                    return False
+                raw = bytes(chunks)
+            finally:
+                if file_fd is not None:
+                    os.close(file_fd)
+            text = raw.decode("utf-8", "strict")
+            # Keep this parser aligned with the harness's authoritative
+            # parse_strict_env contract. Bash read -r splits only on LF;
+            # splitlines() would incorrectly normalize CRLF, bare CR and
+            # Unicode/control record separators into accepted lines.
+            if any(separator in text for separator in "\x00\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
+                return False
+            lines = text.split("\n")
+            if lines and lines[-1] == "":
+                lines.pop()
+            if len(lines) != len(PORT_RESERVATION_FIELDS):
+                return False
+            values: dict[str, str] = {}
+            for line in lines:
+                if "=" not in line:
+                    return False
+                key, value = line.split("=", 1)
+                if key in values or key not in PORT_RESERVATION_FIELDS or not value:
+                    return False
+                values[key] = value
+            if tuple(values) != PORT_RESERVATION_FIELDS:
+                return False
+            if (
+                values["INT001_PORT_RESERVATION_SCHEMA"] != PORT_RESERVATION_SCHEMA_VERSION
+                or values["INT001_RUN_ID"] != reservation_run_id
+            ):
+                return False
+            for key in PORT_RESERVATION_PORT_FIELDS:
+                value = values[key]
+                if not value.isascii() or not value.isdigit():
+                    return False
+                port = int(value, 10)
+                if port < 1025 or port > 65535 or port in RESERVED_PORTS or port in seen_ports:
+                    return False
+                seen_ports.add(port)
+            if name == exact_name:
+                return False
+        return True
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+    finally:
+        if registry_fd is not None:
+            os.close(registry_fd)
+        if root_fd is not None:
+            os.close(root_fd)
 
 
 def run_root_snapshot(run_dir: Path, artifact_root: Path) -> RunRootSnapshot:
@@ -1584,6 +2352,34 @@ def docker_residue_counts(run_id: str) -> dict[str, int | None]:
     return result
 
 
+def redacted_listener_identity_diagnostic(listener_proof: ListenerProof | None) -> str:
+    if listener_proof is None:
+        return LISTENER_IDENTITY_NOT_OBSERVED
+    if listener_proof.identity_diagnostic not in LISTENER_IDENTITY_DIAGNOSTICS:
+        return LISTENER_IDENTITY_NOT_OBSERVED
+    return listener_proof.identity_diagnostic
+
+
+def outcome_listener_identity_diagnostic(
+    listener_proof: ListenerProof | None,
+    furthest_listener_identity_diagnostic: str,
+) -> str:
+    diagnostic = furthest_listener_identity_diagnostic
+    if diagnostic in LISTENER_IDENTITY_DIAGNOSTICS and diagnostic != LISTENER_IDENTITY_NOT_OBSERVED:
+        return diagnostic
+    return redacted_listener_identity_diagnostic(listener_proof)
+
+
+def outcome_listener_proof_stage_diagnostic(
+    listener_proof: ListenerProof | None,
+    furthest_listener_proof_stage_diagnostic: str,
+) -> str:
+    diagnostic = furthest_listener_proof_stage_diagnostic
+    if diagnostic in LISTENER_PROOF_STAGES and diagnostic != LISTENER_PROOF_STAGE_NOT_OBSERVED:
+        return diagnostic
+    return redacted_listener_proof_stage(listener_proof)
+
+
 def emit_summary(
     *,
     run_id: str,
@@ -1597,6 +2393,8 @@ def emit_summary(
     receipt: dict[str, Any] | None,
     root_snapshot: RunRootSnapshot,
     docker_snapshot: dict[str, int | None],
+    furthest_listener_identity_diagnostic: str = LISTENER_IDENTITY_NOT_OBSERVED,
+    furthest_listener_proof_stage_diagnostic: str = LISTENER_PROOF_STAGE_NOT_OBSERVED,
 ) -> None:
     summary = {
         "schemaVersion": 1,
@@ -1604,6 +2402,14 @@ def emit_summary(
         "controlledHealthPrecondition": health_precondition,
         "parentProof": parent_proof.reason if parent_proof else "NOT_ATTEMPTED",
         "listenerProof": listener_proof.reason if listener_proof else "NOT_ATTEMPTED",
+        "listenerIdentityDiagnostic": outcome_listener_identity_diagnostic(
+            listener_proof,
+            furthest_listener_identity_diagnostic,
+        ),
+        "listenerProofStageDiagnostic": outcome_listener_proof_stage_diagnostic(
+            listener_proof,
+            furthest_listener_proof_stage_diagnostic,
+        ),
         "listenerProofEverEligible": listener_proof_ever_eligible,
         "termDispatches": term_dispatches,
         "dispatchSafe": dispatch_safe,
@@ -1629,6 +2435,45 @@ def projection_root_snapshot_state(root_snapshot: RunRootSnapshot, *, suppressed
     if root_snapshot.private_absent is None or root_snapshot.nonreceipt_residue_count is None:
         return "UNAVAILABLE"
     return "COMPLETE"
+
+
+def forced_signal_completion_gate_met(
+    *,
+    supervisor_interruption: str | None,
+    outcome: RehearsalOutcome,
+    receipt: dict[str, Any] | None,
+    root_snapshot: RunRootSnapshot,
+    reservation_absent: bool,
+    docker_snapshot: dict[str, int | None],
+) -> bool:
+    """Accept only the exact real-harness forced-SIGNAL completion contract."""
+    return (
+        supervisor_interruption is None
+        and outcome.health_precondition
+        and outcome.parent_proof is not None
+        and outcome.parent_proof.ok
+        and outcome.parent_proof.reason == EXACT_PARENT_PROOF_REASON
+        and outcome.listener_proof is not None
+        and outcome.listener_proof.ok
+        and outcome.listener_proof.reason == EXACT_LISTENER_PROOF_REASON
+        and outcome.listener_proof.identity_diagnostic == LISTENER_IDENTITY_EXACT
+        and outcome.listener_proof_ever_eligible
+        and outcome.term_dispatches == 1
+        and outcome.dispatch_safe
+        and outcome.child_exit is not None
+        and os.WIFEXITED(outcome.child_exit)
+        and os.WEXITSTATUS(outcome.child_exit) == FORCED_SIGNAL_OUTER_EXIT_CODE
+        and receipt is not None
+        and receipt.get("result") == "CLEANED"
+        and receipt.get("failureStage") == "SIGNAL"
+        and receipt.get("rehearsalLifecycleObservation") == "HOLD_SIGNAL_RECEIVED"
+        and receipt.get("launcherReadinessObservation") == "HEALTH_READY"
+        and receipt.get("launcherFailureClass") == "NOT_APPLICABLE"
+        and root_snapshot.private_absent is True
+        and root_snapshot.nonreceipt_residue_count == 0
+        and reservation_absent
+        and docker_snapshot == {"container": 0, "network": 0, "volume": 0}
+    )
 
 
 def classify_projection_outcome(
@@ -1739,11 +2584,16 @@ def main() -> int:
         # state cannot make the recorded result disagree with the exit code.
         receipt: dict[str, Any] | None = None
         root_snapshot = RunRootSnapshot(None, None)
+        reservation_absent = False
         docker_snapshot: dict[str, int | None] = {"container": None, "network": None, "volume": None}
         if not latch_pending_control_signal():
             receipt = read_redacted_receipt(run_dir, args.run_id, artifact_root)
             if not latch_pending_control_signal():
                 root_snapshot = run_root_snapshot(run_dir, artifact_root)
+            if not latch_pending_control_signal():
+                reservation_absent = current_run_reservation_absent(artifact_root, args.run_id)
+            if receipt is not None and not reservation_absent:
+                receipt = None
             if not latch_pending_control_signal():
                 docker_snapshot = docker_residue_counts(args.run_id)
         # A supervisor interruption makes this rehearsal ineligible even if
@@ -1753,6 +2603,7 @@ def main() -> int:
         if suppressed:
             receipt = None
             root_snapshot = RunRootSnapshot(None, None)
+            reservation_absent = False
             docker_snapshot = {"container": None, "network": None, "volume": None}
         receipt_state = projection_receipt_state(receipt, suppressed=suppressed)
         root_snapshot_state = projection_root_snapshot_state(root_snapshot, suppressed=suppressed)
@@ -1777,6 +2628,10 @@ def main() -> int:
             receipt=receipt,
             root_snapshot=root_snapshot,
             docker_snapshot=docker_snapshot,
+            furthest_listener_identity_diagnostic=outcome.furthest_listener_identity_diagnostic,
+            furthest_listener_proof_stage_diagnostic=(
+                outcome.furthest_listener_proof_stage_diagnostic
+            ),
         )
         stdout_summary_state = "EMITTED"
         projection_phase = "STDOUT_EMITTED"
@@ -1787,22 +2642,14 @@ def main() -> int:
             root_snapshot_state=root_snapshot_state,
             stdout_summary_state=stdout_summary_state,
         )
-        complete = (
-            not latch_pending_control_signal()
-            and outcome.health_precondition
-            and outcome.parent_proof is not None
-            and outcome.parent_proof.ok
-            and outcome.listener_proof is not None
-            and outcome.listener_proof.ok
-            and outcome.term_dispatches == 1
-            and outcome.dispatch_safe
-            and outcome.child_exit is not None
-            and receipt is not None
-            and receipt["result"] == "CLEANED"
-            and receipt["failureStage"] == "SIGNAL"
-            and root_snapshot.private_absent is True
-            and root_snapshot.nonreceipt_residue_count == 0
-            and docker_snapshot == {"container": 0, "network": 0, "volume": 0}
+        latch_pending_control_signal()
+        complete = forced_signal_completion_gate_met(
+            supervisor_interruption=SUPERVISOR_INTERRUPTION,
+            outcome=outcome,
+            receipt=receipt,
+            root_snapshot=root_snapshot,
+            reservation_absent=reservation_absent,
+            docker_snapshot=docker_snapshot,
         )
         projection_phase = "COMPLETE"
         projection.write(
