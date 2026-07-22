@@ -192,12 +192,38 @@ final class UpstreamCliConfig {
         writeProfileValue(targetProfile, key, value, targetProfile != null && targetProfile.equals(profilePath));
     }
 
+    void writeProfileValues(Path targetProfile, Map<String, String> updates, Set<String> removeKeys) {
+        assertProfileWritable(targetProfile);
+        if (updates == null || updates.isEmpty()) {
+            throw new UpstreamCliException("Profile updates are required");
+        }
+        writeProfileValuesUnchecked(targetProfile, updates, removeKeys,
+                targetProfile != null && targetProfile.equals(profilePath));
+    }
+
+    List<String> presentCredentialKeys(String... keys) {
+        List<String> present = new ArrayList<>();
+        for (String key : keys) {
+            if (hasText(values.get(key))) {
+                present.add(key);
+            }
+        }
+        return present;
+    }
+
     private void writeProfileValue(Path targetProfile, String key, String value, boolean updateLoadedValues) {
         assertProfileWritable(targetProfile);
         writeProfileValueUnchecked(targetProfile, key, value, updateLoadedValues);
     }
 
     private void writeProfileValueUnchecked(Path targetProfile, String key, String value, boolean updateLoadedValues) {
+        writeProfileValuesUnchecked(targetProfile, Map.of(key, value), Set.of(), updateLoadedValues);
+    }
+
+    private void writeProfileValuesUnchecked(Path targetProfile,
+                                            Map<String, String> updates,
+                                            Set<String> removeKeys,
+                                            boolean updateLoadedValues) {
         if (targetProfile == null) {
             throw new UpstreamCliException("Profile path is required");
         }
@@ -209,22 +235,34 @@ final class UpstreamCliConfig {
             List<String> lines = Files.exists(targetProfile)
                     ? Files.readAllLines(targetProfile, StandardCharsets.UTF_8)
                     : new ArrayList<>();
-            boolean replaced = false;
-            for (int i = 0; i < lines.size(); i++) {
+            Set<String> pendingUpdates = new LinkedHashSet<>(updates.keySet());
+            for (int i = lines.size() - 1; i >= 0; i--) {
                 String line = lines.get(i);
                 String trimmed = line.trim();
                 if (trimmed.startsWith("#") || trimmed.startsWith("!")) {
                     continue;
                 }
                 int equals = line.indexOf('=');
-                if (equals > 0 && line.substring(0, equals).trim().equals(key)) {
-                    lines.set(i, key + "=" + value);
-                    replaced = true;
-                    break;
+                if (equals <= 0) {
+                    continue;
+                }
+                String existingKey = line.substring(0, equals).trim();
+                if (removeKeys != null && removeKeys.contains(existingKey)) {
+                    lines.remove(i);
+                    continue;
+                }
+                if (updates.containsKey(existingKey)) {
+                    if (pendingUpdates.remove(existingKey)) {
+                        lines.set(i, existingKey + "=" + updates.get(existingKey));
+                    } else {
+                        lines.remove(i);
+                    }
                 }
             }
-            if (!replaced) {
-                lines.add(key + "=" + value);
+            for (String key : updates.keySet()) {
+                if (pendingUpdates.contains(key)) {
+                    lines.add(key + "=" + updates.get(key));
+                }
             }
             Path temp = targetProfile.resolveSibling(targetProfile.getFileName() + ".tmp");
             Files.write(temp, lines, StandardCharsets.UTF_8,
@@ -235,7 +273,10 @@ final class UpstreamCliConfig {
                 Files.move(temp, targetProfile, StandardCopyOption.REPLACE_EXISTING);
             }
             if (updateLoadedValues) {
-                values.put(key, value);
+                if (removeKeys != null) {
+                    removeKeys.forEach(values::remove);
+                }
+                values.putAll(updates);
             }
         } catch (IOException e) {
             throw new UpstreamCliException("Failed to write profile: " + targetProfile, e);
@@ -300,6 +341,54 @@ final class UpstreamCliConfig {
         }
         return states.stream().allMatch(LocalState.VALID::equals)
                 ? LocalState.VALID : LocalState.UNVERIFIED;
+    }
+
+    String legacyPlatformLaneAvailability() {
+        return laneAvailability("NAVI_ADMIN_API_KEY", new String[]{
+                "NAVI_CONTROL_API_KEY", "NAVIGATOR_CONTROL_API_KEY", "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN",
+                "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY",
+                "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET", "NAVI_CLIENT_APP_ACCESS_TOKEN",
+                "NAVI_CLIENT_APP_RUNTIME_TOKEN", "CLIENT_APP_RUNTIME_TOKEN", "NAVI_PRINCIPAL_CREDENTIAL",
+                "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN"});
+    }
+
+    String clientAppControlLaneAvailability() {
+        return laneAvailability("NAVI_CONTROL_API_KEY", new String[]{
+                "NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY", "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN",
+                "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY",
+                "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET", "NAVI_CLIENT_APP_ACCESS_TOKEN",
+                "NAVI_CLIENT_APP_RUNTIME_TOKEN", "CLIENT_APP_RUNTIME_TOKEN", "NAVI_PRINCIPAL_CREDENTIAL",
+                "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN"});
+    }
+
+    String runtimeLaneAvailability() {
+        List<String> foreign = presentCredentialKeys("NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY",
+                "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
+                "NAVI_CONTROL_API_KEY", "NAVIGATOR_CONTROL_API_KEY", "NAVI_PRINCIPAL_CREDENTIAL",
+                "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
+        if (!foreign.isEmpty()) {
+            return "MIXED";
+        }
+        return presentCredentialKeys("NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY", "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET",
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_CLIENT_APP_RUNTIME_TOKEN", "CLIENT_APP_RUNTIME_TOKEN").isEmpty()
+                ? "MISSING" : "AVAILABLE";
+    }
+
+    String typedManagementAuthorityAvailability() {
+        if (typedCredentialSource == TypedCredentialSource.MISSING) {
+            return "NOT_CONFIGURED";
+        }
+        if (typedCredentialSourceState() == LocalState.INVALID || typedMetadataState() != LocalState.VALID) {
+            return "INVALID";
+        }
+        return "LOCALLY_CONFIGURED_NOT_AUTHORIZED";
+    }
+
+    private String laneAvailability(String requiredKey, String[] forbiddenKeys) {
+        if (!presentCredentialKeys(forbiddenKeys).isEmpty()) {
+            return "MIXED";
+        }
+        return hasText(values.get(requiredKey)) ? "AVAILABLE" : "MISSING";
     }
 
     private List<String> presentLegacyCredentialKeys() {

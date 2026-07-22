@@ -27,11 +27,11 @@ related_workitem: ../workitems/GOV-001-dev-s1-s2-integration-mvp.md
 
 ## Common preflight
 
-1. Use a source-matched upstream CLI. The installed wrapper is known to have lagged source (`1.0.18` vs source `1.0.21`). `1.0.18` can run `ensure-tenant`, but it cannot evidence the current help/credential-boundary text. To use the current checkout without publishing or changing an upstream repository, first build `mvn package -pl navigator-open-sdk -am -DskipTests`, then invoke its JAR with the local dependency directory:
+1. Use upstream CLI `1.0.22` or newer. This release includes the current `platform` / `app` / `runtime` help and credential-boundary rules. If a local checkout must be used instead of the published installer, first build `mvn package -pl navigator-open-sdk -am -DskipTests`, then invoke its JAR with the local dependency directory:
 
    ```bash
    NAVI_ROOT=/home/sa/workspace/Foggy-Navigator
-   java -cp "$NAVI_ROOT/navigator-open-sdk/target/navigator-open-sdk-1.0.21.jar:$NAVI_ROOT/tools/navigator-upstream/lib/*" \
+   java -cp "$NAVI_ROOT/navigator-open-sdk/target/navigator-open-sdk-1.0.22.jar:$NAVI_ROOT/tools/navigator-upstream/lib/*" \
      com.foggy.navigator.sdk.cli.UpstreamCli upstream client-app --help
    ```
 
@@ -67,24 +67,26 @@ related_workitem: ../workitems/GOV-001-dev-s1-s2-integration-mvp.md
 
 ## S2: tms-x3 platform and tenant ClientApp
 
-1. TMS platform uses its gitignored upstream-admin profile. First inspect its owned ClientApps; an unfiltered list now includes authorized `nav_tms-x3_<tenant>` ClientApps:
+1. TMS platform uses its gitignored upstream-admin profile. This is the current `UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN` compatibility lane, not typed `SAAS_PLATFORM`. First inspect its owned ClientApps; an unfiltered list now includes authorized `nav_tms-x3_<tenant>` ClientApps:
 
    ```bash
-   navi upstream client-app list
-   navi upstream client-app list --target-tenant-id nav_tms-x3_<source-tenant-id>
+   navi upstream platform tenant list
+   navi upstream platform tenant list --target-tenant-id nav_tms-x3_<source-tenant-id>
    ```
 
-2. Bootstrap a tenant only from the platform-private profile. `ensure-tenant` requires `--write-profile` because credentials are one-time. They are never printed in plaintext; the CLI may emit only a masked prefix/suffix and short hash diagnostic:
+2. Bootstrap a tenant only from the platform-private profile. `platform tenant ensure` requires `--write-profile` because credentials are one-time. It requires two different, gitignored output profiles and never prints plaintext credentials:
 
    ```bash
-   navi upstream client-app ensure-tenant \
+   navi upstream platform tenant ensure \
      --source-system tms-x3 --source-tenant-id <source-tenant-id> \
      --physical-worker-id <existing-physical-worker-id> \
-     --directory-id <directory-id> --tenant-profile <private-bootstrap.env> --write-profile
+     --directory-id <directory-id> \
+     --platform-control-profile <platform-private-control.env> \
+     --tenant-runtime-profile <tenant-runtime.env> --write-profile
    ```
 
-3. Treat `<private-bootstrap.env>` as platform-private: it contains both `NAVI_CONTROL_API_KEY` and runtime key/secret. Copy only non-control runtime fields to a separate gitignored tenant runtime profile through the platform's secret-delivery process; remove or omit `NAVI_CONTROL_API_KEY` before the tenant receives anything. This CLI does not yet automate that split.
-4. From the runtime-only tenant profile, run `runtime-token`, `verify-agent-readiness` and `owner-smoke` with the tenant's explicit user/Agent/model/directory identifiers. A `READY` provisioning response alone is not sufficient.
+3. Keep `<platform-private-control.env>` with the TMS platform; it contains `NAVI_CONTROL_API_KEY` for `navi upstream app ...` commands. Deliver only `<tenant-runtime.env>` to the tenant; it has ClientApp key/secret and no admin, control, or typed-management credential. Do not combine the profiles or persist a runtime access token.
+4. From the runtime-only tenant profile, run `navi upstream runtime token`, `navi upstream runtime readiness` and `navi upstream runtime owner-smoke` with the tenant's explicit user/Agent/model/directory identifiers. A `READY` provisioning response alone is not sufficient.
 5. A TMS platform credential may manage only its own upstream system/namespace. Cross-upstream or cross-namespace ClientApp, model, directory, Worker or grant operations must be treated as a failed isolation test, not repaired with broader credentials.
 
 ## Evidence and escalation

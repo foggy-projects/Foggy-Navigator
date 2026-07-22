@@ -31,8 +31,9 @@ Use the narrowest lane that can perform the action:
 
 - This path is only for local/trusted development integration. It does not implement or prove S1 `INSTANCE_ROOT`, S2 typed `SAAS_PLATFORM`, Worker Gateway external, or production readiness.
 - SIM uses its dedicated Navigator instance and may use the current legacy upstream-admin lane for SIM-owned development resources. Do not describe that lane as final instance-root authority or use it to claim arbitrary cross-owner control.
-- TMS platform uses upstream-admin for bootstrap and keeps ClientApp control credentials in a platform-private, gitignored profile. A tenant receives only a separate runtime key/secret or short-lived runtime token unless an explicit limited-control requirement is approved.
-- `client-app ensure-tenant --write-profile` currently writes both runtime and control credentials into the selected private profile. Never hand that bootstrap profile to a tenant; split out a runtime-only profile before delivery.
+- TMS platform uses the current legacy upstream-admin lane for bootstrap. It is not typed `SAAS_PLATFORM` authority. Use `navi upstream platform tenant ensure --platform-control-profile <path> --tenant-runtime-profile <path> --write-profile`; the two gitignored output profiles must be different.
+- The platform-control profile contains `NAVI_CONTROL_API_KEY` and is for `navi upstream app ...` commands only. The tenant-runtime profile contains ClientApp key/secret and is for `navi upstream runtime ...` commands only; it must not contain admin, control, or typed-management material. Provisioning does not persist an access token.
+- `client-app ensure-tenant` remains a legacy alias for one release window and prints a migration notice. It still requires the two explicit output profiles; never use a combined bootstrap profile.
 - `ensure-tenant` `READY` is not ask-ready. Require `activationReady=true`, `verify-agent-readiness` `OK`, then `owner-smoke` before a safe ask. `NAVIGATOR_EXTERNAL_ENABLED=true` still only opens `/api/v1/open/**`; keep `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false` for this MVP.
 
 ## Typed-management CLI FAQ (S1 / S2)

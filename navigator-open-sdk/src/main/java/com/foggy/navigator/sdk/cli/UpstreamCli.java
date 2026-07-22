@@ -120,6 +120,18 @@ public class UpstreamCli {
     private static final String NOT_SUPPLIED_BY_SERVER = "NOT_SUPPLIED_BY_SERVER";
     private static final Pattern MANAGEMENT_REFERENCE_PATTERN =
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:/@#{}-]*");
+    private static final Set<String> PLATFORM_CONTROL_PROFILE_FORBIDDEN = Set.of(
+            "NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY", "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN",
+            "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVI_PRINCIPAL_CREDENTIAL",
+            "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY", "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET",
+            "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_CLIENT_APP_RUNTIME_TOKEN", "CLIENT_APP_RUNTIME_TOKEN",
+            "NAVI_RUNTIME_CREDENTIAL", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
+            "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
+    private static final Set<String> TENANT_RUNTIME_PROFILE_FORBIDDEN = Set.of(
+            "NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY", "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN",
+            "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVI_CONTROL_API_KEY",
+            "NAVIGATOR_CONTROL_API_KEY", "NAVI_PRINCIPAL_CREDENTIAL", "NAVI_USER_API_KEY",
+            "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
     private final PrintStream out;
     private final PrintStream err;
     private final Path cwd;
@@ -170,8 +182,126 @@ public class UpstreamCli {
     }
 
     private int dispatch(CliArguments args) throws Exception {
+        printLegacyMigrationNotice(args.command());
+        if (isRuntimeOperation(args.command())) {
+            requireRuntimeLane();
+        }
         return switch (args.command()) {
             case "config check" -> configCheck();
+            case "platform", "platform help", "platform tenant", "platform app" -> platformUsage();
+            case "platform tenant list" -> upstreamClientAppList(args);
+            case "platform tenant ensure" -> upstreamTenantClientAppEnsure(args, false);
+            case "platform app list" -> upstreamClientAppList(args);
+            case "platform app ensure" -> upstreamClientAppEnsure(args);
+            case "platform app issue-control-key" -> upstreamClientAppIssueControlKey(args, false);
+            case "platform app issue-runtime-key", "platform app issue-runtime-credential" ->
+                    upstreamClientAppIssueRuntimeKey(args, false);
+            case "platform agent" -> platformAgentUsage();
+            case "platform agent list" -> agentSystemList(args);
+            case "platform agent create" -> agentSystemCreate(args);
+            case "platform agent get" -> agentSystemGet(args);
+            case "platform agent update" -> agentSystemUpdate(args);
+            case "platform agent model-bindings" -> agentSystemModelBindings(args);
+            case "platform agent bind-model" -> agentSystemBindModel(args);
+            case "platform agent unbind-model" -> agentSystemUnbindModel(args);
+            case "platform agent set-default-model" -> agentSystemSetDefaultModel(args);
+            case "platform agent workspace-bindings" -> agentSystemWorkspaceBindings(args);
+            case "platform agent bind-workspace" -> agentSystemBindWorkspace(args);
+            case "platform agent unbind-workspace" -> agentSystemUnbindWorkspace(args);
+            case "platform agent set-default-workspace" -> agentSystemSetDefaultWorkspace(args);
+            case "platform agent worker-bindings" -> agentSystemWorkerBindings(args);
+            case "platform agent bind-worker" -> agentSystemBindWorker(args);
+            case "platform agent unbind-worker" -> agentSystemUnbindWorker(args);
+            case "platform agent set-default-worker" -> agentSystemSetDefaultWorker(args);
+            case "platform model" -> platformModelUsage();
+            case "platform model list" -> modelSystemList(args);
+            case "platform model get" -> modelSystemGet(args);
+            case "platform model create" -> modelSystemCreate(args);
+            case "platform model update" -> modelSystemUpdate(args);
+            case "platform model test", "platform model test-connection" -> modelSystemTest(args);
+            case "platform model test-saved" -> modelSystemTestSaved(args);
+            case "platform model rotate-key" -> modelSystemRotateKey(args);
+            case "platform model clear-key" -> modelSystemClearKey(args);
+            case "platform worker" -> workerUsage();
+            case "platform worker list" -> workerList(args);
+            case "platform worker create" -> workerCreate(args);
+            case "platform worker get" -> workerGet(args);
+            case "platform worker update" -> workerUpdate(args);
+            case "platform worker delete" -> workerDelete(args);
+            case "platform worker health" -> workerHealth(args);
+            case "platform worker processes" -> workerProcesses(args);
+            case "platform worker kill" -> workerKill(args);
+            case "platform worker-host" -> workerHostUsage();
+            case "platform worker-host apply" -> workerHostApply(args);
+            case "platform worker-host update" -> workerHostUpdate(args);
+            case "platform worker-host verify" -> workerHostVerify(args);
+            case "platform worker-host install" -> workerHostInstall(args);
+            case "platform directory" -> directoryUsage();
+            case "platform directory list" -> directoryList(args);
+            case "platform directory init" -> directoryInit(args);
+            case "platform directory get" -> directoryGet(args);
+            case "platform directory delete" -> directoryDelete(args);
+            case "platform directory env" -> directoryEnv(args);
+            case "platform directory files" -> directoryFiles(args);
+            case "platform worker-pool" -> workerPoolUsage();
+            case "platform worker-pool list" -> workerPoolList(args);
+            case "platform worker-pool create" -> workerPoolCreate(args);
+            case "platform worker-pool register-worker" -> workerPoolRegisterWorker(args);
+            case "platform worker-pool add-member" -> workerPoolAddMember(args);
+            case "platform worker-pool status" -> workerPoolStatus(args);
+            case "app", "app help", "app agent", "app model", "app directory", "app function", "app route" -> appUsage();
+            case "app ensure-grant" -> ensureGrant(args);
+            case "app agent sync" -> agentSync(args);
+            case "app agent model-bindings" -> agentModelBindings(args);
+            case "app agent bind-model" -> agentBindModel(args);
+            case "app agent unbind-model" -> agentUnbindModel(args);
+            case "app agent set-default-model" -> agentSetDefaultModel(args);
+            case "app agent workspace-bindings" -> agentWorkspaceBindings(args);
+            case "app agent bind-workspace" -> agentBindWorkspace(args);
+            case "app agent unbind-workspace" -> agentUnbindWorkspace(args);
+            case "app agent set-default-workspace" -> agentSetDefaultWorkspace(args);
+            case "app agent worker-bindings" -> agentWorkerBindings(args);
+            case "app agent bind-worker" -> agentBindWorker(args);
+            case "app agent unbind-worker" -> agentUnbindWorker(args);
+            case "app agent set-default-worker" -> agentSetDefaultWorker(args);
+            case "app model grants" -> modelGrants(args);
+            case "app model grant" -> modelGrant(args);
+            case "app model set-default" -> modelSetDefault(args);
+            case "app model create" -> modelCreate(args);
+            case "app model update" -> modelUpdate(args);
+            case "app model test", "app model test-connection" -> modelTest(args);
+            case "app model test-saved" -> modelTestSaved(args);
+            case "app model rotate-key" -> modelRotateKey(args);
+            case "app model clear-key" -> modelClearKey(args);
+            case "app function import" -> functionImport(args);
+            case "app function grant" -> functionGrant(args);
+            case "app function grant-status" -> functionGrantStatus(args);
+            case "app function visible" -> functionVisible(args);
+            case "app route list" -> routeList(args);
+            case "app route set" -> routeSet(args);
+            case "app route status" -> routeStatus(args);
+            case "app directory list" -> directoryClientList(args);
+            case "app directory init" -> directoryClientInit(args);
+            case "app directory get" -> directoryClientGet(args);
+            case "app directory delete" -> directoryClientDelete(args);
+            case "app directory env" -> directoryClientEnv(args);
+            case "app directory files" -> directoryClientFiles(args);
+            case "runtime", "runtime help" -> runtimeUsage();
+            case "runtime token" -> runtimeToken(args);
+            case "runtime owner-smoke" -> ownerSmoke(args);
+            case "runtime readiness", "runtime verify-agent-readiness" -> verifyAgentReadiness(args);
+            case "runtime inspect" -> inspectRuntime(args);
+            case "runtime ask" -> ask(args);
+            case "runtime messages" -> messages(args);
+            case "runtime diagnostics" -> diagnostics(args);
+            case "runtime evidence" -> evidence(args);
+            case "runtime sessions" -> sessions(args);
+            case "runtime session-messages" -> sessionMessages(args);
+            case "runtime skill tree" -> skillTree(args);
+            case "runtime skill read" -> skillRead(args);
+            case "runtime account-context list" -> accountContextList(args);
+            case "runtime account-context read" -> accountContextRead(args);
+            case "runtime account-context write-policy" -> accountContextWritePolicy(args);
             case "auth", "auth help" -> authUsage();
             case "auth login" -> authLogin(args);
             case "auth whoami" -> authWhoami(args);
@@ -264,10 +394,10 @@ public class UpstreamCli {
             case "client-app", "client-app help" -> clientAppUsage();
             case "client-app list" -> upstreamClientAppList(args);
             case "client-app ensure" -> upstreamClientAppEnsure(args);
-            case "client-app ensure-tenant" -> upstreamTenantClientAppEnsure(args);
-            case "client-app issue-control-key" -> upstreamClientAppIssueControlKey(args);
+            case "client-app ensure-tenant" -> upstreamTenantClientAppEnsure(args, true);
+            case "client-app issue-control-key" -> upstreamClientAppIssueControlKey(args, true);
             case "client-app issue-runtime-key", "client-app issue-runtime-credential" ->
-                    upstreamClientAppIssueRuntimeKey(args);
+                    upstreamClientAppIssueRuntimeKey(args, true);
             case "worker", "worker help" -> workerUsage();
             case "worker list" -> workerList(args);
             case "worker create" -> workerCreate(args);
@@ -311,8 +441,16 @@ public class UpstreamCli {
         };
     }
 
+    private boolean isRuntimeOperation(String command) {
+        return command.startsWith("runtime ")
+                || Set.of("runtime-token", "owner-smoke", "verify-agent-readiness", "verify-agent-grant",
+                "inspect runtime", "ask", "messages", "diagnostics", "evidence", "sessions", "session-messages")
+                .contains(command);
+    }
+
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
+        out.println("Canonical lanes: platform, app, runtime. Run `navi upstream <lane> --help` for lane-specific commands.");
         out.println("Commands: config check, auth login/whoami, runtime-token, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status. Do not use these commands to onboard OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
         out.println("For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.");
@@ -419,12 +557,66 @@ public class UpstreamCli {
         out.println("Commands: list, ensure, ensure-tenant, issue-runtime-key, issue-runtime-credential, issue-control-key");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  ensure --target-tenant-id <tenantId> --upstream-ref <ref> [--name <name>] [--tenant-profile <path>] [--write-profile]");
-        out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--upstream-ref <ref>] [--agent-code <id>] [--worker-backend <backend>] [--physical-worker-id <id>] [--directory-id <id>] [--biz-worker-base-url <url>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
-        out.println("  issue-runtime-key --client-app-id <id> [--tenant-profile <path>] [--rotate-runtime-credential] --write-profile");
-        out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
+        out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> --platform-control-profile <path> --tenant-runtime-profile <path> [--rotate-credentials] --write-profile");
+        out.println("  issue-runtime-key --client-app-id <id> --tenant-runtime-profile <path> [--rotate-runtime-credential] --write-profile");
+        out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] --platform-control-profile <path> --write-profile");
         out.println("  These commands require the upstream-admin lane (NAVI_ADMIN_API_KEY); they are not runtime calls.");
-        out.println("  ensure-tenant writes one-time runtime and control credentials to its private tenant profile. Keep NAVI_CONTROL_API_KEY with the platform; deliver a runtime-only profile to a tenant.");
+        out.println("  Legacy names remain available for one release window. Use `platform tenant ensure`: control and runtime credentials are written to separate private profiles.");
         return 0;
+    }
+
+    private int platformUsage() {
+        out.println("Usage: navi upstream platform <resource> <command> [options]");
+        out.println("Current authority: UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN (NAVI_ADMIN_API_KEY). It is not typed SAAS_PLATFORM authority.");
+        out.println("Commands: tenant list/ensure, app list/ensure/issue-control-key/issue-runtime-key, agent, model, worker, worker-host, directory, worker-pool (legacy compatibility).");
+        out.println("  tenant ensure --source-system <system> --source-tenant-id <id> --platform-control-profile <path> --tenant-runtime-profile <path> [--rotate-credentials] --write-profile");
+        out.println("  app issue-control-key --client-app-id <id> --platform-control-profile <path> --write-profile");
+        out.println("  app issue-runtime-key --client-app-id <id> --tenant-runtime-profile <path> --write-profile");
+        out.println("Both output profiles must be different and gitignored. The control profile stays with the TMS platform; the runtime profile is tenant-only.");
+        return 0;
+    }
+
+    private int platformAgentUsage() {
+        out.println("Usage: navi upstream platform agent <list|create|get|update|model-bindings|bind-model|unbind-model|set-default-model|workspace-bindings|bind-workspace|unbind-workspace|set-default-workspace|worker-bindings|bind-worker|unbind-worker|set-default-worker> [options]");
+        out.println("Uses the current legacy platform lane (NAVI_ADMIN_API_KEY); it is not typed SAAS_PLATFORM authority.");
+        return 0;
+    }
+
+    private int platformModelUsage() {
+        out.println("Usage: navi upstream platform model <list|get|create|update|test|test-saved|rotate-key|clear-key> [options]");
+        out.println("Uses the current legacy platform lane (NAVI_ADMIN_API_KEY); it is not typed SAAS_PLATFORM authority.");
+        return 0;
+    }
+
+    private int appUsage() {
+        out.println("Usage: navi upstream app <resource> <command> [options]");
+        out.println("ClientApp control lane requires exactly NAVI_CONTROL_API_KEY. Do not load platform-admin, runtime, or typed-management credentials in this profile.");
+        out.println("Commands: ensure-grant, agent sync/bindings, model grants/create/update, function import/grant/visible, route list/set/status, directory list/init/get/delete/env/files.");
+        out.println("Use a dedicated gitignored platform-control profile created by `platform tenant ensure` or `platform app issue-control-key`.");
+        return 0;
+    }
+
+    private int runtimeUsage() {
+        out.println("Usage: navi upstream runtime <token|readiness|owner-smoke|inspect|ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
+        out.println("Runtime lane accepts only ClientApp runtime material (key/secret or access token) and rejects admin, control, and typed-management credentials.");
+        out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
+        return 0;
+    }
+
+    private void printLegacyMigrationNotice(String command) {
+        if ("client-app ensure-tenant".equals(command)) {
+            out.println("migrationNotice=client-app ensure-tenant is a legacy alias; use platform tenant ensure with --platform-control-profile and --tenant-runtime-profile");
+        } else if (command.startsWith("agent system-") || command.startsWith("model system-")) {
+            out.println("migrationNotice=system-* is a legacy alias; use platform agent or platform model");
+        } else if (Set.of("runtime-token", "owner-smoke", "verify-agent-readiness", "verify-agent-grant", "ask", "messages").contains(command)) {
+            out.println("migrationNotice=top-level runtime command is a legacy alias; use runtime "
+                    + switch (command) {
+                        case "runtime-token" -> "token";
+                        case "owner-smoke" -> "owner-smoke";
+                        case "verify-agent-readiness", "verify-agent-grant" -> "readiness";
+                        default -> command;
+                    });
+        }
     }
 
     private int agentUsage() {
@@ -636,6 +828,10 @@ public class UpstreamCli {
         out.println("profileSafety=" + config.profileSafetyState());
         out.println("typedMetadata=" + config.typedMetadataState());
         out.println("typedCredentialSource=" + config.typedCredentialSourceState());
+        out.println("legacyPlatformLane=" + config.legacyPlatformLaneAvailability());
+        out.println("clientAppControlLane=" + config.clientAppControlLaneAvailability());
+        out.println("runtimeLane=" + config.runtimeLaneAvailability());
+        out.println("typedManagementAuthority=" + config.typedManagementAuthorityAvailability());
         out.println("authorization=UNVERIFIED");
         return configState == UpstreamCliConfig.LocalState.INVALID ? 2 : 0;
     }
@@ -879,12 +1075,11 @@ public class UpstreamCli {
         return 0;
     }
 
-    private int upstreamTenantClientAppEnsure(CliArguments args) {
+    private int upstreamTenantClientAppEnsure(CliArguments args, boolean legacyAlias) {
         if (!args.flag("write-profile")) {
-            throw new UpstreamCliException("client-app ensure-tenant requires --write-profile to store one-time credentials without printing them");
+            throw new UpstreamCliException("platform tenant ensure requires --write-profile to store one-time credentials without printing them");
         }
-        Path targetProfile = tenantProfilePath(args);
-        config.assertProfileWritable(targetProfile);
+        ProvisionedProfileTargets profiles = provisionedProfileTargets(args, legacyAlias);
 
         String sourceSystem = requiredOptionOrConfig(args, "source-system", "NAVI_UPSTREAM_SYSTEM_ID", "source system");
         String sourceTenantId = sourceTenantId(args);
@@ -921,21 +1116,22 @@ public class UpstreamCli {
             throw new UpstreamCliException("client-app ensure-tenant response did not include full binding secrets; rerun with --rotate-credentials to issue new one-time credentials");
         }
 
-        writeProvisionedTenantProfile(targetProfile, dto, sourceSystem, sourceTenantId);
+        writeProvisionedTenantProfiles(profiles, dto, sourceSystem, sourceTenantId);
 
-        out.println("client-app ensure-tenant ok");
-        out.println("profileUpdated=" + targetProfile);
-        out.println("stored=" + provisionedTenantStoredKeys(dto));
+        out.println(legacyAlias ? "client-app ensure-tenant ok" : "platform tenant ensure ok");
+        out.println("platformControlProfileUpdated=" + profiles.platformControlProfile());
+        out.println("tenantRuntimeProfileUpdated=" + profiles.tenantRuntimeProfile());
+        out.println("platformControlStored=" + provisionedControlStoredKeys(dto));
+        out.println("tenantRuntimeStored=" + provisionedRuntimeStoredKeys(dto));
         printUpstreamTenantClientAppProvisioning(dto);
         return 0;
     }
 
-    private int upstreamClientAppIssueControlKey(CliArguments args) {
+    private int upstreamClientAppIssueControlKey(CliArguments args, boolean legacyAlias) {
         if (!args.flag("write-profile")) {
-            throw new UpstreamCliException("client-app issue-control-key requires --write-profile to store NAVI_CONTROL_API_KEY without printing it");
+            throw new UpstreamCliException("platform app issue-control-key requires --write-profile to store NAVI_CONTROL_API_KEY without printing it");
         }
-        Path targetProfile = tenantProfilePath(args);
-        config.assertProfileWritable(targetProfile);
+        Path targetProfile = platformControlProfilePath(args, legacyAlias);
 
         IssueControlCredentialForm form = new IssueControlCredentialForm();
         form.setDescription(args.option("description"));
@@ -950,12 +1146,13 @@ public class UpstreamCli {
             throw new UpstreamCliException("client-app issue-control-key response did not include NAVI_CONTROL_API_KEY");
         }
 
-        config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
-        config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(credential.getTenantId()));
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(credential.getClientAppId()));
-        config.writeProfileValue(targetProfile, "NAVI_CONTROL_API_KEY", credential.getControlApiKey());
+        config.writeProfileValues(targetProfile, Map.of(
+                "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"),
+                "NAVI_TENANT_ID", emptyIfNull(credential.getTenantId()),
+                "NAVI_CLIENT_APP_ID", emptyIfNull(credential.getClientAppId()),
+                "NAVI_CONTROL_API_KEY", credential.getControlApiKey()), PLATFORM_CONTROL_PROFILE_FORBIDDEN);
 
-        out.println("client-app issue-control-key ok");
+        out.println(legacyAlias ? "client-app issue-control-key ok" : "platform app issue-control-key ok");
         out.println("profileUpdated=" + targetProfile);
         out.println("stored=NAVI_CONTROL_API_KEY");
         out.println("credentialId=" + valueOrEmpty(credential.getCredentialId()));
@@ -967,12 +1164,11 @@ public class UpstreamCli {
         return 0;
     }
 
-    private int upstreamClientAppIssueRuntimeKey(CliArguments args) {
+    private int upstreamClientAppIssueRuntimeKey(CliArguments args, boolean legacyAlias) {
         if (!args.flag("write-profile")) {
-            throw new UpstreamCliException("client-app issue-runtime-key requires --write-profile to store NAVI_CLIENT_APP_KEY and NAVI_CLIENT_APP_SECRET without printing them");
+            throw new UpstreamCliException("platform app issue-runtime-key requires --write-profile to store NAVI_CLIENT_APP_KEY and NAVI_CLIENT_APP_SECRET without printing them");
         }
-        Path targetProfile = tenantProfilePath(args);
-        config.assertProfileWritable(targetProfile);
+        Path targetProfile = tenantRuntimeProfilePath(args, legacyAlias);
 
         IssueRuntimeCredentialForm form = new IssueRuntimeCredentialForm();
         form.setDescription(args.option("description"));
@@ -985,14 +1181,15 @@ public class UpstreamCli {
             throw new UpstreamCliException("client-app issue-runtime-key response did not include NAVI_CLIENT_APP_KEY and NAVI_CLIENT_APP_SECRET");
         }
 
-        config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
-        config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(credential.getTenantId()));
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(credential.getClientAppId()));
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_KEY", credential.getAppKey());
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_SECRET", credential.getSecret());
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ACCESS_TOKEN", "");
+        config.writeProfileValues(targetProfile, Map.of(
+                "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"),
+                "NAVI_TENANT_ID", emptyIfNull(credential.getTenantId()),
+                "NAVI_CLIENT_APP_ID", emptyIfNull(credential.getClientAppId()),
+                "NAVI_CLIENT_APP_KEY", credential.getAppKey(),
+                "NAVI_CLIENT_APP_SECRET", credential.getSecret(),
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", ""), TENANT_RUNTIME_PROFILE_FORBIDDEN);
 
-        out.println("client-app issue-runtime-key ok");
+        out.println(legacyAlias ? "client-app issue-runtime-key ok" : "platform app issue-runtime-key ok");
         out.println("profileUpdated=" + targetProfile);
         out.println("stored=NAVI_CLIENT_APP_KEY,NAVI_CLIENT_APP_SECRET,NAVI_CLIENT_APP_ACCESS_TOKEN");
         out.println("credentialId=" + valueOrEmpty(credential.getCredentialId()));
@@ -3779,10 +3976,8 @@ public class UpstreamCli {
     }
 
     private BusinessAgentApi upstreamAdminApi() {
+        requireLegacyPlatformLane();
         String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
-        if (!hasText(adminApiKey)) {
-            throw new UpstreamCliException("upstream admin credential is required (NAVI_ADMIN_API_KEY)");
-        }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null,
@@ -3803,10 +3998,8 @@ public class UpstreamCli {
     }
 
     private DirectoryApi clientAppDirectoryApi() {
+        requireClientAppControlLane();
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
-        if (!hasText(controlApiKey)) {
-            throw new UpstreamCliException("client app control credential is required (NAVI_CONTROL_API_KEY)");
-        }
         return new DirectoryApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null,
@@ -3819,10 +4012,8 @@ public class UpstreamCli {
     }
 
     private HttpHelper upstreamAdminHttp() {
+        requireLegacyPlatformLane();
         String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
-        if (!hasText(adminApiKey)) {
-            throw new UpstreamCliException("upstream admin credential is required (NAVI_ADMIN_API_KEY)");
-        }
         return new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null,
@@ -3835,10 +4026,8 @@ public class UpstreamCli {
     }
 
     private BusinessAgentApi businessAgentControlApi() {
+        requireClientAppControlLane();
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
-        if (!hasText(controlApiKey)) {
-            throw new UpstreamCliException("client app control credential is required (NAVI_CONTROL_API_KEY)");
-        }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null,
@@ -3853,6 +4042,44 @@ public class UpstreamCli {
     private HttpHelper openHttp() {
         return new HttpHelper(config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null, null, config.get("NAVI_TENANT_ID"), Duration.ofSeconds(30));
+    }
+
+    private void requireLegacyPlatformLane() {
+        if (!hasText(config.get("NAVI_ADMIN_API_KEY"))) {
+            throw new UpstreamCliException("upstream admin credential is required (NAVI_ADMIN_API_KEY)");
+        }
+        rejectForeignCredentialMaterial("platform legacy", "NAVI_CONTROL_API_KEY", "NAVIGATOR_CONTROL_API_KEY",
+                "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
+                "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY", "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET",
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_CLIENT_APP_RUNTIME_TOKEN", "CLIENT_APP_RUNTIME_TOKEN",
+                "NAVI_PRINCIPAL_CREDENTIAL", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
+                "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
+    }
+
+    private void requireClientAppControlLane() {
+        if (!hasText(config.get("NAVI_CONTROL_API_KEY"))) {
+            throw new UpstreamCliException("client app control credential is required (NAVI_CONTROL_API_KEY)");
+        }
+        rejectForeignCredentialMaterial("ClientApp control", "NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY",
+                "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
+                "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY", "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET",
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_CLIENT_APP_RUNTIME_TOKEN", "CLIENT_APP_RUNTIME_TOKEN",
+                "NAVI_PRINCIPAL_CREDENTIAL", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
+                "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
+    }
+
+    private void requireRuntimeLane() {
+        rejectForeignCredentialMaterial("runtime", "NAVI_ADMIN_API_KEY", "NAVIGATOR_ADMIN_API_KEY",
+                "NAVI_ADMIN_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
+                "NAVI_CONTROL_API_KEY", "NAVIGATOR_CONTROL_API_KEY", "NAVI_PRINCIPAL_CREDENTIAL",
+                "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
+    }
+
+    private void rejectForeignCredentialMaterial(String lane, String... keys) {
+        List<String> present = config.presentCredentialKeys(keys);
+        if (!present.isEmpty()) {
+            throw new UpstreamCliException(lane + " lane refuses mixed credential material: " + String.join(",", present));
+        }
     }
 
     private String clientAppKey(CliArguments args) {
@@ -4202,40 +4429,72 @@ public class UpstreamCli {
                 + " upstreamRef=" + valueOrEmpty(app != null ? app.getUpstreamRef() : null));
     }
 
-    private void writeProvisionedTenantProfile(Path targetProfile,
-                                               UpstreamTenantClientAppProvisioningDTO dto,
-                                               String sourceSystem,
-                                               String sourceTenantId) {
-        config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
-        config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(dto.getNavigatorTenantId()));
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(dto.getClientAppId()));
-        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_SYSTEM_ID", emptyIfNull(firstNonBlank(dto.getUpstreamSystemId(), sourceSystem)));
-        config.writeProfileValue(targetProfile, "NAVI_SOURCE_TENANT_ID", emptyIfNull(firstNonBlank(dto.getSourceTenantId(), sourceTenantId)));
-        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_REF", emptyIfNull(firstNonBlank(dto.getUpstreamRef(), sourceTenantId)));
-        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_NAMESPACE", emptyIfNull(dto.getUpstreamNamespace()));
-        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_CAPABILITY_DOMAIN", emptyIfNull(firstNonBlank(dto.getClientAppCapabilityDomain(), dto.getCapabilityDomain())));
-        config.writeProfileValue(targetProfile, "NAVI_AGENT_CODE", emptyIfNull(firstNonBlank(dto.getAgentCode(), dto.getRootAgentId())));
-        config.writeProfileValue(targetProfile, "NAVI_ROOT_AGENT_ID", emptyIfNull(dto.getRootAgentId()));
-        config.writeProfileValue(targetProfile, "NAVI_MODEL_CONFIG_ID", emptyIfNull(dto.getModelConfigId()));
-        config.writeProfileValue(targetProfile, "NAVI_SKILL_ID", emptyIfNull(dto.getSkillId()));
-        config.writeProfileValue(targetProfile, "NAVI_WORKER_POOL_ID", emptyIfNull(dto.getWorkerPoolId()));
-        config.writeProfileValue(targetProfile, "NAVI_WORKER_BACKEND", emptyIfNull(dto.getWorkerBackend()));
-        config.writeProfileValue(targetProfile, "NAVI_PHYSICAL_WORKER_ID", emptyIfNull(dto.getPhysicalWorkerId()));
-        config.writeProfileValue(targetProfile, "NAVI_DIRECTORY_ID", emptyIfNull(dto.getDirectoryId()));
-        config.writeProfileValue(targetProfile, "NAVI_BIZ_WORKER_BASE_URL", emptyIfNull(dto.getBizWorkerBaseUrl()));
-        if (hasText(dto.getClientAppKey())) {
-            config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_KEY", dto.getClientAppKey());
-        }
-        if (hasText(dto.getClientAppSecret())) {
-            config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_SECRET", dto.getClientAppSecret());
-        }
-        if (hasText(dto.getControlApiKey())) {
-            config.writeProfileValue(targetProfile, "NAVI_CONTROL_API_KEY", dto.getControlApiKey());
+    private void writeProvisionedTenantProfiles(ProvisionedProfileTargets profiles,
+                                                UpstreamTenantClientAppProvisioningDTO dto,
+                                                String sourceSystem,
+                                                String sourceTenantId) {
+        Map<String, String> shared = provisionedProfileValues(dto, sourceSystem, sourceTenantId);
+        Map<String, String> control = new LinkedHashMap<>(shared);
+        control.put("NAVI_CONTROL_API_KEY", dto.getControlApiKey());
+        Map<String, String> runtime = new LinkedHashMap<>(shared);
+        runtime.put("NAVI_CLIENT_APP_KEY", dto.getClientAppKey());
+        runtime.put("NAVI_CLIENT_APP_SECRET", dto.getClientAppSecret());
+        runtime.put("NAVI_CLIENT_APP_ACCESS_TOKEN", "");
+
+        config.writeProfileValues(profiles.platformControlProfile(), control, PLATFORM_CONTROL_PROFILE_FORBIDDEN);
+        try {
+            config.writeProfileValues(profiles.tenantRuntimeProfile(), runtime, TENANT_RUNTIME_PROFILE_FORBIDDEN);
+        } catch (UpstreamCliException e) {
+            throw new UpstreamCliException("tenant runtime profile was not written; the platform control profile remains private and no combined credential profile was created", e);
         }
     }
 
-    private String provisionedTenantStoredKeys(UpstreamTenantClientAppProvisioningDTO dto) {
-        List<String> keys = new ArrayList<>(List.of(
+    private Map<String, String> provisionedProfileValues(UpstreamTenantClientAppProvisioningDTO dto,
+                                                           String sourceSystem,
+                                                           String sourceTenantId) {
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
+        values.put("NAVI_TENANT_ID", emptyIfNull(dto.getNavigatorTenantId()));
+        values.put("NAVI_CLIENT_APP_ID", emptyIfNull(dto.getClientAppId()));
+        values.put("NAVI_UPSTREAM_SYSTEM_ID", emptyIfNull(firstNonBlank(dto.getUpstreamSystemId(), sourceSystem)));
+        values.put("NAVI_SOURCE_TENANT_ID", emptyIfNull(firstNonBlank(dto.getSourceTenantId(), sourceTenantId)));
+        values.put("NAVI_UPSTREAM_REF", emptyIfNull(firstNonBlank(dto.getUpstreamRef(), sourceTenantId)));
+        values.put("NAVI_UPSTREAM_NAMESPACE", emptyIfNull(dto.getUpstreamNamespace()));
+        values.put("NAVI_CLIENT_APP_CAPABILITY_DOMAIN", emptyIfNull(firstNonBlank(dto.getClientAppCapabilityDomain(), dto.getCapabilityDomain())));
+        values.put("NAVI_AGENT_CODE", emptyIfNull(firstNonBlank(dto.getAgentCode(), dto.getRootAgentId())));
+        values.put("NAVI_ROOT_AGENT_ID", emptyIfNull(dto.getRootAgentId()));
+        values.put("NAVI_MODEL_CONFIG_ID", emptyIfNull(dto.getModelConfigId()));
+        values.put("NAVI_SKILL_ID", emptyIfNull(dto.getSkillId()));
+        values.put("NAVI_WORKER_POOL_ID", emptyIfNull(dto.getWorkerPoolId()));
+        values.put("NAVI_WORKER_BACKEND", emptyIfNull(dto.getWorkerBackend()));
+        values.put("NAVI_PHYSICAL_WORKER_ID", emptyIfNull(dto.getPhysicalWorkerId()));
+        values.put("NAVI_DIRECTORY_ID", emptyIfNull(dto.getDirectoryId()));
+        values.put("NAVI_BIZ_WORKER_BASE_URL", emptyIfNull(dto.getBizWorkerBaseUrl()));
+        return values;
+    }
+
+    private String provisionedControlStoredKeys(UpstreamTenantClientAppProvisioningDTO dto) {
+        List<String> keys = new ArrayList<>(provisionedSharedStoredKeys());
+        if (hasText(dto.getControlApiKey())) {
+            keys.add("NAVI_CONTROL_API_KEY");
+        }
+        return String.join(",", keys);
+    }
+
+    private String provisionedRuntimeStoredKeys(UpstreamTenantClientAppProvisioningDTO dto) {
+        List<String> keys = new ArrayList<>(provisionedSharedStoredKeys());
+        if (hasText(dto.getClientAppKey())) {
+            keys.add("NAVI_CLIENT_APP_KEY");
+        }
+        if (hasText(dto.getClientAppSecret())) {
+            keys.add("NAVI_CLIENT_APP_SECRET");
+        }
+        keys.add("NAVI_CLIENT_APP_ACCESS_TOKEN");
+        return String.join(",", keys);
+    }
+
+    private List<String> provisionedSharedStoredKeys() {
+        return List.of(
                 "NAVI_BASE_URL",
                 "NAVI_TENANT_ID",
                 "NAVI_CLIENT_APP_ID",
@@ -4252,17 +4511,7 @@ public class UpstreamCli {
                 "NAVI_WORKER_BACKEND",
                 "NAVI_PHYSICAL_WORKER_ID",
                 "NAVI_DIRECTORY_ID",
-                "NAVI_BIZ_WORKER_BASE_URL"));
-        if (hasText(dto.getClientAppKey())) {
-            keys.add("NAVI_CLIENT_APP_KEY");
-        }
-        if (hasText(dto.getClientAppSecret())) {
-            keys.add("NAVI_CLIENT_APP_SECRET");
-        }
-        if (hasText(dto.getControlApiKey())) {
-            keys.add("NAVI_CONTROL_API_KEY");
-        }
-        return String.join(",", keys);
+                "NAVI_BIZ_WORKER_BASE_URL");
     }
 
     private boolean isCredentialsNotReplayable(UpstreamTenantClientAppProvisioningDTO dto) {
@@ -4825,6 +5074,85 @@ public class UpstreamCli {
             path = cwd.resolve(path);
         }
         return path.normalize();
+    }
+
+    private ProvisionedProfileTargets provisionedProfileTargets(CliArguments args, boolean legacyAlias) {
+        String legacyRuntimeProfile = args.option("tenant-profile");
+        String runtimeProfile = args.option("tenant-runtime-profile");
+        if (hasText(legacyRuntimeProfile) && hasText(runtimeProfile)) {
+            throw new UpstreamCliException("Specify only one of --tenant-profile and --tenant-runtime-profile");
+        }
+        if (!legacyAlias && hasText(legacyRuntimeProfile)) {
+            throw new UpstreamCliException("platform tenant ensure does not accept --tenant-profile; use --tenant-runtime-profile");
+        }
+        Path control = requiredOutputProfile(args.option("platform-control-profile"),
+                "platform control profile", "--platform-control-profile");
+        Path runtime = requiredOutputProfile(firstNonBlank(runtimeProfile, legacyRuntimeProfile),
+                "tenant runtime profile", "--tenant-runtime-profile");
+        if (control.equals(runtime)) {
+            throw new UpstreamCliException("platform control profile and tenant runtime profile must be different");
+        }
+        return new ProvisionedProfileTargets(control, runtime);
+    }
+
+    private Path platformControlProfilePath(CliArguments args, boolean legacyAlias) {
+        String legacyProfile = args.option("tenant-profile");
+        String explicitProfile = args.option("platform-control-profile");
+        if (hasText(legacyProfile) && hasText(explicitProfile)) {
+            throw new UpstreamCliException("Specify only one of --tenant-profile and --platform-control-profile");
+        }
+        if (!legacyAlias && hasText(legacyProfile)) {
+            throw new UpstreamCliException("platform app issue-control-key does not accept --tenant-profile; use --platform-control-profile");
+        }
+        return requiredOutputProfile(firstNonBlank(explicitProfile, legacyProfile),
+                "platform control profile", "--platform-control-profile");
+    }
+
+    private Path tenantRuntimeProfilePath(CliArguments args, boolean legacyAlias) {
+        String legacyProfile = args.option("tenant-profile");
+        String explicitProfile = args.option("tenant-runtime-profile");
+        if (hasText(legacyProfile) && hasText(explicitProfile)) {
+            throw new UpstreamCliException("Specify only one of --tenant-profile and --tenant-runtime-profile");
+        }
+        if (!legacyAlias && hasText(legacyProfile)) {
+            throw new UpstreamCliException("platform app issue-runtime-key does not accept --tenant-profile; use --tenant-runtime-profile");
+        }
+        return requiredOutputProfile(firstNonBlank(explicitProfile, legacyProfile),
+                "tenant runtime profile", "--tenant-runtime-profile");
+    }
+
+    private Path requiredOutputProfile(String value, String description, String option) {
+        if (!hasText(value)) {
+            throw new UpstreamCliException(description + " is required (" + option + ")");
+        }
+        Path path = Path.of(value);
+        if (!path.isAbsolute()) {
+            path = cwd.resolve(path);
+        }
+        path = path.normalize();
+        if (config.profilePath() != null && path.equals(config.profilePath().toAbsolutePath().normalize())) {
+            throw new UpstreamCliException(description + " must not overwrite the input management profile");
+        }
+        config.assertProfileWritable(path);
+        return path;
+    }
+
+    private static final class ProvisionedProfileTargets {
+        private final Path platformControlProfile;
+        private final Path tenantRuntimeProfile;
+
+        private ProvisionedProfileTargets(Path platformControlProfile, Path tenantRuntimeProfile) {
+            this.platformControlProfile = platformControlProfile;
+            this.tenantRuntimeProfile = tenantRuntimeProfile;
+        }
+
+        private Path platformControlProfile() {
+            return platformControlProfile;
+        }
+
+        private Path tenantRuntimeProfile() {
+            return tenantRuntimeProfile;
+        }
     }
 
     private Integer parseInteger(String value) {

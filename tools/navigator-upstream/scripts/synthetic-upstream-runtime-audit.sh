@@ -42,7 +42,7 @@ readonly RUNTIME_AUDIT_REPORT_NAME='runtime-audit-report.json'
 # credential-bearing files have been removed, so a failed audit can be
 # triaged without reading a private log/profile or repeating a live run.
 readonly RUNTIME_AUDIT_SUMMARY_NAME='runtime-audit-summary.json'
-readonly SOURCE_SDK_JAR="$REPO_ROOT/navigator-open-sdk/target/navigator-open-sdk-1.0.21.jar"
+readonly SOURCE_SDK_JAR="$REPO_ROOT/navigator-open-sdk/target/navigator-open-sdk-1.0.22.jar"
 readonly SDK_LIB_DIR="$REPO_ROOT/tools/navigator-upstream/lib"
 readonly TRUSTED_JAVA_LINK='/usr/bin/java'
 readonly LOCAL_DOCKER_HOST='unix:///var/run/docker.sock'

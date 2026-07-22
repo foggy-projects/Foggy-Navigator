@@ -292,9 +292,114 @@ class UpstreamCliTest {
 
         assertEquals(0, code);
         assertTrue(output.contains("require the upstream-admin lane (NAVI_ADMIN_API_KEY)"));
-        assertTrue(output.contains("Keep NAVI_CONTROL_API_KEY with the platform"));
-        assertTrue(output.contains("runtime-only profile to a tenant"));
+        assertTrue(output.contains("platform-control-profile"));
+        assertTrue(output.contains("control and runtime credentials are written to separate private profiles"));
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void canonicalLaneHelpExplainsCurrentAuthorityWithoutClaimingTypedPlatform() {
+        int platformCode = run(new String[]{"upstream", "platform", "--help"}, Map.of());
+        String platformOutput = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, platformCode);
+        assertTrue(platformOutput.contains("UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN"));
+        assertTrue(platformOutput.contains("not typed SAAS_PLATFORM authority"));
+        assertTrue(platformOutput.contains("platform-control-profile"));
+
+        stdout.reset();
+        stderr.reset();
+        int appCode = run(new String[]{"upstream", "app", "--help"}, Map.of());
+        assertEquals(0, appCode);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("requires exactly NAVI_CONTROL_API_KEY"));
+
+        stdout.reset();
+        stderr.reset();
+        int runtimeCode = run(new String[]{"upstream", "runtime", "--help"}, Map.of());
+        assertEquals(0, runtimeCode);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("rejects admin, control, and typed-management credentials"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void platformTenantEnsureRejectsSameProfileBeforeProvisioning() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "platform", "tenant", "ensure",
+                "--profile", ".navigator/upstream.env",
+                "--source-system", "TMS",
+                "--source-tenant-id", "3",
+                "--platform-control-profile", ".navigator/tenant.env",
+                "--tenant-runtime-profile", ".navigator/tenant.env",
+                "--write-profile"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("must be different"));
+        assertNull(lastPath);
+    }
+
+    @Test
+    void platformTenantEnsureDoesNotCreateCombinedProfileWhenRuntimeWriteFails() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        Files.writeString(profileDir.resolve("not-a-directory"), "occupied", StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "navigatorTenantId":"nav_tms_3",
+                  "clientAppId":"capp-tms-3",
+                  "clientAppKey":"cak-secret-key",
+                  "clientAppSecret":"cas-secret-value",
+                  "controlApiKey":"cac-secret-control-key"
+                }}
+                """;
+
+        Path controlProfile = profileDir.resolve("platform/tms-3-control.env");
+        int code = run(new String[]{"upstream", "platform", "tenant", "ensure",
+                "--profile", ".navigator/upstream.env",
+                "--source-system", "TMS",
+                "--source-tenant-id", "3",
+                "--platform-control-profile", ".navigator/platform/tms-3-control.env",
+                "--tenant-runtime-profile", ".navigator/not-a-directory/tms-3-runtime.env",
+                "--write-profile"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        String control = Files.readString(controlProfile, StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertEquals("/api/v1/admin/upstream-tenants/client-apps/ensure", lastPath);
+        assertTrue(error.contains("tenant runtime profile"));
+        assertTrue(control.contains("NAVI_CONTROL_API_KEY=cac-secret-control-key"));
+        assertFalse(control.contains("NAVI_CLIENT_APP_KEY="));
+        assertFalse(control.contains("NAVI_CLIENT_APP_SECRET="));
+        assertFalse(Files.exists(profileDir.resolve("not-a-directory/tms-3-runtime.env")));
+        assertFalse(error.contains("naa-secret-admin-key"));
+        assertFalse(error.contains("cac-secret-control-key"));
+        assertFalse(error.contains("cak-secret-key"));
+        assertFalse(error.contains("cas-secret-value"));
+    }
+
+    @Test
+    void appControlCommandRejectsRuntimeMaterialBeforeRequest() {
+        int code = run(new String[]{"upstream", "app", "ensure-grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--client-app-id", "app-1",
+                "--upstream-user-id", "user-1",
+                "--control-api-key", "cac-control-secret",
+                "--client-app-key", "cak-runtime-secret"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("ClientApp control lane refuses mixed credential material"));
+        assertNull(lastPath);
     }
 
     @Test
@@ -368,6 +473,10 @@ class UpstreamCliTest {
                 profileSafety=VALID
                 typedMetadata=UNVERIFIED
                 typedCredentialSource=UNVERIFIED
+                legacyPlatformLane=MIXED
+                clientAppControlLane=MIXED
+                runtimeLane=AVAILABLE
+                typedManagementAuthority=NOT_CONFIGURED
                 authorization=UNVERIFIED
                 """, output);
         assertFalse(output.contains("super-secret-value"));
@@ -398,6 +507,10 @@ class UpstreamCliTest {
                 profileSafety=VALID
                 typedMetadata=VALID
                 typedCredentialSource=VALID
+                legacyPlatformLane=MIXED
+                clientAppControlLane=MIXED
+                runtimeLane=MIXED
+                typedManagementAuthority=LOCALLY_CONFIGURED_NOT_AUTHORIZED
                 authorization=UNVERIFIED
                 """, output);
         assertFalse(output.contains("typed-fixture-secret"));
@@ -760,11 +873,11 @@ class UpstreamCliTest {
     }
 
     @Test
-    void runtimeTokenUsesSecretHeaderAndMasksOutput() {
+    void canonicalRuntimeTokenUsesSecretHeaderAndMasksOutput() {
         responseOverride = "{\"accessToken\":\"cat-runtime-secret\",\"appKey\":\"cak-test\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}";
         Map<String, String> env = env("NAVI_SECRET_ENV", "cas-secret-value");
 
-        int code = run(new String[]{"upstream", "runtime-token",
+        int code = run(new String[]{"upstream", "runtime", "token",
                 "--base-url", baseUrl(),
                 "--client-app-key", "cak-test",
                 "--client-app-secret-env", "NAVI_SECRET_ENV"}, env);
@@ -784,7 +897,7 @@ class UpstreamCliTest {
     }
 
     @Test
-    void runtimeTokenIgnoresAdminAndControlCredentialsFromProfile() throws Exception {
+    void runtimeTokenRejectsAdminAndControlCredentialsFromProfile() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
         Files.createDirectories(profileDir);
@@ -795,19 +908,15 @@ class UpstreamCliTest {
                 NAVI_ADMIN_API_KEY=naa-expired-admin-key
                 NAVI_CONTROL_API_KEY=cac-expired-control-key
                 """.formatted(baseUrl()), StandardCharsets.UTF_8);
-        responseOverride = "{\"accessToken\":\"cat-runtime-secret\",\"appKey\":\"cak-runtime-key\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}";
-
         int code = run(new String[]{"upstream", "runtime-token"}, Map.of());
 
         String output = stdout.toString(StandardCharsets.UTF_8);
-        assertEquals(0, code);
-        assertEquals("/api/v1/open/client-apps/runtime-token", lastPath);
-        assertEquals("cak-runtime-key", lastClientAppKeyHeader);
-        assertEquals("cas-runtime-secret", lastClientAppSecretHeader);
+        assertEquals(2, code);
+        assertNull(lastPath);
         assertNull(lastUpstreamAdminKeyHeader);
         assertNull(lastClientAppControlKeyHeader);
-        assertTrue(output.contains("runtime-token ok"));
-        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("runtime lane refuses mixed credential material"));
+        assertFalse(output.contains("runtime-token ok"));
         assertFalse(output.contains("naa-expired-admin-key"));
         assertFalse(output.contains("cac-expired-control-key"));
         assertFalse(output.contains("cas-runtime-secret"));
@@ -1250,7 +1359,7 @@ class UpstreamCliTest {
     }
 
     @Test
-    void clientAppEnsureTenantUsesUpstreamAdminKeyAndStoresOneShotCredentials() throws Exception {
+    void platformTenantEnsureUsesUpstreamAdminKeyAndSplitsOneShotCredentials() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
         Files.createDirectories(profileDir);
@@ -1298,7 +1407,15 @@ class UpstreamCliTest {
                 }}
                 """;
 
-        int code = run(new String[]{"upstream", "client-app", "ensure-tenant",
+        Path platformControlProfile = profileDir.resolve("platform").resolve("tms-3-control.env");
+        Path tenantRuntimeProfile = profileDir.resolve("tenants").resolve("tms-3-runtime.env");
+        Files.createDirectories(platformControlProfile.getParent());
+        Files.createDirectories(tenantRuntimeProfile.getParent());
+        Files.writeString(platformControlProfile, "NAVI_CLIENT_APP_SECRET=stale-runtime-secret\nNAVI_USER_API_KEY=stale-user-secret\n", StandardCharsets.UTF_8);
+        Files.writeString(tenantRuntimeProfile, "NAVI_CONTROL_API_KEY=stale-control-secret\nNAVI_ADMIN_API_KEY=stale-admin-secret\n",
+                StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "platform", "tenant", "ensure",
                 "--profile", ".navigator/upstream.env",
                 "--source-tenant-id", "3",
                 "--name", "TMS 3",
@@ -1312,12 +1429,13 @@ class UpstreamCliTest {
                 "--directory-id", "dir-1",
                 "--biz-worker-base-url", "http://127.0.0.1:3161",
                 "--rotate-credentials",
-                "--tenant-profile", ".navigator/tenants/tms-3.env",
+                "--platform-control-profile", ".navigator/platform/tms-3-control.env",
+                "--tenant-runtime-profile", ".navigator/tenants/tms-3-runtime.env",
                 "--write-profile"}, Map.of());
 
-        Path tenantProfile = profileDir.resolve("tenants").resolve("tms-3.env");
         String output = stdout.toString(StandardCharsets.UTF_8);
-        String profile = Files.readString(tenantProfile, StandardCharsets.UTF_8);
+        String controlProfile = Files.readString(platformControlProfile, StandardCharsets.UTF_8);
+        String runtimeProfile = Files.readString(tenantRuntimeProfile, StandardCharsets.UTF_8);
         assertEquals(0, code);
         assertEquals("/api/v1/admin/upstream-tenants/client-apps/ensure", lastPath);
         assertEquals("POST", lastMethod);
@@ -1332,26 +1450,39 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"physicalWorkerId\":\"worker-1\""));
         assertTrue(lastBody.contains("\"directoryId\":\"dir-1\""));
         assertTrue(lastBody.contains("\"rotateCredentials\":true"));
-        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
-        assertTrue(profile.contains("NAVI_TENANT_ID=nav_tms_3"));
-        assertTrue(profile.contains("NAVI_CLIENT_APP_ID=capp-tms-3"));
-        assertTrue(profile.contains("NAVI_CLIENT_APP_KEY=cak-secret-key"));
-        assertTrue(profile.contains("NAVI_CLIENT_APP_SECRET=cas-secret-value"));
-        assertTrue(profile.contains("NAVI_CONTROL_API_KEY=cac-secret-control-key"));
-        assertTrue(profile.contains("NAVI_AGENT_CODE=tms-root-agent"));
-        assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=model-live"));
-        assertTrue(profile.contains("NAVI_SKILL_ID=tms.navigator.agent"));
-        assertTrue(profile.contains("NAVI_WORKER_POOL_ID=pool-1"));
-        assertTrue(profile.contains("NAVI_WORKER_BACKEND=LANGGRAPH_BIZ"));
-        assertTrue(profile.contains("NAVI_PHYSICAL_WORKER_ID=worker-1"));
-        assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-1"));
-        assertTrue(profile.contains("NAVI_BIZ_WORKER_BASE_URL=http://127.0.0.1:3161"));
-        assertTrue(profile.contains("NAVI_SOURCE_TENANT_ID=3"));
-        assertTrue(profile.contains("NAVI_UPSTREAM_REF=TMS-3"));
-        assertTrue(profile.contains("NAVI_UPSTREAM_NAMESPACE=TMS"));
-        assertTrue(profile.contains("NAVI_CLIENT_APP_CAPABILITY_DOMAIN=tms.ops"));
-        assertTrue(output.contains("client-app ensure-tenant ok"));
-        assertTrue(output.contains("stored=NAVI_BASE_URL"));
+        assertTrue(controlProfile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(controlProfile.contains("NAVI_TENANT_ID=nav_tms_3"));
+        assertTrue(controlProfile.contains("NAVI_CLIENT_APP_ID=capp-tms-3"));
+        assertTrue(controlProfile.contains("NAVI_CONTROL_API_KEY=cac-secret-control-key"));
+        assertFalse(controlProfile.contains("NAVI_CLIENT_APP_KEY="));
+        assertFalse(controlProfile.contains("NAVI_CLIENT_APP_SECRET="));
+        assertFalse(controlProfile.contains("stale-runtime-secret"));
+        assertFalse(controlProfile.contains("NAVI_USER_API_KEY="));
+        assertFalse(controlProfile.contains("stale-user-secret"));
+        assertTrue(runtimeProfile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(runtimeProfile.contains("NAVI_TENANT_ID=nav_tms_3"));
+        assertTrue(runtimeProfile.contains("NAVI_CLIENT_APP_ID=capp-tms-3"));
+        assertTrue(runtimeProfile.contains("NAVI_CLIENT_APP_KEY=cak-secret-key"));
+        assertTrue(runtimeProfile.contains("NAVI_CLIENT_APP_SECRET=cas-secret-value"));
+        assertFalse(runtimeProfile.contains("NAVI_CONTROL_API_KEY="));
+        assertFalse(runtimeProfile.contains("NAVI_ADMIN_API_KEY="));
+        assertFalse(runtimeProfile.contains("stale-control-secret"));
+        assertFalse(runtimeProfile.contains("stale-admin-secret"));
+        assertTrue(runtimeProfile.contains("NAVI_AGENT_CODE=tms-root-agent"));
+        assertTrue(runtimeProfile.contains("NAVI_MODEL_CONFIG_ID=model-live"));
+        assertTrue(runtimeProfile.contains("NAVI_SKILL_ID=tms.navigator.agent"));
+        assertTrue(runtimeProfile.contains("NAVI_WORKER_POOL_ID=pool-1"));
+        assertTrue(runtimeProfile.contains("NAVI_WORKER_BACKEND=LANGGRAPH_BIZ"));
+        assertTrue(runtimeProfile.contains("NAVI_PHYSICAL_WORKER_ID=worker-1"));
+        assertTrue(runtimeProfile.contains("NAVI_DIRECTORY_ID=dir-1"));
+        assertTrue(runtimeProfile.contains("NAVI_BIZ_WORKER_BASE_URL=http://127.0.0.1:3161"));
+        assertTrue(runtimeProfile.contains("NAVI_SOURCE_TENANT_ID=3"));
+        assertTrue(runtimeProfile.contains("NAVI_UPSTREAM_REF=TMS-3"));
+        assertTrue(runtimeProfile.contains("NAVI_UPSTREAM_NAMESPACE=TMS"));
+        assertTrue(runtimeProfile.contains("NAVI_CLIENT_APP_CAPABILITY_DOMAIN=tms.ops"));
+        assertTrue(output.contains("platform tenant ensure ok"));
+        assertTrue(output.contains("platformControlStored=NAVI_BASE_URL"));
+        assertTrue(output.contains("tenantRuntimeStored=NAVI_BASE_URL"));
         assertTrue(output.contains("created=true"));
         assertTrue(output.contains("rotated=true"));
         assertTrue(output.contains("status=READY"));
@@ -1400,7 +1531,8 @@ class UpstreamCliTest {
         int code = run(new String[]{"upstream", "client-app", "ensure-tenant",
                 "--profile", ".navigator/upstream.env",
                 "--source-tenant-id", "3",
-                "--tenant-profile", ".navigator/tenants/tms-3.env",
+                "--platform-control-profile", ".navigator/platform/tms-3-control.env",
+                "--tenant-runtime-profile", ".navigator/tenants/tms-3.env",
                 "--write-profile"}, Map.of());
 
         assertEquals(2, code);
@@ -1408,6 +1540,7 @@ class UpstreamCliTest {
         assertNull(lastAuthorizationHeader);
         assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
         assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("CREDENTIALS_NOT_REPLAYABLE"));
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("migrationNotice=client-app ensure-tenant is a legacy alias"));
         assertFalse(Files.exists(profileDir.resolve("tenants").resolve("tms-3.env")));
     }
 
@@ -1419,11 +1552,14 @@ class UpstreamCliTest {
                 NAVI_ADMIN_API_KEY=naa-secret-admin-key
                 """.formatted(baseUrl()), StandardCharsets.UTF_8);
 
-        int code = run(new String[]{"upstream", "client-app", "ensure-tenant",
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "platform", "tenant", "ensure",
                 "--profile", upstreamProfile.toString(),
                 "--source-system", "TMS",
                 "--source-tenant-id", "3",
-                "--tenant-profile", "tenant.env",
+                "--platform-control-profile", ".navigator/platform/control.env",
+                "--tenant-runtime-profile", "tenant.env",
                 "--write-profile"}, Map.of());
 
         assertEquals(2, code);
@@ -1561,11 +1697,11 @@ class UpstreamCliTest {
     }
 
     @Test
-    void ensureGrantUsesControlPlaneCredentialAndDoesNotPrintTokens() {
+    void canonicalAppEnsureGrantUsesControlPlaneCredentialAndDoesNotPrintTokens() {
         responseOverride = "{\"clientAppId\":\"app-1\",\"upstreamUserId\":\"u-1\",\"status\":\"ENABLED\"}";
         Map<String, String> env = env("CONTROL_ENV", "control-key-secret", "USER_TOKEN_ENV", "staff-token-secret");
 
-        int code = run(new String[]{"upstream", "ensure-grant",
+        int code = run(new String[]{"upstream", "app", "ensure-grant",
                 "--base-url", baseUrl(),
                 "--tenant-id", "tenant-1",
                 "--client-app-id", "app-1",
@@ -4435,10 +4571,10 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.21", provenance.sourceVersion());
-        assertEquals("1.0.18", provenance.publishedVersion());
-        assertEquals("SOURCE_NEWER_THAN_PUBLISHED", provenance.artifactDrift());
-        assertNotEquals(provenance.sourceVersion(), provenance.publishedVersion());
+        assertEquals("1.0.22", provenance.sourceVersion());
+        assertEquals("1.0.22", provenance.publishedVersion());
+        assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
+        assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
                 .contains("<version>" + provenance.sourceVersion() + "</version>"));
         assertEquals(provenance.manifestEntryCount() + 1, manifestLines.size());
@@ -4514,7 +4650,7 @@ class UpstreamCliTest {
                 () -> assertTrue(runbook.contains("NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED") && runbook.contains("network-exposure")),
                 () -> assertTrue(runbook.contains("worker-host update --worker-id <physicalWorkerId>")
                         && runbook.contains("BizWorkerIdentity") && runbook.contains("WorkerPool")),
-                () -> assertTrue(runbook.contains("SOURCE_NEWER_THAN_PUBLISHED"))
+                () -> assertTrue(runbook.contains("SOURCE_MATCHES_PUBLISHED"))
         );
     }
 

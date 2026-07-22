@@ -74,9 +74,9 @@ replaces the server's route/action/target authorization decision.
   `worker-host update --worker-id <physicalWorkerId>` with `claudeCode.codexConfig`.
   Do not create a BizWorkerIdentity, direct Codex identity, WorkerPool member, or extra
   Worker to work around a Codex route.
-- Source CLI `1.0.21` is newer than the published `tools/navigator-upstream` `1.0.18`
-  archive. `SOURCE_NEWER_THAN_PUBLISHED` is drift information only; it does not claim a
-  new package has been published.
+- CLI `1.0.22` is the published source-matched upstream archive. Its provenance reports
+  `SOURCE_MATCHES_PUBLISHED`; this release alignment does not claim typed authority or
+  production readiness.
 
 ## Explicitly out of scope
 

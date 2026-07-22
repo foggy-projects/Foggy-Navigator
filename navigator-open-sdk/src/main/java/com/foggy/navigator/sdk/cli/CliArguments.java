@@ -99,6 +99,7 @@ final class CliArguments {
             "pid",
             "poll",
             "pool-id",
+            "platform-control-profile",
             "principal-credential-env",
             "private-account-id",
             "profile",
@@ -131,6 +132,7 @@ final class CliArguments {
             "tenant-id",
             "tenant-name",
             "tenant-profile",
+            "tenant-runtime-profile",
             "timeout-seconds",
             "trace-id",
             "upstream-ref",
@@ -209,6 +211,11 @@ final class CliArguments {
             }
         }
         if (words.size() >= 3 && "tms".equals(words.get(0))) {
+            return String.join(" ", words.subList(0, Math.min(words.size(), 3)));
+        }
+        if (words.size() >= 2 && ("platform".equals(words.get(0))
+                || "app".equals(words.get(0))
+                || "runtime".equals(words.get(0)))) {
             return String.join(" ", words.subList(0, Math.min(words.size(), 3)));
         }
         if (words.size() >= 2 && "skill".equals(words.get(0))) {
