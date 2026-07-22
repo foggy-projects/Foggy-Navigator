@@ -49,15 +49,15 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 
 当前已发布版本：
 
-- version: `1.0.17`
-- released: `2026-05-31`
-- buildId: `1.0.17+0ceebc4ed26b.dirty`
-- gitCommit: `0ceebc4ed26bede758da9ca7790f34e9114e7ca3`
-- gitDirty: `true`
-- Windows archive: `1.0.17/navigator-upstream-cli-1.0.17-windows.zip`
-- SHA256: `396edea74ecd9ecc4971a41293ff59c8d781e029c11e6880e59107f91dd26ac9`
-- includes: `session-directory-diagnostics`
-- release smoke: remote installer smoke passed during `tools/navigator-upstream-cli/dist/upload.ps1 -Version 1.0.17 -AllowSameVersion`
+- version: `1.0.22`
+- released: `2026-07-22`
+- buildId: `1.0.22+c314850ad332`
+- gitCommit: `c314850ad33213b2df5faf91c282adc350e5205b`
+- gitDirty: `false`
+- Windows archive / SHA256: `1.0.22/navigator-upstream-cli-1.0.22-windows.zip` / `a02ea2922e7d654d06848f9284c57efc0bbba38d95835e9ad42bede1fc5b59ff`
+- Linux archive / SHA256: `1.0.22/navigator-upstream-cli-1.0.22-linux.tar.gz` / `357f21492b0c65421ca55d13c41899552196374b0c097806f19ea770c52ec3d4`
+- includes: `tms-saas-three-lane`, `tenant-credential-profile-split`
+- release smoke: remote Linux installer smoke passed during `tools/navigator-upstream-cli/dist/upload.sh --version 1.0.22`
 
 安装脚本会：
 

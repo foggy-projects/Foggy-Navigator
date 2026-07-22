@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: REL-001
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 approved_by: project-owner-user-confirmed
@@ -96,15 +96,26 @@ Validation cost: focused checks are `<5m`; reactor/package/upload are `5-30m`. F
 
 ## Implementation Result
 
-> To be completed by the release session.
-
-- implementation_summary:
+- implementation_summary: 已发布 `navigator-upstream-cli` `1.0.22`。archive 与 provenance 均对应 `c314850ad33213b2df5faf91c282adc350e5205b`，包含 `tms-saas-three-lane`、`tenant-credential-profile-split`；OBS `latest.json` 已指向该 release。实现提交 `c314850a feat(cli): release three-lane upstream workflow` 已推送至 `origin/main`。
 - changed_paths:
+  - `navigator-open-sdk/pom.xml`、CLI source/config/test 与 `authorization-provenance.properties`：发布版本与 GOV-002 三 lane/profile-split 证明。
+  - `tools/navigator-upstream-cli/dist/package.sh`、`tools/navigator-upstream/scripts/synthetic-upstream-*.sh`：archive metadata 及 JAR version 对齐。
+  - `.agents/skills/navigator-runtime-provisioning/SKILL.md`、`docs/version-tracker/1.4.3-SNAPSHOT/{README.md,runbooks/**,workitems/GOV-002-*.md}`：operator lane boundary、GOV-002 交付记录。
+  - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/19-navigator-upstream-cli-install-update.md`：当前公开版本、archive 与 SHA 的安装指引。
+  - 本 work item 与版本索引：发布证据与签收状态。
 - tests_and_results:
+  - `mvn -pl navigator-open-sdk -Dtest=UpstreamCliTest test`：`129` tests passed。
+  - `mvn -pl navigator-open-sdk -am test`：`170` tests passed。
+  - `bash -n tools/navigator-upstream-cli/dist/bin/navi tools/navigator-upstream-cli/dist/bin/navi-e2e tools/navigator-upstream-cli/dist/install.sh tools/navigator-upstream-cli/dist/remote-install.sh tools/navigator-upstream-cli/dist/package.sh tools/navigator-upstream-cli/dist/upload.sh`：passed。
+  - detached clean worktree `package.sh` 与 offline Linux install smoke：passed；`navi version` 输出 `1.0.22`、commit `c314850a`、`gitDirty=false`，canonical three-lane help 及 invalid-option guard 均通过。
+  - `git diff --check` 与 scoped secret scan：passed；未 stage/commit 既有 dirty changes。
 - manual_or_experience_evidence:
+  - upload command：`OBSUTIL_BIN="$HOME/.local/bin/obsutil" OBSUTIL_CONFIG_FILE=<local-obsutil-config> bash tools/navigator-upstream-cli/dist/upload.sh --version 1.0.22`，从 gitignored detached worktree 运行并 exit `0`；Windows ZIP、Linux TAR.GZ、`latest.json`、`install.ps1`、`install.sh` 均获 OBS HTTP `200`，内建远端 Linux installer smoke passed。
+  - remote `latest.json` verification：`version=1.0.22`、`buildId=1.0.22+c314850ad332`、`gitCommit=c314850ad33213b2df5faf91c282adc350e5205b`、`gitDirty=false`；Windows SHA-256 `a02ea2922e7d654d06848f9284c57efc0bbba38d95835e9ad42bede1fc5b59ff`，Linux SHA-256 `357f21492b0c65421ca55d13c41899552196374b0c097806f19ea770c52ec3d4`。
+  - 本次未重启任何 service 或 Worker：发布物仅为独立 CLI archive，未变更 backend、Worker binary/config 或运行时资源。
 - deviations: none
-- residual_risks:
-- readiness: READY_FOR_SIGNOFF | NEEDS_REPLAN | BLOCKED
+- residual_risks: 当前 Linux/WSL 环境未执行 Windows native wrapper；Windows archive 已由 package metadata/static content 覆盖，远端 installer smoke 为 Linux。真实 TMS/SIM profile、credential、runtime 和 typed `SAAS_PLATFORM` lifecycle 均未触碰，仍需下游在自身受控环境完成接入验收。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
