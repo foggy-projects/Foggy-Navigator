@@ -7,6 +7,7 @@ import com.foggy.navigator.business.agent.model.form.ClientAppModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.RotateModelConfigKeyForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -48,6 +49,8 @@ class ClientAppOwnedModelConfigServiceTest {
                 anyString(),
                 anyString())).thenReturn("cfg-owned");
         when(grantService.grantModelConfig(anyString(), anyString(), anyString(), any())).thenReturn(grantDto("cfg-owned"));
+        when(llmModelManager.getModelConfig(anyString())).thenAnswer(invocation ->
+                Optional.of(ownedModel(invocation.getArgument(0))));
     }
 
     @Test
@@ -186,6 +189,21 @@ class ClientAppOwnedModelConfigServiceTest {
         assertEquals("cfg-owned", dto.getModelConfigId());
     }
 
+    @Test
+    void get_rejects_model_granted_to_clientApp_but_owned_by_another_clientApp() {
+        ClientAppModelConfigGrantEntity grant = ownedGrant("cfg-owned");
+        when(grantRepository.findByClientAppIdAndModelConfigId("capp-1", "cfg-owned"))
+                .thenReturn(Optional.of(grant));
+        LlmModelConfigDTO model = ownedModel("cfg-owned");
+        model.setOwnerId("capp-other");
+        when(llmModelManager.getModelConfig("cfg-owned")).thenReturn(Optional.of(model));
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> service.get("tenant-1", "capp-1", "cfg-owned"));
+
+        assertEquals("model config is not owned by this ClientApp", exception.getMessage());
+    }
+
     private ClientAppModelConfigForm createForm() {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
         form.setName("Upstream GPT");
@@ -218,6 +236,15 @@ class ClientAppOwnedModelConfigServiceTest {
         dto.setIsDefault(true);
         dto.setGrantScope(ClientAppOwnedModelConfigService.GRANT_SCOPE_CLIENT_APP_OWNED);
         return dto;
+    }
+
+    private LlmModelConfigDTO ownedModel(String modelConfigId) {
+        LlmModelConfigDTO model = new LlmModelConfigDTO();
+        model.setId(modelConfigId);
+        model.setTenantId("tenant-1");
+        model.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        model.setOwnerId("capp-1");
+        return model;
     }
 
     private ClientAppEntity clientApp() {

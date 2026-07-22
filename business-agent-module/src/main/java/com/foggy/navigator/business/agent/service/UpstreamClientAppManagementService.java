@@ -138,7 +138,13 @@ public class UpstreamClientAppManagementService {
         return clientAppRepository.save(app);
     }
 
-    private ClientAppEntity requireManagedActiveClientApp(UpstreamClientAppAdminPrincipal principal, String clientAppId) {
+    /**
+     * Resolves a ClientApp that the upstream-admin principal may manage. This is deliberately
+     * the single target-app guard for upstream-admin scoped ClientApp operations: tenant,
+     * upstream system, namespace and active status all fail closed here.
+     */
+    @Transactional(readOnly = true)
+    public ClientAppEntity requireManagedActiveClientApp(UpstreamClientAppAdminPrincipal principal, String clientAppId) {
         requirePrincipal(principal);
         String id = requireText(clientAppId, "clientAppId is required");
         ClientAppEntity app = clientAppRepository.findByClientAppId(id)

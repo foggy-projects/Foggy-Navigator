@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.UUID;
+import java.util.List;
 
 import static com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService.STATUS_DISABLED;
 import static com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService.STATUS_ENABLED;
@@ -24,6 +25,15 @@ public class ClientAppUserGrantService {
 
     private final ClientAppUpstreamUserGrantRepository grantRepository;
     private final ClientAppService clientAppService;
+
+    @Transactional(readOnly = true)
+    public List<ClientAppUpstreamUserGrantDTO> listUpstreamUserGrants(String tenantId, String clientAppId) {
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        return grantRepository.findByTenantIdAndClientAppId(tenantId, clientAppId)
+                .stream()
+                .map(ClientAppUpstreamUserGrantDTO::fromEntity)
+                .toList();
+    }
 
     @Transactional
     public ClientAppUpstreamUserGrantDTO grantUpstreamUserAccess(String tenantId, String clientAppId, String actorUserId, GrantUpstreamUserForm form) {

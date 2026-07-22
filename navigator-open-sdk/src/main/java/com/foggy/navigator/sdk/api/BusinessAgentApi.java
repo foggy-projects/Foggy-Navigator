@@ -113,6 +113,106 @@ public class BusinessAgentApi {
                 + "/runtime-credentials", form, upstreamAdminApiKey, new TypeReference<>() {});
     }
 
+    // ===== Explicit upstream-admin ClientApp scope =====
+
+    public UpstreamAdminClientAppScopeDTO inspectUpstreamAdminClientAppScope(String clientAppId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId), null, new TypeReference<>() {});
+    }
+
+    public List<BusinessAgentBundleDTO> listUpstreamAdminClientAppAgents(String clientAppId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/agents", null, new TypeReference<>() {});
+    }
+
+    public BusinessAgentBundleDTO getUpstreamAdminClientAppAgent(String clientAppId, String agentId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/agents/" + urlEncode(agentId), null, new TypeReference<>() {});
+    }
+
+    public BusinessAgentBundleDTO syncUpstreamAdminClientAppAgent(String clientAppId, SyncBusinessAgentBundleForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/agents/sync", form, null, new TypeReference<>() {});
+    }
+
+    public List<ClientAppModelConfigGrantDTO> listUpstreamAdminClientAppModelConfigGrants(String clientAppId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-config-grants", null, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO grantUpstreamAdminClientAppModelConfig(String clientAppId, GrantModelConfigForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-config-grants", form, null, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO updateUpstreamAdminClientAppModelConfigGrantStatus(String clientAppId, Long grantId, UpdateStatusForm form) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-config-grants/" + grantId + "/status", form, null, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO setDefaultUpstreamAdminClientAppModelConfigGrant(String clientAppId, Long grantId) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-config-grants/" + grantId + "/default", null, null, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO createUpstreamAdminClientAppModelConfig(String clientAppId, ClientAppModelConfigForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-configs", form, null, new TypeReference<>() {});
+    }
+
+    public LlmModelConfigDTO getUpstreamAdminClientAppModelConfig(String clientAppId, String modelConfigId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-configs/" + urlEncode(modelConfigId), null, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO updateUpstreamAdminClientAppModelConfig(String clientAppId, String modelConfigId, ClientAppModelConfigForm form) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-configs/" + urlEncode(modelConfigId), form, null, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO rotateUpstreamAdminClientAppModelConfigKey(String clientAppId, String modelConfigId, RotateModelConfigKeyForm form) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/model-configs/" + urlEncode(modelConfigId) + "/key", form, null, new TypeReference<>() {});
+    }
+
+    public List<ClientAppUpstreamUserGrantDTO> listUpstreamAdminClientAppUpstreamUsers(String clientAppId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/upstream-users", null, new TypeReference<>() {});
+    }
+
+    public ClientAppUpstreamUserGrantDTO grantUpstreamAdminClientAppUpstreamUser(String clientAppId, GrantUpstreamUserForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/upstream-users", form, null, new TypeReference<>() {});
+    }
+
+    public ClientAppUpstreamUserGrantDTO updateUpstreamAdminClientAppUpstreamUserStatus(String clientAppId, String upstreamUserId, String status) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppScopePath(clientAppId) + "/upstream-users/" + urlEncode(upstreamUserId)
+                + "/status?status=" + urlEncode(status), null, null, new TypeReference<>() {});
+    }
+
+    public List<AgentModelBindingDTO> listUpstreamAdminClientAppAgentModelBindings(String clientAppId, String agentId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/model-bindings", null, new TypeReference<>() {});
+    }
+    public AgentModelBindingDTO bindUpstreamAdminClientAppAgentModel(String clientAppId, String agentId, BindAgentModelForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/model-bindings", form, null, new TypeReference<>() {});
+    }
+    public AgentModelBindingDTO setDefaultUpstreamAdminClientAppAgentModel(String clientAppId, String agentId, BindAgentModelForm form) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/model-bindings/default", form, null, new TypeReference<>() {});
+    }
+    public void unbindUpstreamAdminClientAppAgentModel(String clientAppId, String agentId, String modelConfigId) {
+        http.deleteWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/model-bindings/" + urlEncode(modelConfigId), null);
+    }
+    public List<AgentWorkspaceBindingDTO> listUpstreamAdminClientAppAgentWorkspaceBindings(String clientAppId, String agentId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/workspace-bindings", null, new TypeReference<>() {});
+    }
+    public AgentWorkspaceBindingDTO bindUpstreamAdminClientAppAgentWorkspace(String clientAppId, String agentId, BindAgentWorkspaceForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/workspace-bindings", form, null, new TypeReference<>() {});
+    }
+    public AgentWorkspaceBindingDTO setDefaultUpstreamAdminClientAppAgentWorkspace(String clientAppId, String agentId, BindAgentWorkspaceForm form) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/workspace-bindings/default", form, null, new TypeReference<>() {});
+    }
+    public void unbindUpstreamAdminClientAppAgentWorkspace(String clientAppId, String agentId, String directoryId) {
+        http.deleteWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/workspace-bindings/" + urlEncode(directoryId), null);
+    }
+    public List<AgentWorkerBindingDTO> listUpstreamAdminClientAppAgentWorkerBindings(String clientAppId, String agentId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/worker-bindings", null, new TypeReference<>() {});
+    }
+    public AgentWorkerBindingDTO bindUpstreamAdminClientAppAgentWorker(String clientAppId, String agentId, BindAgentWorkerForm form) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/worker-bindings", form, null, new TypeReference<>() {});
+    }
+    public AgentWorkerBindingDTO setDefaultUpstreamAdminClientAppAgentWorker(String clientAppId, String agentId, BindAgentWorkerForm form) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/worker-bindings/default", form, null, new TypeReference<>() {});
+    }
+    public void unbindUpstreamAdminClientAppAgentWorker(String clientAppId, String agentId, String workerPoolId) {
+        http.deleteWithUpstreamAdminAuth(upstreamClientAppAgentPath(clientAppId, agentId) + "/worker-bindings/" + urlEncode(workerPoolId), null);
+    }
+
     public Map<String, Object> registerUpstreamWorkerIdentity(Map<String, Object> form) {
         return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/worker-identities",
                 form, null, new TypeReference<>() {});
@@ -691,6 +791,14 @@ public class BusinessAgentApi {
 
     private String urlEncode(String value) {
         return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private String upstreamClientAppScopePath(String clientAppId) {
+        return "/api/v1/upstream-admin/client-apps/" + urlEncode(clientAppId) + "/scope";
+    }
+
+    private String upstreamClientAppAgentPath(String clientAppId, String agentId) {
+        return upstreamClientAppScopePath(clientAppId) + "/agents/" + urlEncode(agentId);
     }
 
     private Map<String, String> operatorHeaders(String operatorApiKey) {

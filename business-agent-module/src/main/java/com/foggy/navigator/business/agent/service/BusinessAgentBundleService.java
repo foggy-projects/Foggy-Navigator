@@ -75,6 +75,30 @@ public class BusinessAgentBundleService {
         return BusinessAgentBundleDTO.fromEntity(saved, clientAppId, skillId, skillBundle);
     }
 
+    @Transactional(readOnly = true)
+    public List<BusinessAgentBundleDTO> listClientAppOwnedAgents(String tenantId, String clientAppId) {
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        return agentRepository.findByTenantIdAndOwnerTypeAndOwnerIdOrderByCreatedAtDesc(
+                        tenantId, ResourceOwnerType.CLIENT_APP, clientAppId)
+                .stream()
+                .filter(agent -> clientAppId.equals(agent.getClientAppId()))
+                .map(agent -> BusinessAgentBundleDTO.fromEntity(agent, clientAppId, null, null))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public BusinessAgentBundleDTO getClientAppOwnedAgent(String tenantId, String clientAppId, String agentId) {
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        CodingAgentEntity agent = agentRepository.findByAgentIdAndTenantId(agentId, tenantId)
+                .orElseThrow(() -> new IllegalArgumentException("agent not found: " + agentId));
+        if (agent.getOwnerType() != ResourceOwnerType.CLIENT_APP
+                || !clientAppId.equals(agent.getOwnerId())
+                || !clientAppId.equals(agent.getClientAppId())) {
+            throw new SecurityException("agent is not owned by this client app");
+        }
+        return BusinessAgentBundleDTO.fromEntity(agent, clientAppId, null, null);
+    }
+
     private SkillBundleDTO syncPublicSkillBundle(
             String tenantId,
             String actorUserId,

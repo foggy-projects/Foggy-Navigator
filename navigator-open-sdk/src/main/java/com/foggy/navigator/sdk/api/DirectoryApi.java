@@ -178,6 +178,44 @@ public class DirectoryApi {
                 files, new TypeReference<>() {});
     }
 
+    // ===== Explicit upstream-admin ClientApp scope =====
+
+    public Directory initWithUpstreamAdminClientAppScope(String clientAppId, Map<String, Object> params) {
+        return http.postWithUpstreamAdminAuth(upstreamClientAppDirectoryPath(clientAppId) + "/init",
+                params, null, new TypeReference<>() {});
+    }
+
+    public List<Directory> listWithUpstreamAdminClientAppScope(String clientAppId, String workerId,
+                                                                 String workspaceScope, String upstreamUserId) {
+        Map<String, String> values = new LinkedHashMap<>();
+        putIfPresent(values, "workerId", workerId);
+        putIfPresent(values, "workspaceScope", workspaceScope);
+        putIfPresent(values, "upstreamUserId", upstreamUserId);
+        return http.getWithUpstreamAdminAuth(upstreamClientAppDirectoryPath(clientAppId) + query(values),
+                null, new TypeReference<>() {});
+    }
+
+    public Directory getWithUpstreamAdminClientAppScope(String clientAppId, String directoryId) {
+        return http.getWithUpstreamAdminAuth(upstreamClientAppDirectoryPath(clientAppId) + "/" + encode(directoryId),
+                null, new TypeReference<>() {});
+    }
+
+    public void deleteWithUpstreamAdminClientAppScope(String clientAppId, String directoryId) {
+        http.deleteWithUpstreamAdminAuth(upstreamClientAppDirectoryPath(clientAppId) + "/" + encode(directoryId), null);
+    }
+
+    public Map<String, String> updateEnvVarsWithUpstreamAdminClientAppScope(
+            String clientAppId, String directoryId, Map<String, String> envVars) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppDirectoryPath(clientAppId) + "/" + encode(directoryId) + "/env",
+                envVars, null, new TypeReference<>() {});
+    }
+
+    public Map<String, Object> updateFilesWithUpstreamAdminClientAppScope(
+            String clientAppId, String directoryId, Map<String, String> files) {
+        return http.putWithUpstreamAdminAuth(upstreamClientAppDirectoryPath(clientAppId) + "/" + encode(directoryId) + "/files",
+                files, null, new TypeReference<>() {});
+    }
+
     private String query(String targetTenantId, String workerId) {
         Map<String, String> values = new LinkedHashMap<>();
         putIfPresent(values, "targetTenantId", targetTenantId);
@@ -203,6 +241,10 @@ public class DirectoryApi {
 
     private String clientAppDirectoryPath(String clientAppId) {
         return "/api/v1/client-apps/" + encode(clientAppId) + "/directories";
+    }
+
+    private String upstreamClientAppDirectoryPath(String clientAppId) {
+        return "/api/v1/upstream-admin/client-apps/" + encode(clientAppId) + "/scope/directories";
     }
 
     private String encode(String value) {

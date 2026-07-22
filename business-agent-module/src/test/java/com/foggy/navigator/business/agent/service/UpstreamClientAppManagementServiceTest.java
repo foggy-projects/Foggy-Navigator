@@ -195,6 +195,15 @@ class UpstreamClientAppManagementServiceTest {
         verify(clientAppService, never()).issueControlCredential(any(), any(), any(), any());
     }
 
+    @Test
+    void requireManagedActiveClientAppRejectsSameTenantClientAppFromOtherNamespace() {
+        ClientAppEntity app = activeApp("tenant-1", "capp-1", "x6-tms", "other-namespace", "tms-tenant-a");
+        when(clientAppRepository.findByClientAppId("capp-1")).thenReturn(Optional.of(app));
+
+        assertThrows(SecurityException.class,
+                () -> service.requireManagedActiveClientApp(principal("tenant-1"), "capp-1"));
+    }
+
     private EnsureUpstreamClientAppForm ensureForm(String tenantId, String upstreamRef) {
         EnsureUpstreamClientAppForm form = new EnsureUpstreamClientAppForm();
         form.setTargetTenantId(tenantId);

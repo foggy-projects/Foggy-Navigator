@@ -55,6 +55,7 @@ import com.foggy.navigator.sdk.model.businessagent.EnsureUpstreamTenantClientApp
 import com.foggy.navigator.sdk.model.businessagent.GrantBusinessFunctionForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminClientAppScopeDTO;
 import com.foggy.navigator.sdk.model.businessagent.ImportBusinessFunctionManifestForm;
 import com.foggy.navigator.sdk.model.businessagent.IssueControlCredentialForm;
 import com.foggy.navigator.sdk.model.businessagent.IssueRuntimeCredentialForm;
@@ -191,11 +192,45 @@ public class UpstreamCli {
             case "platform", "platform help", "platform tenant", "platform app" -> platformUsage();
             case "platform tenant list" -> upstreamClientAppList(args);
             case "platform tenant ensure" -> upstreamTenantClientAppEnsure(args, false);
-            case "platform app list" -> upstreamClientAppList(args);
+            case "platform app list" -> args.flag("help") ? platformAppUsage() : upstreamClientAppList(args);
             case "platform app ensure" -> upstreamClientAppEnsure(args);
             case "platform app issue-control-key" -> upstreamClientAppIssueControlKey(args, false);
             case "platform app issue-runtime-key", "platform app issue-runtime-credential" ->
                     upstreamClientAppIssueRuntimeKey(args, false);
+            case "platform app-scope" -> platformAppScopeUsage();
+            case "platform app-scope inspect" -> platformAppScopeInspect(args);
+            case "platform app-scope agent-list" -> platformAppScopeAgentList(args);
+            case "platform app-scope agent-get" -> platformAppScopeAgentGet(args);
+            case "platform app-scope agent-sync" -> platformAppScopeAgentSync(args);
+            case "platform app-scope model-grants" -> platformAppScopeModelGrants(args);
+            case "platform app-scope model-grant" -> platformAppScopeModelGrant(args);
+            case "platform app-scope model-set-default" -> platformAppScopeModelSetDefault(args);
+            case "platform app-scope model-get" -> platformAppScopeModelGet(args);
+            case "platform app-scope model-create" -> platformAppScopeModelCreate(args);
+            case "platform app-scope model-update" -> platformAppScopeModelUpdate(args);
+            case "platform app-scope model-rotate-key" -> platformAppScopeModelRotateKey(args, false);
+            case "platform app-scope model-clear-key" -> platformAppScopeModelRotateKey(args, true);
+            case "platform app-scope user-grants" -> platformAppScopeUserGrants(args);
+            case "platform app-scope user-grant" -> platformAppScopeUserGrant(args);
+            case "platform app-scope user-status" -> platformAppScopeUserStatus(args);
+            case "platform app-scope model-bindings" -> platformAppScopeModelBindings(args);
+            case "platform app-scope bind-model" -> platformAppScopeBindModel(args);
+            case "platform app-scope unbind-model" -> platformAppScopeUnbindModel(args);
+            case "platform app-scope set-default-model" -> platformAppScopeSetDefaultModel(args);
+            case "platform app-scope workspace-bindings" -> platformAppScopeWorkspaceBindings(args);
+            case "platform app-scope bind-workspace" -> platformAppScopeBindWorkspace(args);
+            case "platform app-scope unbind-workspace" -> platformAppScopeUnbindWorkspace(args);
+            case "platform app-scope set-default-workspace" -> platformAppScopeSetDefaultWorkspace(args);
+            case "platform app-scope worker-bindings" -> platformAppScopeWorkerBindings(args);
+            case "platform app-scope bind-worker" -> platformAppScopeBindWorker(args);
+            case "platform app-scope unbind-worker" -> platformAppScopeUnbindWorker(args);
+            case "platform app-scope set-default-worker" -> platformAppScopeSetDefaultWorker(args);
+            case "platform app-scope directory-list" -> platformAppScopeDirectoryList(args);
+            case "platform app-scope directory-init" -> platformAppScopeDirectoryInit(args);
+            case "platform app-scope directory-get" -> platformAppScopeDirectoryGet(args);
+            case "platform app-scope directory-delete" -> platformAppScopeDirectoryDelete(args);
+            case "platform app-scope directory-env" -> platformAppScopeDirectoryEnv(args);
+            case "platform app-scope directory-files" -> platformAppScopeDirectoryFiles(args);
             case "platform agent" -> platformAgentUsage();
             case "platform agent list" -> agentSystemList(args);
             case "platform agent create" -> agentSystemCreate(args);
@@ -568,11 +603,25 @@ public class UpstreamCli {
     private int platformUsage() {
         out.println("Usage: navi upstream platform <resource> <command> [options]");
         out.println("Current authority: UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN (NAVI_ADMIN_API_KEY). It is not typed SAAS_PLATFORM authority.");
-        out.println("Commands: tenant list/ensure, app list/ensure/issue-control-key/issue-runtime-key, agent, model, worker, worker-host, directory, worker-pool (legacy compatibility).");
+        out.println("Commands: tenant list/ensure, app list/ensure/issue-control-key/issue-runtime-key, app-scope, agent, model, worker, worker-host, directory, worker-pool (legacy compatibility).");
         out.println("  tenant ensure --source-system <system> --source-tenant-id <id> --platform-control-profile <path> --tenant-runtime-profile <path> [--rotate-credentials] --write-profile");
         out.println("  app issue-control-key --client-app-id <id> --platform-control-profile <path> --write-profile");
         out.println("  app issue-runtime-key --client-app-id <id> --tenant-runtime-profile <path> --write-profile");
         out.println("Both output profiles must be different and gitignored. The control profile stays with the TMS platform; the runtime profile is tenant-only.");
+        return 0;
+    }
+
+    private int platformAppUsage() {
+        out.println("Usage: navi upstream platform app <list|ensure|issue-control-key|issue-runtime-key> [options]");
+        out.println("Use `platform app-scope` for system-admin management of one explicit ClientApp.");
+        return 0;
+    }
+
+    private int platformAppScopeUsage() {
+        out.println("Usage: navi upstream platform app-scope <command> --client-app-id <id> [options]");
+        out.println("Commands: inspect, agent-list, agent-get, agent-sync, model-grants, model-grant, model-set-default, model-get, model-create, model-update, model-rotate-key, model-clear-key, user-grants, user-grant, user-status, model-bindings, bind-model, unbind-model, set-default-model, workspace-bindings, bind-workspace, unbind-workspace, set-default-workspace, worker-bindings, bind-worker, unbind-worker, set-default-worker, directory-list, directory-init, directory-get, directory-delete, directory-env, directory-files.");
+        out.println("Requires only the system-admin profile (NAVI_BASE_URL, NAVI_UPSTREAM_SYSTEM_ID, NAVI_ADMIN_API_KEY). --client-app-id is mandatory and is never read from NAVI_CLIENT_APP_ID.");
+        out.println("The server derives tenant from the target ClientApp and fails closed on tenant, upstream-system, namespace, owner and active-status mismatch.");
         return 0;
     }
 
@@ -1032,6 +1081,10 @@ public class UpstreamCli {
     private int upstreamClientAppList(CliArguments args) {
         String tenantId = optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID");
         List<ClientAppDTO> apps = upstreamAdminApi().listUpstreamManagedClientApps(tenantId);
+        if ("platform tenant list".equals(args.command())) {
+            out.println("migrationNotice=platform tenant list returns ClientApp records; use platform app list");
+            out.println("resourceType=CLIENT_APP");
+        }
         out.println("client-app list ok");
         out.println("clientAppCount=" + (apps == null ? 0 : apps.size()));
         if (apps != null) {
@@ -3532,6 +3585,250 @@ public class UpstreamCli {
         return 0;
     }
 
+    // ===== Explicit system-admin ClientApp scope =====
+
+    private String systemAdminScopedClientAppId(CliArguments args) {
+        if (hasText(args.option("target-tenant-id"))) {
+            throw new UpstreamCliException("platform app-scope derives tenant from --client-app-id and does not accept --target-tenant-id");
+        }
+        String clientAppId = args.option("client-app-id");
+        if (!hasText(clientAppId)) {
+            throw new UpstreamCliException("platform app-scope requires explicit --client-app-id; NAVI_CLIENT_APP_ID is not used");
+        }
+        return clientAppId.trim();
+    }
+
+    private String beginSystemAdminClientAppScope(CliArguments args) {
+        String clientAppId = systemAdminScopedClientAppId(args);
+        printSystemAdminClientAppScope(upstreamAdminApi().inspectUpstreamAdminClientAppScope(clientAppId));
+        return clientAppId;
+    }
+
+    private int platformAppScopeInspect(CliArguments args) {
+        beginSystemAdminClientAppScope(args);
+        return 0;
+    }
+
+    private int platformAppScopeAgentList(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        List<BusinessAgentBundleDTO> agents = upstreamAdminApi().listUpstreamAdminClientAppAgents(clientAppId);
+        out.println("agentCount=" + (agents == null ? 0 : agents.size()));
+        printJson(agents);
+        return 0;
+    }
+
+    private int platformAppScopeAgentGet(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printBusinessAgentBundle(upstreamAdminApi().getUpstreamAdminClientAppAgent(clientAppId, agentCode(args)));
+        return 0;
+    }
+
+    private int platformAppScopeAgentSync(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        SyncBusinessAgentBundleForm form = readJsonFile(requiredOption(args, "manifest", "manifest path"), SyncBusinessAgentBundleForm.class);
+        if (hasText(form.getClientAppId()) && !clientAppId.equals(form.getClientAppId().trim())) {
+            throw new UpstreamCliException("agent manifest clientAppId does not match explicit --client-app-id");
+        }
+        form.setClientAppId(clientAppId);
+        printBusinessAgentBundle(upstreamAdminApi().syncUpstreamAdminClientAppAgent(clientAppId, form));
+        return 0;
+    }
+
+    private int platformAppScopeModelGrants(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        List<ClientAppModelConfigGrantDTO> grants = upstreamAdminApi().listUpstreamAdminClientAppModelConfigGrants(clientAppId);
+        out.println("modelGrantCount=" + (grants == null ? 0 : grants.size()));
+        if (grants != null) grants.forEach(grant -> printModelConfigGrant("modelGrant", grant));
+        return 0;
+    }
+
+    private int platformAppScopeModelGrant(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        GrantModelConfigForm form = new GrantModelConfigForm();
+        form.setModelConfigId(requiredOption(args, "model-config-id", "model config id"));
+        form.setIsDefault(args.flag("set-default") || args.flag("default"));
+        form.setGrantScope(args.option("grant-scope"));
+        printModelConfigGrant("modelGrant", upstreamAdminApi().grantUpstreamAdminClientAppModelConfig(clientAppId, form));
+        return 0;
+    }
+
+    private int platformAppScopeModelSetDefault(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        Long grantId = resolveSystemAdminScopeModelGrantId(args, clientAppId);
+        printModelConfigGrant("modelGrant", upstreamAdminApi().setDefaultUpstreamAdminClientAppModelConfigGrant(clientAppId, grantId));
+        return 0;
+    }
+
+    private Long resolveSystemAdminScopeModelGrantId(CliArguments args, String clientAppId) {
+        if (hasText(args.option("grant-id"))) return parseLong(args.option("grant-id"), "grant id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id or grant id");
+        List<ClientAppModelConfigGrantDTO> grants = upstreamAdminApi().listUpstreamAdminClientAppModelConfigGrants(clientAppId);
+        if (grants != null) for (ClientAppModelConfigGrantDTO grant : grants) {
+            if (modelConfigId.equals(grant.getModelConfigId())) return grant.getId();
+        }
+        throw new UpstreamCliException("model config grant not found for modelConfigId: " + modelConfigId);
+    }
+
+    private int platformAppScopeModelCreate(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        ClientAppModelConfigForm form = buildModelConfigForm(args, true);
+        form.setSetDefault(args.flag("set-default") || args.flag("default"));
+        printModelConfigGrant("modelGrant", upstreamAdminApi().createUpstreamAdminClientAppModelConfig(clientAppId, form));
+        return 0;
+    }
+
+    private int platformAppScopeModelGet(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().getUpstreamAdminClientAppModelConfig(
+                clientAppId, requiredOption(args, "model-config-id", "model config id")));
+        return 0;
+    }
+
+    private int platformAppScopeModelUpdate(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        ClientAppModelConfigForm form = buildModelConfigForm(args, false);
+        form.setSetDefault(args.flag("set-default") || args.flag("default"));
+        printModelConfigGrant("modelGrant", upstreamAdminApi().updateUpstreamAdminClientAppModelConfig(clientAppId, modelConfigId, form));
+        return 0;
+    }
+
+    private int platformAppScopeModelRotateKey(CliArguments args, boolean clear) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        if (clear) form.setClearApiKey(true);
+        else form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+        printModelConfigGrant("modelGrant", upstreamAdminApi().rotateUpstreamAdminClientAppModelConfigKey(
+                clientAppId, requiredOption(args, "model-config-id", "model config id"), form));
+        return 0;
+    }
+
+    private int platformAppScopeUserGrants(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        List<ClientAppUpstreamUserGrantDTO> grants = upstreamAdminApi().listUpstreamAdminClientAppUpstreamUsers(clientAppId);
+        out.println("upstreamUserGrantCount=" + (grants == null ? 0 : grants.size()));
+        printJson(grants);
+        return 0;
+    }
+
+    private int platformAppScopeUserGrant(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        GrantUpstreamUserForm form = new GrantUpstreamUserForm();
+        form.setUpstreamUserId(requiredOption(args, "upstream-user-id", "upstream user id"));
+        form.setUpstreamUserToken(args.option("upstream-user-token"));
+        form.setStatus(hasText(args.option("status")) ? args.option("status") : "ENABLED");
+        printJson(upstreamAdminApi().grantUpstreamAdminClientAppUpstreamUser(clientAppId, form));
+        return 0;
+    }
+
+    private int platformAppScopeUserStatus(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().updateUpstreamAdminClientAppUpstreamUserStatus(clientAppId,
+                requiredOption(args, "upstream-user-id", "upstream user id"), requiredOption(args, "status", "status")));
+        return 0;
+    }
+
+    private int platformAppScopeModelBindings(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().listUpstreamAdminClientAppAgentModelBindings(clientAppId, agentCode(args)));
+        return 0;
+    }
+    private int platformAppScopeBindModel(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().bindUpstreamAdminClientAppAgentModel(clientAppId, agentCode(args), bindAgentModelForm(args)));
+        return 0;
+    }
+    private int platformAppScopeUnbindModel(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        upstreamAdminApi().unbindUpstreamAdminClientAppAgentModel(clientAppId, agentCode(args), requiredOption(args, "model-config-id", "model config id"));
+        out.println("agent unbind-model ok"); return 0;
+    }
+    private int platformAppScopeSetDefaultModel(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().setDefaultUpstreamAdminClientAppAgentModel(clientAppId, agentCode(args), bindAgentModelForm(args)));
+        return 0;
+    }
+    private int platformAppScopeWorkspaceBindings(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().listUpstreamAdminClientAppAgentWorkspaceBindings(clientAppId, agentCode(args)));
+        return 0;
+    }
+    private int platformAppScopeBindWorkspace(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().bindUpstreamAdminClientAppAgentWorkspace(clientAppId, agentCode(args), bindAgentWorkspaceForm(args)));
+        return 0;
+    }
+    private int platformAppScopeUnbindWorkspace(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        upstreamAdminApi().unbindUpstreamAdminClientAppAgentWorkspace(clientAppId, agentCode(args), requiredOption(args, "directory-id", "directory id"));
+        out.println("agent unbind-workspace ok"); return 0;
+    }
+    private int platformAppScopeSetDefaultWorkspace(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().setDefaultUpstreamAdminClientAppAgentWorkspace(clientAppId, agentCode(args), bindAgentWorkspaceForm(args)));
+        return 0;
+    }
+    private int platformAppScopeWorkerBindings(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().listUpstreamAdminClientAppAgentWorkerBindings(clientAppId, agentCode(args)));
+        return 0;
+    }
+    private int platformAppScopeBindWorker(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().bindUpstreamAdminClientAppAgentWorker(clientAppId, agentCode(args), bindAgentWorkerForm(args)));
+        return 0;
+    }
+    private int platformAppScopeUnbindWorker(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        upstreamAdminApi().unbindUpstreamAdminClientAppAgentWorker(clientAppId, agentCode(args), requiredOption(args, "worker-pool-id", "worker pool id"));
+        out.println("agent unbind-worker ok"); return 0;
+    }
+    private int platformAppScopeSetDefaultWorker(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminApi().setDefaultUpstreamAdminClientAppAgentWorker(clientAppId, agentCode(args), bindAgentWorkerForm(args)));
+        return 0;
+    }
+    private int platformAppScopeDirectoryList(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        List<Directory> dirs = upstreamAdminDirectoryApi().listWithUpstreamAdminClientAppScope(clientAppId,
+                args.option("worker-id"), args.option("workspace-scope"), args.option("upstream-user-id"));
+        out.println("directoryCount=" + (dirs == null ? 0 : dirs.size()));
+        if (dirs != null) dirs.forEach(this::printDirectory);
+        return 0;
+    }
+    private int platformAppScopeDirectoryInit(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printDirectory(upstreamAdminDirectoryApi().initWithUpstreamAdminClientAppScope(clientAppId,
+                readJsonMap(requiredOption(args, "file", "directory init json file"))));
+        return 0;
+    }
+    private int platformAppScopeDirectoryGet(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printDirectory(upstreamAdminDirectoryApi().getWithUpstreamAdminClientAppScope(clientAppId,
+                requiredOption(args, "directory-id", "directory id")));
+        return 0;
+    }
+    private int platformAppScopeDirectoryDelete(CliArguments args) {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        upstreamAdminDirectoryApi().deleteWithUpstreamAdminClientAppScope(clientAppId,
+                requiredOption(args, "directory-id", "directory id"));
+        out.println("directory delete ok"); return 0;
+    }
+    private int platformAppScopeDirectoryEnv(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminDirectoryApi().updateEnvVarsWithUpstreamAdminClientAppScope(clientAppId,
+                requiredOption(args, "directory-id", "directory id"),
+                readJsonStringMap(requiredOption(args, "file", "env json file"))));
+        return 0;
+    }
+    private int platformAppScopeDirectoryFiles(CliArguments args) throws Exception {
+        String clientAppId = beginSystemAdminClientAppScope(args);
+        printJson(upstreamAdminDirectoryApi().updateFilesWithUpstreamAdminClientAppScope(clientAppId,
+                requiredOption(args, "directory-id", "directory id"),
+                readJsonStringMap(requiredOption(args, "file", "files json file"))));
+        return 0;
+    }
+
     private int modelTest(CliArguments args) {
         String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
         String reply = businessAgentControlApi().testClientAppModelConfig(
@@ -4447,6 +4744,18 @@ public class UpstreamCli {
         } catch (UpstreamCliException e) {
             throw new UpstreamCliException("tenant runtime profile was not written; the platform control profile remains private and no combined credential profile was created", e);
         }
+    }
+
+    private void printSystemAdminClientAppScope(UpstreamAdminClientAppScopeDTO scope) {
+        out.println("scopeCredentialLane=" + valueOrEmpty(scope != null ? scope.getCredentialLane() : null));
+        out.println("scopePrincipalType=" + valueOrEmpty(scope != null ? scope.getPrincipalType() : null));
+        out.println("scopeUpstreamSystemId=" + valueOrEmpty(scope != null ? scope.getUpstreamSystemId() : null));
+        out.println("scopeTenantId=" + valueOrEmpty(scope != null ? scope.getTenantId() : null));
+        out.println("scopeClientAppId=" + valueOrEmpty(scope != null ? scope.getClientAppId() : null));
+        out.println("scopeClientAppNamespace=" + valueOrEmpty(scope != null ? scope.getClientAppNamespace() : null));
+        out.println("scopeTargetOwnerType=" + valueOrEmpty(scope != null ? scope.getTargetOwnerType() : null));
+        out.println("scopeTargetOwnerId=" + valueOrEmpty(scope != null ? scope.getTargetOwnerId() : null));
+        out.println("scopeAuthorizationChecks=" + joinList(scope != null ? scope.getAuthorizationChecks() : null));
     }
 
     private Map<String, String> provisionedProfileValues(UpstreamTenantClientAppProvisioningDTO dto,

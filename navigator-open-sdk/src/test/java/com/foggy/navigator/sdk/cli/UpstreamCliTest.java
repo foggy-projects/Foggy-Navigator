@@ -218,6 +218,14 @@ class UpstreamCliTest {
                           }
                         ]}
                         """;
+            } else if ("__SYSTEM_ADMIN_SCOPE_AGENT_LIST__".equals(responseOverride)) {
+                response = lastPath.endsWith("/scope")
+                        ? """
+                        {"code":0,"data":{"credentialLane":"UPSTREAM_SYSTEM_ADMIN","principalType":"UPSTREAM_SYSTEM_ADMIN","upstreamSystemId":"foggy-world-sim","tenantId":"nav_foggy-world-sim_sim","clientAppId":"capp-sim","clientAppNamespace":"foggy-world-sim","targetOwnerType":"CLIENT_APP","targetOwnerId":"capp-sim","authorizationChecks":["EXPLICIT_CLIENT_APP_TARGET","TENANT_AUTHORIZED","UPSTREAM_SYSTEM_MATCH","CLIENT_APP_NAMESPACE_MATCH","CLIENT_APP_ACTIVE"]}}
+                        """
+                        : """
+                        {"code":0,"data":[{"tenantId":"nav_foggy-world-sim_sim","clientAppId":"capp-sim","agentId":"agent-sim","ownerType":"CLIENT_APP","ownerId":"capp-sim","name":"SIM Agent"}]}
+                        """;
             } else {
                 response = responseOverride != null ? responseOverride : "{\"code\":0,\"data\":{}}";
             }
@@ -318,6 +326,49 @@ class UpstreamCliTest {
         assertEquals(0, runtimeCode);
         assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("rejects admin, control, and typed-management credentials"));
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void platformAppListHelpDoesNotExecuteAndTenantListNamesReturnedClientApps() {
+        int helpCode = run(new String[]{"upstream", "platform", "app", "list", "--help"}, Map.of());
+        assertEquals(0, helpCode);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("Usage: navi upstream platform app"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        responseOverride = "{\"code\":0,\"data\":[]}";
+        int listCode = run(new String[]{"upstream", "platform", "tenant", "list", "--base-url", baseUrl()},
+                env("NAVI_ADMIN_API_KEY", "naa-secret-admin-key"));
+        assertEquals(0, listCode);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("resourceType=CLIENT_APP"));
+        assertEquals("/api/v1/upstream-admin/client-apps", lastPath);
+    }
+
+    @Test
+    void platformAppScopeUsesOnlySystemAdminCredentialAndRequiresExplicitTarget() {
+        responseOverride = "__SYSTEM_ADMIN_SCOPE_AGENT_LIST__";
+        int code = run(new String[]{"upstream", "platform", "app-scope", "agent-list", "--client-app-id", "capp-sim"},
+                env("NAVI_BASE_URL", baseUrl(), "NAVI_UPSTREAM_SYSTEM_ID", "foggy-world-sim",
+                        "NAVI_ADMIN_API_KEY", "naa-secret-admin-key"));
+
+        assertEquals(0, code);
+        assertEquals(List.of(
+                "/api/v1/upstream-admin/client-apps/capp-sim/scope",
+                "/api/v1/upstream-admin/client-apps/capp-sim/scope/agents"), requestPaths);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertNull(lastClientAppControlKeyHeader);
+        assertNull(lastApiKeyHeader);
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertTrue(output.contains("scopeCredentialLane=UPSTREAM_SYSTEM_ADMIN"));
+        assertTrue(output.contains("scopeAuthorizationChecks=EXPLICIT_CLIENT_APP_TARGET,TENANT_AUTHORIZED"));
+
+        stdout.reset();
+        stderr.reset();
+        int missingTarget = run(new String[]{"upstream", "platform", "app-scope", "inspect"},
+                env("NAVI_BASE_URL", baseUrl(), "NAVI_UPSTREAM_SYSTEM_ID", "foggy-world-sim",
+                        "NAVI_ADMIN_API_KEY", "naa-secret-admin-key"));
+        assertEquals(2, missingTarget);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("requires explicit --client-app-id"));
     }
 
     @Test
@@ -4571,8 +4622,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.22", provenance.sourceVersion());
-        assertEquals("1.0.22", provenance.publishedVersion());
+        assertEquals("1.0.23", provenance.sourceVersion());
+        assertEquals("1.0.23", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)

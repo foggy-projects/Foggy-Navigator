@@ -160,6 +160,7 @@ $features = @(
     "admin-key-bootstrap",
     "client-app-bootstrap",
     "client-app-runtime-credential",
+    "system-admin-clientapp-scope",
     "upstream-worker-orchestration",
     "upstream-directory-orchestration",
     "upstream-worker-pool-orchestration",

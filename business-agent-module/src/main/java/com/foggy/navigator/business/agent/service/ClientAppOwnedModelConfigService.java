@@ -63,7 +63,7 @@ public class ClientAppOwnedModelConfigService {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
-        ClientAppModelConfigGrantEntity grant = requireOwnedGrant(tenantId, clientAppId, modelConfigId);
+        ClientAppModelConfigGrantEntity grant = requireOwnedModelConfig(tenantId, clientAppId, modelConfigId);
         llmModelManager.updateModelConfig(modelConfigId, buildUpdateModelForm(form, false));
         if (Boolean.TRUE.equals(form.getSetDefault())) {
             return grantService.setDefault(tenantId, clientAppId, grant.getId());
@@ -85,7 +85,7 @@ public class ClientAppOwnedModelConfigService {
         if (!clearApiKey) {
             requireText(form.getApiKey(), "apiKey is required");
         }
-        ClientAppModelConfigGrantEntity grant = requireOwnedGrant(tenantId, clientAppId, modelConfigId);
+        ClientAppModelConfigGrantEntity grant = requireOwnedModelConfig(tenantId, clientAppId, modelConfigId);
         LlmModelConfigForm modelForm = new LlmModelConfigForm();
         if (clearApiKey) {
             modelForm.setClearApiKey(true);
@@ -104,10 +104,18 @@ public class ClientAppOwnedModelConfigService {
 
     public String testSavedConnection(String tenantId, String actorUserId, String clientAppId,
                                       String modelConfigId, String workerId) {
-        requireOwnedGrant(tenantId, clientAppId, modelConfigId);
-        LlmModelConfigDTO model = llmModelManager.getModelConfig(modelConfigId)
-                .orElseThrow(() -> new IllegalArgumentException("model config not found: " + modelConfigId));
+        LlmModelConfigDTO model = get(tenantId, clientAppId, modelConfigId);
         return connectionTestService.testSaved(actorUserId, tenantId, model, workerId);
+    }
+
+    /**
+     * Reads one ClientApp-owned model configuration. The returned DTO deliberately omits the API key.
+     */
+    @Transactional(readOnly = true)
+    public LlmModelConfigDTO get(String tenantId, String clientAppId, String modelConfigId) {
+        requireOwnedModelConfig(tenantId, clientAppId, modelConfigId);
+        return llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("model config not found: " + modelConfigId));
     }
 
     private ClientAppModelConfigGrantEntity requireOwnedGrant(String tenantId, String clientAppId, String modelConfigId) {
@@ -119,6 +127,19 @@ public class ClientAppOwnedModelConfigService {
             throw new IllegalArgumentException("grant tenant mismatch");
         }
         if (!GRANT_SCOPE_CLIENT_APP_OWNED.equals(grant.getGrantScope())) {
+            throw new IllegalArgumentException("model config is not owned by this ClientApp");
+        }
+        return grant;
+    }
+
+    private ClientAppModelConfigGrantEntity requireOwnedModelConfig(String tenantId, String clientAppId, String modelConfigId) {
+        ClientAppModelConfigGrantEntity grant = requireOwnedGrant(tenantId, clientAppId, modelConfigId);
+        LlmModelConfigDTO model = llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("model config not found: " + modelConfigId));
+        if (!tenantId.equals(model.getTenantId())) {
+            throw new IllegalArgumentException("model config tenant mismatch");
+        }
+        if (model.getOwnerType() != ResourceOwnerType.CLIENT_APP || !clientAppId.equals(model.getOwnerId())) {
             throw new IllegalArgumentException("model config is not owned by this ClientApp");
         }
         return grant;

@@ -46,6 +46,12 @@ public class ClientAppWorkingDirectoryController {
                                                 @PathVariable String clientAppId,
                                                 @RequestBody ClientAppDirectoryInitForm form) {
         ClientAppControlPlanePrincipal principal = requireDirectoryManage(request, clientAppId);
+        return initDirectory(principal, form);
+    }
+
+    /** Internal operation shared by the separate upstream-admin scoped endpoint. */
+    public RX<WorkingDirectoryDTO> initDirectory(ClientAppControlPlanePrincipal principal,
+                                                 ClientAppDirectoryInitForm form) {
         RX<WorkingDirectoryDTO> validation = validateInitForm(form);
         if (validation != null) {
             return validation;
@@ -74,6 +80,14 @@ public class ClientAppWorkingDirectoryController {
                                                         @RequestParam(required = false) WorkspaceScope workspaceScope,
                                                         @RequestParam(required = false) String upstreamUserId) {
         ClientAppControlPlanePrincipal principal = requireDirectoryManage(request, clientAppId);
+        return listDirectories(principal, workerId, workspaceScope, upstreamUserId);
+    }
+
+    /** Internal operation shared by the separate upstream-admin scoped endpoint. */
+    public RX<List<WorkingDirectoryDTO>> listDirectories(ClientAppControlPlanePrincipal principal,
+                                                          String workerId,
+                                                          WorkspaceScope workspaceScope,
+                                                          String upstreamUserId) {
         List<WorkingDirectoryEntity> candidates;
         if (StringUtils.hasText(workerId)) {
             ClaudeWorkerEntity worker = resolveWorkerForClientApp(principal, workerId);
@@ -97,6 +111,11 @@ public class ClientAppWorkingDirectoryController {
                                                @PathVariable String clientAppId,
                                                @PathVariable String directoryId) {
         ClientAppControlPlanePrincipal principal = requireDirectoryManage(request, clientAppId);
+        return getDirectory(principal, directoryId);
+    }
+
+    /** Internal operation shared by the separate upstream-admin scoped endpoint. */
+    public RX<WorkingDirectoryDTO> getDirectory(ClientAppControlPlanePrincipal principal, String directoryId) {
         WorkingDirectoryEntity entity = resolveDirectoryForClientApp(principal, directoryId);
         return RX.ok(directoryService.getDirectory(entity.getUserId(), directoryId));
     }
@@ -106,6 +125,11 @@ public class ClientAppWorkingDirectoryController {
                                     @PathVariable String clientAppId,
                                     @PathVariable String directoryId) {
         ClientAppControlPlanePrincipal principal = requireDirectoryManage(request, clientAppId);
+        return deleteDirectory(principal, directoryId);
+    }
+
+    /** Internal operation shared by the separate upstream-admin scoped endpoint. */
+    public RX<Void> deleteDirectory(ClientAppControlPlanePrincipal principal, String directoryId) {
         WorkingDirectoryEntity entity = resolveDirectoryForClientApp(principal, directoryId);
         directoryService.deleteDirectory(entity.getUserId(), directoryId);
         return RX.ok(null);
@@ -117,6 +141,13 @@ public class ClientAppWorkingDirectoryController {
                                                          @PathVariable String directoryId,
                                                          @RequestBody Map<String, String> envVars) {
         ClientAppControlPlanePrincipal principal = requireDirectoryManage(request, clientAppId);
+        return updateDirectoryEnvVars(principal, directoryId, envVars);
+    }
+
+    /** Internal operation shared by the separate upstream-admin scoped endpoint. */
+    public RX<Map<String, String>> updateDirectoryEnvVars(ClientAppControlPlanePrincipal principal,
+                                                           String directoryId,
+                                                           Map<String, String> envVars) {
         WorkingDirectoryEntity entity = resolveDirectoryForClientApp(principal, directoryId);
         if (Boolean.TRUE.equals(entity.getReadOnly())) {
             return RX.failB("working directory is read-only: " + directoryId);
@@ -138,6 +169,13 @@ public class ClientAppWorkingDirectoryController {
                                                        @PathVariable String directoryId,
                                                        @RequestBody Map<String, String> files) {
         ClientAppControlPlanePrincipal principal = requireDirectoryManage(request, clientAppId);
+        return updateDirectoryFiles(principal, directoryId, files);
+    }
+
+    /** Internal operation shared by the separate upstream-admin scoped endpoint. */
+    public RX<Map<String, Object>> updateDirectoryFiles(ClientAppControlPlanePrincipal principal,
+                                                         String directoryId,
+                                                         Map<String, String> files) {
         WorkingDirectoryEntity entity = resolveDirectoryForClientApp(principal, directoryId);
         if (Boolean.TRUE.equals(entity.getReadOnly())) {
             return RX.failB("working directory is read-only: " + directoryId);
