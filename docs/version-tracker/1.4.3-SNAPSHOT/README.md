@@ -1,11 +1,11 @@
 ---
 doc_type: version-index
 version: 1.4.3-SNAPSHOT
-status: int001-rejected-bug008-accepted-with-risks-bug009-needs-replan
+status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-21
+last_updated: 2026-07-22
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -20,13 +20,13 @@ last_updated: 2026-07-21
 
 ## Current Status
 
-- phase: int001-rejected-bug008-accepted-with-risks-bug009-needs-replan
+- phase: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 - architecture_review: passed-with-complexity-guardrails
 - p0_5_status: complete
 - implementation_started: p1a-accepted-p1b-a-accepted-p1b-b0-accepted-p1c-a-accepted
 - canonical_status: P1A_ACCEPTED_P1B_A_ACCEPTED_P1B_B0_ACCEPTED_P1C_A_ACCEPTED
 - p1a_acceptance_status: accepted
-- active_repair_spec: workitems/BUG-009-int001-forced-signal-owned-cleanup.md
+- active_repair_spec: workitems/BUG-010-int001-process-group-empty-proof.md
 - p1a_repair_status: ACCEPTED
 - observer_bff_p1a_disposition: catalog-and-test-only
 - p1b_a_status: ACCEPTED
@@ -43,13 +43,39 @@ last_updated: 2026-07-21
 - int001_acceptance_status: rejected
 - bug008_status: ACCEPTED
 - bug008_acceptance_status: accepted-with-risks
-- bug009_status: NEEDS_REPLAN
+- bug009_status: READY_FOR_SIGNOFF
+- bug010_status: READY_FOR_SIGNOFF
+- bug009_acceptance_status: rejected-pending-independent-resignoff
+- runtime9_freeze_status: CONSUMED_FAIL_CLOSED
+- runtime9_exact_run_id: `int001-bug009-20260722-r9-33154d77`
+- runtime9_exact_command: `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py --run-id int001-bug009-20260722-r9-33154d77`
+- runtime9_current_authorization: none
+- runtime9_preflight: strict runId PASS；exact run directory/projection/reservation absent；artifact root/registry/local Docker socket safe；exact-run Docker container/network/volume residue `0/0/0`；test-owned production-like Java residue `0`。
+- runtime9_historical_one_shot_rule: Runtime 9 当时仅允许执行 exact command 一次；现已执行并永久消费，不得 retry、替换 runId、手工 cleanup、读取受限详情或将历史条件作为重新激活依据。
+- runtime9_success_gate: no supervisor interruption；controlled health；exact parent `commandLine+cwd+runId+uid+session+startTicks`；exact listener `uid+java+argv+cwd+ancestor+socket+startTicks` + `EXACT_CANDIDATE_FOUND`；`listenerProofStageDiagnostic=FULL_ELIGIBLE`；`listenerProofEverEligible=true`；exactly one TERM；`dispatchSafe=true`；normal exact `EXIT_128`；schema-v4 redacted `CLEANED/SIGNAL + HOLD_SIGNAL_RECEIVED + HEALTH_READY + NOT_APPLICABLE`；private absent；root residue `0`；exact reservation absent；Docker `0/0/0`。
+- runtime9_evidence_boundary: 仅允许 fixed-enum/redacted stdout、fixed-schema projection、root receipt 固定字段、private-absent、root residue count、exact-reservation-absent 与 Docker redacted counts；禁止受限详情、共享 8112、真实 TMS/SIM/凭据/Worker/Gateway/Pool/Identity/Codex/external/production。disposable child 的 `NAVIGATOR_EXTERNAL_ENABLED=true` 仅为 loopback Open API route gate，`NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false`。
 - external_enablement: no
 - production_enablement: no
-- current_scenario: P1A foundation/shadow、P1B-A fixture-only typed-management authentication core、P1B-B0 pure-offline pre-seed inventory validator 与 P1C-A CLI/SKILL permission visibility 均已独立 accepted。开发期 SIM/TMS 联调 MVP 仍只证明代码、CLI、手册和本地 preflight。INT-001 仍因 forced-SIGNAL AC-2 被拒绝。BUG-009 candidate-first strict listener proof 已实现，候选身份不可读/畸形现以显式 tri-state-plus-malformed 结果整体 fail closed，61 项 Python 离线回归及其余离线 gate 均通过；但唯一新 run `c4n8v2k6` 仍返回 `listener-candidate-absent`、0 TERM、`CLEANED/UNKNOWN + HEALTH_READY + HOLD_TIMEOUT`，因此保持 `NEEDS_REPLAN`。以上均不替代真实上游验收。
-- next_action: 不得重试 `c4n8v2k6`、替换新 runId、手工 cleanup 或读取任何 failed run 的 `private/children/log/profile/payload/process/Docker`。下一步只能先批准一个不泄露 PID/argv/cwd/path/private 值的 exact-candidate identity mismatch 静态诊断设计；不得放宽 owner/listener proof，也不得触及真实 TMS/SIM、shared `8112`、credential、Worker、Gateway、Pool、identity、Codex route、external 或 production。BUG-009 不具备独立签核资格，INT-001 仍为 rejected。
+- current_scenario: P1A foundation/shadow、P1B-A fixture-only typed-management authentication core、P1B-B0 pure-offline pre-seed inventory validator 与 P1C-A CLI/SKILL permission visibility 均已独立 accepted。开发期 SIM/TMS 联调 MVP 仍只证明代码、CLI、手册和本地 preflight。INT-001 的历史签核仍为 rejected。BUG-009 Runtime 4–9 均 `CONSUMED_FAIL_CLOSED`，Runtime 10 已一次性 `CONSUMED_SUCCESS`。此前 BUG-level 独立签核因未证明 host process-group/descendant residue 为零而 rejected；BUG-010 已补齐 exact PGID absence fail-closed 修复和离线回归，BUG-009 当前为 `READY_FOR_SIGNOFF`，等待独立 re-signoff；当前无 runtime 权限。
+- runtime8_exact_command: `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py --run-id int001-bug009-20260722-r8-212fde1c`
+- runtime8_status: `CONSUMED_FAIL_CLOSED`
+- runtime8_success_gate: Runtime 7 strict gate 全部保持，并新增观测 `listenerProofStageDiagnostic=FULL_ELIGIBLE`；该诊断本身不授权 TERM 或成功。
+- runtime8_evidence_boundary: 与 Runtime 7 相同，仅允许 fixed-enum/redacted stdout、fixed-schema projection、root receipt 固定字段、private-absent、root residue count、exact-reservation-absent 与 Docker redacted counts；禁止受限详情、共享 8112、真实 TMS/SIM/凭据/Worker/Gateway/Pool/Identity/Codex/external/production。
+- runtime7_exact_command: `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py --run-id int001-bug009-20260722-r7-6d3f8a1c`
+- runtime7_status: `CONSUMED_FAIL_CLOSED`
+- runtime6_exact_command: `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py --run-id int001-bug009-20260722-r6-4c8e1d7a`
+- runtime7_success_gate: no supervisor interruption；controlled health；exact parent `commandLine+cwd+runId+uid+session+startTicks`；exact listener `uid+java+argv+cwd+ancestor+socket+startTicks` + `EXACT_CANDIDATE_FOUND`；`listenerProofEverEligible=true`；`termDispatches=1`；`dispatchSafe=true`；normal exact `EXIT_128`；schema-v4 redacted `CLEANED/SIGNAL + HOLD_SIGNAL_RECEIVED + HEALTH_READY + NOT_APPLICABLE`；private absent；root residue 0；Docker 0/0/0；exact reservation absent。
+- runtime7_evidence_boundary: 只允许 fixed-enum/redacted stdout、fixed-schema projection、root receipt 固定字段、private-absent、root residue count、redacted Docker counts 与 exact-reservation-absent；禁止读取 `private/children/log/profile/payload/process/Docker` 详情、手工 cleanup、重试、换 ID、共享 `8112`、真实 TMS/SIM/凭据/Worker/Gateway/Pool/Identity/Codex/external/production。disposable child 的 `NAVIGATOR_EXTERNAL_ENABLED=true` 仅为 loopback Open API route gate，`NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED=false`。
+- runtime9_postterm_offline_gate: PASS；目标安全套件 `88/88`、synthetic TypeScript `112 passed / 1 skipped`、Python supervisor `97/97`，typecheck、shell/Python syntax、diff check、secret scan 与 test-owned Java residue check 均通过。该结果不满足 AC-2/AC-3，也不授权 Runtime 10。
+- runtime9_postterm_review_status: PASS；code/security、test/runtime-readiness、canonical/docs 三路独立只读复核均无阻断。
+- runtime10_freeze_status: CONSUMED_SUCCESS
+- runtime10_exact_run_id: `int001-bug009-20260722-r10-9047a550`
+- runtime10_exact_command: `PYTHONDONTWRITEBYTECODE=1 python3 tools/navigator-upstream/scripts/synthetic-upstream-forced-signal-supervisor.py --run-id int001-bug009-20260722-r10-9047a550`
+- runtime10_current_authorization: none；exact command 已执行一次并 exit `0`，projection `SUCCESS_GATE_MET`，receipt `CLEANED/SIGNAL`，private/root/reservation/Docker 为 absent/0/absent/0-0-0。不得 retry、替换、手工 cleanup 或读取受限详情。
+- runtime10_durable_record: `test-records/BUG-009-int001-runtime10-success-2026-07-22.md`
+- next_action: 对 BUG-010 修复后的 BUG-009 执行独立 re-signoff；无需且不得重跑 Runtime 10 或创建替代 runtime。INT-001 仍保持 rejected，除非后续单独签核改变该状态。
 
-P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rejected` 记录原样保留；[BUG-002](./workitems/BUG-002-p1a-required-section-contract.md) 修复已通过 [独立 re-signoff](./evidence/BUG-002-p1a-required-section-independent-resignoff.md)，P1A foundation/shadow 状态为 accepted。P1B-A 新增五条 canonical typed-management auth route 及 fixture-only credential/token verifier contract，现已通过 [独立签核](./evidence/GOV-001-p1b-a-independent-signoff.md)；它不 seed 或签发真实 SIM/TMS principal、grant、tenant authority 或 credential。P1B-B0 已通过 [独立签核](./evidence/GOV-001-p1b-b0-independent-signoff.md)：它只提供 synthetic/securely supplied inventory 的离线、无回显、无审批 classification，绝不读取真实 profile/secret/DB/network 或执行 seed。P1C-A 已通过 [独立签核](./evidence/GOV-001-p1c-a-independent-signoff.md)：它只使用 fixture、不能证明真实 S1/S2 principal 或 production readiness。[开发期 S1/S2 联调 MVP](./workitems/GOV-001-dev-s1-s2-integration-mvp.md) 已通过 [独立签核](./evidence/GOV-001-dev-s1-s2-integration-mvp-independent-signoff.md)：只覆盖动态 tenant list、CLI/手册 lane 边界和本地 preflight，不证明 real SIM/TMS runtime、Gateway external 或 production。Observer BFF 在 P1A 仍仅为 catalog/test-only，其 runtime shadow/audit 与 production hardening 延后为独立设计，BFF 仍只能 local/trusted dev、production blocked。Owner 批准的 `GET /actuator` 第 415 条 route 和 200→404 唯一兼容例外继续有效。[INT-001](./workitems/INT-001-synthetic-upstream-integration-harness.md) 的 [独立签核](./evidence/INT-001-independent-signoff.md) 为 `rejected`：AC-2 的 forced-SIGNAL cleanup 根 receipt 为 `FAILED_CLEANUP/SIGNAL`。Project Owner 已批准 [BUG-009](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) 的独立、harness-only diagnosis/fix；它仍禁止读取、重试或手工清理失败 run，并要求新的 `CLEANED/SIGNAL` 证明才可重新签核 INT-001。 [BUG-008](./workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md) 通过 [独立签核](./evidence/BUG-008-independent-signoff.md) 为 `accepted-with-risks`：只修复 server-internal LangGraph physical identity owner-context 传播，不创建/改绑 Worker、BizWorkerIdentity、Pool member，也不涉及 Codex 或 Gateway。当前仍不包含业务数据 seed、真实上游联调、Gateway/external/prod enablement；`NAVIGATOR_EXTERNAL_ENABLED=true` 仍绝不表示 Provider、Worker Gateway 或 production ready。
+P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rejected` 记录原样保留；[BUG-002](./workitems/BUG-002-p1a-required-section-contract.md) 修复已通过 [独立 re-signoff](./evidence/BUG-002-p1a-required-section-independent-resignoff.md)，P1A foundation/shadow 状态为 accepted。P1B-A 新增五条 canonical typed-management auth route及 fixture-only credential/token verifier contract，现已通过 [独立签核](./evidence/GOV-001-p1b-a-independent-signoff.md)；它不 seed 或签发真实 SIM/TMS principal、grant、tenant authority 或 credential。P1B-B0 已通过 [独立签核](./evidence/GOV-001-p1b-b0-independent-signoff.md)：它只提供 synthetic/securely supplied inventory 的离线、无回显、无审批 classification，绝不读取真实 profile/secret/DB/network 或执行 seed。P1C-A 已通过 [独立签核](./evidence/GOV-001-p1c-a-independent-signoff.md)：它只使用 fixture、不能证明真实 S1/S2 principal 或 production readiness。[开发期 S1/S2 联调 MVP](./workitems/GOV-001-dev-s1-s2-integration-mvp.md) 已通过 [独立签核](./evidence/GOV-001-dev-s1-s2-integration-mvp-independent-signoff.md)：只覆盖动态 tenant list、CLI/手册 lane 边界和本地 preflight，不证明 real SIM/TMS runtime、Gateway external 或 production。Observer BFF 在 P1A 仍仅为 catalog/test-only，其 runtime shadow/audit 与 production hardening延后为独立设计，BFF 仍只能 local/trusted dev、production blocked。Owner 批准的 `GET /actuator` 第 415 条 route 和 200→404 唯一兼容例外继续有效。[INT-001](./workitems/INT-001-synthetic-upstream-integration-harness.md) 的 [独立签核](./evidence/INT-001-independent-signoff.md) 仍为 `rejected`。[BUG-009](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) 的 [既有独立签核](./evidence/BUG-009-independent-signoff-2026-07-22.md) 为 `rejected`；[BUG-010](./workitems/BUG-010-int001-process-group-empty-proof.md) 已离线修复该 PGID/descendant false-clean 缺口，BUG-009 现等待新的独立 re-signoff，且不得据此自动重新签收 INT-001。 [BUG-008](./workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md) 通过 [独立签核](./evidence/BUG-008-independent-signoff.md) 为 `accepted-with-risks`：只修复 server-internal LangGraph physical identity owner-context 传播，不创建/改绑 Worker、BizWorkerIdentity、Pool member，也不涉及 Codex 或 Gateway。当前仍不包含业务数据 seed、真实上游联调、Gateway/external/prod enablement；`NAVIGATOR_EXTERNAL_ENABLED=true` 仍绝不表示 Provider、Worker Gateway 或 production ready。
 
 ## Workitems
 
@@ -63,7 +89,8 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-007 task capability function-scope schema contract](./workitems/BUG-007-task-token-function-scope-schema-contract.md) | 对齐 task-scoped token 的 `function_scope_json` mapping/preflight/migration 契约，并重试本机 TMS runtime-only safe ask | ULTRA_EXECUTING；runtime credential file-safety gate BLOCKED |
 | [INT-001 Synthetic Upstream Integration Harness](./workitems/INT-001-synthetic-upstream-integration-harness.md) | 可销毁、独立的 synthetic upstream runtime harness；用于本机发现/复现通用权限与运行时问题 | REJECTED；AC-2 forced-SIGNAL cleanup 为 `FAILED_CLEANUP/SIGNAL`，不替代真实 TMS/SIM 验收、Gateway external 或 production |
 | [BUG-008 Open API upstream physical LangGraph owner context](./workitems/BUG-008-openapi-upstream-physical-langgraph-identity-context.md) | runtime-authenticated ClientApp 的 server-resolved upstream scope 进入 exact physical LangGraph identity lookup | ACCEPTED_WITH_RISKS；无 API/lane/Gateway/production 扩张 |
-| [BUG-009 INT-001 forced-SIGNAL owned cleanup](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) | acceptance-found harness lifecycle defect；健康 disposable stack 的 parent-TERM cleanup 仍返回 `FAILED_CLEANUP` | NEEDS_REPLAN；candidate-first runtime 仍 candidate absent、0 TERM，单次窗口已耗尽 |
+| [BUG-009 INT-001 forced-SIGNAL owned cleanup](./workitems/BUG-009-int001-forced-signal-owned-cleanup.md) | acceptance-found harness lifecycle defect；forced-SIGNAL cleanup 必须证明全部 run-owned process resource 清空 | READY_FOR_SIGNOFF；BUG-010 已补 PGID-empty fail-closed 证明，等待独立 re-signoff |
+| [BUG-010 INT-001 process-group-empty cleanup proof](./workitems/BUG-010-int001-process-group-empty-proof.md) | 修复 BUG-009 拒签发现的 leader-dead / descendant-alive false-clean 缺口 | READY_FOR_SIGNOFF；仅离线 harness/test 修复，无 runtime 权限 |
 | [BUG-004 Codex 真实中止闭环与再次中止状态确认](./workitems/BUG-004-codex-cancel-execution-and-retry-confirmation.md) | SDK Worker 真实进程退出闭环；App Server exact thread/turn 状态检查与再次中止确认 | READY_FOR_SIGNOFF |
 
 ## Scenario Sequence
