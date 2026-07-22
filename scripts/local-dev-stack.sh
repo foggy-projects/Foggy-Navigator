@@ -15,6 +15,7 @@ NO_CODEX=0
 NO_GEMINI=0
 NO_LOCAL_BIZ=0
 NO_WSL_BIZ=0
+FORCE_OWNED_CODEX=0
 # start/restart normally mean "run the current checkout". The separately
 # installed WSL Biz Worker therefore receives a source sync unless opted out.
 SYNC_WSL_BIZ_SOURCE=1
@@ -37,6 +38,8 @@ Options:
   --no-gemini               Skip Gemini worker
   --no-local-biz            Skip local LangGraph Biz worker on 3061
   --no-wsl-biz              Skip WSL LangGraph Biz worker on 3161
+  --force-owned-codex       Force-stop only a verified current-checkout Codex Worker;
+                            may interrupt its local managed work
   --no-sync-wsl-biz-source  Restart WSL biz worker without syncing this checkout
   --sync-wsl-biz-source     Explicitly sync repo source to WSL biz worker (default; retained for compatibility)
   --wsl-biz-distro <name>   Restart/status the 3161 worker in another WSL distro, default Ubuntu-24.04
@@ -77,6 +80,10 @@ while [ $# -gt 0 ]; do
       ;;
     --no-wsl-biz|-NoWslBiz)
       NO_WSL_BIZ=1
+      shift
+      ;;
+    --force-owned-codex)
+      FORCE_OWNED_CODEX=1
       shift
       ;;
     --sync-wsl-biz-source|-SyncWslBizSource)
@@ -214,6 +221,7 @@ invoke_script() {
 invoke_worker_stop_script() {
   local label="$1"
   local relative_path="$2"
+  shift 2
   local script="$REPO_ROOT/$relative_path"
 
   [ -f "$script" ] || {
@@ -223,7 +231,7 @@ invoke_worker_stop_script() {
 
   echo
   echo "==> $label"
-  if ! bash "$script"; then
+  if ! bash "$script" "$@"; then
     echo "$label did not prove safe Worker quiescence; local stack will not continue or start a replacement Worker." >&2
     return 1
   fi
@@ -338,8 +346,12 @@ if [ "$ACTION" = "status" ]; then
 fi
 
 if [ "$ACTION" = "stop" ] || [ "$ACTION" = "restart" ]; then
+  codex_stop_args=()
+  if [ "$FORCE_OWNED_CODEX" -eq 1 ]; then
+    codex_stop_args+=("--force-owned")
+  fi
   [ "$NO_GEMINI" -eq 1 ] || stop_port "gemini-worker" "$GEMINI_PORT"
-  [ "$NO_CODEX" -eq 1 ] || invoke_worker_stop_script "Stop Codex Worker" "tools/codex-agent-worker/stop.sh"
+  [ "$NO_CODEX" -eq 1 ] || invoke_worker_stop_script "Stop Codex Worker" "tools/codex-agent-worker/stop.sh" "${codex_stop_args[@]}"
   [ "$NO_CLAUDE" -eq 1 ] || invoke_worker_stop_script "Stop Claude Worker" "tools/claude-agent-worker/stop.sh"
   [ "$NO_LOCAL_BIZ" -eq 1 ] || stop_port "local-biz-worker" "$LOCAL_BIZ_PORT"
   [ "$NO_BACKEND" -eq 1 ] || invoke_script "Stop Java Backend" "scripts/stop-launcher.sh"

@@ -12,7 +12,10 @@ function readRepositoryFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-function assertFailClosedStopScript(script: string): void {
+function assertFailClosedStopScript(script: string, allowsVerifiedListenerKill = false): void {
+  if (!allowsVerifiedListenerKill) {
+    assert.doesNotMatch(script, /kill\s+-KILL\b/)
+  }
   assert.doesNotMatch(script, /kill\s+-9\b/)
   assert.doesNotMatch(script, /taskkill\s+\/F\b/i)
   assert.doesNotMatch(script, /Stop-Process[^\r\n]*-Force/i)
@@ -39,8 +42,22 @@ test('Codex and Claude stop scripts require ownership and a quiescent process sn
   ]
 
   for (const file of files) {
-    assertFailClosedStopScript(readRepositoryFile(file))
+    assertFailClosedStopScript(readRepositoryFile(file), file === 'tools/codex-agent-worker/stop.sh')
   }
+})
+
+test('Codex Unix stop script may force-stop only a verified listener after a snapshot failure or explicit local force', () => {
+  const codex = readRepositoryFile('tools/codex-agent-worker/stop.sh')
+
+  assert.match(codex, /Usage: stop\.sh \[--force-owned\]/)
+  assert.match(codex, /FORCE_OWNED=0/)
+  assert.match(codex, /force_stop_verified_listeners\(\)/)
+  assert.match(codex, /if ! fetch_snapshot; then\s+force_stop_verified_listeners "snapshot_unavailable"/s)
+  assert.match(codex, /if \[ "\$FORCE_OWNED" -eq 1 \]; then\s+force_stop_verified_listeners "force_owned_preflight_not_quiescent"/s)
+  assert.match(codex, /request_graceful_stop\s+if wait_for_exit 5/s)
+  assert.match(codex, /for pid in "\$\{LISTENER_PIDS\[@\]\}"; do\s+if is_process_running "\$pid"; then[\s\S]*kill -KILL "\$pid"/)
+  assert.doesNotMatch(codex, /kill -KILL "\$SAVED_PID"/)
+  assert.match(codex, /is_owned_worker_pid/)
 })
 
 test('Unix stop scripts support verifiable listener ownership without force-kill fallback', () => {
@@ -68,6 +85,8 @@ test('local development stack refuses a replacement Worker after a failed safe s
   assert.match(shellStack, /will not continue or start a replacement Worker/)
   assert.match(shellStack, /invoke_worker_stop_script "Stop Codex Worker"/)
   assert.match(shellStack, /invoke_worker_stop_script "Stop Claude Worker"/)
+  assert.match(shellStack, /--force-owned-codex/)
+  assert.match(shellStack, /codex_stop_args\+=\("--force-owned"\)/)
 
   assert.match(powershellStack, /function Invoke-WorkerStopScript/)
   assert.match(powershellStack, /will not continue or start a replacement Worker/)

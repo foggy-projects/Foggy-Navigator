@@ -20,7 +20,36 @@ SNAPSHOT_TOTAL="unavailable"
 SAVED_PID=""
 PID_FILE_INVALID=0
 SAVED_PID_IS_LAUNCHER=0
+FORCE_OWNED=0
 declare -a LISTENER_PIDS=()
+
+usage() {
+  cat <<'EOF'
+Usage: stop.sh [--force-owned]
+
+Options:
+  --force-owned  After current-checkout listener ownership has been verified,
+                 allow TERM then KILL even when the task snapshot is non-quiescent.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force-owned)
+      FORCE_OWNED=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 read_dotenv_value() {
   local key="$1"
@@ -214,7 +243,8 @@ request_graceful_stop() {
 }
 
 wait_for_exit() {
-  local deadline=$((SECONDS + 30))
+  local timeout_seconds="${1:-30}"
+  local deadline=$((SECONDS + timeout_seconds))
   local pid alive
 
   while :; do
@@ -232,6 +262,40 @@ wait_for_exit() {
     [ "$SECONDS" -ge "$deadline" ] && return 1
     sleep 1
   done
+}
+
+force_stop_verified_listeners() {
+  local reason="$1"
+  local pid
+
+  echo "Requesting graceful stop before verified local Codex Worker recovery kill..." >&2
+  request_graceful_stop
+  if wait_for_exit 5; then
+    if [ -n "$SAVED_PID" ] && ! is_process_running "$SAVED_PID"; then
+      rm -f "$PID_FILE"
+    fi
+    write_evidence "FORCED_STOPPED" "term_requested" "${reason}_listener_exited_after_term"
+    return 0
+  fi
+
+  for pid in "${LISTENER_PIDS[@]}"; do
+    if is_process_running "$pid"; then
+      echo "Forcing verified Codex Worker listener stop (PID=$pid)..." >&2
+      kill -KILL "$pid"
+    fi
+  done
+
+  if ! wait_for_exit 5; then
+    write_evidence "WORKER_DRAIN_UNCONFIRMED" "term_then_kill_requested" "verified_listener_exit_not_observed_after_kill"
+    echo "Verified Codex Worker listener did not exit after KILL." >&2
+    return 1
+  fi
+
+  if [ -n "$SAVED_PID" ] && ! is_process_running "$SAVED_PID"; then
+    rm -f "$PID_FILE"
+  fi
+  write_evidence "FORCED_STOPPED" "term_then_kill_requested" "${reason}_verified_listener_killed"
+  echo "Codex Worker stopped after TERM and KILL of a verified listener."
 }
 
 WORKER_TOKEN="$(read_dotenv_value CODEX_WORKER_TOKEN)"
@@ -306,12 +370,15 @@ for candidate in "${LISTENER_PIDS[@]}"; do
 done
 
 if ! fetch_snapshot; then
-  write_evidence "WORKER_DRAIN_UNCONFIRMED" "none" "process_snapshot_unavailable_or_invalid"
-  echo "Refusing to stop: unable to prove the Codex Worker task snapshot is quiescent." >&2
-  exit 2
+  force_stop_verified_listeners "snapshot_unavailable"
+  exit $?
 fi
 
 if [ "$SNAPSHOT_ACTIVE" -ne 0 ] || [ "$SNAPSHOT_TOTAL" -ne 0 ]; then
+  if [ "$FORCE_OWNED" -eq 1 ]; then
+    force_stop_verified_listeners "force_owned_preflight_not_quiescent"
+    exit $?
+  fi
   # The Codex Worker handles SIGTERM as ingress drain and keeps itself alive
   # while active executions or reservations remain. Do not auto-restart even
   # if it exits: this invocation did not obtain a post-drain quiescent snapshot.
