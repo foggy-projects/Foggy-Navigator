@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 统一任务 API —— 屏蔽 Claude / Codex / 未来 Agent 差异。
@@ -140,6 +141,8 @@ public class TaskController {
      * 取消任务
      */
     private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
+    private static final Pattern SAFE_TERMINATION_ERROR_CODE =
+            Pattern.compile("TERMINATION_[A-Z0-9_]{1,128}");
 
     @PostMapping("/{taskId}/cancel")
     public RX<String> cancelTask(@PathVariable String taskId,
@@ -168,7 +171,11 @@ public class TaskController {
             // The authorized task projection is the only routing authority;
             // a request-body agentId must never redirect cancellation.
             taskDispatchFacade.cancelTask(taskId, task.getAgentId(), context);
-            return RX.ok("Task cancelled");
+            return RX.ok("Cancellation request accepted");
+        } catch (IllegalStateException e) {
+            String safeCode = safeTerminationErrorCode(e.getMessage());
+            log.warn("cancelTask: termination request failed for task {}: code={}", taskId, safeCode);
+            return RX.failB(safeCode);
         } catch (org.springframework.dao.PessimisticLockingFailureException e) {
             // 死锁兜底：cancel 线程与 SSE reactor 线程同时更新任务行导致 MySQL 死锁
             // 重新查询状态 — 如果已是终态则视为取消成功（幂等）
@@ -179,6 +186,13 @@ public class TaskController {
             }
             return RX.failB("Failed to cancel task due to concurrent update, please retry");
         }
+    }
+
+    private String safeTerminationErrorCode(String message) {
+        if (message != null && SAFE_TERMINATION_ERROR_CODE.matcher(message).matches()) {
+            return message;
+        }
+        return "TERMINATION_REQUEST_FAILED";
     }
 
     /**

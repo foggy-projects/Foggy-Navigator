@@ -18,6 +18,7 @@ export const RELEASE_FILES = [
   'release/update.sh',
   'release/bin/codex-worker',
   'release/bin/codex-worker.ps1',
+  'scripts/configure-install-env.mjs',
   'scripts/ensure-sdk.mjs',
   'update-worker.ps1',
   'update-worker.sh',

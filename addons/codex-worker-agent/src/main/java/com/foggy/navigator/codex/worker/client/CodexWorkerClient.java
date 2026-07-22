@@ -1,6 +1,5 @@
 package com.foggy.navigator.codex.worker.client;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
 import com.foggy.navigator.common.termination.TerminationOperationCapability;
@@ -30,7 +29,6 @@ public class CodexWorkerClient {
 
     public static final String EXPECTED_INSTANCE_HEADER = "X-Codex-Expected-Instance-Id";
     public static final String ACTUAL_INSTANCE_HEADER = "X-Codex-Instance-Id";
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String OPERATION_ID_PATTERN = "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}";
     private static final Set<String> USER_INPUT_ERROR_CODES = Set.of(
             "INVALID_USER_INPUT_RESPONSE",
@@ -39,6 +37,9 @@ public class CodexWorkerClient {
             "USER_INPUT_REQUEST_MISMATCH",
             "USER_INPUT_ALREADY_RESPONDED",
             "USER_INPUT_RUNTIME_AFFINITY_LOST");
+    private static final Set<String> TERMINATION_ERROR_CODES = Set.of(
+            "TASK_NOT_FOUND",
+            "TASK_CANCELLATION_NOT_ACCEPTED");
 
     private final WebClient webClient;
     private final WebClient generatedImageWebClient;
@@ -445,18 +446,24 @@ public class CodexWorkerClient {
                                 .map(body -> (Map<String, Object>) body);
                     }
                     if (response.statusCode().value() == 409) {
-                        return response.createException().flatMap(error -> {
-                            Map<String, Object> conflict = responseBodyAsMap(error);
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .onErrorReturn(Map.of())
+                                .defaultIfEmpty(Map.of())
+                                .flatMap(conflict -> {
                             if (isAbortPendingConflict(taskId, conflict)) {
                                 Map<String, Object> acknowledgement = new LinkedHashMap<>(conflict);
                                 acknowledgement.putIfAbsent("task_id", taskId);
                                 acknowledgement.put("status", "abort_pending");
                                 return Mono.just(acknowledgement);
                             }
-                            return Mono.error(error);
+                            return Mono.error(new WorkerQueryRejectedException(
+                                    response.statusCode().value(),
+                                    terminationWorkerErrorCode(response.statusCode().value(), conflict)));
                         });
                     }
-                    return response.createException().flatMap(Mono::error);
+                    return terminationWorkerRejection(
+                            response.statusCode().value(), response.bodyToMono(Map.class));
                 })
                 .timeout(Duration.ofSeconds(10));
     }
@@ -477,7 +484,8 @@ public class CodexWorkerClient {
                                 .map(value -> (Map<String, Object>) value)
                                 .defaultIfEmpty(new LinkedHashMap<>());
                     }
-                    return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
+                    return terminationWorkerRejection(
+                            response.statusCode().value(), response.bodyToMono(Map.class));
                 })
                 .timeout(Duration.ofSeconds(15));
     }
@@ -522,22 +530,6 @@ public class CodexWorkerClient {
                     return workerQueryRejection(response.statusCode().value(), response.bodyToMono(Map.class));
                 })
                 .timeout(Duration.ofSeconds(30));
-    }
-
-    private static Map<String, Object> responseBodyAsMap(WebClientResponseException error) {
-        try {
-            Object decoded = OBJECT_MAPPER.readValue(error.getResponseBodyAsByteArray(), Object.class);
-            if (!(decoded instanceof Map<?, ?> values)) return Map.of();
-            Map<String, Object> result = new LinkedHashMap<>();
-            values.forEach((key, value) -> {
-                if (key instanceof String stringKey) {
-                    result.put(stringKey, value);
-                }
-            });
-            return result;
-        } catch (Exception ignored) {
-            return Map.of();
-        }
     }
 
     private static boolean isAbortPendingConflict(String taskId, Map<String, Object> conflict) {
@@ -687,6 +679,32 @@ public class CodexWorkerClient {
         return "CODEX_WORKER_REQUEST_REJECTED_" + statusCode;
     }
 
+    @SuppressWarnings("unchecked")
+    private Mono<Map<String, Object>> terminationWorkerRejection(
+            int statusCode, Mono<Map> responseBody) {
+        return responseBody
+                .map(value -> (Map<String, Object>) value)
+                .onErrorReturn(Map.of())
+                .defaultIfEmpty(Map.of())
+                .flatMap(body -> Mono.error(new WorkerQueryRejectedException(
+                        statusCode, terminationWorkerErrorCode(statusCode, body))));
+    }
+
+    private String terminationWorkerErrorCode(int statusCode, Map<String, Object> body) {
+        for (String key : List.of("error_code", "error", "code")) {
+            String value = stringValue(body.get(key), null);
+            if (isSafeTerminationErrorCode(value)) {
+                return value;
+            }
+        }
+        return "CODEX_WORKER_REQUEST_REJECTED_" + statusCode;
+    }
+
+    private boolean isSafeTerminationErrorCode(String value) {
+        return value != null && (TERMINATION_ERROR_CODES.contains(value)
+                || value.matches("TERMINATION_[A-Z0-9_]{1,128}"));
+    }
+
     private void requireTaskId(String taskId) {
         if (taskId == null || taskId.isBlank()) {
             throw new IllegalArgumentException("taskId is required");
@@ -798,9 +816,15 @@ public class CodexWorkerClient {
                 .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("force", force))
-                .retrieve()
-                .bodyToMono(Map.class)
-                .map(m -> (Map<String, Object>) m)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return terminationWorkerRejection(
+                            response.statusCode().value(), response.bodyToMono(Map.class));
+                })
                 .timeout(Duration.ofSeconds(10));
     }
 

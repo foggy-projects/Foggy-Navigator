@@ -362,7 +362,8 @@ final class TaskOperationRouter {
                         .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType))
                 : findProviderForTask(taskId);
         provider.cancelTaskDirect(taskId, userId);
-        log.info("Cancelled task via provider route: taskId={}, providerType={}", taskId, provider.getProviderType());
+        log.info("Cancellation request accepted via provider route: taskId={}, providerType={}",
+                taskId, provider.getProviderType());
     }
 
     private boolean isProviderTaskAlreadyMissing(IllegalArgumentException exception, String taskId) {

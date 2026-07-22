@@ -665,6 +665,11 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 - `codex_home_auth_configured`
 - `codex_biz_home_root_configured`
 - `codex_biz_scoped_home_ready`
+- `termination_ready`
+- `termination_reasons`
+- `termination_worker_id_configured`
+- `termination_auth_configured`
+- `termination_replay_ledger_ready`
 
 其中 `codex_auth_mode` 可能为：
 
@@ -673,6 +678,8 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 - `none`
 
 `codex_home_source` 只可能为 `worker_config` 或 `user_default`，分别表示使用专属 `CODEX_WORKER_CODEX_HOME` 或当前运行用户的默认 `~/.codex`；`codex_home_auth_configured` 表示该有效默认 Home 下是否存在 `auth.json`。这些字段以及 `codex_biz_home_root_configured`、`codex_biz_scoped_home_ready` 均不返回真实路径。
+
+`termination_ready` 与普通执行 readiness 相互独立。它只有在 PhysicalWorker ID、`CODEX_WORKER_TOKEN` 和持久 receipt ledger 都可用时为 `true`；`termination_reasons` 只返回固定错误码，不返回 Worker ID、Token 或 ledger 路径。服务化部署应把 `termination_ready=true` 作为允许远程中止和人工 PID 终止的前置条件。
 
 ### 10.3 会话列表不是持久化数据库
 
@@ -701,6 +708,10 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 - 上游保存 `task_id`、`session_id`、最后收到的 `seq`
 - 断线后使用 `/api/v1/tasks/:taskId/subscribe?ack_seq=N` 重连
 - 如果是多租户，优先每次请求传独立 `api_key`
+- 为每个 Worker 实例配置其精确 Navigator PhysicalWorker 资源 ID：`CODEX_NAVIGATOR_WORKER_ID=<worker-id>`
+- 配置 `CODEX_WORKER_TOKEN`，并保证 `CODEX_TERMINATION_OPERATION_LEDGER_DIR` 指向该 PhysicalWorker 独占、持久且可写的绝对路径
+
+发布包的 `install.sh` / `install.ps1` 会保留已有 Worker ID 和 ledger 配置。首次安装或需要显式替换时，可在启动安装器的进程环境中传入 `CODEX_NAVIGATOR_WORKER_ID` 与可选的 `CODEX_TERMINATION_OPERATION_LEDGER_DIR`；安装器只输出“已配置/缺失”和“ledger ready”，不会回显具体 ID、路径或任何 secret。Gateway credential 是独立配置，不是签名中止的前置条件。
 
 ## 12. 调用示例
 

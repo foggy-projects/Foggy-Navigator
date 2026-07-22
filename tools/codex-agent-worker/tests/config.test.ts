@@ -188,7 +188,19 @@ test('createConfig rejects invalid Navigator worker gateway base URL', () => {
   }), /CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL must use http or https/)
 })
 
-test('createConfig reads paired Navigator Worker identity from local env', () => {
+test('createConfig decouples termination Worker identity from Gateway credential', () => {
+  const identityOnly = createConfig({
+    CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
+  })
+  assert.equal(identityOnly.navigatorWorkerId, 'worker-a')
+  assert.equal(identityOnly.navigatorWorkerCredential, '')
+
+  const credentialOnly = createConfig({
+    CODEX_NAVIGATOR_WORKER_CREDENTIAL: 'bwc_secret',
+  })
+  assert.equal(credentialOnly.navigatorWorkerId, '')
+  assert.equal(credentialOnly.navigatorWorkerCredential, 'bwc_secret')
+
   const config = createConfig({
     CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
     CODEX_NAVIGATOR_WORKER_CREDENTIAL: 'bwc_secret',
@@ -196,15 +208,6 @@ test('createConfig reads paired Navigator Worker identity from local env', () =>
 
   assert.equal(config.navigatorWorkerId, 'worker-a')
   assert.equal(config.navigatorWorkerCredential, 'bwc_secret')
-})
-
-test('createConfig rejects partial Navigator Worker identity', () => {
-  assert.throws(() => createConfig({
-    CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
-  }), /must be configured together/)
-  assert.throws(() => createConfig({
-    CODEX_NAVIGATOR_WORKER_CREDENTIAL: 'bwc_secret',
-  }), /must be configured together/)
 })
 
 test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () => {

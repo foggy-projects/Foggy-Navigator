@@ -112,9 +112,9 @@ export interface TerminationInspection {
 
 export interface TerminationRetryResult {
   taskId: string
-  operationId: string
-  providerState: 'completed' | 'failed' | 'interrupted'
-  status: 'COMPLETED' | 'FAILED' | 'ABORTED'
+  operationId?: string
+  providerState: 'cancel_requested' | 'completed' | 'failed' | 'interrupted'
+  status: 'CANCEL_REQUESTED' | 'COMPLETED' | 'FAILED' | 'ABORTED'
 }
 
 function normalizeImages(images?: string | string[]): string[] | undefined {

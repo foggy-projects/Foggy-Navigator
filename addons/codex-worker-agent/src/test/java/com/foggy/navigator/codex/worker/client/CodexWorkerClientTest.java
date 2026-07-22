@@ -445,18 +445,53 @@ class CodexWorkerClientTest {
     }
 
     @Test
-    void abortTaskKeepsOtherConflictAsHttpFailure() throws Exception {
+    void abortTaskPreservesSafeTerminationConflictCode() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             server.abortReturnsConflict("{\"error\":\"TASK_NOT_FOUND\"}");
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
 
-            WebClientResponseException error = assertThrows(WebClientResponseException.class,
+            CodexWorkerClient.WorkerQueryRejectedException error = assertThrows(
+                    CodexWorkerClient.WorkerQueryRejectedException.class,
                     () -> client.abortTask("worker-task-9",
                                     new TerminationOperationCapability("encoded-operation", "encoded-signature"))
                             .block(Duration.ofSeconds(5)));
 
-            assertEquals(409, error.getStatusCode().value());
-            assertEquals("{\"error\":\"TASK_NOT_FOUND\"}", error.getResponseBodyAsString());
+            assertEquals(409, error.getStatusCode());
+            assertEquals("TASK_NOT_FOUND", error.getCode());
+        }
+    }
+
+    @Test
+    void abortTaskPreservesSafeWorkerConfigurationCode() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.abortReturns(503, "{\"code\":\"TERMINATION_OPERATION_WORKER_UNCONFIGURED\"}");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            CodexWorkerClient.WorkerQueryRejectedException error = assertThrows(
+                    CodexWorkerClient.WorkerQueryRejectedException.class,
+                    () -> client.abortTask("worker-task-9",
+                                    new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                            .block(Duration.ofSeconds(5)));
+
+            assertEquals(503, error.getStatusCode());
+            assertEquals("TERMINATION_OPERATION_WORKER_UNCONFIGURED", error.getCode());
+        }
+    }
+
+    @Test
+    void abortTaskDoesNotExposeArbitraryWorkerErrorText() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.abortReturns(503, "{\"error\":\"private /root command and token detail\"}");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            CodexWorkerClient.WorkerQueryRejectedException error = assertThrows(
+                    CodexWorkerClient.WorkerQueryRejectedException.class,
+                    () -> client.abortTask("worker-task-9",
+                                    new TerminationOperationCapability("encoded-operation", "encoded-signature"))
+                            .block(Duration.ofSeconds(5)));
+
+            assertEquals(503, error.getStatusCode());
+            assertEquals("CODEX_WORKER_REQUEST_REJECTED_503", error.getCode());
         }
     }
 
@@ -534,7 +569,8 @@ class CodexWorkerClientTest {
         private final AtomicReference<String> authorization = new AtomicReference<>();
         private final AtomicReference<String> terminationOperation = new AtomicReference<>();
         private final AtomicReference<String> terminationSignature = new AtomicReference<>();
-        private volatile String abortConflictResponse;
+        private volatile int abortStatus = 202;
+        private volatile String abortResponse;
         private volatile boolean queryThreadActiveConflict;
         private volatile int respondStatus = 200;
         private volatile String respondErrorCode;
@@ -698,13 +734,13 @@ class CodexWorkerClientTest {
                     return;
                 }
                 boolean abort = exchange.getRequestURI().getPath().endsWith("/abort");
-                String responseJson = abort && capture.abortConflictResponse != null
-                        ? capture.abortConflictResponse
+                String responseJson = abort && capture.abortResponse != null
+                        ? capture.abortResponse
                         : "{\"task_id\":\"worker-task-9\",\"status\":\"accepted\"}";
                 byte[] response = responseJson
                         .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
-                exchange.sendResponseHeaders(abort && capture.abortConflictResponse != null ? 409 : 202, response.length);
+                exchange.sendResponseHeaders(abort ? capture.abortStatus : 202, response.length);
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
@@ -808,11 +844,16 @@ class CodexWorkerClientTest {
         }
 
         void abortReturnsTerminationOperationPendingConflict() {
-            abortConflictResponse = "{\"error\":\"TERMINATION_OPERATION_PENDING\"}";
+            abortReturns(409, "{\"error\":\"TERMINATION_OPERATION_PENDING\"}");
         }
 
         void abortReturnsConflict(String response) {
-            abortConflictResponse = response;
+            abortReturns(409, response);
+        }
+
+        void abortReturns(int status, String response) {
+            abortStatus = status;
+            abortResponse = response;
         }
 
         void queryReturnsThreadActiveConflict() {

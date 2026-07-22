@@ -212,6 +212,25 @@ class TaskControllerTest {
     }
 
     @Test
+    void cancelTaskReturnsStableTerminationFailureInsteadOfSuccess() {
+        DispatchTaskDTO dto = DispatchTaskDTO.builder()
+                .taskId("task-1")
+                .agentId("agent-1")
+                .status("CANCEL_REQUESTED")
+                .build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(dto));
+        doThrow(new IllegalStateException("TERMINATION_OPERATION_WORKER_UNCONFIGURED"))
+                .when(taskDispatchFacade).cancelTask(
+                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+
+        RX<String> result = controller.cancelTask("task-1", null);
+
+        assertNull(result.getData());
+        assertEquals("TERMINATION_OPERATION_WORKER_UNCONFIGURED", result.getMsg());
+    }
+
+    @Test
     void cancelTask_deadlockFallback_terminalState() {
         // First getTask call (before cancel) returns RUNNING
         DispatchTaskDTO running = DispatchTaskDTO.builder()

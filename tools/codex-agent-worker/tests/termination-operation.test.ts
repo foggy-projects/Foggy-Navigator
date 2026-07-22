@@ -324,3 +324,15 @@ test('durable receipt ledger rejects replay after verifier recreation and fails 
     'TERMINATION_OPERATION_REPLAYED',
   )
 })
+
+test('durable receipt ledger exposes non-destructive readiness without leaking its path', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-termination-readiness-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const ready = new TerminationOperationReceiptLedger(path.join(root, 'ledger'))
+  assert.equal(ready.isReady(), true)
+
+  const unsafePath = path.join(root, 'not-a-directory')
+  fs.writeFileSync(unsafePath, 'unsafe')
+  assert.equal(new TerminationOperationReceiptLedger(unsafePath).isReady(), false)
+})

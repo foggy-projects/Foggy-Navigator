@@ -152,6 +152,7 @@ export async function killCodexCliProcess(
   const rx = (await client.post(
     `/codex-workers/${workerId}/processes/${pid}/kill`,
     { force, taskId },
+    { suppressErrorMessage: true } as any,
   )) as unknown as RX<KillProcessResponse>
   return rx.data
 }

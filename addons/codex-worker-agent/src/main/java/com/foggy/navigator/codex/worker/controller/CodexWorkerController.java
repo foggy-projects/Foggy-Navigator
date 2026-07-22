@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.controller;
 
+import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
@@ -168,6 +169,10 @@ public class CodexWorkerController {
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Throwable current = error;
         for (int depth = 0; current != null && depth < 8 && visited.add(current); depth++, current = current.getCause()) {
+            if (current instanceof CodexWorkerClient.WorkerQueryRejectedException rejected
+                    && isSafeTerminationErrorCode(rejected.getCode())) {
+                return rejected.getCode();
+            }
             if (current instanceof WebClientResponseException responseException) {
                 return "CODEX_WORKER_HTTP_" + responseException.getStatusCode().value();
             }
@@ -177,11 +182,16 @@ public class CodexWorkerController {
             if (current instanceof WebClientRequestException) {
                 return "CODEX_WORKER_CONNECTION_UNAVAILABLE";
             }
-            if (SAFE_TERMINATION_ERROR_CODES.contains(current.getMessage())) {
+            if (isSafeTerminationErrorCode(current.getMessage())) {
                 return current.getMessage();
             }
         }
         return "CODEX_WORKER_REQUEST_UNCONFIRMED";
+    }
+
+    private static boolean isSafeTerminationErrorCode(String code) {
+        return code != null && (SAFE_TERMINATION_ERROR_CODES.contains(code)
+                || code.matches("TERMINATION_[A-Z0-9_]{1,128}"));
     }
 
     private static boolean isBlockingTimeout(Throwable error) {

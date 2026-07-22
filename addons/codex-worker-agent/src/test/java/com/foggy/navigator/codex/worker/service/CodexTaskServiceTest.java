@@ -295,11 +295,14 @@ class CodexTaskServiceTest {
         lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.cancelTaskDirectForProvider(
-                CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-retry", "user-1");
+        CodexTaskService.TerminationDispatchException error = assertThrows(
+                CodexTaskService.TerminationDispatchException.class,
+                () -> service.cancelTaskDirectForProvider(
+                        CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-retry", "user-1"));
 
         assertEquals("CANCEL_REQUESTED", task.getStatus());
         assertEquals("TERMINATION_AUDIT_UNAVAILABLE", task.getErrorMessage());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", error.getSafeCode());
         verify(taskRepository, times(2)).findByTaskIdForUpdate("task-cancel-retry");
     }
 
@@ -328,19 +331,29 @@ class CodexTaskServiceTest {
         when(workerClient.listCliProcesses()).thenReturn(Mono.just(processSnapshot(List.of())));
         when(taskRepository.save(any(CodexTaskEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setLatestTaskId("task-cancel-stale");
+        session.setInteractionState("PROCESSING");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
 
         service.cancelTaskDirectForProvider(
                 CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-stale", "user-1");
 
-        assertEquals("FAILED", task.getStatus());
-        assertEquals(CodexStaleTaskRepairedException.CODE, task.getErrorMessage());
+        assertEquals("ABORTED", task.getStatus());
+        assertNull(task.getErrorMessage());
         verify(workerClient).getTaskStatus("worker-task-stale");
         verify(workerClient).listCliProcesses();
         verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
                 "task-cancel-stale".equals(entity.getTaskId())
-                        && "FAILED".equals(entity.getStatus())
-                        && CodexStaleTaskRepairedException.CODE.equals(entity.getErrorMessage())));
-        verifyNoInteractions(terminationOperationService);
+                        && "ABORTED".equals(entity.getStatus())
+                        && entity.getErrorMessage() == null));
+        assertEquals("AWAITING_REPLY", session.getInteractionState());
+        verify(sessionEntityRepository).save(session);
+        verify(terminationOperationService).markObservedTerminalForTask(
+                "task-cancel-stale", "ABORTED");
+        verify(terminationOperationService, never()).accept(any());
         verify(workerClient, never()).abortTask(anyString(), any());
     }
 
@@ -371,11 +384,14 @@ class CodexTaskServiceTest {
         lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.cancelTaskDirectForProvider(
-                CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-inconclusive", "user-1");
+        CodexTaskService.TerminationDispatchException error = assertThrows(
+                CodexTaskService.TerminationDispatchException.class,
+                () -> service.cancelTaskDirectForProvider(
+                        CodexTaskService.CODEX_PROVIDER_TYPE, "task-cancel-inconclusive", "user-1"));
 
         assertEquals("CANCEL_REQUESTED", task.getStatus());
         assertEquals("TERMINATION_AUDIT_UNAVAILABLE", task.getErrorMessage());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", error.getSafeCode());
         verify(workerClient).getTaskStatus("worker-task-stale");
         verify(workerClient).listCliProcesses();
         verify(taskRepository, times(2)).findByTaskIdForUpdate("task-cancel-inconclusive");
@@ -1789,6 +1805,67 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void sdkAbortRetrySupersedesOldOperationAndDispatchesFreshCapability() {
+        CodexTaskEntity entity = createTask(
+                "task-sdk-retry", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.of(2026, 7, 22, 9, 30));
+        entity.setTenantId("tenant-1");
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        entity.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        entity.setWorkerTaskId("worker-native-sdk-retry");
+        entity.setCodexThreadId("thread-sdk-retry");
+        when(taskRepository.findByTaskId("task-sdk-retry")).thenReturn(Optional.of(entity));
+        when(taskRepository.findByTaskIdForUpdate("task-sdk-retry")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
+                .baseUrl("http://worker.example").authToken("worker-token").build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("worker-native-sdk-retry"))
+                .thenReturn(Mono.just(Map.of("task_id", "worker-native-sdk-retry", "status", "running")));
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
+        when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+            TerminationOperationService.CreateCommand command = invocation.getArgument(0);
+            TerminationOperationEntity operation = new TerminationOperationEntity();
+            operation.setOperationId("to-sdk-retry");
+            operation.setSchemaVersion(1);
+            operation.setTaskId(command.taskId());
+            operation.setProviderTaskId(command.providerTaskId());
+            operation.setWorkerId(command.workerId());
+            operation.setKind(command.kind());
+            operation.setOrigin(command.origin());
+            operation.setActorId(command.actorId());
+            operation.setActorType(command.actorType());
+            operation.setAuthorizationDecisionId(command.authorizationDecisionId());
+            operation.setReasonCode(command.reasonCode());
+            operation.setCorrelationId(command.correlationId());
+            return operation;
+        });
+        when(workerClient.abortTask(eq("worker-native-sdk-retry"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "worker-native-sdk-retry",
+                        "status", "cancel_requested")));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        CodexTaskService.SdkAbortRetryResult result = service.retrySdkAbort(
+                "task-sdk-retry", "user-1", "tenant-1");
+
+        assertEquals("to-sdk-retry", result.operationId());
+        assertEquals("cancel_requested", result.providerState());
+        assertEquals("CANCEL_REQUESTED", result.status());
+        verify(terminationOperationService).supersedeActiveOperationsForTask(
+                "task-sdk-retry", "TERMINATION_OPERATION_SUPERSEDED_BY_RETRY");
+        ArgumentCaptor<TerminationOperationService.CreateCommand> command =
+                ArgumentCaptor.forClass(TerminationOperationService.CreateCommand.class);
+        verify(terminationOperationService).accept(command.capture());
+        assertEquals("USER_CANCEL_RETRY", command.getValue().reasonCode());
+        verify(terminationOperationService).markDispatchStarted("to-sdk-retry");
+        verify(terminationOperationService).markCancelRequested("to-sdk-retry");
+        verify(workerClient, never()).retryAbortTask(anyString(), any());
+    }
+
+    @Test
     void appServerAbortRetryClosesDefinitiveWorkerConflictWithoutChangingTaskState() {
         CodexTaskEntity entity = pendingAppServerRetryTask("task-retry-conflict", "tenant-1");
         stubAppServerAbortRetryTask(entity, "to-retry-conflict");
@@ -2013,11 +2090,36 @@ class CodexTaskServiceTest {
 
         when(taskRepository.findByTaskId("task-abort")).thenReturn(Optional.of(entity));
         when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        service.abortTask("task-abort");
+        CodexTaskService.TerminationDispatchException error = assertThrows(
+                CodexTaskService.TerminationDispatchException.class,
+                () -> service.abortTask("task-abort"));
 
         assertEquals("CANCEL_REQUESTED", entity.getStatus());
         assertEquals("TERMINATION_AUDIT_UNAVAILABLE", entity.getErrorMessage());
+        assertEquals("TERMINATION_AUDIT_UNAVAILABLE", error.getSafeCode());
         verify(streamRelay, never()).abortAndReconcileTask(any());
+        verifyNoInteractions(workerClient);
+    }
+
+    @Test
+    void abortTaskReportsExistingOperationInsteadOfReturningSuccess() {
+        CodexTaskEntity entity = createTask(
+                "task-abort-pending", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 22, 9, 0));
+        entity.setWorkerTaskId("worker-task-1");
+        when(taskRepository.findByTaskId("task-abort-pending")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(terminationOperationService.hasActiveOperationForTask("task-abort-pending")).thenReturn(true);
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        CodexTaskService.TerminationDispatchException error = assertThrows(
+                CodexTaskService.TerminationDispatchException.class,
+                () -> service.abortTask("task-abort-pending"));
+
+        assertEquals("TERMINATION_OPERATION_PENDING", error.getSafeCode());
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        assertEquals("TERMINATION_OPERATION_PENDING", entity.getErrorMessage());
+        verify(terminationOperationService, never()).accept(any());
         verifyNoInteractions(workerClient);
     }
 
@@ -2135,10 +2237,13 @@ class CodexTaskServiceTest {
                 .thenReturn(Mono.error(notFound));
         ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
 
-        service.abortTask("task-missing-native");
+        CodexTaskService.TerminationDispatchException error = assertThrows(
+                CodexTaskService.TerminationDispatchException.class,
+                () -> service.abortTask("task-missing-native"));
 
         assertEquals("CANCEL_REQUESTED", entity.getStatus());
-        assertEquals("TERMINATION_UNCONFIRMED", entity.getErrorMessage());
+        assertEquals("TERMINATION_DISPATCH_UNCONFIRMED", entity.getErrorMessage());
+        assertEquals("TERMINATION_DISPATCH_UNCONFIRMED", error.getSafeCode());
         verify(terminationOperationService).markUnconfirmed(eq("to_missing_native"), anyString());
         verify(terminationOperationService, never()).markRejected(anyString(), anyString());
         verify(terminationOperationService, never()).markCancelRequested(anyString());
@@ -2182,10 +2287,13 @@ class CodexTaskServiceTest {
                 .thenReturn(Mono.error(forbidden));
         ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
 
-        service.abortTask("task-rejected");
+        CodexTaskService.TerminationDispatchException error = assertThrows(
+                CodexTaskService.TerminationDispatchException.class,
+                () -> service.abortTask("task-rejected"));
 
         assertEquals("RUNNING", entity.getStatus());
         assertEquals("TERMINATION_REJECTED", entity.getErrorMessage());
+        assertEquals("TERMINATION_REJECTED", error.getSafeCode());
         verify(terminationOperationService).markRejected(eq("to_rejected"), anyString());
         verify(terminationOperationService, never()).markUnconfirmed(anyString(), anyString());
         verify(terminationOperationService, never()).markCancelRequested(anyString());
@@ -2237,7 +2345,7 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void manualPidKillPersistsAndSignsFreshProcessIdentity() {
+    void manualPidKillSupersedesPendingOperationAndSignsFreshProcessIdentity() {
         CodexTaskEntity entity = createTask(
                 "task-manual-kill", "session-1", "worker-1", "dir-1", "RUNNING",
                 LocalDateTime.of(2026, 7, 16, 10, 0));
@@ -2245,7 +2353,7 @@ class CodexTaskServiceTest {
         entity.setWorkerTaskId("worker-task-1");
         when(taskRepository.findByTaskIdForUpdate("task-manual-kill")).thenReturn(Optional.of(entity));
         when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(terminationOperationService.hasActiveOperationForTask("task-manual-kill")).thenReturn(false);
+        when(terminationOperationService.hasActiveOperationForTask("task-manual-kill")).thenReturn(true);
         TerminationOperationService.CreateCommand[] accepted = new TerminationOperationService.CreateCommand[1];
         when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
             accepted[0] = invocation.getArgument(0);
@@ -2278,6 +2386,8 @@ class CodexTaskServiceTest {
         String encoded = request.capability().encodedOperation();
         String payload = new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
         assertTrue(payload.contains("\"expected_process_identity\":\"codex-cli:321:2026-07-16T03:40:13.655Z\""));
+        verify(terminationOperationService).supersedeActiveOperationsForTask(
+                "task-manual-kill", "TERMINATION_OPERATION_SUPERSEDED_BY_MANUAL_PID_RETRY");
         verify(terminationOperationService).markDispatchStarted("to_manual_pid");
     }
 

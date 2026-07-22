@@ -550,6 +550,28 @@ class CodexTaskExtensionControllerTest {
     }
 
     @Test
+    void terminationRetrySupportsOwnedSdkTaskAndReturnsPendingReceipt() {
+        CodexTaskEntity task = sdkTask();
+        task.setStatus("CANCEL_REQUESTED");
+        stubOwnedTask(CodexTaskService.CODEX_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(taskService.retrySdkAbort(TASK_ID, USER_ID, TENANT_ID))
+                .thenReturn(new CodexTaskService.SdkAbortRetryResult(
+                        TASK_ID, "to-sdk-retry-1", "cancel_requested", "CANCEL_REQUESTED"));
+
+        RX<Map<String, Object>> response = controller.retryTermination(TASK_ID);
+
+        assertEquals(Map.of(
+                "taskId", TASK_ID,
+                "operationId", "to-sdk-retry-1",
+                "providerState", "cancel_requested",
+                "status", "CANCEL_REQUESTED"), response.getData());
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        verify(taskService).retrySdkAbort(TASK_ID, USER_ID, TENANT_ID);
+        verifyNoInteractions(clientFactory, runtimeRegistryService, client);
+    }
+
+    @Test
     void compactContext_ownerUsesPinnedRuntimeAndOperationId() {
         CodexTaskEntity task = appServerTask();
         task.setCodexThreadId("thread-1");

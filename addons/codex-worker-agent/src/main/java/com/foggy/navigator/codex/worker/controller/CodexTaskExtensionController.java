@@ -259,18 +259,26 @@ public class CodexTaskExtensionController {
     public RX<Map<String, Object>> retryTermination(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
-        CodexTaskEntity task = requireTask(
-                taskId, userId, tenantId, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
-                CodexRuntimeType.APP_SERVER.name());
-        requirePinnedAppServerRuntime(task);
+        CodexTaskEntity task = requireTerminationRetryTask(taskId, userId, tenantId);
         workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
-        CodexTaskService.AppServerAbortRetryResult result =
-                taskService.retryAppServerAbort(taskId, userId, tenantId);
-        return RX.ok(Map.of(
-                "taskId", result.taskId(),
-                "operationId", result.operationId(),
-                "providerState", result.providerState(),
-                "status", result.status()));
+        Map<String, Object> response = new LinkedHashMap<>();
+        if (CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType())) {
+            requirePinnedAppServerRuntime(task);
+            CodexTaskService.AppServerAbortRetryResult result =
+                    taskService.retryAppServerAbort(taskId, userId, tenantId);
+            response.put("taskId", result.taskId());
+            putIfText(response, "operationId", result.operationId());
+            response.put("providerState", result.providerState());
+            response.put("status", result.status());
+        } else {
+            CodexTaskService.SdkAbortRetryResult result =
+                    taskService.retrySdkAbort(taskId, userId, tenantId);
+            response.put("taskId", result.taskId());
+            putIfText(response, "operationId", result.operationId());
+            response.put("providerState", result.providerState());
+            response.put("status", result.status());
+        }
+        return RX.ok(response);
     }
 
     /**
@@ -362,6 +370,24 @@ public class CodexTaskExtensionController {
         return ResponseEntity.status(status).body(RX.failA(error.getSafeCode()));
     }
 
+    @ExceptionHandler(CodexTaskService.SdkAbortRetryException.class)
+    public ResponseEntity<RX<?>> handleSdkAbortRetryException(
+            CodexTaskService.SdkAbortRetryException error) {
+        HttpStatus status = error.isRetryable()
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.CONFLICT;
+        return ResponseEntity.status(status).body(RX.failA(error.getSafeCode()));
+    }
+
+    @ExceptionHandler(CodexTaskService.TerminationDispatchException.class)
+    public ResponseEntity<RX<?>> handleTerminationDispatchException(
+            CodexTaskService.TerminationDispatchException error) {
+        HttpStatus status = error.isRetryable()
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.CONFLICT;
+        return ResponseEntity.status(status).body(RX.failA(error.getSafeCode()));
+    }
+
     /** Starts one idempotent whole-thread native compaction on the exact pinned runtime. */
     @PostMapping("/{taskId}/compact-context")
     public RX<Map<String, Object>> compactContext(
@@ -447,6 +473,36 @@ public class CodexTaskExtensionController {
             throw taskNotFound(taskId);
         }
         return task;
+    }
+
+    private CodexTaskEntity requireTerminationRetryTask(
+            String taskId, String userId, String tenantId) {
+        SessionTaskEntity ownedTask = resourceAccessService.requireOwnedTask(
+                taskId, userId, tenantId);
+        String providerType = ownedTask.getProviderType();
+        if (!Set.of(CodexTaskService.CODEX_PROVIDER_TYPE,
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE).contains(providerType)) {
+            throw taskNotFound(taskId);
+        }
+
+        CodexTaskEntity task = taskService.getTaskEntity(taskId);
+        boolean runtimeMatchesProvider = CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType)
+                ? CodexRuntimeType.SDK_EXEC.name().equals(task.getRuntimeType())
+                : CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType());
+        if (!providerType.equals(task.getProviderType())
+                || !runtimeMatchesProvider
+                || !Objects.equals(ownedTask.getSessionId(), task.getSessionId())
+                || !Objects.equals(ownedTask.getWorkerId(), task.getWorkerId())
+                || !matchesOwnerScope(task, userId, tenantId)) {
+            throw taskNotFound(taskId);
+        }
+        return task;
+    }
+
+    private void putIfText(Map<String, Object> target, String key, String value) {
+        if (hasText(value)) {
+            target.put(key, value);
+        }
     }
 
     private boolean matchesOwnerScope(CodexTaskEntity task, String userId, String tenantId) {

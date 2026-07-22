@@ -9,6 +9,7 @@ import {
   resolveCodexBizReadiness,
   resolveCodexHomeAuthReadiness,
   resolveNavigatorWorkerCredentialReadiness,
+  resolveTerminationReadiness,
   resolveWorkerHealthStatus,
 } from '../src/routes/health.ts'
 import { CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY } from '../src/codex/sdk-wrapper.ts'
@@ -73,12 +74,41 @@ test('Codex auth health uses the effective default home without exposing its pat
   }
 })
 
-test('configured Navigator Worker credential keeps Codex Worker unready without exposing it', () => {
+test('only a configured Gateway credential keeps Codex execution unready', () => {
+  assert.deepEqual(resolveNavigatorWorkerCredentialReadiness('worker-a', false), [])
   const reasons = resolveNavigatorWorkerCredentialReadiness('worker-a', true)
 
   assert.deepEqual(reasons, [CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY])
   assert.equal(reasons.some(reason => /bwc_|credential-value/.test(reason)), false)
   assert.deepEqual(resolveNavigatorWorkerCredentialReadiness('', false), [])
+  assert.deepEqual(
+    resolveNavigatorWorkerCredentialReadiness('', true),
+    [CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY],
+  )
+})
+
+test('termination readiness is independent and reports only fixed non-secret reasons', () => {
+  assert.deepEqual(resolveTerminationReadiness('worker-a', 'worker-token', true), {
+    termination_ready: true,
+    termination_reasons: [],
+    termination_worker_id_configured: true,
+    termination_auth_configured: true,
+    termination_replay_ledger_ready: true,
+  })
+
+  const unavailable = resolveTerminationReadiness('', '', false)
+  assert.deepEqual(unavailable, {
+    termination_ready: false,
+    termination_reasons: [
+      'TERMINATION_WORKER_ID_REQUIRED',
+      'TERMINATION_AUTH_TOKEN_REQUIRED',
+      'TERMINATION_REPLAY_LEDGER_UNAVAILABLE',
+    ],
+    termination_worker_id_configured: false,
+    termination_auth_configured: false,
+    termination_replay_ledger_ready: false,
+  })
+  assert.doesNotMatch(JSON.stringify(unavailable), /worker-a|worker-token|\/var\//)
 })
 
 test('external mode never treats a configured bearer token as execution readiness', () => {

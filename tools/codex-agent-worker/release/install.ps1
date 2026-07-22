@@ -154,6 +154,17 @@ if ($env:CODEX_WORKER_URL) {
     Write-Host "Saved CODEX_WORKER_URL to .env" -ForegroundColor Green
 }
 
+$ConfigureEnvScript = Join-Path $ScriptDir "scripts\configure-install-env.mjs"
+if (-not (Test-Path $ConfigureEnvScript)) {
+    Write-Host "ERROR: Missing termination environment configurator." -ForegroundColor Red
+    exit 1
+}
+& node $ConfigureEnvScript $EnvPath $InstallDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Could not configure termination identity and receipt ledger." -ForegroundColor Red
+    exit 1
+}
+
 Write-Host ""
 Write-Host "Installing runtime dependencies..." -ForegroundColor Cyan
 Set-Location $InstallDir

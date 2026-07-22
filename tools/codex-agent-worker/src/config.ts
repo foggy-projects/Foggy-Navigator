@@ -42,8 +42,9 @@ export interface AppConfig {
   /** Navigator gateway base URL used by the built-in business MCP bridge. */
   navigatorWorkerGatewayBaseUrl: string
   /**
-   * Stable Navigator PhysicalWorker identity used for outbound Gateway calls
-   * and exact target matching of signed termination operations.
+   * Stable Navigator PhysicalWorker identity used for exact target matching
+   * of signed termination operations. It is intentionally independent from
+   * the optional WorkerGateway credential.
    */
   navigatorWorkerId: string
   /** One-time rotated credential; never forward through the generic Codex process environment. */
@@ -379,11 +380,6 @@ export function createConfig(
     'CODEX_NAVIGATOR_WORKER_CREDENTIAL',
     512,
   )
-  if (Boolean(navigatorWorkerId) !== Boolean(navigatorWorkerCredential)) {
-    throw new Error(
-      'CODEX_NAVIGATOR_WORKER_ID and CODEX_NAVIGATOR_WORKER_CREDENTIAL must be configured together'
-    )
-  }
 
   return {
     port: parsePort(env.CODEX_WORKER_PORT),

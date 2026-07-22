@@ -12,6 +12,7 @@ import { resolveCodexSdkRuntimeStatus } from '../runtime-requirements.js'
 import { APP_VERSION } from '../version.js'
 import { resolveExternalModeState } from '../external-mode.js'
 import { pathApiFor } from '../path-guards.js'
+import { TerminationOperationReceiptLedger } from '../termination-operation.js'
 
 const router = Router()
 
@@ -69,12 +70,38 @@ export function resolveCodexHomeAuthReadiness(
 }
 
 export function resolveNavigatorWorkerCredentialReadiness(
-  workerId: string,
+  _workerId: string,
   credentialConfigured: boolean,
 ): string[] {
-  return workerId || credentialConfigured
+  return credentialConfigured
     ? [CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY]
     : []
+}
+
+export function resolveTerminationReadiness(
+  workerId: string,
+  workerToken: string,
+  replayLedgerReady: boolean,
+): Pick<HealthResponse,
+  'termination_ready'
+  | 'termination_reasons'
+  | 'termination_worker_id_configured'
+  | 'termination_auth_configured'
+  | 'termination_replay_ledger_ready'
+> {
+  const workerIdConfigured = Boolean(workerId.trim())
+  const authConfigured = Boolean(workerToken.trim())
+  const reasons: string[] = []
+  if (!workerIdConfigured) reasons.push('TERMINATION_WORKER_ID_REQUIRED')
+  if (!authConfigured) reasons.push('TERMINATION_AUTH_TOKEN_REQUIRED')
+  if (!replayLedgerReady) reasons.push('TERMINATION_REPLAY_LEDGER_UNAVAILABLE')
+  return {
+    termination_ready: reasons.length === 0,
+    termination_reasons: reasons,
+    termination_worker_id_configured: workerIdConfigured,
+    termination_auth_configured: authConfigured,
+    termination_replay_ledger_ready: replayLedgerReady,
+  }
 }
 
 /**
@@ -94,6 +121,11 @@ router.get('/health', (_req: Request, res: Response) => {
   }))
   const codexSdkStatus = resolveCodexSdkRuntimeStatus()
   const codexBizReadiness = resolveCodexBizReadiness(config.codexBizHomeRoot)
+  const terminationReadiness = resolveTerminationReadiness(
+    config.navigatorWorkerId,
+    config.workerToken,
+    new TerminationOperationReceiptLedger(config.terminationOperationLedgerDir).isReady(),
+  )
   const external = resolveExternalModeState(config)
   const reasons = [...external.reasons]
   reasons.push(...resolveNavigatorWorkerCredentialReadiness(
@@ -122,6 +154,7 @@ router.get('/health', (_req: Request, res: Response) => {
     codex_sdk_compatible: codexSdkStatus.compatible,
     ...codexHomeAuth,
     ...codexBizReadiness,
+    ...terminationReadiness,
   }
 
   res.json(response)

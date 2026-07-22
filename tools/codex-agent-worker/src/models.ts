@@ -185,6 +185,12 @@ export interface HealthResponse {
   codex_home_auth_configured?: boolean
   codex_biz_home_root_configured?: boolean
   codex_biz_scoped_home_ready?: boolean
+  /** Termination readiness is independent from normal Codex execution readiness. */
+  termination_ready: boolean
+  termination_reasons: string[]
+  termination_worker_id_configured: boolean
+  termination_auth_configured: boolean
+  termination_replay_ledger_ready: boolean
 }
 
 /**

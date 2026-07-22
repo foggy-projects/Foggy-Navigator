@@ -872,6 +872,31 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       wrapper.unmount()
     })
 
+    it('shows the safe Worker configuration reason when Codex CLI termination is rejected', async () => {
+      vi.mocked(claudeWorkerApi.killCodexCliProcess).mockRejectedValue(
+        new Error('终止 Codex CLI 进程失败: TERMINATION_OPERATION_WORKER_UNCONFIGURED'),
+      )
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await vm.handleKillProcess({
+        pid: 2418783,
+        process_type: 'codex',
+        foggy_task_id: 'task-codex-1',
+      }, false)
+
+      expect(ElMessage.error).toHaveBeenCalledWith(
+        expect.stringContaining('PhysicalWorker ID'),
+      )
+      expect(ElMessage.error).toHaveBeenCalledWith(
+        expect.stringContaining('TERMINATION_OPERATION_WORKER_UNCONFIGURED'),
+      )
+      wrapper.unmount()
+    })
+
     it('does not offer a termination request for an unbound Codex CLI PID', async () => {
       const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
       await flushPromises()
@@ -1831,6 +1856,44 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       expect(unifiedTaskApi.retryTerminationUnified).toHaveBeenCalledWith(pendingTask.taskId)
       expect(unifiedTaskApi.getTaskUnified).toHaveBeenCalledWith(pendingTask.taskId)
       expect(result.status).toBe('COMPLETED')
+      wrapper.unmount()
+    })
+  })
+
+  describe('BUG-014 SDK cancellation retry confirmation', () => {
+    it('supersedes the old SDK operation only after explicit user confirmation', async () => {
+      const pendingTask: ClaudeTask = {
+        ...mockCompletedTask,
+        taskId: 'task-sdk-cancel-pending',
+        providerType: 'codex-worker',
+        status: 'CANCEL_REQUESTED',
+        errorMessage: 'TERMINATION_OPERATION_WORKER_UNCONFIGURED',
+      }
+      const refreshedTask: ClaudeTask = { ...pendingTask, errorMessage: undefined }
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      vi.mocked(unifiedTaskApi.retryTerminationUnified).mockResolvedValue({
+        taskId: pendingTask.taskId,
+        operationId: 'operation-sdk-retry-1',
+        providerState: 'cancel_requested',
+        status: 'CANCEL_REQUESTED',
+      } as any)
+      vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(refreshedTask)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      const result = await vm.confirmAndAbortTask(pendingTask)
+      await flushPromises()
+
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('PhysicalWorker ID'),
+        '确认再次中止',
+        expect.objectContaining({ confirmButtonText: '再次中止' }),
+      )
+      expect(unifiedTaskApi.getTerminationInspection).not.toHaveBeenCalled()
+      expect(unifiedTaskApi.retryTerminationUnified).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(unifiedTaskApi.getTaskUnified).toHaveBeenCalledWith(pendingTask.taskId)
+      expect(result.status).toBe('CANCEL_REQUESTED')
       wrapper.unmount()
     })
   })

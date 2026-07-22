@@ -158,6 +158,13 @@ if [ -n "$CODEX_WORKER_URL" ]; then
     echo -e "${GREEN}Saved CODEX_WORKER_URL to .env${NC}"
 fi
 
+CONFIGURE_ENV_SCRIPT="$SCRIPT_DIR/scripts/configure-install-env.mjs"
+if [ ! -f "$CONFIGURE_ENV_SCRIPT" ]; then
+    echo -e "${RED}ERROR: Missing termination environment configurator.${NC}"
+    exit 1
+fi
+node "$CONFIGURE_ENV_SCRIPT" "$INSTALL_DIR/.env" "$INSTALL_DIR"
+
 echo ""
 echo -e "${CYAN}Installing runtime dependencies...${NC}"
 cd "$INSTALL_DIR"

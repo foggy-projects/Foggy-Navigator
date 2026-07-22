@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.controller;
 
+import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -57,6 +58,10 @@ class CodexWorkerControllerTest {
         assertEquals("TERMINATION_OPERATION_PENDING",
                 CodexWorkerController.safeWorkerErrorCode(
                         new IllegalStateException("TERMINATION_OPERATION_PENDING")));
+        assertEquals("TERMINATION_OPERATION_WORKER_UNCONFIGURED",
+                CodexWorkerController.safeWorkerErrorCode(
+                        new CodexWorkerClient.WorkerQueryRejectedException(
+                                503, "TERMINATION_OPERATION_WORKER_UNCONFIGURED")));
         assertEquals("CODEX_WORKER_HTTP_409",
                 CodexWorkerController.safeWorkerErrorCode(WebClientResponseException.create(
                         409, "Conflict", null, null, null)));

@@ -96,6 +96,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-010 INT-001 process-group-empty cleanup proof](./workitems/BUG-010-int001-process-group-empty-proof.md) | 修复 BUG-009 拒签发现的 leader-dead / descendant-alive false-clean 缺口 | READY_FOR_SIGNOFF；仅离线 harness/test 修复，无 runtime 权限 |
 | [BUG-013 Codex 待核验状态与终态后 SSE 异常](./workitems/BUG-013-codex-unverified-state-and-post-terminal-sse.md) | 将 `PROCESS_UNVERIFIED` 收敛为可查询状态卡，并阻止终态后的 SSE 错误触发恢复 | READY_FOR_SIGNOFF；需部署本提交后进行 live 验证 |
 | [BUG-004 Codex 真实中止闭环与再次中止状态确认](./workitems/BUG-004-codex-cancel-execution-and-retry-confirmation.md) | SDK Worker 真实进程退出闭环；App Server exact thread/turn 状态检查与再次中止确认 | READY_FOR_SIGNOFF |
+| [BUG-014 Codex SDK Worker 受控中止身份、重试与退出收口](./workitems/BUG-014-codex-sdk-termination-identity-and-reconciliation.md) | 解耦终止身份与 Gateway credential，修复未确认重试和 CLI 已退出后的 `ABORTED` 收口，并完成 SDK Worker 发版部署 | ULTRA_EXECUTING；按 1～5 顺序实施 |
 
 ## Scenario Sequence
 

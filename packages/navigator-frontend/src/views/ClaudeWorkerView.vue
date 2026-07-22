@@ -3329,7 +3329,7 @@ async function handleKillProcess(processInfo: CliProcessInfo, force = false) {
     }
     await loadCliProcesses()
   } catch (e: unknown) {
-    ElMessage.error(`${action}失败: ${e instanceof Error ? e.message : e}`)
+    ElMessage.error(terminationActionErrorMessage(e, `${action}失败`))
   }
 }
 
@@ -7191,7 +7191,7 @@ async function abortPane(paneId: string) {
       ElMessage.info('中止请求已发送，Worker 退出尚未确认')
     }
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('中止失败')
+    if (e !== 'cancel') ElMessage.error(terminationActionErrorMessage(e, '中止失败'))
   }
 }
 
@@ -7225,6 +7225,28 @@ function terminationInspectionMessage(inspection: TerminationInspection, prompt:
 async function confirmAndAbortTask(task: ClaudeTask): Promise<ClaudeTask | null> {
   const isAppServerRetry = task.status === 'CANCEL_REQUESTED'
     && task.providerType === 'codex-app-server-worker'
+  const isSdkRetry = task.status === 'CANCEL_REQUESTED'
+    && task.providerType === 'codex-worker'
+  if (isSdkRetry) {
+    const reason = terminationCodeExplanation(task.errorMessage)
+    await ElMessageBox.confirm(
+      `${reason}\n\n再次中止会先核验 Worker 任务和 Codex CLI 是否已经退出；仅在无法确认退出时，才会废止旧操作并发送新的签名中止请求。`,
+      '确认再次中止',
+      {
+        type: 'warning',
+        confirmButtonText: '再次中止',
+        cancelButtonText: '取消',
+      },
+    )
+    try {
+      await retryTerminationUnified(task.taskId)
+    } catch (error) {
+      const refreshed = await getTaskUnified(task.taskId) as ClaudeTask | null
+      if (refreshed && ['COMPLETED', 'FAILED', 'ABORTED'].includes(refreshed.status)) return refreshed
+      throw error
+    }
+    return await getTaskUnified(task.taskId) as ClaudeTask | null
+  }
   if (!isAppServerRetry) {
     await ElMessageBox.confirm('确认中止该任务？', '提示', {
       type: 'warning',
@@ -7293,6 +7315,75 @@ async function confirmAndAbortTask(task: ClaudeTask): Promise<ClaudeTask | null>
     { type: 'warning', confirmButtonText: '知道了' },
   )
   return null
+}
+
+function terminationCodeExplanation(code?: string): string {
+  return ({
+    TERMINATION_OPERATION_WORKER_UNCONFIGURED:
+      '目标 SDK Worker 未配置 PhysicalWorker ID，原中止操作无法通过 Worker 身份校验。',
+    TERMINATION_WORKER_ID_REQUIRED:
+      '目标 SDK Worker 未配置 PhysicalWorker ID，无法验证本次中止是否发往正确的物理 Worker。',
+    TERMINATION_AUTH_TOKEN_REQUIRED:
+      '目标 SDK Worker 未配置中止签名密钥，无法验证中止请求。',
+    TERMINATION_REPLAY_LEDGER_UNAVAILABLE:
+      '目标 SDK Worker 的中止操作账本不可写，无法安全防止操作重放。',
+    TERMINATION_OPERATION_REPLAY_LEDGER_UNAVAILABLE:
+      '目标 SDK Worker 的中止操作账本不可用，未执行本次中止。',
+    TERMINATION_OPERATION_AUTH_UNCONFIGURED:
+      '目标 SDK Worker 缺少中止签名配置，未执行本次中止。',
+    TERMINATION_AUDIT_UNAVAILABLE:
+      'Navigator 中止审计服务暂不可用，未发送远程中止请求。',
+    TERMINATION_OPERATION_PENDING:
+      '已有中止操作仍处于未确认状态。',
+    TERMINATION_REMOTE_TASK_UNAVAILABLE:
+      '任务缺少精确的 Worker 任务绑定，无法安全发送中止请求。',
+    TERMINATION_TASK_UNAVAILABLE:
+      '任务在中止派发前已不可用，请刷新任务状态后重试。',
+    TERMINATION_RETRY_AUDIT_UNAVAILABLE:
+      'Navigator 暂时无法创建新的审计中止操作，请稍后重试。',
+    TERMINATION_RETRY_BINDING_MISSING:
+      '任务缺少 Worker 或远端任务绑定，无法安全再次中止。',
+    TERMINATION_RETRY_NOT_PENDING:
+      '任务当前不处于等待中止确认状态，请先刷新任务。',
+    TERMINATION_RETRY_TASK_TERMINAL:
+      '任务已经进入终态，无需再次中止。',
+    TERMINATION_DISPATCH_UNCONFIRMED:
+      '上一次中止请求未获得 Worker 的可信确认。',
+    TERMINATION_ACK_INVALID:
+      'Worker 返回的中止确认不完整，任务仍保持待确认状态。',
+    TERMINATION_UNCONFIRMED:
+      '上一次中止结果尚未得到 Worker 的可信确认。',
+  } as Record<string, string>)[code || '']
+    || '上一次中止操作尚未完成或未获得可信确认。'
+}
+
+function terminationActionErrorMessage(error: unknown, fallback: string): string {
+  const code = safeTerminationErrorCode(error)
+  return code ? `${fallback}：${terminationCodeExplanation(code)}（${code}）` : fallback
+}
+
+function safeTerminationErrorCode(error: unknown): string | undefined {
+  const candidates: unknown[] = []
+  if (error && typeof error === 'object') {
+    if ('response' in error) {
+      const response = (error as { response?: { data?: unknown } }).response
+      const data = response?.data
+      if (data && typeof data === 'object') {
+        const body = data as { msg?: unknown; message?: unknown; code?: unknown }
+        candidates.push(body.msg, body.message, body.code)
+      }
+    }
+    if ('message' in error) candidates.push((error as { message?: unknown }).message)
+  }
+  candidates.push(error)
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue
+    const match = candidate.match(
+      /(?:^|[^A-Z0-9_])(TERMINATION_[A-Z0-9_]{1,128}|CODEX_WORKER_REQUEST_REJECTED_[1-5][0-9]{2})(?=$|[^A-Z0-9_])/,
+    )
+    if (match?.[1]) return match[1]
+  }
+  return undefined
 }
 
 async function handlePaneReconnect(paneId: string, taskId: string) {
@@ -7902,7 +7993,7 @@ async function handleAbortTask(taskId: string) {
     }
   } catch (e) {
     if (e !== 'cancel') {
-      ElMessage.error('中止失败')
+      ElMessage.error(terminationActionErrorMessage(e, '中止失败'))
     }
   }
 }

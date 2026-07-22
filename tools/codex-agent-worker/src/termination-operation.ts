@@ -88,6 +88,28 @@ export class TerminationOperationReceiptLedger {
     private readonly maxEntries = 2_048,
   ) {}
 
+  /**
+   * Non-destructive readiness probe used by /health. It validates only the
+   * ledger boundary and existing receipt structure; operation consumption
+   * still performs the authoritative atomic one-use check.
+   */
+  isReady(): boolean {
+    try {
+      const directory = this.ensureDirectory()
+      fs.accessSync(directory, fs.constants.R_OK | fs.constants.W_OK)
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isFile() || !RECEIPT_FILE_PATTERN.test(entry.name)) {
+          throw new Error('termination receipt ledger contains an invalid entry')
+        }
+        this.readReceipt(path.join(directory, entry.name))
+      }
+      syncDirectory(directory)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   consume(workerId: string, operationId: string, expiresAt: number, now: number): void {
     try {
       this.consumeReceipt(workerId, operationId, expiresAt, now)
