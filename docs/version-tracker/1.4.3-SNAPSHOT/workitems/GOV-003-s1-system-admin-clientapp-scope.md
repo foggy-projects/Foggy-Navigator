@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: GOV-003
-status: ULTRA_EXECUTING
+status: BLOCKED
 canonical: true
 execution_mode: ultra
 approved_by: project-owner-user-confirmed
@@ -49,10 +49,10 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: system-admin 可以只用 `NAVI_ADMIN_API_KEY` 对明确同-upstream ClientApp 执行目标资源的支持操作；不再遇到错误 owner/control-lane 判定。
-- [ ] AC-2: 每个请求同时验证 target ClientApp 的 active/tenant/upstream/namespace 边界；跨 upstream、未授权 tenant、非 ClientApp-owned target 一律 fail closed。
-- [ ] AC-3: CLI 不混用 profile，`platform app-scope` help 与实际命令明确；输出不泄露 secrets 且含 owner/scope/authorization diagnostics。
-- [ ] AC-4: `platform tenant list` 明确为 ClientApp list；`platform app list --help` 只显示帮助、不访问服务端。
+- [x] AC-1: system-admin 可以只用 `NAVI_ADMIN_API_KEY` 对明确同-upstream ClientApp 执行目标资源的支持操作；不再遇到错误 owner/control-lane 判定。
+- [x] AC-2: 每个请求同时验证 target ClientApp 的 active/tenant/upstream/namespace 边界；跨 upstream、未授权 tenant、非 ClientApp-owned target 一律 fail closed。
+- [x] AC-3: CLI 不混用 profile，`platform app-scope` help 与实际命令明确；输出不泄露 secrets 且含 owner/scope/authorization diagnostics。
+- [x] AC-4: `platform tenant list` 明确为 ClientApp list；`platform app list --help` 只显示帮助、不访问服务端。
 - [ ] AC-5: 相关模块测试、CLI package/install smoke 通过；发布 version/buildId/gitCommit/8112 restart 结论和复测入口已记录。
 
 ## Validation and Risks
@@ -62,12 +62,39 @@ open_questions: []
 
 ## Implementation Result
 
-> To be completed by the implementation and release session.
+### Implementation summary
 
-- implementation_summary:
-- changed_paths:
-- tests_and_results:
-- manual_or_experience_evidence:
-- deviations: none
-- residual_risks:
-- readiness: READY_FOR_SIGNOFF | NEEDS_REPLAN | BLOCKED
+- 新增 `/api/v1/upstream-admin/client-apps/{clientAppId}/scope/**` system-admin facade；每次先验证 active ClientApp、tenant authorization、exact upstreamSystemId 与 namespace，再以 server-side resolved ClientApp control principal 调用既有资源服务。
+- 新路径覆盖 ClientApp-owned Agent、model grant/default 与 owned modelConfig、upstream-user grant、model/workspace/Worker bindings、Directory；owner type/id 与 tenant 在底层资源服务继续复核，grant 不会绕过 ClientApp owner。
+- CLI 新增明确 `navi upstream platform app-scope ... --client-app-id <id>`；缺 target 或混入 `--target-tenant-id` 直接失败，不读取 `NAVI_CONTROL_API_KEY`。scope inspect 输出脱敏 credential lane、owner/scope 和 authorization checks。
+- 修正 `platform tenant list` 的 ClientApp list 说明；`platform app list --help` 在本地返回 help，不执行 HTTP 请求。
+
+### Changed paths
+
+- backend: `business-agent-module/**/UpstreamAdminClientAppScope*`、`BusinessAgentBundleService`、`ClientAppOwnedModelConfigService`、`ClientAppUserGrantService`、`UpstreamClientAppManagementService`、Claude working-directory admin facade。
+- SDK/CLI: `navigator-open-sdk` APIs/DTO/`UpstreamCli`；CLI version `1.0.23` 与 package feature manifest。
+- authorization: frozen route catalog 增加 system-admin facade 入口，并补齐两条既有 Codex task ingress registration；entry count `455`，SHA-256 `53f95c98521f31d1ea693259239a8dc257c17328647ff1dffee7dbfda29f1ee2`。
+
+### Tests and results
+
+- `mvn -pl business-agent-module -am -Dtest=ClientAppOwnedModelConfigServiceTest,UpstreamClientAppManagementServiceTest,UpstreamAdminClientAppScopeServiceTest -Dsurefire.failIfNoSpecifiedTests=false test` — PASS, 22 tests.
+- `mvn -pl navigator-open-sdk -Dtest=UpstreamCliTest test` — PASS, 131 tests.
+- `mvn -pl launcher -am -Dtest=AuthorizationRouteManifestCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test` — PASS, 3 tests.
+- clean clone: `mvn -pl launcher -am -DskipTests package` — PASS; launcher metadata `git.commit.id.abbrev=aa4a944`, `git.dirty=false`.
+- CLI archive package — PASS: `navigator-upstream-cli` `1.0.23`, source commit `aa4a944e7f2510fe1cfff623d92732df573fb9cf`, deterministic buildId `1.0.23+aa4a944e7f25`.
+
+### Manual / release evidence
+
+- No Worker update, real ask, or 8112 process operation was performed.
+- OBS upload was attempted through the standard upload script. It is blocked before transfer because this environment has no usable OBS publish credentials; no credential value was read, printed, or committed. Therefore remote installer smoke and published `latest.json` cannot be claimed.
+
+### Deviations
+
+- The frozen ingress coverage check exposed two pre-existing but unregistered Codex task routes (`termination-inspection`, `termination-retry`). Their catalog entries were added without changing route behavior.
+
+### Residual risks / next action
+
+- Publish the already built `1.0.23` archives from an environment with valid OBS credentials, then let `upload.sh` complete its remote Linux installer smoke.
+- Deploy the clean launcher build to SIM's S1 Navigator instance and restart 8112; do not restart any Worker. SIM can then rerun Step 2 only.
+
+- readiness: BLOCKED (external OBS publish credential unavailable)
