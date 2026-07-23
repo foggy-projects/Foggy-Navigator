@@ -14,6 +14,7 @@ import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionListDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionMessagesDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditPageDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactSliceDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactTreeDTO;
@@ -27,6 +28,7 @@ import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
+import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
@@ -66,8 +68,10 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -75,6 +79,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Open API Controller — 面向第三方系统的集成接口
@@ -113,6 +118,40 @@ public class OpenApiController {
     private static final String TOOL_SCOPE_KIND_NO_RUNTIME = "NO_RUNTIME_MODEL_TOOL_SURFACE";
     private static final Set<String> ALL_BUSINESS_TOOL_ALIASES = Set.of(
             "business.*", "business.functions.*", "navigator.business_functions");
+    private static final Set<String> SANITIZED_RUNTIME_ERROR_CODES = Set.of(
+            "AUDIT_QUERY_MODE_CONFLICT",
+            "AUDIT_RECORD_EXPIRED_OR_NOT_FOUND",
+            "CLIENT_REQUEST_ID_ALREADY_USED",
+            "CLIENT_REQUEST_ID_INVALID",
+            "CLIENT_REQUEST_ID_OPERATION_MISMATCH",
+            "CLIENT_REQUEST_ID_REQUIRED",
+            "FUNCTION_SCOPE_EXPLICIT_NULL",
+            "RUNTIME_AUDIT_BOUNDED_WINDOW_REQUIRED",
+            "RUNTIME_AUDIT_CREDENTIAL_REQUIRED",
+            "RUNTIME_AUDIT_HANDLE_REQUIRED",
+            "RUNTIME_AUDIT_LIMIT_INVALID",
+            "RUNTIME_AUDIT_OPERATION_INVALID",
+            "RUNTIME_AUDIT_RECORD_NOT_FOUND",
+            "RUNTIME_AUDIT_SCOPE_NOT_FOUND",
+            "RUNTIME_AUDIT_SINCE_INVALID",
+            "RUNTIME_AUDIT_UNTIL_INVALID",
+            "RUNTIME_AUDIT_WINDOW_INVALID",
+            "RUNTIME_AUDIT_WINDOW_TOO_LARGE",
+            "RUNTIME_CLIENT_APP_CREDENTIAL_REQUIRED",
+            "RUNTIME_CLIENT_APP_KEY_REQUIRED",
+            "RUNTIME_CLIENT_APP_KEY_UNKNOWN",
+            "RUNTIME_CLIENT_APP_SCOPE_UNKNOWN",
+            "SAFE_SMOKE_BODY_REQUIRED",
+            "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED",
+            "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE",
+            "SAFE_SMOKE_MESSAGE_REQUIRED",
+            "SAFE_SMOKE_REQUIRES_EMPTY_FUNCTION_SCOPE",
+            "SAFE_SMOKE_REQUIRES_EMPTY_TOOL_SCOPE",
+            "SAFE_SMOKE_RUNTIME_INPUT_NOT_ALLOWED",
+            "SAFE_SMOKE_TOKEN_SERVICE_UNAVAILABLE",
+            "SAFE_SMOKE_TOOL_SCOPE_REQUIRED",
+            "SAFE_SMOKE_UPSTREAM_USER_REQUIRED",
+            "TOOL_SCOPE_EXPLICIT_NULL");
     private static final Map<String, String> BUSINESS_TOOL_ALIASES = Map.of(
             "business.functions.list", "list_business_functions",
             "business.functions.schema", "get_business_function_schema",
@@ -139,6 +178,7 @@ public class OpenApiController {
     private final ObjectMapper objectMapper;
     private final OpenApiAgentRouteService agentRouteService;
     private final ObjectProvider<ClientAppRuntimeCredentialResolver> clientAppCredentialResolver;
+    private final ObjectProvider<RuntimeRequestAuditService> runtimeRequestAuditService;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
@@ -406,7 +446,94 @@ public class OpenApiController {
                 "X-Client-App-Secret",
                 "X-App-Secret",
                 "X-Foggy-App-Secret");
-        return RX.ok(resolver.issueAccessToken(appKey, appSecret));
+        String clientRequestId = firstHeader(request, "X-Navigator-Client-Request-Id");
+        RuntimeRequestAuditService auditService = runtimeRequestAuditService.getIfAvailable();
+        RuntimeRequestAuditService.AuditHandle audit = null;
+        if (StringUtils.hasText(clientRequestId) && auditService == null) {
+            return RX.failB("RUNTIME_AUDIT_SERVICE_UNAVAILABLE");
+        }
+        if (StringUtils.hasText(clientRequestId)) {
+            try {
+                audit = auditService.beginRuntimeToken(
+                        clientRequestId,
+                        firstHeader(request, "X-Navigator-Runtime-Operation"),
+                        appKey,
+                        firstHeader(request, "X-Navigator-Agent-Code"),
+                        firstHeader(request,
+                                "X-Upstream-User-Id",
+                                "X-Foggy-Upstream-User-Id",
+                                "X-Client-Upstream-User-Id"));
+            } catch (RuntimeException e) {
+                return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_RECORDING_FAILED"));
+            }
+        }
+        ClientAppRuntimeAccessTokenDTO token;
+        try {
+            token = resolver.issueAccessToken(appKey, appSecret);
+        } catch (RuntimeException e) {
+            String code = runtimeCredentialErrorCode(e);
+            if (audit != null) {
+                try {
+                    auditService.runtimeTokenRejected(audit, code);
+                } catch (RuntimeException ignored) {
+                    // The credential rejection remains authoritative; never expose audit persistence details.
+                }
+            }
+            return RX.failB(code);
+        }
+        if (audit != null) {
+            try {
+                auditService.runtimeTokenIssued(audit);
+            } catch (RuntimeException e) {
+                return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
+            }
+        }
+        return RX.ok(token);
+    }
+
+    /**
+     * Strictly read-only ClientApp runtime self-audit. Scope is derived from the supplied
+     * runtime key/secret and cannot be overridden by request parameters.
+     */
+    @GetMapping("/runtime-audits")
+    public RX<RuntimeRequestAuditPageDTO> queryRuntimeAudits(
+            @RequestParam(required = false) String requestId,
+            @RequestParam(required = false) String since,
+            @RequestParam(required = false) String until,
+            @RequestParam(required = false) String operation,
+            @RequestParam(required = false) String agentCode,
+            @RequestParam(required = false) String upstreamUserId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request) {
+        RuntimeRequestAuditService auditService = runtimeRequestAuditService.getIfAvailable();
+        if (auditService == null) {
+            return RX.failB("RUNTIME_AUDIT_SERVICE_UNAVAILABLE");
+        }
+        if (hasForbiddenRuntimeAuditCredential(request)) {
+            return RX.failB("RUNTIME_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        String appKey = firstHeader(request,
+                "X-Client-App-Key",
+                "X-App-Key",
+                "X-Foggy-App-Key");
+        String appSecret = firstHeader(request,
+                "X-Client-App-Secret",
+                "X-App-Secret",
+                "X-Foggy-App-Secret");
+        try {
+            return RX.ok(auditService.querySelfAudit(
+                    appKey,
+                    appSecret,
+                    requestId,
+                    parseAuditInstant(since, "RUNTIME_AUDIT_SINCE_INVALID"),
+                    parseAuditInstant(until, "RUNTIME_AUDIT_UNTIL_INVALID"),
+                    operation,
+                    agentCode,
+                    upstreamUserId,
+                    limit));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_QUERY_FAILED"));
+        }
     }
 
     /**
@@ -676,41 +803,59 @@ public class OpenApiController {
             @PathVariable String agentId,
             @RequestBody OpenApiQueryForm form,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
-        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
-                requireOpenApiAgentRoute(agentId, credential);
-        if (form == null) {
-            return RX.failB("SAFE_SMOKE_BODY_REQUIRED");
-        }
-        String message = form.resolveMessage();
-        if (!StringUtils.hasText(message)) {
-            return RX.failB("SAFE_SMOKE_MESSAGE_REQUIRED");
-        }
-        if (form.getMaxTurns() == null || form.getMaxTurns() != 1) {
-            return RX.failB("SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE");
-        }
-        String scopeError = validateSafeSmokeScopes(form);
-        if (scopeError != null) {
-            return RX.failB(scopeError);
-        }
-        if (StringUtils.hasText(form.getSystemPrompt())
-                || StringUtils.hasText(form.getFirstMsg())
-                || (form.getAttachments() != null && !form.getAttachments().isEmpty())) {
-            return RX.failB("SAFE_SMOKE_RUNTIME_INPUT_NOT_ALLOWED");
-        }
-
+        String clientRequestId = firstHeader(request, "X-Navigator-Client-Request-Id");
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
                 "X-Foggy-Upstream-User-Id",
                 "X-Client-Upstream-User-Id");
-        if (!StringUtils.hasText(upstreamUserId)) {
-            return RX.failB("SAFE_SMOKE_UPSTREAM_USER_REQUIRED");
-        }
-        String tenantId = credential.getTenantId();
-        String contextId = StringUtils.hasText(form.getContextId())
-                ? form.getContextId().trim()
-                : BusinessAgentSessionService.generateContextId();
+        RuntimeRequestAuditService auditService = runtimeRequestAuditService.getIfAvailable();
+        ResolvedClientAppCredentialDTO credential;
         try {
+            credential = requireClientAppRuntimeToken(request);
+        } catch (RuntimeException e) {
+            return RX.failB(safeSmokeErrorCode(e));
+        }
+        RuntimeRequestAuditService.AuditHandle audit = null;
+        if (StringUtils.hasText(clientRequestId)) {
+            if (auditService == null) {
+                return RX.failB("RUNTIME_AUDIT_SERVICE_UNAVAILABLE");
+            }
+            try {
+                audit = auditService.beginSafeSmoke(clientRequestId, credential, agentId, upstreamUserId);
+            } catch (RuntimeException e) {
+                return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_RECORDING_FAILED"));
+            }
+        }
+
+        try {
+            OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                    requireOpenApiAgentRoute(agentId, credential);
+            if (form == null) {
+                return failSafeSmoke(auditService, audit, "SAFE_SMOKE_BODY_REQUIRED");
+            }
+            String message = form.resolveMessage();
+            if (!StringUtils.hasText(message)) {
+                return failSafeSmoke(auditService, audit, "SAFE_SMOKE_MESSAGE_REQUIRED");
+            }
+            if (form.getMaxTurns() == null || form.getMaxTurns() != 1) {
+                return failSafeSmoke(auditService, audit, "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE");
+            }
+            String scopeError = validateSafeSmokeScopes(form);
+            if (scopeError != null) {
+                return failSafeSmoke(auditService, audit, scopeError);
+            }
+            if (StringUtils.hasText(form.getSystemPrompt())
+                    || StringUtils.hasText(form.getFirstMsg())
+                    || (form.getAttachments() != null && !form.getAttachments().isEmpty())) {
+                return failSafeSmoke(auditService, audit, "SAFE_SMOKE_RUNTIME_INPUT_NOT_ALLOWED");
+            }
+            if (!StringUtils.hasText(upstreamUserId)) {
+                return failSafeSmoke(auditService, audit, "SAFE_SMOKE_UPSTREAM_USER_REQUIRED");
+            }
+            String tenantId = credential.getTenantId();
+            String contextId = StringUtils.hasText(form.getContextId())
+                    ? form.getContextId().trim()
+                    : BusinessAgentSessionService.generateContextId();
             A2AgentResourceResolver resourceResolver = requireA2AgentResourceResolver();
             A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
                     tenantId,
@@ -731,7 +876,7 @@ public class OpenApiController {
                             LlmModelCategory.GENERAL);
             BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
             if (service == null) {
-                return RX.failB("SAFE_SMOKE_TOKEN_SERVICE_UNAVAILABLE");
+                return failSafeSmoke(auditService, audit, "SAFE_SMOKE_TOKEN_SERVICE_UNAVAILABLE");
             }
             BusinessAgentTaskService.SafeSmokeResult result = service.performOpenApiSafeSmoke(
                     tenantId,
@@ -742,7 +887,7 @@ public class OpenApiController {
                     contextId,
                     modelResource.modelConfigId());
             LocalDateTime now = LocalDateTime.now();
-            return RX.ok(OpenApiTaskDTO.builder()
+            OpenApiTaskDTO response = OpenApiTaskDTO.builder()
                     .taskId(result.taskId())
                     .agentId(route.agentId())
                     .status("COMPLETED")
@@ -765,12 +910,51 @@ public class OpenApiController {
                     .result("SAFE_SMOKE_VERIFIED_NO_RUNTIME_DISPATCH")
                     .createdAt(now)
                     .updatedAt(now)
-                    .build());
-        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
-            return RX.failB(firstNonBlank(
-                    sanitizeDiagnosticText(e.getMessage()),
-                    "SAFE_SMOKE_REJECTED"));
+                    .build();
+            if (audit != null) {
+                try {
+                    auditService.safeSmokeCompleted(audit, new RuntimeRequestAuditService.SafeSmokeEvidence(
+                            response.getTaskId(),
+                            response.getStatus(),
+                            response.getEffectiveToolCount(),
+                            response.getToolScopeKind(),
+                            response.getToolScopeSource(),
+                            response.getEffectiveFunctionCount(),
+                            response.getFunctionScopeSource(),
+                            response.getTaskTokenFunctionScopeEmpty(),
+                            response.getTaskTokenStatus(),
+                            response.getRuntimeDispatched(),
+                            response.getResult()));
+                } catch (RuntimeException e) {
+                    return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
+                }
+            }
+            return RX.ok(response);
+        } catch (RuntimeException e) {
+            String code = safeSmokeErrorCode(e);
+            if (audit != null) {
+                try {
+                    auditService.safeSmokeFailed(audit, code);
+                } catch (RuntimeException ignored) {
+                    // Preserve the stable safe-smoke failure and do not expose persistence details.
+                }
+            }
+            return RX.failB(code);
         }
+    }
+
+    private RX<OpenApiTaskDTO> failSafeSmoke(
+            RuntimeRequestAuditService auditService,
+            RuntimeRequestAuditService.AuditHandle audit,
+            String code) {
+        if (audit != null) {
+            try {
+                auditService.safeSmokeFailed(audit, code);
+            } catch (RuntimeException ignored) {
+                // Preserve the stable safe-smoke failure and do not expose persistence details.
+            }
+        }
+        return RX.failB(code);
     }
 
     private String validateSafeSmokeScopes(OpenApiQueryForm form) {
@@ -1885,6 +2069,116 @@ public class OpenApiController {
             String value = request.getHeader(name);
             if (StringUtils.hasText(value)) {
                 return value;
+            }
+        }
+        return null;
+    }
+
+    private boolean hasForbiddenRuntimeAuditCredential(HttpServletRequest request) {
+        if (request == null) {
+            return false;
+        }
+        if (hasAnyHeader(request,
+                "Authorization",
+                "X-API-Key",
+                "X-Navigator-API-Key",
+                "X-Navi-Admin-Key",
+                "X-Navi-Operator-Key",
+                "X-Navi-Principal-Credential",
+                "X-Client-App-Control-Key",
+                "X-Client-App-Access-Token",
+                "X-App-Access-Token",
+                "X-Foggy-App-Access-Token",
+                "X-Task-Token",
+                "X-Worker-Token",
+                "X-Tenant-Id",
+                "X-Platform-Admin-Key",
+                "X-System-Admin-Key",
+                "X-Operator-Token",
+                "X-Principal-Token")) {
+            return true;
+        }
+        return hasAnyNormalizedParameter(request,
+                "tenantId",
+                "targetTenantId",
+                "clientAppId",
+                "upstreamSystemId",
+                "sourceSystem",
+                "sourceTenantId",
+                "taskId",
+                "contextId",
+                "providerTaskId");
+    }
+
+    private boolean hasAnyHeader(HttpServletRequest request, String... names) {
+        for (String name : names) {
+            if (StringUtils.hasText(request.getHeader(name))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasAnyNormalizedParameter(HttpServletRequest request, String... names) {
+        Set<String> forbidden = Arrays.stream(names)
+                .map(this::normalizeParameterName)
+                .collect(Collectors.toSet());
+        for (String name : request.getParameterMap().keySet()) {
+            if (forbidden.contains(normalizeParameterName(name))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String normalizeParameterName(String name) {
+        return name == null ? "" : name.replace("-", "").replace("_", "").toLowerCase(Locale.ROOT);
+    }
+
+    private Instant parseAuditInstant(String value, String errorCode) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(value.trim()).toInstant();
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(errorCode);
+        }
+    }
+
+    private String runtimeCredentialErrorCode(Throwable error) {
+        String message = error != null && error.getMessage() != null
+                ? error.getMessage().toLowerCase(Locale.ROOT)
+                : "";
+        if (message.contains("expired")) {
+            return "RUNTIME_CREDENTIAL_EXPIRED";
+        }
+        if (message.contains("not active")) {
+            return "RUNTIME_CREDENTIAL_INACTIVE";
+        }
+        if (message.contains("required")) {
+            return "RUNTIME_CREDENTIAL_REQUIRED";
+        }
+        return "RUNTIME_CREDENTIAL_INVALID";
+    }
+
+    private String safeSmokeErrorCode(Throwable error) {
+        String stable = stableErrorCode(error != null ? error.getMessage() : null);
+        return stable != null ? stable : "SAFE_SMOKE_REJECTED";
+    }
+
+    private String runtimeAuditErrorCode(Throwable error, String fallback) {
+        String stable = stableErrorCode(error != null ? error.getMessage() : null);
+        return stable != null ? stable : fallback;
+    }
+
+    private String stableErrorCode(String message) {
+        if (!StringUtils.hasText(message)) {
+            return null;
+        }
+        for (String part : message.trim().split("[^A-Za-z0-9_]+")) {
+            if (SANITIZED_RUNTIME_ERROR_CODES.contains(part)) {
+                return part;
             }
         }
         return null;

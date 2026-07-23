@@ -45,6 +45,8 @@ last_updated: 2026-07-23
 - bug008_acceptance_status: accepted-with-risks
 - bug009_status: READY_FOR_SIGNOFF
 - bug010_status: READY_FOR_SIGNOFF
+- runtime_request_audit_spec: workitems/BUG-017-runtime-request-audit-no-task-id.md
+- bug017_status: ULTRA_EXECUTING
 - bug009_acceptance_status: rejected-pending-independent-resignoff
 - runtime9_freeze_status: CONSUMED_FAIL_CLOSED
 - runtime9_exact_run_id: `int001-bug009-20260722-r9-33154d77`
@@ -98,6 +100,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-013 Codex 待核验状态与终态后 SSE 异常](./workitems/BUG-013-codex-unverified-state-and-post-terminal-sse.md) | 将 `PROCESS_UNVERIFIED` 收敛为可查询状态卡，并阻止终态后的 SSE 错误触发恢复 | READY_FOR_SIGNOFF；需部署本提交后进行 live 验证 |
 | [BUG-004 Codex 真实中止闭环与再次中止状态确认](./workitems/BUG-004-codex-cancel-execution-and-retry-confirmation.md) | SDK Worker 真实进程退出闭环；App Server exact thread/turn 状态检查与再次中止确认 | READY_FOR_SIGNOFF |
 | [BUG-014 Codex SDK Worker 受控中止身份、重试与退出收口](./workitems/BUG-014-codex-sdk-termination-identity-and-reconciliation.md) | 解耦终止身份与 Gateway credential，修复未确认重试和 CLI 已退出后的 `ABORTED` 收口，并完成 SDK Worker 发版部署 | READY_FOR_SIGNOFF；Worker 1.0.19、目标部署与现场恢复已完成，等待独立签核 |
+| [BUG-017 无 taskId runtime request audit](./workitems/BUG-017-runtime-request-audit-no-task-id.md) | ClientApp 自身 runtime-token/safe-ask correlation、短期脱敏阶段审计、无 taskId 查询与 CLI 1.0.25 发布 | ULTRA_EXECUTING；实现与发布验证进行中 |
 
 ## Scenario Sequence
 

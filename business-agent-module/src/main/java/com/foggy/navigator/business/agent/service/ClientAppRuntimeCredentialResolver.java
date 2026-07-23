@@ -49,6 +49,22 @@ public class ClientAppRuntimeCredentialResolver {
                 .build());
     }
 
+    /**
+     * Resolves the ClientApp owner directly from its runtime key/secret without issuing a token.
+     * Used by the strictly read-only runtime self-audit lane.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ResolvedClientAppCredentialDTO> resolve(String appKey, String appSecret) {
+        if (!StringUtils.hasText(appKey) && !StringUtils.hasText(appSecret)) {
+            return Optional.empty();
+        }
+        requireText(appKey, "client app key is required");
+        requireText(appSecret, "client app secret is required");
+        ClientAppRuntimeCredentialEntity credential = runtimeCredentialRepository.findByAppKey(appKey)
+                .orElseThrow(() -> new IllegalArgumentException("invalid client app credential"));
+        return resolve(credential.getTenantId(), appKey, appSecret);
+    }
+
     @Transactional(readOnly = true)
     public Optional<ResolvedClientAppCredentialDTO> resolveForSkill(
             String tenantId,

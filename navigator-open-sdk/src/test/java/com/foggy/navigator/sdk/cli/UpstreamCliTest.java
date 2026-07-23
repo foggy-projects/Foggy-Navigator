@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -47,12 +48,14 @@ class UpstreamCliTest {
     private static String lastClientAppAccessTokenHeader;
     private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
+    private static String lastClientRequestIdHeader;
     private static String lastPrincipalCredentialHeader;
     private static String lastTenantIdHeader;
     private static String responseOverride;
     private static int responseStatusOverride;
     private static List<String> requestPaths;
     private static List<String> requestBodies;
+    private static List<String> requestClientRequestIds;
 
     @TempDir
     Path tempDir;
@@ -79,11 +82,50 @@ class UpstreamCliTest {
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
             lastClientAppControlKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
+            lastClientRequestIdHeader = exchange.getRequestHeaders().getFirst("X-Navigator-Client-Request-Id");
+            requestClientRequestIds.add(lastClientRequestIdHeader);
             lastPrincipalCredentialHeader = exchange.getRequestHeaders().getFirst("X-Navi-Principal-Credential");
             lastTenantIdHeader = exchange.getRequestHeaders().getFirst("X-Tenant-Id");
 
             String response;
-            if ("__MESSAGES_TERMINAL__".equals(responseOverride)) {
+            if ("__RUNTIME_TOKEN_THEN_SAFE_SMOKE_DROP__".equals(responseOverride)
+                    && lastPath.contains("/safe-smoke")) {
+                exchange.close();
+                return;
+            } else if ("__RUNTIME_TOKEN_THEN_SAFE_SMOKE__".equals(responseOverride)
+                    || "__RUNTIME_TOKEN_THEN_SAFE_SMOKE_DROP__".equals(responseOverride)) {
+                response = lastPath.contains("/runtime-token")
+                        ? "{\"code\":200,\"data\":{\"accessToken\":\"cat-auto-secret\",\"appKey\":\"cak-test\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}}"
+                        : "{\"code\":200,\"data\":{\"taskId\":\"smk-correlated\",\"status\":\"COMPLETED\",\"contextId\":\"ctx-1\",\"effectiveToolCount\":0,\"effectiveFunctionCount\":0,\"toolScopeSource\":\"SAFE_SMOKE_NO_RUNTIME\",\"toolScopeKind\":\"NO_RUNTIME_MODEL_TOOL_SURFACE\",\"functionScopeSource\":\"REQUEST_EXPLICIT_EMPTY\",\"taskTokenFunctionScopeEmpty\":true,\"runtimeDispatched\":false,\"taskTokenStatus\":\"REVOKED\",\"result\":\"SAFE_SMOKE_VERIFIED_NO_RUNTIME_DISPATCH\"}}";
+            } else if ("__RUNTIME_AUDIT_EXACT__".equals(responseOverride)) {
+                response = """
+                        {"code":200,"data":{"count":1,"limit":20,"items":[{
+                          "clientRequestId":"6a02be06-b9e9-4935-878d-063268031462",
+                          "operation":"safe-ask",
+                          "receivedAt":"2026-07-23T06:30:09Z",
+                          "completedAt":null,
+                          "terminal":false,
+                          "result":"UNKNOWN",
+                          "sanitizedErrorCode":null,
+                          "httpRequestReceived":true,
+                          "runtimeTokenRequestReceived":true,
+                          "runtimeTokenIssued":null,
+                          "safeSmokeRequestReceived":false,
+                          "syntheticEvidenceCreated":false,
+                          "taskId":null,
+                          "status":"WAITING_FOR_SAFE_SMOKE",
+                          "effectiveToolCount":null,
+                          "toolScopeKind":"UNKNOWN",
+                          "toolScopeSource":"UNKNOWN",
+                          "effectiveFunctionCount":null,
+                          "functionScopeSource":"UNKNOWN",
+                          "taskTokenFunctionScopeEmpty":null,
+                          "taskTokenStatus":"UNKNOWN",
+                          "runtimeDispatched":null,
+                          "stages":[{"stage":"RUNTIME_TOKEN_REQUEST_RECEIVED","status":"RECEIVED","sanitizedErrorCode":null,"occurredAt":"2026-07-23T06:30:09Z"}]
+                        }]}}
+                        """;
+            } else if ("__MESSAGES_TERMINAL__".equals(responseOverride)) {
                 response = lastPath.contains("/messages")
                         ? """
                         {"code":0,"data":{"messages":[{
@@ -263,10 +305,12 @@ class UpstreamCliTest {
         lastClientAppAccessTokenHeader = null;
         lastClientAppControlKeyHeader = null;
         lastUpstreamUserIdHeader = null;
+        lastClientRequestIdHeader = null;
         lastPrincipalCredentialHeader = null;
         lastTenantIdHeader = null;
         requestPaths = new ArrayList<>();
         requestBodies = new ArrayList<>();
+        requestClientRequestIds = new ArrayList<>();
         responseOverride = "{\"code\":0,\"data\":{}}";
         responseStatusOverride = 200;
         stdout = new ByteArrayOutputStream();
@@ -327,7 +371,10 @@ class UpstreamCliTest {
         stderr.reset();
         int runtimeCode = run(new String[]{"upstream", "runtime", "--help"}, Map.of());
         assertEquals(0, runtimeCode);
-        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("rejects admin, control, and typed-management credentials"));
+        String runtimeOutput = stdout.toString(StandardCharsets.UTF_8);
+        assertTrue(runtimeOutput.contains("rejects admin, control, and typed-management credentials"));
+        assertTrue(runtimeOutput.contains("audit --request-id <clientRequestId>"));
+        assertTrue(runtimeOutput.contains("--since <ISO-8601 offset time> --until <ISO-8601 offset time>"));
         assertTrue(requestPaths.isEmpty());
     }
 
@@ -2047,6 +2094,185 @@ class UpstreamCliTest {
         assertTrue(output.contains("toolScopeKind=NO_RUNTIME_MODEL_TOOL_SURFACE"));
         assertTrue(output.contains("runtimeDispatched=false"));
         assertTrue(output.contains("taskTokenStatus=REVOKED"));
+    }
+
+    @Test
+    void safeAskPrintsCorrelationBeforeNetworkAndCarriesItAcrossTokenAndSafeSmoke() {
+        responseOverride = "__RUNTIME_TOKEN_THEN_SAFE_SMOKE__";
+
+        int code = run(new String[]{"upstream", "runtime", "safe-ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "sim-safe-smoke"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String requestId = output.lines()
+                .filter(line -> line.startsWith("clientRequestId="))
+                .map(line -> line.substring("clientRequestId=".length()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(0, code);
+        assertDoesNotThrow(() -> UUID.fromString(requestId));
+        assertEquals(List.of(
+                "/api/v1/open/client-apps/runtime-token",
+                "/api/v1/open/agents/agent-1/safe-smoke"), requestPaths);
+        assertEquals(List.of(requestId, requestId), requestClientRequestIds);
+        assertEquals("cat-auto-secret", lastClientAppAccessTokenHeader);
+        assertTrue(output.indexOf("clientRequestId=") < output.indexOf("taskId="));
+        assertFalse(output.contains("cas-runtime-secret"));
+    }
+
+    @Test
+    void safeAskTokenRejectionReturnsExitOneStableCodeAndNoRawBody() {
+        responseOverride = """
+                {"code":600,"msg":"RUNTIME_SECRET_MUST_NOT_LEAK RUNTIME_CREDENTIAL_INVALID raw-body cas-runtime-secret Authorization: Bearer leaked"}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "safe-ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "sim-safe-smoke"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals(1, requestPaths.size());
+        assertEquals("/api/v1/open/client-apps/runtime-token", lastPath);
+        assertTrue(output.matches("(?s).*clientRequestId=[0-9a-f-]{36}.*"));
+        assertTrue(error.contains("sanitizedErrorCode=RUNTIME_CREDENTIAL_INVALID"));
+        assertTrue(error.contains("clientRequestId="));
+        assertFalse(error.contains("raw-body"));
+        assertFalse(error.contains("Authorization"));
+        assertFalse(error.contains("cas-runtime-secret"));
+        assertFalse(error.contains("RUNTIME_SECRET_MUST_NOT_LEAK"));
+    }
+
+    @Test
+    void safeAskDroppedResponseKeepsCorrelationAndDoesNotRetryOrFallBackToAsk() {
+        responseOverride = "__RUNTIME_TOKEN_THEN_SAFE_SMOKE_DROP__";
+
+        int code = run(new String[]{"upstream", "runtime", "safe-ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "sim-safe-smoke"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        String requestId = stdout.toString(StandardCharsets.UTF_8).lines()
+                .filter(line -> line.startsWith("clientRequestId="))
+                .map(line -> line.substring("clientRequestId=".length()))
+                .findFirst()
+                .orElseThrow();
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals(List.of(
+                "/api/v1/open/client-apps/runtime-token",
+                "/api/v1/open/agents/agent-1/safe-smoke"), requestPaths);
+        assertEquals(List.of(requestId, requestId), requestClientRequestIds);
+        assertTrue(error.contains("sanitizedErrorCode=SAFE_ASK_RESPONSE_NOT_RECEIVED"));
+        assertTrue(error.contains("clientRequestId=" + requestId));
+        assertTrue(requestPaths.stream().noneMatch(path -> path.endsWith("/ask")));
+        assertFalse(error.contains("cas-runtime-secret"));
+    }
+
+    @Test
+    void safeAskClientPreconditionFailureStillReturnsStableCodeAndCorrelation() {
+        int code = run(new String[]{"upstream", "runtime", "safe-ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "sim-safe-smoke"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String requestId = output.lines()
+                .filter(line -> line.startsWith("clientRequestId="))
+                .map(line -> line.substring("clientRequestId=".length()))
+                .findFirst()
+                .orElseThrow();
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertDoesNotThrow(() -> UUID.fromString(requestId));
+        assertTrue(error.contains("sanitizedErrorCode=SAFE_ASK_CLIENT_FAILURE"));
+        assertTrue(error.contains("clientRequestId=" + requestId));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void runtimeAuditExactWorksWithoutTaskIdAndPreservesUnknownTriState() {
+        responseOverride = "__RUNTIME_AUDIT_EXACT__";
+        String requestId = "6a02be06-b9e9-4935-878d-063268031462";
+
+        int code = run(new String[]{"upstream", "runtime", "audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--request-id", requestId}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("GET", lastMethod);
+        assertTrue(lastPath.startsWith("/api/v1/open/runtime-audits?"));
+        assertTrue(lastPath.contains("requestId=" + requestId));
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cas-runtime-secret", lastClientAppSecretHeader);
+        assertNull(lastClientAppAccessTokenHeader);
+        assertNull(lastClientAppControlKeyHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertNull(lastTenantIdHeader);
+        assertNull(lastClientRequestIdHeader);
+        assertTrue(output.contains("audit[0].taskId=null"));
+        assertTrue(output.contains("audit[0].runtimeTokenIssued=UNKNOWN"));
+        assertTrue(output.contains("audit[0].runtimeDispatched=UNKNOWN"));
+        assertTrue(output.contains("audit[0].safeSmokeRequestReceived=false"));
+        assertFalse(output.contains("cas-runtime-secret"));
+    }
+
+    @Test
+    void runtimeAuditWindowCarriesBoundedFiltersAndLimit() {
+        responseOverride = "__RUNTIME_AUDIT_EXACT__";
+
+        int code = run(new String[]{"upstream", "runtime", "audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--since", "2026-07-23T14:29:30+08:00",
+                "--until", "2026-07-23T14:31:00+08:00",
+                "--operation", "safe-ask",
+                "--agent-code", "world-sim-order-clerk-v2-dev-20260716-a",
+                "--upstream-user-id", "sim-upstream-user-local",
+                "--limit", "12"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, code);
+        assertTrue(lastPath.contains("since=2026-07-23T14%3A29%3A30%2B08%3A00"));
+        assertTrue(lastPath.contains("until=2026-07-23T14%3A31%3A00%2B08%3A00"));
+        assertTrue(lastPath.contains("operation=safe-ask"));
+        assertTrue(lastPath.contains("agentCode=world-sim-order-clerk-v2-dev-20260716-a"));
+        assertTrue(lastPath.contains("upstreamUserId=sim-upstream-user-local"));
+        assertTrue(lastPath.contains("limit=12"));
+    }
+
+    @Test
+    void runtimeAuditRejectsAdminCredentialBeforeNetwork() {
+        int code = run(new String[]{"upstream", "runtime", "audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--request-id", "6a02be06-b9e9-4935-878d-063268031462"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret",
+                "NAVI_ADMIN_API_KEY", "naa-admin-secret"));
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("runtime lane refuses mixed credential material: NAVI_ADMIN_API_KEY"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
@@ -4757,8 +4983,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.24", provenance.sourceVersion());
-        assertEquals("1.0.24", provenance.publishedVersion());
+        assertEquals("1.0.25", provenance.sourceVersion());
+        assertEquals("1.0.25", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)

@@ -237,6 +237,28 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
+        return safeSmokeWithClientAppAccessToken(
+                agentId,
+                message,
+                contextId,
+                modelConfigId,
+                modelVariant,
+                clientAppKey,
+                clientAppAccessToken,
+                upstreamUserId,
+                null);
+    }
+
+    public AgentTask safeSmokeWithClientAppAccessToken(
+            String agentId,
+            String message,
+            String contextId,
+            String modelConfigId,
+            String modelVariant,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId,
+            String clientRequestId) {
         Map<String, Object> body = buildAskBody(
                 message,
                 contextId,
@@ -253,6 +275,7 @@ public class AgentApi {
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
         headers.put("X-Upstream-User-Id", upstreamUserId);
+        headers.put("X-Navigator-Client-Request-Id", clientRequestId);
         return http.post("/api/v1/open/agents/" + agentId + "/safe-smoke",
                 body, headers, new TypeReference<>() {});
     }

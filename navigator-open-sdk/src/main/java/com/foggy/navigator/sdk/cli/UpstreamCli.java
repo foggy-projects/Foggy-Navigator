@@ -63,6 +63,9 @@ import com.foggy.navigator.sdk.model.businessagent.IssuedCredentialDTO;
 import com.foggy.navigator.sdk.model.businessagent.LlmModelConfigDTO;
 import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
 import com.foggy.navigator.sdk.model.businessagent.RotateUpstreamAdminCredentialForm;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditPageDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditStageDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
@@ -101,6 +104,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -133,6 +137,50 @@ public class UpstreamCli {
             "NAVI_OPERATOR_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVI_CONTROL_API_KEY",
             "NAVIGATOR_CONTROL_API_KEY", "NAVI_PRINCIPAL_CREDENTIAL", "NAVI_USER_API_KEY",
             "NAVI_ADMIN_KEY_CLAIM_TOKEN", "NAVI_WORKER_CREDENTIAL", "NAVI_TASK_SCOPED_TOKEN");
+    private static final Set<String> SANITIZED_RUNTIME_ERROR_CODES = Set.of(
+            "AUDIT_QUERY_MODE_CONFLICT",
+            "AUDIT_RECORD_EXPIRED_OR_NOT_FOUND",
+            "CLIENT_REQUEST_ID_ALREADY_USED",
+            "CLIENT_REQUEST_ID_INVALID",
+            "CLIENT_REQUEST_ID_OPERATION_MISMATCH",
+            "CLIENT_REQUEST_ID_REQUIRED",
+            "FUNCTION_SCOPE_EXPLICIT_NULL",
+            "RUNTIME_AUDIT_BOUNDED_WINDOW_REQUIRED",
+            "RUNTIME_AUDIT_CREDENTIAL_INVALID",
+            "RUNTIME_AUDIT_CREDENTIAL_LANE_REJECTED",
+            "RUNTIME_AUDIT_CREDENTIAL_REQUIRED",
+            "RUNTIME_AUDIT_HANDLE_REQUIRED",
+            "RUNTIME_AUDIT_LIMIT_INVALID",
+            "RUNTIME_AUDIT_OPERATION_INVALID",
+            "RUNTIME_AUDIT_QUERY_FAILED",
+            "RUNTIME_AUDIT_RECORDING_FAILED",
+            "RUNTIME_AUDIT_RECORD_NOT_FOUND",
+            "RUNTIME_AUDIT_SCOPE_NOT_FOUND",
+            "RUNTIME_AUDIT_SERVICE_UNAVAILABLE",
+            "RUNTIME_AUDIT_SINCE_INVALID",
+            "RUNTIME_AUDIT_UNTIL_INVALID",
+            "RUNTIME_AUDIT_WINDOW_INVALID",
+            "RUNTIME_AUDIT_WINDOW_TOO_LARGE",
+            "RUNTIME_CLIENT_APP_CREDENTIAL_REQUIRED",
+            "RUNTIME_CLIENT_APP_KEY_REQUIRED",
+            "RUNTIME_CLIENT_APP_KEY_UNKNOWN",
+            "RUNTIME_CLIENT_APP_SCOPE_UNKNOWN",
+            "RUNTIME_CREDENTIAL_EXPIRED",
+            "RUNTIME_CREDENTIAL_INACTIVE",
+            "RUNTIME_CREDENTIAL_INVALID",
+            "RUNTIME_CREDENTIAL_REQUIRED",
+            "SAFE_SMOKE_BODY_REQUIRED",
+            "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED",
+            "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE",
+            "SAFE_SMOKE_MESSAGE_REQUIRED",
+            "SAFE_SMOKE_REJECTED",
+            "SAFE_SMOKE_REQUIRES_EMPTY_FUNCTION_SCOPE",
+            "SAFE_SMOKE_REQUIRES_EMPTY_TOOL_SCOPE",
+            "SAFE_SMOKE_RUNTIME_INPUT_NOT_ALLOWED",
+            "SAFE_SMOKE_TOKEN_SERVICE_UNAVAILABLE",
+            "SAFE_SMOKE_TOOL_SCOPE_REQUIRED",
+            "SAFE_SMOKE_UPSTREAM_USER_REQUIRED",
+            "TOOL_SCOPE_EXPLICIT_NULL");
     private final PrintStream out;
     private final PrintStream err;
     private final Path cwd;
@@ -140,6 +188,10 @@ public class UpstreamCli {
     private final CommandRunner commandRunner;
     private UpstreamCliConfig config;
     private String resolvedClientAppAccessToken;
+    private String activeClientRequestId;
+    private String activeRuntimeOperation;
+    private String activeRuntimeAgentCode;
+    private String activeRuntimeUpstreamUserId;
     private Map<String, String> env = Map.of();
 
     public UpstreamCli(PrintStream out, PrintStream err, Path cwd) {
@@ -167,6 +219,10 @@ public class UpstreamCli {
     public int run(String[] args, Map<String, String> env) {
         CliArguments parsed = CliArguments.parse(args);
         try {
+            activeClientRequestId = null;
+            activeRuntimeOperation = null;
+            activeRuntimeAgentCode = null;
+            activeRuntimeUpstreamUserId = null;
             parsed.rejectUnknownOptions();
             this.env = env != null ? env : Map.of();
             config = UpstreamCliConfig.load(parsed, env, cwd);
@@ -323,6 +379,7 @@ public class UpstreamCli {
             case "app directory files" -> directoryClientFiles(args);
             case "runtime", "runtime help" -> runtimeUsage();
             case "runtime token" -> runtimeToken(args);
+            case "runtime audit" -> runtimeAudit(args);
             case "runtime owner-smoke" -> ownerSmoke(args);
             case "runtime readiness", "runtime verify-agent-readiness" -> verifyAgentReadiness(args);
             case "runtime inspect" -> inspectRuntime(args);
@@ -488,7 +545,7 @@ public class UpstreamCli {
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
         out.println("Canonical lanes: platform, app, runtime. Run `navi upstream <lane> --help` for lane-specific commands.");
-        out.println("Commands: config check, auth login/whoami, runtime-token, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, safe-ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login/whoami, runtime-token, runtime audit, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, safe-ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status. Do not use these commands to onboard OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
         out.println("For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.");
         out.println("Typed-management introspection requires exactly one NAVI_PRINCIPAL_CREDENTIAL (or --principal-credential-env); NAVI_ADMIN_API_KEY is not S1 root or S2 platform/security authority.");
@@ -500,6 +557,8 @@ public class UpstreamCli {
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv|none>] [--allowed-functions <csv|none>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  safe-ask --upstream-user-id <id> --message <label> [--model-config-id <id>] [--model-variant <name>]  # forces maxTurns=1 and exact allowedTools=[]/allowedFunctions=[]; no Worker/model dispatch");
+        out.println("  runtime audit --request-id <clientRequestId> [--operation runtime-token|safe-ask] [--json]");
+        out.println("  runtime audit --since <offset-time> --until <offset-time> [--operation runtime-token|safe-ask] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
@@ -649,9 +708,12 @@ public class UpstreamCli {
     }
 
     private int runtimeUsage() {
-        out.println("Usage: navi upstream runtime <token|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
+        out.println("Usage: navi upstream runtime <token|audit|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
         out.println("Runtime lane accepts only ClientApp runtime material (key/secret or access token) and rejects admin, control, and typed-management credentials.");
         out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
+        out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask] [--json]");
+        out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("Audit uses ClientApp key/secret only, derives tenant/system/ClientApp on the server, issues no token, and creates no task/context/session or runtime dispatch.");
         return 0;
     }
 
@@ -892,7 +954,18 @@ public class UpstreamCli {
         if (args.flag("write-profile")) {
             config.assertProfileWritable();
         }
-        ClientAppRuntimeAccessTokenDTO token = exchangeRuntimeAccessToken(args);
+        String clientRequestId = beginRuntimeClientRequest("runtime-token", null, null);
+        ClientAppRuntimeAccessTokenDTO token;
+        try {
+            token = exchangeRuntimeAccessToken(args);
+        } catch (RuntimeRequestFailure e) {
+            throw e;
+        } catch (NavigatorApiException e) {
+            throw runtimeRequestFailure(e, "RUNTIME_TOKEN_RESPONSE_NOT_RECEIVED", clientRequestId);
+        } catch (RuntimeException e) {
+            throw new RuntimeRequestFailure(
+                    "sanitizedErrorCode=RUNTIME_TOKEN_CLIENT_FAILURE clientRequestId=" + clientRequestId);
+        }
         if (args.flag("write-profile")) {
             config.writeProfileValue("NAVI_CLIENT_APP_ACCESS_TOKEN", token.getAccessToken());
         }
@@ -1180,6 +1253,47 @@ public class UpstreamCli {
         out.println("platformControlStored=" + provisionedControlStoredKeys(dto));
         out.println("tenantRuntimeStored=" + provisionedRuntimeStoredKeys(dto));
         printUpstreamTenantClientAppProvisioning(dto);
+        return 0;
+    }
+
+    private int runtimeAudit(CliArguments args) throws Exception {
+        String requestId = args.option("request-id");
+        String since = args.option("since");
+        String until = args.option("until");
+        if (hasText(requestId) == (hasText(since) || hasText(until))) {
+            throw new UpstreamCliException(
+                    "runtime audit requires exactly --request-id or both --since and --until");
+        }
+        if (!hasText(requestId) && (!hasText(since) || !hasText(until))) {
+            throw new UpstreamCliException("runtime audit requires both --since and --until");
+        }
+        Integer limit = parseInteger(args.option("limit"));
+        String appKey = clientAppKey(args);
+        String appSecret = config.required("NAVI_CLIENT_APP_SECRET", "client app secret");
+        RuntimeRequestAuditPageDTO page;
+        try {
+            page = new BusinessAgentApi(runtimeAuditHttp()).queryRuntimeAudits(
+                    appKey,
+                    appSecret,
+                    requestId,
+                    since,
+                    until,
+                    args.option("operation"),
+                    args.option("agent-code"),
+                    args.option("upstream-user-id"),
+                    limit);
+        } catch (NavigatorApiException e) {
+            throw runtimeRequestFailure(e, "RUNTIME_AUDIT_RESPONSE_NOT_RECEIVED", requestId);
+        }
+        if (page == null) {
+            throw new RuntimeRequestFailure(
+                    "sanitizedErrorCode=RUNTIME_AUDIT_EMPTY_RESPONSE clientRequestId=" + valueOrNull(requestId));
+        }
+        if (args.flag("json")) {
+            printJson(page);
+        } else {
+            printRuntimeAudits(page);
+        }
         return 0;
     }
 
@@ -3596,6 +3710,7 @@ public class UpstreamCli {
         }
         rejectSafeAskScopeOverride(args, "allowed-tools");
         rejectSafeAskScopeOverride(args, "allowed-functions");
+        String clientRequestId = beginRuntimeClientRequest("safe-ask", agent, upstreamUserId);
         AgentTask task;
         try {
             task = agentApi().safeSmokeWithClientAppAccessToken(
@@ -3606,11 +3721,19 @@ public class UpstreamCli {
                     modelVariant(args),
                     clientAppKey(args),
                     clientAppAccessToken(args),
-                    upstreamUserId);
+                    upstreamUserId,
+                    clientRequestId);
+        } catch (RuntimeRequestFailure e) {
+            throw e;
         } catch (NavigatorApiException e) {
-            throw new UpstreamCliException(
-                    e.getMessage() != null ? e.getMessage() : "Navigator safe ask request failed",
-                    e);
+            throw runtimeRequestFailure(e, "SAFE_ASK_RESPONSE_NOT_RECEIVED", clientRequestId);
+        } catch (RuntimeException e) {
+            throw new RuntimeRequestFailure(
+                    "sanitizedErrorCode=SAFE_ASK_CLIENT_FAILURE clientRequestId=" + clientRequestId);
+        }
+        if (task == null) {
+            throw new RuntimeRequestFailure(
+                    "sanitizedErrorCode=SAFE_ASK_EMPTY_RESPONSE clientRequestId=" + clientRequestId);
         }
         printTask(task);
         return 0;
@@ -4400,6 +4523,15 @@ public class UpstreamCli {
                 null, null, config.get("NAVI_TENANT_ID"), Duration.ofSeconds(30));
     }
 
+    private HttpHelper runtimeAuditHttp() {
+        return new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
+                null,
+                null,
+                Duration.ofSeconds(30));
+    }
+
     private void requireLegacyPlatformLane() {
         if (!hasText(config.get("NAVI_ADMIN_API_KEY"))) {
             throw new UpstreamCliException("upstream admin credential is required (NAVI_ADMIN_API_KEY)");
@@ -4462,12 +4594,57 @@ public class UpstreamCli {
         String appKey = requiredOptionOrConfig(args, "client-app-key", "NAVI_CLIENT_APP_KEY", "client app key");
         String appSecret = config.required("NAVI_CLIENT_APP_SECRET", "client app secret");
         BusinessAgentApi api = new BusinessAgentApi(openHttp());
-        ClientAppRuntimeAccessTokenDTO token = api.exchangeRuntimeAccessToken(appKey, appSecret);
+        ClientAppRuntimeAccessTokenDTO token = api.exchangeRuntimeAccessToken(
+                appKey,
+                appSecret,
+                activeClientRequestId,
+                activeRuntimeOperation,
+                activeRuntimeAgentCode,
+                activeRuntimeUpstreamUserId);
         if (token == null || !hasText(token.getAccessToken())) {
+            if (hasText(activeClientRequestId)) {
+                throw new RuntimeRequestFailure(
+                        "sanitizedErrorCode=RUNTIME_TOKEN_EMPTY_RESPONSE clientRequestId="
+                                + activeClientRequestId);
+            }
             throw new UpstreamCliException("runtime token response did not include accessToken");
         }
         config.setValue("NAVI_CLIENT_APP_ACCESS_TOKEN", token.getAccessToken());
         return token;
+    }
+
+    private String beginRuntimeClientRequest(String operation, String agentCode, String upstreamUserId) {
+        String clientRequestId = UUID.randomUUID().toString();
+        activeClientRequestId = clientRequestId;
+        activeRuntimeOperation = operation;
+        activeRuntimeAgentCode = agentCode;
+        activeRuntimeUpstreamUserId = upstreamUserId;
+        out.println("clientRequestId=" + clientRequestId);
+        out.flush();
+        return clientRequestId;
+    }
+
+    private RuntimeRequestFailure runtimeRequestFailure(
+            NavigatorApiException error,
+            String fallback,
+            String clientRequestId) {
+        String code = sanitizedRuntimeErrorCode(error, fallback);
+        return new RuntimeRequestFailure(
+                "sanitizedErrorCode=" + code + " clientRequestId=" + valueOrNull(clientRequestId));
+    }
+
+    private String sanitizedRuntimeErrorCode(NavigatorApiException error, String fallback) {
+        String message = error != null ? error.getMessage() : null;
+        if (hasText(message)) {
+            Matcher matcher = Pattern.compile("[A-Z][A-Z0-9_]{2,127}").matcher(message);
+            while (matcher.find()) {
+                String candidate = matcher.group();
+                if (SANITIZED_RUNTIME_ERROR_CODES.contains(candidate)) {
+                    return candidate;
+                }
+            }
+        }
+        return fallback;
     }
 
     private String modelConfigId(CliArguments args) {
@@ -4802,6 +4979,50 @@ public class UpstreamCli {
             config.writeProfileValues(profiles.tenantRuntimeProfile(), runtime, TENANT_RUNTIME_PROFILE_FORBIDDEN);
         } catch (UpstreamCliException e) {
             throw new UpstreamCliException("tenant runtime profile was not written; the platform control profile remains private and no combined credential profile was created", e);
+        }
+    }
+
+    private void printRuntimeAudits(RuntimeRequestAuditPageDTO page) {
+        List<RuntimeRequestAuditDTO> items = page.getItems() != null ? page.getItems() : List.of();
+        out.println("auditCount=" + items.size());
+        out.println("auditLimit=" + page.getLimit());
+        for (int i = 0; i < items.size(); i++) {
+            RuntimeRequestAuditDTO audit = items.get(i);
+            String prefix = "audit[" + i + "].";
+            out.println(prefix + "clientRequestId=" + valueOrNull(audit.getClientRequestId()));
+            out.println(prefix + "operation=" + valueOrUnknown(audit.getOperation()));
+            out.println(prefix + "receivedAt=" + valueOrUnknown(audit.getReceivedAt()));
+            out.println(prefix + "completedAt=" + valueOrNull(audit.getCompletedAt()));
+            out.println(prefix + "terminal=" + booleanOrUnknown(audit.getTerminal()));
+            out.println(prefix + "result=" + valueOrUnknown(audit.getResult()));
+            out.println(prefix + "sanitizedErrorCode=" + valueOrNull(audit.getSanitizedErrorCode()));
+            out.println(prefix + "safeErrorSummary=" + valueOrNull(audit.getSafeErrorSummary()));
+            out.println(prefix + "httpRequestReceived=" + booleanOrUnknown(audit.getHttpRequestReceived()));
+            out.println(prefix + "runtimeTokenRequestReceived=" + booleanOrUnknown(audit.getRuntimeTokenRequestReceived()));
+            out.println(prefix + "runtimeTokenIssued=" + booleanOrUnknown(audit.getRuntimeTokenIssued()));
+            out.println(prefix + "safeSmokeRequestReceived=" + booleanOrUnknown(audit.getSafeSmokeRequestReceived()));
+            out.println(prefix + "syntheticEvidenceCreated=" + booleanOrUnknown(audit.getSyntheticEvidenceCreated()));
+            out.println(prefix + "taskId=" + valueOrNull(audit.getTaskId()));
+            out.println(prefix + "status=" + valueOrUnknown(audit.getStatus()));
+            out.println(prefix + "effectiveToolCount=" + valueOrUnknown(audit.getEffectiveToolCount()));
+            out.println(prefix + "toolScopeKind=" + valueOrUnknown(audit.getToolScopeKind()));
+            out.println(prefix + "toolScopeSource=" + valueOrUnknown(audit.getToolScopeSource()));
+            out.println(prefix + "effectiveFunctionCount=" + valueOrUnknown(audit.getEffectiveFunctionCount()));
+            out.println(prefix + "functionScopeSource=" + valueOrUnknown(audit.getFunctionScopeSource()));
+            out.println(prefix + "taskTokenFunctionScopeEmpty="
+                    + booleanOrUnknown(audit.getTaskTokenFunctionScopeEmpty()));
+            out.println(prefix + "taskTokenStatus=" + valueOrUnknown(audit.getTaskTokenStatus()));
+            out.println(prefix + "runtimeDispatched=" + booleanOrUnknown(audit.getRuntimeDispatched()));
+            List<RuntimeRequestAuditStageDTO> stages = audit.getStages() != null ? audit.getStages() : List.of();
+            out.println(prefix + "stageCount=" + stages.size());
+            for (int j = 0; j < stages.size(); j++) {
+                RuntimeRequestAuditStageDTO stage = stages.get(j);
+                String stagePrefix = prefix + "stages[" + j + "].";
+                out.println(stagePrefix + "stage=" + valueOrUnknown(stage.getStage()));
+                out.println(stagePrefix + "status=" + valueOrUnknown(stage.getStatus()));
+                out.println(stagePrefix + "sanitizedErrorCode=" + valueOrNull(stage.getSanitizedErrorCode()));
+                out.println(stagePrefix + "occurredAt=" + valueOrUnknown(stage.getOccurredAt()));
+            }
         }
     }
 
@@ -5653,6 +5874,12 @@ public class UpstreamCli {
     private record StartCommand(String role, List<String> command, String scriptPreview) {
     }
 
+    private static final class RuntimeRequestFailure extends RuntimeException {
+        private RuntimeRequestFailure(String message) {
+            super(message);
+        }
+    }
+
     private record WslInstallOptions(String distro, String user) {
     }
 
@@ -5747,6 +5974,18 @@ public class UpstreamCli {
 
     private static String valueOrEmpty(Object value) {
         return value == null ? "(empty)" : String.valueOf(value);
+    }
+
+    private static String valueOrNull(Object value) {
+        return value == null ? "null" : String.valueOf(value);
+    }
+
+    private static String valueOrUnknown(Object value) {
+        return value == null ? "UNKNOWN" : String.valueOf(value);
+    }
+
+    private static String booleanOrUnknown(Boolean value) {
+        return value == null ? "UNKNOWN" : value.toString();
     }
 
     private static String firstText(String first, String second) {

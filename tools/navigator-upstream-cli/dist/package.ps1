@@ -136,6 +136,9 @@ $features = @(
     "agent-readiness",
     "ask",
     "safe-ask",
+    "runtime-request-audit",
+    "safe-ask-client-request-correlation",
+    "runtime-audit-no-task-id",
     "messages",
     "sessions",
     "skill-artifact-read",
@@ -233,10 +236,33 @@ Compress-Archive -Path "$stagingRoot\*" -DestinationPath $archivePath -Force
 $sha = Get-Sha256 -Path $archivePath
 Write-Utf8NoBom -Path (Join-Path $outputDir "$archiveName.sha256") -Content "$sha  $archiveName"
 
+$shortCommit = if ($gitCommit.Length -ge 12) { $gitCommit.Substring(0, 12) } else { $gitCommit }
+$buildId = if ($shortCommit) { "$version+$shortCommit" } else { "$version+$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))" }
+if ($gitDirty) {
+    $buildId = "$buildId.dirty"
+}
+$releaseManifest = [ordered]@{
+    version = $version
+    released = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+    buildTimeUtc = $buildTimeUtc
+    buildId = $buildId
+    gitCommit = $gitCommit
+    gitDirty = $gitDirty
+    features = $features
+    files = @{
+        windows = "$version/$archiveName"
+    }
+    sha256 = @{
+        windows = $sha
+    }
+} | ConvertTo-Json -Depth 5
+Write-Utf8NoBom -Path (Join-Path $outputDir "RELEASE_MANIFEST.json") -Content $releaseManifest
+
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 
 Write-Host "Archive: $archivePath" -ForegroundColor Green
 Write-Host "SHA256:  $sha" -ForegroundColor Green
+Write-Host "Release manifest: $(Join-Path $outputDir 'RELEASE_MANIFEST.json')" -ForegroundColor Green
 
 if ($Upload) {
     if ($AllowSameVersion) {

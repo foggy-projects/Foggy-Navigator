@@ -48,12 +48,15 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
             Map.entry("mvc:get:/api/v1/open/business-agent/sessions/{contextId}/messages", false),
             Map.entry("mvc:post:/api/v1/open/client-apps/runtime-token", false),
             Map.entry("mvc:get:/api/v1/open/frame-reports", false),
+            Map.entry("mvc:get:/api/v1/open/runtime-audits", false),
             Map.entry("mvc:get:/api/v1/open/skills/{skillId}/files/slice", false),
             Map.entry("mvc:get:/api/v1/open/skills/{skillId}/files/tree", false)
     );
 
     private static final String RUNTIME_TOKEN_EXCHANGE_ROUTE =
             "mvc:post:/api/v1/open/client-apps/runtime-token";
+    private static final String RUNTIME_SELF_AUDIT_ROUTE =
+            "mvc:get:/api/v1/open/runtime-audits";
 
     private static final Map<String, String> WORKER_GATEWAY_ACTION_BY_ROUTE = Map.of(
             "mvc:get:/internal/worker-gateway/v1/business-functions", "gateway.function.list",
@@ -148,7 +151,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         byte[] sourceBytes = Files.readAllBytes(source);
 
         assertArrayEquals(sourceBytes, Files.readAllBytes(evidence));
-        assertEquals(421, Files.readAllLines(source).size());
+        assertEquals(457, Files.readAllLines(source).size());
         assertEquals(AuthorizationRouteCatalog.EXPECTED_ENTRY_COUNT, sourceRows().size() - 1);
         assertEquals(AuthorizationRouteCatalog.EXPECTED_SHA_256, sha256(sourceBytes));
     }
@@ -189,9 +192,9 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
 
         assertEquals(6, entries.stream().filter(entry -> entry.requiredSections().isEmpty()).count(),
                 "public/framework rows must say NONE explicitly");
-        assertEquals(201, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
+        assertEquals(234, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
         assertEquals(125, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.PLATFORM_GRANT)).count());
-        assertEquals(125, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.TENANT_AUTHORITY)).count());
+        assertEquals(158, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.TENANT_AUTHORITY)).count());
         assertEquals(19, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION)).count());
         assertTrue(entries.stream()
                         .filter(entry -> entry.requires(AuthorizationRequiredSection.PLATFORM_GRANT))
@@ -200,6 +203,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
                 "platform dynamic tenant actions require authority, platform grant, and tenant authority together");
         Set<String> expectedDelegationRoutes = RUNTIME_CAPABILITY_BY_ROUTE.keySet().stream()
                 .filter(routeId -> !RUNTIME_TOKEN_EXCHANGE_ROUTE.equals(routeId))
+                .filter(routeId -> !RUNTIME_SELF_AUDIT_ROUTE.equals(routeId))
                 .collect(Collectors.toSet());
         Map<String, AuthorizationRouteManifestEntry> delegationEntries = entries.stream()
                 .filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION))

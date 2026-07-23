@@ -44,7 +44,45 @@ public class BusinessAgentApi {
     }
 
     public ClientAppRuntimeAccessTokenDTO exchangeRuntimeAccessToken(String appKey, String appSecret) {
-        return http.post("/api/v1/open/client-apps/runtime-token", null, Map.of(
+        return exchangeRuntimeAccessToken(appKey, appSecret, null, null, null, null);
+    }
+
+    public ClientAppRuntimeAccessTokenDTO exchangeRuntimeAccessToken(
+            String appKey,
+            String appSecret,
+            String clientRequestId,
+            String operation,
+            String agentCode,
+            String upstreamUserId) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Client-App-Key", appKey);
+        headers.put("X-Client-App-Secret", appSecret);
+        headers.put("X-Navigator-Client-Request-Id", clientRequestId);
+        headers.put("X-Navigator-Runtime-Operation", operation);
+        headers.put("X-Navigator-Agent-Code", agentCode);
+        headers.put("X-Upstream-User-Id", upstreamUserId);
+        return http.post("/api/v1/open/client-apps/runtime-token", null, headers, new TypeReference<>() {});
+    }
+
+    public RuntimeRequestAuditPageDTO queryRuntimeAudits(
+            String appKey,
+            String appSecret,
+            String requestId,
+            String since,
+            String until,
+            String operation,
+            String agentCode,
+            String upstreamUserId,
+            Integer limit) {
+        StringBuilder path = new StringBuilder("/api/v1/open/runtime-audits");
+        appendQuery(path, "requestId", requestId);
+        appendQuery(path, "since", since);
+        appendQuery(path, "until", until);
+        appendQuery(path, "operation", operation);
+        appendQuery(path, "agentCode", agentCode);
+        appendQuery(path, "upstreamUserId", upstreamUserId);
+        appendQuery(path, "limit", limit != null ? String.valueOf(limit) : null);
+        return http.get(path.toString(), Map.of(
                 "X-Client-App-Key", appKey,
                 "X-Client-App-Secret", appSecret
         ), new TypeReference<>() {});
@@ -791,6 +829,16 @@ public class BusinessAgentApi {
 
     private String urlEncode(String value) {
         return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private void appendQuery(StringBuilder path, String name, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        path.append(path.indexOf("?") >= 0 ? '&' : '?')
+                .append(urlEncode(name))
+                .append('=')
+                .append(urlEncode(value));
     }
 
     private String upstreamClientAppScopePath(String clientAppId) {

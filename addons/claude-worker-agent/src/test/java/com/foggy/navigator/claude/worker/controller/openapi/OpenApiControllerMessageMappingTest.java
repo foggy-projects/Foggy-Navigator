@@ -2,13 +2,17 @@ package com.foggy.navigator.claude.worker.controller.openapi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionDTO;
+import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditDTO;
+import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditPageDTO;
 import com.foggy.navigator.business.agent.service.BusinessAgentFrameReportService;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
+import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
@@ -47,9 +51,12 @@ import com.foggy.navigator.business.agent.service.AccountContextFileService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,6 +72,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
@@ -74,6 +82,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class OpenApiControllerMessageMappingTest {
 
@@ -150,6 +161,243 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("TOOL_SCOPE_EXPLICIT_NULL",
                 controller.safeSmokeAgent("agent-1", explicitNull, request).getMsg());
         verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void runtimeTokenCorrelationRecordsIssuedStageWithoutLeakingCredentialFailureDetails() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        RuntimeRequestAuditService.AuditHandle handle =
+                new RuntimeRequestAuditService.AuditHandle("5ec3e0fd-79bf-4eb5-b2ea-d84b636c52aa");
+        OpenApiController controller = newController(
+                agentResolver, credentialResolver, null, null, auditService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        ClientAppRuntimeAccessTokenDTO token = new ClientAppRuntimeAccessTokenDTO();
+        token.setAccessToken("runtime-token-must-not-be-audited");
+
+        when(request.getHeader("X-Navigator-Client-Request-Id")).thenReturn(handle.clientRequestId());
+        when(request.getHeader("X-Navigator-Runtime-Operation")).thenReturn("safe-ask");
+        when(request.getHeader("X-Navigator-Agent-Code")).thenReturn("agent-1");
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Client-App-Secret")).thenReturn("runtime-secret");
+        when(auditService.beginRuntimeToken(
+                handle.clientRequestId(), "safe-ask", "runtime-key", "agent-1", "upstream-a"))
+                .thenReturn(handle);
+        when(credentialResolver.issueAccessToken("runtime-key", "runtime-secret")).thenReturn(token);
+
+        var response = controller.issueClientAppRuntimeToken(request);
+
+        assertTrue(response.isOk());
+        assertEquals(token, response.getData());
+        verify(auditService).runtimeTokenIssued(handle);
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
+    void runtimeTokenRejectionUsesSanitizedCodeAndRecordsFailure() {
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        RuntimeRequestAuditService.AuditHandle handle =
+                new RuntimeRequestAuditService.AuditHandle("596271b0-00b6-4af2-93dc-bcfe119fbefc");
+        OpenApiController controller = newController(
+                mock(UnifiedAgentResolver.class), credentialResolver, null, null, auditService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        when(request.getHeader("X-Navigator-Client-Request-Id")).thenReturn(handle.clientRequestId());
+        when(request.getHeader("X-Navigator-Runtime-Operation")).thenReturn("safe-ask");
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Client-App-Secret")).thenReturn("runtime-secret");
+        when(auditService.beginRuntimeToken(
+                handle.clientRequestId(), "safe-ask", "runtime-key", null, null))
+                .thenReturn(handle);
+        when(credentialResolver.issueAccessToken("runtime-key", "runtime-secret"))
+                .thenThrow(new IllegalArgumentException("raw upstream response and secret runtime-secret"));
+
+        var response = controller.issueClientAppRuntimeToken(request);
+
+        assertEquals("RUNTIME_CREDENTIAL_INVALID", response.getMsg());
+        assertFalse(response.getMsg().contains("runtime-secret"));
+        verify(auditService).runtimeTokenRejected(handle, "RUNTIME_CREDENTIAL_INVALID");
+    }
+
+    @Test
+    void correlatedRuntimeTokenFailsClosedWhenAuditServiceIsUnavailable() {
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiController controller = newController(
+                mock(UnifiedAgentResolver.class),
+                credentialResolver,
+                null,
+                null,
+                (RuntimeRequestAuditService) null);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader("X-Navigator-Client-Request-Id"))
+                .thenReturn("c6fd96b6-b445-4147-91e3-9b250e85436b");
+
+        var response = controller.issueClientAppRuntimeToken(request);
+
+        assertEquals("RUNTIME_AUDIT_SERVICE_UNAVAILABLE", response.getMsg());
+        verifyNoInteractions(credentialResolver);
+    }
+
+    @Test
+    void safeSmokeCorrelationRecordsSyntheticEvidenceRevocationAndNoDispatch() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        RuntimeRequestAuditService.AuditHandle handle =
+                new RuntimeRequestAuditService.AuditHandle("32285a1c-7868-4a83-9299-53ad3569d58c");
+        OpenApiController controller = newController(
+                agentResolver, credentialResolver, null, taskService, auditService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("sim-safe-smoke");
+        form.setMaxTurns(1);
+        form.setAllowedTools(List.of());
+        form.setAllowedFunctions(List.of());
+
+        when(request.getHeader("X-Navigator-Client-Request-Id")).thenReturn(handle.clientRequestId());
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(auditService.beginSafeSmoke(
+                handle.clientRequestId(), credential(), "agent-1", "upstream-a"))
+                .thenReturn(handle);
+        when(taskService.performOpenApiSafeSmoke(
+                eq("tenant-1"), eq("owner-1"), eq("app-1"), eq("upstream-a"),
+                eq("agent-1"), any(String.class), eq("model-default")))
+                .thenAnswer(invocation -> new BusinessAgentTaskService.SafeSmokeResult(
+                        "smk_correlated", invocation.getArgument(5), "model-default", 0,
+                        "REQUEST_EXPLICIT_EMPTY", true, "REVOKED"));
+
+        var response = controller.safeSmokeAgent("agent-1", form, request);
+
+        assertTrue(response.isOk());
+        assertFalse(response.getData().getRuntimeDispatched());
+        verify(auditService).safeSmokeCompleted(eq(handle), argThat(evidence ->
+                "smk_correlated".equals(evidence.taskId())
+                        && Boolean.FALSE.equals(evidence.runtimeDispatched())
+                        && "REVOKED".equals(evidence.taskTokenStatus())));
+        verify(agentResolver, never()).resolveAgent(any(String.class), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void runtimeAuditEndpointSupportsNoTaskIdAndHasNoRuntimeSideEffects() throws Exception {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        String requestId = "6a02be06-b9e9-4935-878d-063268031462";
+        RuntimeRequestAuditDTO item = RuntimeRequestAuditDTO.builder()
+                .clientRequestId(requestId)
+                .operation("safe-ask")
+                .receivedAt(Instant.parse("2026-07-23T06:30:09Z"))
+                .terminal(false)
+                .runtimeTokenRequestReceived(true)
+                .runtimeTokenIssued(true)
+                .safeSmokeRequestReceived(false)
+                .syntheticEvidenceCreated(false)
+                .taskId(null)
+                .status("WAITING_FOR_SAFE_SMOKE")
+                .toolScopeKind("UNKNOWN")
+                .toolScopeSource("UNKNOWN")
+                .functionScopeSource("UNKNOWN")
+                .taskTokenStatus("UNKNOWN")
+                .runtimeDispatched(null)
+                .build();
+        RuntimeRequestAuditPageDTO page = RuntimeRequestAuditPageDTO.builder()
+                .count(1)
+                .limit(20)
+                .items(List.of(item))
+                .build();
+        OpenApiController controller = newController(
+                agentResolver, credentialResolver, null, taskService, auditService);
+        when(auditService.querySelfAudit(
+                "runtime-key", "runtime-secret", requestId,
+                null, null, null, null, null, null))
+                .thenReturn(page);
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mockMvc.perform(get("/api/v1/open/runtime-audits")
+                        .queryParam("requestId", requestId)
+                        .header("X-Client-App-Key", "runtime-key")
+                        .header("X-Client-App-Secret", "runtime-secret"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.count").value(1))
+                .andExpect(jsonPath("$.data.items[0].clientRequestId").value(requestId))
+                .andExpect(jsonPath("$.data.items[0].taskId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].runtimeDispatched").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].status").value("WAITING_FOR_SAFE_SMOKE"));
+
+        verifyNoInteractions(agentResolver, credentialResolver, taskService);
+    }
+
+    @Test
+    void runtimeAuditEndpointRejectsAdminControlAndTenantOverrideHeaders() {
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        OpenApiController controller = newController(
+                mock(UnifiedAgentResolver.class), mock(ClientAppRuntimeCredentialResolver.class),
+                null, mock(BusinessAgentTaskService.class), auditService);
+        for (String forbiddenHeader : List.of(
+                "X-Navi-Admin-Key", "X-Navi-Operator-Key", "X-Navi-Principal-Credential",
+                "X-Client-App-Control-Key", "Authorization", "X-Tenant-Id")) {
+            HttpServletRequest request = mock(HttpServletRequest.class);
+            when(request.getHeader(forbiddenHeader)).thenReturn("forbidden-credential");
+
+            var response = controller.queryRuntimeAudits(
+                    "6a02be06-b9e9-4935-878d-063268031462",
+                    null, null, null, null, null, null, request);
+
+            assertEquals("RUNTIME_AUDIT_CREDENTIAL_LANE_REJECTED", response.getMsg());
+        }
+        HttpServletRequest ownerOverride = mock(HttpServletRequest.class);
+        when(ownerOverride.getParameterMap()).thenReturn(Map.of("tenant-id", new String[]{"tenant-2"}));
+        var overrideResponse = controller.queryRuntimeAudits(
+                "6a02be06-b9e9-4935-878d-063268031462",
+                null, null, null, null, null, null, ownerOverride);
+        assertEquals("RUNTIME_AUDIT_CREDENTIAL_LANE_REJECTED", overrideResponse.getMsg());
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void runtimeAuditEndpointDoesNotPromoteTokenShapedExceptionTextToSanitizedCode() {
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        OpenApiController controller = newController(
+                mock(UnifiedAgentResolver.class),
+                mock(ClientAppRuntimeCredentialResolver.class),
+                null,
+                mock(BusinessAgentTaskService.class),
+                auditService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Client-App-Secret")).thenReturn("runtime-secret");
+        when(auditService.querySelfAudit(
+                eq("runtime-key"),
+                eq("runtime-secret"),
+                any(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull()))
+                .thenThrow(new IllegalArgumentException("RUNTIME_SECRET_MUST_NOT_LEAK raw stack"));
+
+        var response = controller.queryRuntimeAudits(
+                "6a02be06-b9e9-4935-878d-063268031462",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                request);
+
+        assertEquals("RUNTIME_AUDIT_QUERY_FAILED", response.getMsg());
+        assertFalse(response.getMsg().contains("RUNTIME_SECRET_MUST_NOT_LEAK"));
     }
 
     @Test
@@ -2688,6 +2936,25 @@ class OpenApiControllerMessageMappingTest {
     private OpenApiController newController(
             UnifiedAgentResolver agentResolver,
             ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            RuntimeRequestAuditService auditService) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                null,
+                auditService);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
             BusinessAgentSessionService sessionService) {
         return newController(
                 agentResolver,
@@ -2772,8 +3039,33 @@ class OpenApiControllerMessageMappingTest {
             OpenApiSessionQueryService sessionQueryService,
             OpenApiAgentRouteService routeService,
             A2AgentResourceResolver resourceResolverOverride) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService,
+                routeService,
+                resourceResolverOverride,
+                null);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            CodingAgentRepository codingAgentRepository,
+            OpenApiSessionQueryService sessionQueryService,
+            OpenApiAgentRouteService routeService,
+            A2AgentResourceResolver resourceResolverOverride,
+            RuntimeRequestAuditService auditService) {
         ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
         when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
+        ObjectProvider<RuntimeRequestAuditService> auditProvider = mock(ObjectProvider.class);
+        when(auditProvider.getIfAvailable()).thenReturn(auditService);
         ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
         when(taskProvider.getIfAvailable()).thenReturn(taskService);
         ObjectProvider<BusinessAgentSessionService> sessionProvider = mock(ObjectProvider.class);
@@ -2812,6 +3104,7 @@ class OpenApiControllerMessageMappingTest {
                 new ObjectMapper(),
                 routeService,
                 credentialProvider,
+                auditProvider,
                 taskProvider,
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
