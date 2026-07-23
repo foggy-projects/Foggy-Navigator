@@ -23,6 +23,14 @@ public class AgentTask {
     private String taskSource;
     private String workerSource;
     private String backendSource;
+    private Integer effectiveToolCount;
+    private Integer effectiveFunctionCount;
+    private String toolScopeSource;
+    private String toolScopeKind;
+    private String functionScopeSource;
+    private Boolean taskTokenFunctionScopeEmpty;
+    private Boolean runtimeDispatched;
+    private String taskTokenStatus;
     private String failureStage;
     private String failureSummary;
     private String result;
@@ -59,6 +67,22 @@ public class AgentTask {
     public void setWorkerSource(String workerSource) { this.workerSource = workerSource; }
     public String getBackendSource() { return backendSource; }
     public void setBackendSource(String backendSource) { this.backendSource = backendSource; }
+    public Integer getEffectiveToolCount() { return effectiveToolCount; }
+    public void setEffectiveToolCount(Integer effectiveToolCount) { this.effectiveToolCount = effectiveToolCount; }
+    public Integer getEffectiveFunctionCount() { return effectiveFunctionCount; }
+    public void setEffectiveFunctionCount(Integer effectiveFunctionCount) { this.effectiveFunctionCount = effectiveFunctionCount; }
+    public String getToolScopeSource() { return toolScopeSource; }
+    public void setToolScopeSource(String toolScopeSource) { this.toolScopeSource = toolScopeSource; }
+    public String getToolScopeKind() { return toolScopeKind; }
+    public void setToolScopeKind(String toolScopeKind) { this.toolScopeKind = toolScopeKind; }
+    public String getFunctionScopeSource() { return functionScopeSource; }
+    public void setFunctionScopeSource(String functionScopeSource) { this.functionScopeSource = functionScopeSource; }
+    public Boolean getTaskTokenFunctionScopeEmpty() { return taskTokenFunctionScopeEmpty; }
+    public void setTaskTokenFunctionScopeEmpty(Boolean taskTokenFunctionScopeEmpty) { this.taskTokenFunctionScopeEmpty = taskTokenFunctionScopeEmpty; }
+    public Boolean getRuntimeDispatched() { return runtimeDispatched; }
+    public void setRuntimeDispatched(Boolean runtimeDispatched) { this.runtimeDispatched = runtimeDispatched; }
+    public String getTaskTokenStatus() { return taskTokenStatus; }
+    public void setTaskTokenStatus(String taskTokenStatus) { this.taskTokenStatus = taskTokenStatus; }
     public String getFailureStage() { return failureStage; }
     public void setFailureStage(String failureStage) { this.failureStage = failureStage; }
     public String getFailureSummary() { return failureSummary; }

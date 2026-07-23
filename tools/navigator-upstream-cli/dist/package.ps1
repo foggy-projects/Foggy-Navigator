@@ -135,6 +135,7 @@ $features = @(
     "owner-smoke",
     "agent-readiness",
     "ask",
+    "safe-ask",
     "messages",
     "sessions",
     "skill-artifact-read",
@@ -174,6 +175,8 @@ $features = @(
     "codex-biz-worker-route",
     "codex-biz-runtime-options",
     "ask-allowed-tools",
+    "ask-allowed-functions",
+    "runtime-profile-posix-0600",
     "ask-directory-actionable-error"
 )
 

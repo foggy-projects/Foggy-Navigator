@@ -18,6 +18,7 @@ final class CliArguments {
             "agent-bundle-code",
             "agent-code",
             "agent-role",
+            "allowed-functions",
             "allowed-tools",
             "api-key-env",
             "applicant-label",

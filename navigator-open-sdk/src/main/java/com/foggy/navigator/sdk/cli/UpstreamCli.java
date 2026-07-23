@@ -327,6 +327,7 @@ public class UpstreamCli {
             case "runtime readiness", "runtime verify-agent-readiness" -> verifyAgentReadiness(args);
             case "runtime inspect" -> inspectRuntime(args);
             case "runtime ask" -> ask(args);
+            case "runtime safe-ask" -> safeAsk(args);
             case "runtime messages" -> messages(args);
             case "runtime diagnostics" -> diagnostics(args);
             case "runtime evidence" -> evidence(args);
@@ -347,6 +348,7 @@ public class UpstreamCli {
             case "inspect permissions" -> inspectPermissions(args);
             case "ensure-grant" -> ensureGrant(args);
             case "ask" -> ask(args);
+            case "safe-ask" -> safeAsk(args);
             case "messages" -> messages(args);
             case "diagnostics session-dir" -> diagnosticsSessionDir(args);
             case "diagnostics help" -> diagnosticsUsage();
@@ -479,14 +481,14 @@ public class UpstreamCli {
     private boolean isRuntimeOperation(String command) {
         return command.startsWith("runtime ")
                 || Set.of("runtime-token", "owner-smoke", "verify-agent-readiness", "verify-agent-grant",
-                "inspect runtime", "ask", "messages", "diagnostics", "evidence", "sessions", "session-messages")
+                "inspect runtime", "ask", "safe-ask", "messages", "diagnostics", "evidence", "sessions", "session-messages")
                 .contains(command);
     }
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
         out.println("Canonical lanes: platform, app, runtime. Run `navi upstream <lane> --help` for lane-specific commands.");
-        out.println("Commands: config check, auth login/whoami, runtime-token, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login/whoami, runtime-token, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, safe-ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status. Do not use these commands to onboard OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
         out.println("For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.");
         out.println("Typed-management introspection requires exactly one NAVI_PRINCIPAL_CREDENTIAL (or --principal-credential-env); NAVI_ADMIN_API_KEY is not S1 root or S2 platform/security authority.");
@@ -496,7 +498,8 @@ public class UpstreamCli {
         out.println("CLI provenance: source=" + provenance.sourceVersion() + ", published=" + provenance.publishedVersion()
                 + ", artifactDrift=" + provenance.artifactDrift() + " (not a release claim).");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
-        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv|none>] [--allowed-functions <csv|none>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  safe-ask --upstream-user-id <id> --message <label> [--model-config-id <id>] [--model-variant <name>]  # forces maxTurns=1 and exact allowedTools=[]/allowedFunctions=[]; no Worker/model dispatch");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
@@ -646,7 +649,7 @@ public class UpstreamCli {
     }
 
     private int runtimeUsage() {
-        out.println("Usage: navi upstream runtime <token|readiness|owner-smoke|inspect|ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
+        out.println("Usage: navi upstream runtime <token|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
         out.println("Runtime lane accepts only ClientApp runtime material (key/secret or access token) and rejects admin, control, and typed-management credentials.");
         out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
         return 0;
@@ -2430,10 +2433,8 @@ public class UpstreamCli {
         putText(options, "sandboxMode", optionalOptionOrConfig(args, "sandbox-mode", "NAVI_CODEX_SANDBOX_MODE"));
         putText(options, "approvalPolicy", optionalOptionOrConfig(args, "approval-policy", "NAVI_CODEX_APPROVAL_POLICY"));
         putText(options, "webSearchMode", optionalOptionOrConfig(args, "web-search-mode", "NAVI_CODEX_WEB_SEARCH_MODE"));
-        List<String> allowedTools = parseCsv(optionalOptionOrConfig(args, "allowed-tools", "NAVI_ALLOWED_TOOLS"));
-        if (allowedTools != null) {
-            options.put("allowedTools", allowedTools);
-        }
+        putOptionalCsv(options, args, "allowedTools", "allowed-tools", "NAVI_ALLOWED_TOOLS");
+        putOptionalCsv(options, args, "allowedFunctions", "allowed-functions", "NAVI_ALLOWED_FUNCTIONS");
         Boolean networkAccessEnabled = optionalBooleanOptionOrConfig(
                 args, "network-access-enabled", "NAVI_CODEX_NETWORK_ACCESS_ENABLED");
         if (networkAccessEnabled != null) {
@@ -3585,6 +3586,43 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int safeAsk(CliArguments args) {
+        String agent = agentCode(args);
+        String upstreamUserId = upstreamUserId(args);
+        String message = requiredOption(args, "message", "message");
+        String maxTurns = args.option("max-turns");
+        if (hasText(maxTurns) && !"1".equals(maxTurns.trim())) {
+            throw new UpstreamCliException("SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE");
+        }
+        rejectSafeAskScopeOverride(args, "allowed-tools");
+        rejectSafeAskScopeOverride(args, "allowed-functions");
+        AgentTask task;
+        try {
+            task = agentApi().safeSmokeWithClientAppAccessToken(
+                    agent,
+                    message,
+                    args.option("context-id"),
+                    modelConfigId(args),
+                    modelVariant(args),
+                    clientAppKey(args),
+                    clientAppAccessToken(args),
+                    upstreamUserId);
+        } catch (NavigatorApiException e) {
+            throw new UpstreamCliException(
+                    e.getMessage() != null ? e.getMessage() : "Navigator safe ask request failed",
+                    e);
+        }
+        printTask(task);
+        return 0;
+    }
+
+    private void rejectSafeAskScopeOverride(CliArguments args, String option) {
+        String value = args.option(option);
+        if (value != null && !value.isBlank() && !"none".equalsIgnoreCase(value.trim())) {
+            throw new UpstreamCliException("--" + option + " must be none for runtime safe-ask");
+        }
+    }
+
     // ===== Explicit system-admin ClientApp scope =====
 
     private String systemAdminScopedClientAppId(CliArguments args) {
@@ -4093,6 +4131,27 @@ public class UpstreamCli {
                 .filter(UpstreamCli::hasText)
                 .toList();
         return values.isEmpty() ? null : values;
+    }
+
+    private void putOptionalCsv(Map<String, Object> target,
+                                CliArguments args,
+                                String payloadKey,
+                                String option,
+                                String configKey) {
+        boolean optionProvided = args.options().containsKey(option);
+        String raw = optionProvided ? args.option(option) : config.get(configKey);
+        if (optionProvided && (!hasText(raw) || "none".equalsIgnoreCase(raw.trim()))) {
+            target.put(payloadKey, List.of());
+            return;
+        }
+        if (!optionProvided && hasText(raw) && "none".equalsIgnoreCase(raw.trim())) {
+            target.put(payloadKey, List.of());
+            return;
+        }
+        List<String> values = parseCsv(raw);
+        if (values != null) {
+            target.put(payloadKey, values);
+        }
     }
 
     private int accountContextList(CliArguments args) {
@@ -5303,6 +5362,22 @@ public class UpstreamCli {
         printDiagnostic("backendSource", firstNonBlank(
                 page != null ? page.getBackendSource() : null,
                 task != null ? task.getBackendSource() : null));
+        if (task != null && task.getEffectiveToolCount() != null) {
+            out.println("effectiveToolCount=" + task.getEffectiveToolCount());
+        }
+        if (task != null && task.getEffectiveFunctionCount() != null) {
+            out.println("effectiveFunctionCount=" + task.getEffectiveFunctionCount());
+        }
+        printDiagnostic("toolScopeSource", task != null ? task.getToolScopeSource() : null);
+        printDiagnostic("toolScopeKind", task != null ? task.getToolScopeKind() : null);
+        printDiagnostic("functionScopeSource", task != null ? task.getFunctionScopeSource() : null);
+        if (task != null && task.getTaskTokenFunctionScopeEmpty() != null) {
+            out.println("taskTokenFunctionScopeEmpty=" + task.getTaskTokenFunctionScopeEmpty());
+        }
+        if (task != null && task.getRuntimeDispatched() != null) {
+            out.println("runtimeDispatched=" + task.getRuntimeDispatched());
+        }
+        printDiagnostic("taskTokenStatus", task != null ? task.getTaskTokenStatus() : null);
         printDiagnostic("failureStage", firstNonBlank(
                 page != null ? page.getFailureStage() : null,
                 task != null ? task.getFailureStage() : null));

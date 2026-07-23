@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -16,6 +17,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1005,6 +1008,36 @@ class UpstreamCliTest {
     }
 
     @Test
+    void runtimeTokenWriteProfileAtomicallyReplacesGroupReadablePosixProfileAs0600() throws Exception {
+        Assumptions.assumeTrue(Files.getFileStore(tempDir)
+                .supportsFileAttributeView(PosixFileAttributeView.class));
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path profile = profileDir.resolve("upstream.env");
+        Files.writeString(profile, """
+                NAVI_BASE_URL=%s
+                NAVI_CLIENT_APP_KEY=cak-test
+                NAVI_CLIENT_APP_SECRET=cas-secret-value
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        Files.setPosixFilePermissions(profile, Set.of(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.GROUP_READ,
+                PosixFilePermission.GROUP_WRITE));
+        responseOverride = "{\"accessToken\":\"cat-written-secret\",\"appKey\":\"cak-test\",\"clientAppId\":\"app-1\"}";
+
+        int code = run(new String[]{"upstream", "runtime-token", "--write-profile"}, Map.of());
+
+        assertEquals(0, code);
+        assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                Files.getPosixFilePermissions(profile));
+        try (var children = Files.list(profileDir)) {
+            assertEquals(List.of("upstream.env"), children.map(path -> path.getFileName().toString()).sorted().toList());
+        }
+    }
+
+    @Test
     void runtimeTokenWriteProfileRejectsUnignoredProfileBeforeExchange() throws Exception {
         Path profile = tempDir.resolve("upstream.env");
         Files.writeString(profile, """
@@ -1929,6 +1962,107 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"webSearchMode\":\"disabled\""));
         assertTrue(lastBody.contains("\"allowedTools\":[\"business.functions.schema\",\"business.functions.invoke\"]"));
         assertFalse(lastBody.contains("\"clientContext\""));
+    }
+
+    @Test
+    void askPreservesExplicitEmptyToolAndFunctionAllowlistsAndPrintsSanitizedEffectiveScopes() {
+        responseOverride = """
+                {"code":0,"data":{"taskId":"task-1","status":"SUBMITTED","contextId":"ctx-1",
+                "effectiveToolCount":0,"effectiveFunctionCount":0,
+                "toolScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                "functionScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                "taskTokenFunctionScopeEmpty":true}}
+                """;
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "safe smoke",
+                "--max-turns", "1",
+                "--allowed-tools", "",
+                "--allowed-functions", "none"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(lastBody.contains("\"allowedTools\":[]"));
+        assertTrue(lastBody.contains("\"allowedFunctions\":[]"));
+        assertTrue(lastBody.contains("\"maxTurns\":1"));
+        assertTrue(output.contains("effectiveToolCount=0"));
+        assertTrue(output.contains("effectiveFunctionCount=0"));
+        assertTrue(output.contains("toolScopeSource=REQUEST_EXPLICIT_EMPTY"));
+        assertTrue(output.contains("functionScopeSource=REQUEST_EXPLICIT_EMPTY"));
+        assertTrue(output.contains("taskTokenFunctionScopeEmpty=true"));
+    }
+
+    @Test
+    void askOmitsToolAndFunctionAllowlistsWhenNeitherOptionNorConfigIsProvided() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "default scope"}, Map.of());
+
+        assertEquals(0, code);
+        assertFalse(lastBody.contains("\"allowedTools\""));
+        assertFalse(lastBody.contains("\"allowedFunctions\""));
+    }
+
+    @Test
+    void safeAskUsesDedicatedNoRuntimeEndpointAndForcesExactEmptyScopes() {
+        responseOverride = """
+                {"code":0,"data":{"taskId":"smk-1","status":"COMPLETED","contextId":"ctx-1",
+                "effectiveToolCount":0,"effectiveFunctionCount":0,
+                "toolScopeSource":"SAFE_SMOKE_NO_RUNTIME",
+                "toolScopeKind":"NO_RUNTIME_MODEL_TOOL_SURFACE",
+                "functionScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                "taskTokenFunctionScopeEmpty":true,
+                "runtimeDispatched":false,"taskTokenStatus":"REVOKED",
+                "result":"SAFE_SMOKE_VERIFIED_NO_RUNTIME_DISPATCH"}}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "safe-ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "sim-safe-smoke",
+                "--max-turns", "1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/safe-smoke", lastPath);
+        assertTrue(lastBody.contains("\"maxTurns\":1"));
+        assertTrue(lastBody.contains("\"allowedTools\":[]"));
+        assertTrue(lastBody.contains("\"allowedFunctions\":[]"));
+        assertTrue(output.contains("effectiveToolCount=0"));
+        assertTrue(output.contains("effectiveFunctionCount=0"));
+        assertTrue(output.contains("toolScopeKind=NO_RUNTIME_MODEL_TOOL_SURFACE"));
+        assertTrue(output.contains("runtimeDispatched=false"));
+        assertTrue(output.contains("taskTokenStatus=REVOKED"));
+    }
+
+    @Test
+    void safeAskRejectsNonEmptyScopeOverrideBeforeNetworkCall() {
+        int code = run(new String[]{"upstream", "runtime", "safe-ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "sim-safe-smoke",
+                "--allowed-functions", "tms.vehicle.list"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("--allowed-functions must be none for runtime safe-ask"));
     }
 
     @Test
@@ -4234,7 +4368,8 @@ class UpstreamCliTest {
         assertTrue(output.contains("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-get/system-create/system-update/system-test"));
         assertTrue(output.contains("[--max-turns <n>]"));
-        assertTrue(output.contains("[--allowed-tools <csv>]"));
+        assertTrue(output.contains("[--allowed-tools <csv|none>]"));
+        assertTrue(output.contains("[--allowed-functions <csv|none>]"));
     }
 
     @Test
@@ -4622,10 +4757,10 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.23", provenance.sourceVersion());
+        assertEquals("1.0.24", provenance.sourceVersion());
         assertEquals("1.0.23", provenance.publishedVersion());
-        assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
-        assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
+        assertEquals("SOURCE_NEWER_THAN_PUBLISHED", provenance.artifactDrift());
+        assertNotEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
                 .contains("<version>" + provenance.sourceVersion() + "</version>"));
         assertEquals(provenance.manifestEntryCount() + 1, manifestLines.size());

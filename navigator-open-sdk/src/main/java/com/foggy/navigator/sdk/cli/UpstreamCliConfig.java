@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -227,11 +229,17 @@ final class UpstreamCliConfig {
         if (targetProfile == null) {
             throw new UpstreamCliException("Profile path is required");
         }
+        Path temp = null;
         try {
             Path parent = targetProfile.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
+            Path atomicParent = parent != null
+                    ? parent
+                    : targetProfile.toAbsolutePath().normalize().getParent();
+            boolean posix = Files.getFileStore(atomicParent)
+                    .supportsFileAttributeView(PosixFileAttributeView.class);
             List<String> lines = Files.exists(targetProfile)
                     ? Files.readAllLines(targetProfile, StandardCharsets.UTF_8)
                     : new ArrayList<>();
@@ -264,13 +272,24 @@ final class UpstreamCliConfig {
                     lines.add(key + "=" + updates.get(key));
                 }
             }
-            Path temp = targetProfile.resolveSibling(targetProfile.getFileName() + ".tmp");
+            temp = Files.createTempFile(atomicParent, targetProfile.getFileName() + ".", ".tmp");
+            if (posix) {
+                Files.setPosixFilePermissions(temp, ownerOnlyPermissions());
+            }
             Files.write(temp, lines, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             try {
                 Files.move(temp, targetProfile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                temp = null;
             } catch (AtomicMoveNotSupportedException e) {
+                if (posix) {
+                    throw new IOException("Atomic profile replacement is required on POSIX filesystems", e);
+                }
                 Files.move(temp, targetProfile, StandardCopyOption.REPLACE_EXISTING);
+                temp = null;
+            }
+            if (posix) {
+                Files.setPosixFilePermissions(targetProfile, ownerOnlyPermissions());
             }
             if (updateLoadedValues) {
                 if (removeKeys != null) {
@@ -280,7 +299,19 @@ final class UpstreamCliConfig {
             }
         } catch (IOException e) {
             throw new UpstreamCliException("Failed to write profile: " + targetProfile, e);
+        } finally {
+            if (temp != null) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (IOException ignored) {
+                    // Preserve the original write failure; temp names contain no secret values.
+                }
+            }
         }
+    }
+
+    private Set<PosixFilePermission> ownerOnlyPermissions() {
+        return Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
     }
 
     Map<String, String> values() {

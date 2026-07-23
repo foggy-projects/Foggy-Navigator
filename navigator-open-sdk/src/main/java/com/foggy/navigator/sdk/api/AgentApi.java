@@ -43,7 +43,8 @@ public class AgentApi {
             "approvalPolicy",
             "networkAccessEnabled",
             "webSearchMode",
-            "allowedTools"
+            "allowedTools",
+            "allowedFunctions"
     );
 
     private final HttpHelper http;
@@ -220,6 +221,39 @@ public class AgentApi {
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
         headers.put("X-Upstream-User-Id", upstreamUserId);
         return http.post("/api/v1/open/agents/" + agentId + "/ask",
+                body, headers, new TypeReference<>() {});
+    }
+
+    /**
+     * Executes the dedicated no-runtime safe-smoke contract. The explicit empty arrays are
+     * intentional and must not be normalized away by callers or serializers.
+     */
+    public AgentTask safeSmokeWithClientAppAccessToken(
+            String agentId,
+            String message,
+            String contextId,
+            String modelConfigId,
+            String modelVariant,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        Map<String, Object> body = buildAskBody(
+                message,
+                contextId,
+                1,
+                null,
+                null,
+                null,
+                modelConfigId,
+                modelVariant,
+                null);
+        body.put("allowedTools", List.of());
+        body.put("allowedFunctions", List.of());
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Client-App-Key", clientAppKey);
+        headers.put("X-Client-App-Access-Token", clientAppAccessToken);
+        headers.put("X-Upstream-User-Id", upstreamUserId);
+        return http.post("/api/v1/open/agents/" + agentId + "/safe-smoke",
                 body, headers, new TypeReference<>() {});
     }
 
