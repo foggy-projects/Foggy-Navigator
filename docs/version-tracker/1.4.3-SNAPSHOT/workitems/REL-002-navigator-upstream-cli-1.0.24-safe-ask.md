@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: REL-002
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 approved_by: project-owner-user-confirmed
@@ -64,12 +64,12 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: focused `UpstreamCliTest` 和 affected SDK reactor tests 通过；provenance 为 `1.0.24 / 1.0.24 / SOURCE_MATCHES_PUBLISHED`。
-- [ ] AC-2: package metadata 包含 `safe-ask`、`ask-allowed-tools`、`ask-allowed-functions`、`runtime-profile-posix-0600`，且 `gitDirty=false`。
-- [ ] AC-3: Windows ZIP、Linux TAR.GZ、`latest.json`、双平台 installers 上传成功；remote version/buildId/gitCommit/SHA 与 clean release commit 对应。
-- [ ] AC-4: fresh temporary Linux install 后 `navi version` 与 capability gate 通过；安装产生的 runtime profile 权限回归测试已实际通过。
-- [ ] AC-5: release commit 与最终 evidence commit 推送到 `origin/main`；无 secret、profile 内容或 sibling workspace 改动进入 Git。
-- [ ] AC-6: SIM handoff 明确先升级和验证 provenance/capability，再自行执行 dedicated `safe-ask`；普通 ask、STANDARD dispatch 和真实业务调用继续 fail closed。
+- [x] AC-1: focused `UpstreamCliTest` 和 affected SDK reactor tests 通过；provenance 为 `1.0.24 / 1.0.24 / SOURCE_MATCHES_PUBLISHED`。
+- [x] AC-2: package metadata 包含 `safe-ask`、`ask-allowed-tools`、`ask-allowed-functions`、`runtime-profile-posix-0600`，且 `gitDirty=false`。
+- [x] AC-3: Windows ZIP、Linux TAR.GZ、`latest.json`、双平台 installers 上传成功；remote version/buildId/gitCommit/SHA 与 clean release commit 对应。
+- [x] AC-4: fresh temporary Linux install 后 `navi version` 与 capability gate 通过；安装产生的 runtime profile 权限回归测试已实际通过。
+- [x] AC-5: release commit 与最终 evidence commit 推送到 `origin/main`；无 secret、profile 内容或 sibling workspace 改动进入 Git。
+- [x] AC-6: SIM handoff 明确先升级和验证 provenance/capability，再自行执行 dedicated `safe-ask`；普通 ask、STANDARD dispatch 和真实业务调用继续 fail closed。
 
 ## Contract / Data / Security Constraints
 
@@ -108,8 +108,9 @@ Validation cost: focused checks are `<5m`; reactor/package/upload are `5-30m`. R
 
 - implementation_summary:
   - 已完成 Linux/WSL installer 对新建/既有 profile 的 `0600` 收紧，以及普通安装成功后 exit `0` 的修复。
-  - 先前宿主配置的 `InvalidAccessKeyId` 阻断已由 operator 提供的 `~/.obsutilconfig` 解除；该配置已收紧为 `0600`，只读 `obsutil ls -s` 预检通过。
-  - official 发布已恢复执行；将从本次新的 clean release commit 重建，不复用未发布的 `5b01d48e` candidate。
+  - 使用 operator 指定的 `~/.obsutilconfig` 完成 official OBS 发布；配置权限为 `0600`，全过程未回显 AK/SK。
+  - official `latest.json` 已指向 clean release commit `9fcb57faa871b253388633d908a95c4175c9c3dc` 构建的 `navigator-upstream-cli 1.0.24`，buildId 为 `1.0.24+9fcb57faa871`。
+  - Windows/Linux archive、双平台 installer 和 manifest 均已上传；独立公网 Linux 安装、重复安装、capability、provenance、SHA 和 profile 权限验证通过。
 - changed_paths:
   - `tools/navigator-upstream-cli/dist/install.sh`
   - `tools/navigator-upstream-cli/dist/upload.sh`
@@ -119,17 +120,23 @@ Validation cost: focused checks are `<5m`; reactor/package/upload are `5-30m`. R
   - PASS — `mvn -pl navigator-open-sdk -Dtest=UpstreamCliTest test`: 136/136。
   - PASS — `mvn -pl navigator-open-sdk -am test`: 177/177。
   - PASS — release shell syntax、`git diff --check`、差异敏感值扫描。
-  - PASS — clean detached candidate `5b01d48ef63e126a5fc0ecb7b41f6bdd00fded1e`, `gitDirty=false`; Windows SHA `32eccbc1e42541548877cb6b53ac0545488303a0de758e37f0a8504a90cedf04`, Linux SHA `fbd4953d8f08a1ea5186dbc42379c3067e691f6bc6bfae45b36ee50a27597c92`。
+  - PASS — clean release commit `9fcb57faa871b253388633d908a95c4175c9c3dc`, `gitDirty=false`; Windows SHA `f27b783e66b95adb17d736005df9a13024247b2d2262c6cdc2890163802a4a59`, Linux SHA `7f7d205db7e845a682600af3ee2c6aa6e08ce8427b911d937189a055fca348ae`。
   - PASS — offline Linux install/upgrade；`safe-ask`、`allowed-tools`、`allowed-functions` 和 provenance help 可见；新建与既有 profile mode 均为 `0600`。
   - PASS — `$HOME/.obsutilconfig` mode `0600`；`obsutil ls -s` 认证预检通过。
+  - PASS — official OBS upload 对 Windows/Linux archive、`latest.json`、`install.ps1`、`install.sh` 全部成功，发布脚本内建 remote Linux installer smoke 通过。
+  - PASS — 独立公网安装后 `navi version` 返回 `1.0.24`、buildId `1.0.24+9fcb57faa871`、完整 gitCommit、`gitDirty=false`；根帮助包含 `safe-ask`、`--allowed-tools <csv|none>`、`--allowed-functions <csv|none>`。
+  - PASS — 独立重新下载 Windows/Linux archive 后 SHA 与 remote `latest.json` 完全一致；既有 profile 人工置为 `0664` 后重复安装，内容保持不变且 mode 收紧为 `0600`。
 - manual_or_experience_evidence:
-  - 2026-07-23 remote `latest.json` read-only verification remains `version=1.0.23`, `buildId=1.0.23+aa4a944e7f25`, `gitDirty=false`，且 feature list 不包含 `safe-ask`、`ask-allowed-functions`、`runtime-profile-posix-0600`。
-  - 未读取或输出 AK/SK；未上传任何 object；未读取 SIM runtime profile，未获取 token，未创建 task，未 dispatch Worker/model。
+  - 2026-07-23 remote `latest.json` 验证为 `version=1.0.24`、`buildId=1.0.24+9fcb57faa871`、`gitCommit=9fcb57faa871b253388633d908a95c4175c9c3dc`、`gitDirty=false`，feature list 包含 `safe-ask`、`ask-allowed-tools`、`ask-allowed-functions`、`runtime-profile-posix-0600`。
+  - 8112 listener owner 为当前 Navigator Java 进程；`/actuator/health` 为 `UP`，`/actuator/info` 为 `main@2038be0`、`dirty=false`、build time `2026-07-23T04:10:25.338Z`。该运行版本已包含 BUG-016 safe-smoke 服务端实现，CLI 发布后无需再次重启 8112。
+  - 未读取 SIM runtime profile，未获取 token，未创建 task/context/correlation，未提交 ask/safe-ask，未 dispatch Worker/model，未变更 BusinessFunction grants 或运行资源。
 - deviations:
   - 发布前离线 smoke 发现并修复了 Linux installer profile mode 与成功 exit code 两个 release-path 缺陷；均属于已批准的 POSIX profile/official installer 安全范围。
+  - 首次独立公网验证时从仓库根目录启动 bootstrap，导致 installer 按当前目录临时覆盖 `tools/navigator-upstream`。该目录已立即按 `HEAD` 精确恢复并删除仅由 installer 产生的未跟踪文件；`git diff --quiet -- tools/navigator-upstream` 通过。既有 Codex Worker 脏改动未被触碰或纳入发布。
 - residual_risks:
-  - official 1.0.24 在 remote upload/smoke 完成前仍不存在，SIM 必须继续停在 provenance/capability gate。
-- readiness: ULTRA_EXECUTING
+  - Windows native execution 未在本 Linux/WSL 会话实际运行；Windows archive、manifest、SHA 和 wrapper 由静态/package tests 覆盖。
+  - SIM 仍须在自己的 workspace 从 provenance/capability gate 重新开始；在 dedicated `safe-ask` 返回预期 sanitized 零面证据前，不得进入普通 ask 或 STANDARD dispatch。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 

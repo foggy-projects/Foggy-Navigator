@@ -152,11 +152,11 @@ open_questions: []
   - No SIM credential was read; no live runtime token, task, ask, Worker, Directory, Agent/model binding, global grant or Gateway setting was created or changed.
 - deviations:
   - The approved initial preference for option A alone was insufficient for a defensible `effectiveToolCount=0` across all Codex native tools. Official Codex `0.144.1` source exposes tool registration paths not governed by this Open API `allowedTools` contract, so strict safe verification uses option B (dedicated no-runtime endpoint) while retaining option A for BusinessFunction narrowing and Business MCP wrapper propagation.
-  - No distributable archive was published and no release commit was created; provenance is a dirty local candidate until an authorized release step.
+  - 本 BUG 实现完成时尚未发布 distributable archive；后续已由 `REL-002` 从 clean commit `9fcb57faa871b253388633d908a95c4175c9c3dc` 发布 official CLI `1.0.24`。
 - residual_risks:
   - The safe-smoke task ID is a terminal synthetic evidence ID, not a pollable Worker task.
   - Ordinary ask with empty Business MCP wrappers may still expose Codex native capabilities according to runtime configuration; callers requiring strict zero must use `safe-ask`.
-  - The running 8112 instance does not include this change until Navigator is rebuilt/deployed and 8112 restarted. The dedicated safe-smoke path does not require a Worker restart because it never dispatches one; using the ordinary ask adapter change requires the corresponding updated Worker deployment.
+  - 8112 已重启到包含该服务端变更的 `main@2038be0`，健康检查为 `UP`。dedicated safe-smoke 不需要 Worker 重启，因为它不会 dispatch；普通 ask adapter 变更仍要求使用对应更新后的 Worker。
 - readiness: READY_FOR_SIGNOFF
 
 ## References
@@ -164,5 +164,6 @@ open_questions: []
 - related schema repair: `BUG-007-task-token-function-scope-schema-contract.md`
 - related runtime MVP: `GOV-001-dev-s1-s2-integration-mvp.md`
 - upstream CLI release baseline: `REL-001-navigator-upstream-cli-1.0.22.md`
+- official CLI 1.0.24 release: `REL-002-navigator-upstream-cli-1.0.24-safe-ask.md`
 - Codex 0.144.1 Plan tool registration: `https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/core/src/tools/spec_plan.rs`
 - Codex 0.144.1 configuration surface: `https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/config/src/config_toml.rs`
