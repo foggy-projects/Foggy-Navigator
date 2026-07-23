@@ -70,6 +70,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
@@ -77,6 +78,79 @@ import static org.mockito.Mockito.lenient;
 class OpenApiControllerMessageMappingTest {
 
     private static final String STANDARD_CONTEXT_ID = "bctx_20260520_ab_ctx_1";
+
+    @Test
+    void safeSmokeReturnsSanitizedZeroSurfacesWithoutResolvingRuntimeAgent() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("sim-safe-smoke");
+        form.setMaxTurns(1);
+        form.setAllowedTools(List.of());
+        form.setAllowedFunctions(List.of());
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.performOpenApiSafeSmoke(
+                eq("tenant-1"),
+                eq("owner-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(String.class),
+                eq("model-default")))
+                .thenAnswer(invocation -> new BusinessAgentTaskService.SafeSmokeResult(
+                        "smk_01",
+                        invocation.getArgument(5),
+                        "model-default",
+                        0,
+                        "REQUEST_EXPLICIT_EMPTY",
+                        true,
+                        "REVOKED"));
+
+        var response = controller.safeSmokeAgent("agent-1", form, request);
+
+        assertNotNull(response.getData());
+        assertEquals("COMPLETED", response.getData().getStatus());
+        assertEquals(0, response.getData().getEffectiveToolCount());
+        assertEquals(0, response.getData().getEffectiveFunctionCount());
+        assertEquals("SAFE_SMOKE_NO_RUNTIME", response.getData().getToolScopeSource());
+        assertEquals("NO_RUNTIME_MODEL_TOOL_SURFACE", response.getData().getToolScopeKind());
+        assertEquals("REQUEST_EXPLICIT_EMPTY", response.getData().getFunctionScopeSource());
+        assertTrue(response.getData().getTaskTokenFunctionScopeEmpty());
+        assertFalse(response.getData().getRuntimeDispatched());
+        assertEquals("REVOKED", response.getData().getTaskTokenStatus());
+        assertEquals("SAFE_SMOKE_VERIFIED_NO_RUNTIME_DISPATCH", response.getData().getResult());
+        verify(agentResolver, never()).resolveAgent(any(String.class), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void safeSmokeDistinguishesOmittedAndExplicitNullToolScope() throws Exception {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+
+        OpenApiQueryForm omitted = new ObjectMapper().readValue(
+                "{\"message\":\"safe\",\"maxTurns\":1,\"allowedFunctions\":[]}",
+                OpenApiQueryForm.class);
+        OpenApiQueryForm explicitNull = new ObjectMapper().readValue(
+                "{\"message\":\"safe\",\"maxTurns\":1,\"allowedTools\":null,\"allowedFunctions\":[]}",
+                OpenApiQueryForm.class);
+
+        assertEquals("SAFE_SMOKE_TOOL_SCOPE_REQUIRED",
+                controller.safeSmokeAgent("agent-1", omitted, request).getMsg());
+        assertEquals("TOOL_SCOPE_EXPLICIT_NULL",
+                controller.safeSmokeAgent("agent-1", explicitNull, request).getMsg());
+        verifyNoInteractions(taskService);
+    }
 
     @Test
     void taskCompletedMessageIsMarkedAsTerminalResult() throws Exception {
@@ -668,6 +742,8 @@ class OpenApiControllerMessageMappingTest {
 
         OpenApiQueryForm form = new OpenApiQueryForm();
         form.setMessage("创建车辆并走审批");
+        form.setAllowedTools(List.of());
+        form.setAllowedFunctions(List.of());
 
         when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
         when(credentialResolver.resolveAccessToken(
@@ -682,7 +758,16 @@ class OpenApiControllerMessageMappingTest {
                 any(),
                 nullable(String.class),
                 any(BusinessAgentWorkerTaskLaunchRequest.class)))
-                .thenReturn(preparedOpenApiToken("btt_open_api_1"));
+                .thenReturn(new BusinessAgentTaskService.PreparedOpenApiTaskScopedToken(
+                        "btt_open_api_1",
+                        "tst_test_01",
+                        "preselected-worker",
+                        "bwl_test_01",
+                        "pool-1",
+                        "LANGGRAPH_BIZ",
+                        0,
+                        "REQUEST_EXPLICIT_EMPTY",
+                        true));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
                 .id("lgt_visible_1")
@@ -693,7 +778,7 @@ class OpenApiControllerMessageMappingTest {
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
 
-        controller.askAgent("agent-1", form, request);
+        var result = controller.askAgent("agent-1", form, request);
 
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
@@ -702,7 +787,26 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("btt_open_api_1", runtimeContext.get("task_scoped_token"));
         assertEquals("preselected-worker", runtimeContext.get("worker_id"));
         assertEquals("bwl_test_01", runtimeContext.get("worker_lease_id"));
+        assertEquals(List.of(), runtimeContext.get("allowed_tools"));
         assertFalse(runtimeContext.containsKey("skill_name"));
+        assertEquals(0, result.getData().getEffectiveToolCount());
+        assertEquals(0, result.getData().getEffectiveFunctionCount());
+        assertEquals("REQUEST_EXPLICIT_EMPTY", result.getData().getToolScopeSource());
+        assertEquals("REQUEST_EXPLICIT_EMPTY", result.getData().getFunctionScopeSource());
+        assertTrue(result.getData().getTaskTokenFunctionScopeEmpty());
+        var selectionCaptor = org.mockito.ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
+        verify(taskService).prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                selectionCaptor.capture());
+        assertEquals(List.of(), selectionCaptor.getValue().getAllowedTools());
+        assertTrue(selectionCaptor.getValue().isAllowedFunctionsProvided());
+        assertEquals(List.of(), selectionCaptor.getValue().getAllowedFunctions());
         verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant-1",
                 "btt_open_api_1",
@@ -2474,11 +2578,13 @@ class OpenApiControllerMessageMappingTest {
                 A2AgentResourceResolver.ResolvedAgentResource.class,
                 A2AgentResourceResolver.ResolvedModelResource.class,
                 A2AgentResourceResolver.ResolvedWorkspaceResource.class,
-                Map.class);
+                Map.class,
+                OpenApiQueryForm.class);
         selectionMethod.setAccessible(true);
+        OpenApiQueryForm selectionForm = new OpenApiQueryForm();
         BusinessAgentWorkerTaskLaunchRequest request = (BusinessAgentWorkerTaskLaunchRequest) selectionMethod.invoke(
                 controller, "tenant-1", "app-1", "app-1", "upstream-a", "agent-codex", "skill-codex", "ctx-1",
-                agentResource, modelResource, workspaceResource, metadata);
+                agentResource, modelResource, workspaceResource, metadata, selectionForm);
 
         assertEquals("workspace-worker", request.getPhysicalWorkerId());
         assertEquals("workspace-worker", request.getWorkerPoolId());

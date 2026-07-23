@@ -44,4 +44,6 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String workdir;
     private List<String> allowedDirs;
     private List<String> allowedTools;
+    private boolean allowedFunctionsProvided;
+    private List<String> allowedFunctions;
 }

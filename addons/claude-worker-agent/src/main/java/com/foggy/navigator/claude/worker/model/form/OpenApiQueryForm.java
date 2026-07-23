@@ -93,6 +93,27 @@ public class OpenApiQueryForm {
     @JsonAlias({"allowedTools", "authorized_tools", "authorizedTools", "tool_allowlist", "toolAllowlist"})
     private List<String> allowedTools;
 
+    /** Jackson setter-presence marker: absent, explicit null, and explicit empty are distinct contracts. */
+    private boolean allowedToolsProvided;
+
+    public void setAllowedTools(List<String> allowedTools) {
+        this.allowedToolsProvided = true;
+        this.allowedTools = allowedTools;
+    }
+
+    /** 本次任务允许使用的 Navigator BusinessFunction code。显式空数组覆盖 ClientApp grants。 */
+    @JsonProperty("allowed_functions")
+    @JsonAlias({"allowedFunctions", "function_allowlist", "functionAllowlist"})
+    private List<String> allowedFunctions;
+
+    /** Jackson setter-presence marker: absent, explicit null, and explicit empty are distinct contracts. */
+    private boolean allowedFunctionsProvided;
+
+    public void setAllowedFunctions(List<String> allowedFunctions) {
+        this.allowedFunctionsProvided = true;
+        this.allowedFunctions = allowedFunctions;
+    }
+
     /**
      * 获取实际消息内容（优先 message，回退 question）
      */

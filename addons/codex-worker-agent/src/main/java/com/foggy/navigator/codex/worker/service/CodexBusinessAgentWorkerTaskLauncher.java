@@ -166,16 +166,14 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
     }
 
     private void appendList(StringBuilder builder, String key, List<String> values) {
-        if (values == null || values.isEmpty()) {
+        if (values == null) {
             return;
         }
         List<String> cleaned = values.stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .toList();
-        if (!cleaned.isEmpty()) {
-            builder.append(key).append(": ").append(String.join(", ", cleaned)).append('\n');
-        }
+        builder.append(key).append(": [").append(String.join(", ", cleaned)).append("]\n");
     }
 
     private void putText(Map<String, Object> target, String key, String value) {
@@ -185,16 +183,14 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
     }
 
     private void putStringList(Map<String, Object> target, String key, List<String> values) {
-        if (values == null || values.isEmpty()) {
+        if (values == null) {
             return;
         }
         List<String> cleaned = values.stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .toList();
-        if (!cleaned.isEmpty()) {
-            target.put(key, cleaned);
-        }
+        target.put(key, cleaned);
     }
 
     private String sanitizeKeyPart(String value) {

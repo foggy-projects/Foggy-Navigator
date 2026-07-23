@@ -57,6 +57,30 @@ public class OpenApiTaskDTO {
     /** 后端来源 */
     private String backendSource;
 
+    /** 当前响应所声明 tool surface 的实际数量；具体 surface 类型见 toolScopeKind。 */
+    private Integer effectiveToolCount;
+
+    /** task-scoped token 中实际允许的 Navigator BusinessFunction code 数量。 */
+    private Integer effectiveFunctionCount;
+
+    /** tool scope 来源；不包含工具名称。 */
+    private String toolScopeSource;
+
+    /** tool 计数口径，明确区分 Navigator MCP wrappers、Codex native tools 与无 runtime。 */
+    private String toolScopeKind;
+
+    /** BusinessFunction scope 来源；不包含 function code。 */
+    private String functionScopeSource;
+
+    /** task-scoped token 的 function scope 是否为空。 */
+    private Boolean taskTokenFunctionScopeEmpty;
+
+    /** 是否实际进入 Worker/模型 runtime。safe-smoke 必须为 false。 */
+    private Boolean runtimeDispatched;
+
+    /** safe-smoke task token 的最终状态；不暴露 token 本身。 */
+    private String taskTokenStatus;
+
     /** 失败阶段：DISPATCH | WORKER_TRANSPORT | RUNTIME | PROVIDER_API */
     private String failureStage;
 

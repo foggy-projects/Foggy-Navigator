@@ -110,6 +110,44 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
     }
 
     @Test
+    void launchPreservesExplicitEmptyAllowedToolsInBusinessRuntimeContext() {
+        CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
+        BusinessAgentWorkerTaskLaunchRequest request = fullRequestBuilder()
+                .physicalWorkerId("codex_worker_01")
+                .selectedWorkerId("codex_worker_01")
+                .allowedTools(List.of())
+                .build();
+        when(bizWorkerPoolService.requireAvailablePool(
+                "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
+                .thenReturn(pool());
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member(
+                        "pool_01", "codex_worker_01", BizWorkerPoolService.STATUS_ENABLED)));
+        when(codexTaskService.createTaskDirectForProvider(
+                eq(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE), anyMap(), eq("owner_01"), eq("tenant_01")))
+                .thenReturn(DispatchTaskDTO.builder()
+                        .taskId("ct_empty_tools")
+                        .sessionId("session_01")
+                        .contextId("bctx_01")
+                        .workerId("codex_worker_01")
+                        .build());
+
+        launcher.launch(request);
+
+        ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(codexTaskService).createTaskDirectForProvider(
+                eq(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE), paramsCaptor.capture(),
+                eq("owner_01"), eq("tenant_01"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtimeContext =
+                (Map<String, Object>) paramsCaptor.getValue().get("businessRuntimeContext");
+        assertTrue(runtimeContext.containsKey("allowed_tools"));
+        assertEquals(List.of(), runtimeContext.get("allowed_tools"));
+        assertTrue(((String) paramsCaptor.getValue().get("developerInstructions"))
+                .contains("allowed_tools: []"));
+    }
+
+    @Test
     void launchUsesFirstEnabledPoolMemberWhenPhysicalWorkerMissing() {
         CodexBusinessAgentWorkerTaskLauncher launcher = launcher();
         when(bizWorkerPoolService.requireAvailablePool(

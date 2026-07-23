@@ -186,6 +186,7 @@ class RestAdapterUpstreamE2ETest {
                 agentModelBindingRepository);
         BusinessTaskScopedTokenPolicyService tokenPolicyService = new BusinessTaskScopedTokenPolicyService(
                 functionGrantRepository,
+                functionRepository,
                 objectMapper,
                 new com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties());
         BusinessTaskScopedTokenLifecycleService tokenLifecycleService =

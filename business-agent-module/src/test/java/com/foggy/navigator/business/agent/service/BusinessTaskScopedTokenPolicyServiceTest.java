@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties;
 import com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import com.foggy.navigator.business.agent.model.entity.BusinessFunctionEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppFunctionGrantEntity;
+import com.foggy.navigator.business.agent.repository.BusinessFunctionRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppFunctionGrantRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -33,6 +36,8 @@ class BusinessTaskScopedTokenPolicyServiceTest {
 
     @Mock
     private ClientAppFunctionGrantRepository functionGrantRepository;
+    @Mock
+    private BusinessFunctionRepository functionRepository;
 
     private ObjectMapper objectMapper;
     private BusinessTaskScopedTokenProperties properties;
@@ -44,6 +49,7 @@ class BusinessTaskScopedTokenPolicyServiceTest {
         properties = new BusinessTaskScopedTokenProperties();
         policyService = new BusinessTaskScopedTokenPolicyService(
                 functionGrantRepository,
+                functionRepository,
                 objectMapper,
                 properties
         );
@@ -55,7 +61,8 @@ class BusinessTaskScopedTokenPolicyServiceTest {
                 .thenReturn(List.of());
         BusinessTaskScopedTokenEntity token = newTokenEntity();
 
-        policyService.initializeNewToken(token);
+        BusinessTaskScopedTokenPolicyService.FunctionScopeSummary summary =
+                policyService.initializeNewToken(token);
 
         assertEquals(Duration.ofMinutes(30), Duration.between(token.getIssuedAt(), token.getExpiresAt()));
         assertEquals(BusinessTaskScopedTokenPolicyService.CURRENT_TOKEN_VERSION, token.getTokenVersion());
@@ -63,6 +70,10 @@ class BusinessTaskScopedTokenPolicyServiceTest {
         assertEquals(BusinessTaskScopedTokenPolicyService.AUDIENCE_WORKER_GATEWAY, token.getAudience());
         assertEquals(BusinessTaskScopedTokenPolicyService.IDENTITY_ASSURANCE_CLIENT_APP_DELEGATED,
                 token.getIdentityAssurance());
+        assertEquals(0, summary.effectiveFunctionCount());
+        assertEquals(BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_CLIENT_APP_GRANTS,
+                summary.source());
+        assertTrue(summary.empty());
     }
 
     @Test
@@ -98,6 +109,78 @@ class BusinessTaskScopedTokenPolicyServiceTest {
                 Map.of("functionId", "alpha", "version", "v1"),
                 Map.of("functionId", "zeta", "version", "v2")), scope);
         verify(functionGrantRepository).findByTenantIdAndClientAppId(TENANT_ID, CLIENT_APP_ID);
+    }
+
+    @Test
+    void initializeNewToken_explicitEmptyOverridesEnabledClientAppGrants() {
+        when(functionGrantRepository.findByTenantIdAndClientAppId(TENANT_ID, CLIENT_APP_ID))
+                .thenReturn(List.of(grant("orders.read", "v1", BusinessFunctionRegistryService.STATUS_ENABLED)));
+        BusinessTaskScopedTokenEntity token = newTokenEntity();
+
+        BusinessTaskScopedTokenPolicyService.FunctionScopeSummary summary = policyService.initializeNewToken(
+                token,
+                BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(List.of()));
+
+        assertEquals("[]", token.getFunctionScopeJson());
+        assertEquals(0, summary.effectiveFunctionCount());
+        assertEquals(BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY,
+                summary.source());
+        assertTrue(summary.empty());
+    }
+
+    @Test
+    void initializeNewToken_requestAllowlistSelectsOnlyGrantedFunctionCodes() throws Exception {
+        when(functionGrantRepository.findByTenantIdAndClientAppId(TENANT_ID, CLIENT_APP_ID))
+                .thenReturn(List.of(
+                        grant("orders.read", "v1", BusinessFunctionRegistryService.STATUS_ENABLED),
+                        grant("orders.write", "v2", BusinessFunctionRegistryService.STATUS_ENABLED)));
+        when(functionRepository.findByTenantIdAndFunctionId(TENANT_ID, "orders.read"))
+                .thenReturn(Optional.of(function("orders.read")));
+        BusinessTaskScopedTokenEntity token = newTokenEntity();
+
+        BusinessTaskScopedTokenPolicyService.FunctionScopeSummary summary = policyService.initializeNewToken(
+                token,
+                BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(List.of("orders.read")));
+
+        List<Map<String, String>> scope = objectMapper.readValue(token.getFunctionScopeJson(), new TypeReference<>() {
+        });
+        assertEquals(List.of(Map.of("functionId", "orders.read", "version", "v1")), scope);
+        assertEquals(1, summary.effectiveFunctionCount());
+        assertEquals(BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_ALLOWLIST,
+                summary.source());
+        assertFalse(summary.empty());
+    }
+
+    @Test
+    void initializeNewToken_rejectsUnknownFunctionCodeDistinctly() {
+        when(functionGrantRepository.findByTenantIdAndClientAppId(TENANT_ID, CLIENT_APP_ID))
+                .thenReturn(List.of());
+        when(functionRepository.findByTenantIdAndFunctionId(TENANT_ID, "missing.function"))
+                .thenReturn(Optional.empty());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> policyService.initializeNewToken(
+                        newTokenEntity(),
+                        BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(
+                                List.of("missing.function"))));
+
+        assertTrue(error.getMessage().startsWith("UNKNOWN_FUNCTION_CODE:"));
+    }
+
+    @Test
+    void initializeNewToken_rejectsClientAppGrantMismatchDistinctly() {
+        when(functionGrantRepository.findByTenantIdAndClientAppId(TENANT_ID, CLIENT_APP_ID))
+                .thenReturn(List.of());
+        when(functionRepository.findByTenantIdAndFunctionId(TENANT_ID, "orders.read"))
+                .thenReturn(Optional.of(function("orders.read")));
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> policyService.initializeNewToken(
+                        newTokenEntity(),
+                        BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(
+                                List.of("orders.read"))));
+
+        assertTrue(error.getMessage().startsWith("FUNCTION_SCOPE_OWNERSHIP_MISMATCH:"));
     }
 
     @Test
@@ -177,5 +260,12 @@ class BusinessTaskScopedTokenPolicyServiceTest {
         grant.setVersion(version);
         grant.setStatus(status);
         return grant;
+    }
+
+    private BusinessFunctionEntity function(String functionId) {
+        BusinessFunctionEntity function = new BusinessFunctionEntity();
+        function.setTenantId(TENANT_ID);
+        function.setFunctionId(functionId);
+        return function;
     }
 }

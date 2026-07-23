@@ -61,10 +61,30 @@ class BusinessTaskScopedTokenLifecycleServiceTest {
 
         assertEquals(token, result);
         assertEquals(SecretTokenSupport.sha256("btt_plain"), result.getTokenHash());
-        verify(tokenPolicyService).initializeNewToken(token);
+        verify(tokenPolicyService).initializeNewToken(
+                eq(token), any(BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class));
         verify(tokenRepository).save(token);
         verify(tokenRuntimeStore).registerToken(
                 "tenant_01", "session_01", "bt_01", "btt_plain", token.getExpiresAt());
+    }
+
+    @Test
+    void issueNewTokenWithScopeReturnsExactPolicyEvidence() {
+        BusinessTaskScopedTokenEntity token = activeToken();
+        var request = BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(List.of());
+        var summary = new BusinessTaskScopedTokenPolicyService.FunctionScopeSummary(
+                0,
+                BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY,
+                true);
+        when(tokenPolicyService.initializeNewToken(token, request)).thenReturn(summary);
+        when(tokenRepository.save(token)).thenReturn(token);
+
+        BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken issued =
+                service().issueNewTokenWithScope(token, "btt_plain", request);
+
+        assertEquals(token, issued.token());
+        assertEquals(summary, issued.functionScopeSummary());
+        verify(tokenPolicyService).initializeNewToken(token, request);
     }
 
     @Test
@@ -77,7 +97,8 @@ class BusinessTaskScopedTokenLifecycleServiceTest {
 
         assertEquals("worker_01", result.getWorkerId());
         assertEquals("bwl_lease_01", result.getWorkerLeaseId());
-        verify(tokenPolicyService).initializeNewToken(token);
+        verify(tokenPolicyService).initializeNewToken(
+                eq(token), any(BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class));
         verify(tokenRepository).save(token);
         verify(tokenRuntimeStore).registerToken(
                 "tenant_01", "session_01", "bt_01", "btt_plain", token.getExpiresAt());

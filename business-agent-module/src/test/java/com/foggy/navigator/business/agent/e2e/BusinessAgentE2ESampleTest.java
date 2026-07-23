@@ -159,6 +159,7 @@ class BusinessAgentE2ESampleTest {
                 agentModelBindingRepository);
         BusinessTaskScopedTokenPolicyService tokenPolicyService = new BusinessTaskScopedTokenPolicyService(
                 functionGrantRepository,
+                functionRepository,
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties());
         BusinessTaskScopedTokenLifecycleService tokenLifecycleService =

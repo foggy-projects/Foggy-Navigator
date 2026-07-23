@@ -109,6 +109,12 @@ class BusinessAgentTaskServiceTest {
                     token.setExpiresAt(LocalDateTime.now().plusMinutes(30));
                     return token;
                 });
+        lenient().when(tokenLifecycleService.summarizeFunctionScope(
+                any(BusinessTaskScopedTokenEntity.class), anyString()))
+                .thenAnswer(invocation -> new BusinessTaskScopedTokenPolicyService.FunctionScopeSummary(
+                        0,
+                        invocation.getArgument(1),
+                        true));
         lenient().when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
                 .thenAnswer(invocation -> {
                     BusinessAgentWorkerTaskLaunchRequest request = invocation.getArgument(0);
@@ -821,6 +827,61 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
+    void performOpenApiSafeSmokeIssuesExactEmptyScopeAndRevokesWithoutWorkerDispatch() {
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(tokenLifecycleService.issueNewTokenWithScope(
+                any(BusinessTaskScopedTokenEntity.class),
+                anyString(),
+                any(BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class)))
+                .thenAnswer(invocation -> {
+                    BusinessTaskScopedTokenEntity token = invocation.getArgument(0);
+                    token.setFunctionScopeJson("[]");
+                    return new BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken(
+                            token,
+                            new BusinessTaskScopedTokenPolicyService.FunctionScopeSummary(
+                                    0,
+                                    BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY,
+                                    true));
+                });
+
+        BusinessAgentTaskService.SafeSmokeResult result = taskService.performOpenApiSafeSmoke(
+                "tenant_01",
+                "actor_01",
+                "app_01",
+                "user_01",
+                "skill_01",
+                "session_01",
+                "model_01");
+
+        assertTrue(result.taskId().matches("smk_[a-f0-9]{32}"));
+        assertEquals(0, result.effectiveFunctionCount());
+        assertEquals(BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY,
+                result.functionScopeSource());
+        assertTrue(result.functionScopeEmpty());
+        assertEquals(BusinessAgentTaskService.STATUS_REVOKED, result.taskTokenStatus());
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        ArgumentCaptor<BusinessTaskScopedTokenPolicyService.FunctionScopeRequest> scopeCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class);
+        verify(tokenLifecycleService).issueNewTokenWithScope(
+                tokenCaptor.capture(),
+                argThat(token -> token.matches("btt_[A-Za-z0-9_-]{43}")),
+                scopeCaptor.capture());
+        assertEquals("SAFE_SMOKE", tokenCaptor.getValue().getWorkerPoolId());
+        assertNull(tokenCaptor.getValue().getWorkerId());
+        assertTrue(scopeCaptor.getValue().provided());
+        assertEquals(List.of(), scopeCaptor.getValue().functionCodes());
+        verify(tokenLifecycleService).revokeTaskScopedToken(
+                eq("tenant_01"),
+                eq(tokenCaptor.getValue().getTokenId()),
+                eq("system:safe-smoke"),
+                eq("safe smoke verification completed"));
+        verifyNoInteractions(workerTaskLauncher);
+    }
+
+    @Test
     void prepareOpenApiTaskScopedToken_resolvesAndPersistsExactWorkerBeforeDispatch() {
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
                 taskRepository,
@@ -891,6 +952,76 @@ class BusinessAgentTaskServiceTest {
         assertEquals(prepared.workerLeaseId(), persisted.getWorkerLeaseId());
         assertEquals("pool_01", persisted.getWorkerPoolId());
         verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedToken_preservesExplicitEmptyFunctionScope() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                List.of(workerTaskLauncher));
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(new ClientAppEntity());
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01");
+        when(tokenLifecycleService.issuePreboundTokenWithScope(
+                any(BusinessTaskScopedTokenEntity.class),
+                anyString(),
+                eq("worker_01"),
+                anyString(),
+                any(BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class)))
+                .thenAnswer(invocation -> new BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken(
+                        invocation.getArgument(0),
+                        new BusinessTaskScopedTokenPolicyService.FunctionScopeSummary(
+                                0,
+                                BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY,
+                                true)));
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest = BusinessAgentWorkerTaskLaunchRequest.builder()
+                .workerPoolId("pool_01")
+                .workerBackend("LANGGRAPH_BIZ")
+                .allowedFunctionsProvided(true)
+                .allowedFunctions(List.of())
+                .build();
+
+        BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
+                serviceWithLauncher.prepareOpenApiTaskScopedToken(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
+
+        assertEquals(0, prepared.effectiveFunctionCount());
+        assertEquals(BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY,
+                prepared.functionScopeSource());
+        assertTrue(prepared.functionScopeEmpty());
+        var scopeCaptor = ArgumentCaptor.forClass(
+                BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class);
+        verify(tokenLifecycleService).issuePreboundTokenWithScope(
+                any(BusinessTaskScopedTokenEntity.class),
+                eq(prepared.plainToken()),
+                eq("worker_01"),
+                eq(prepared.workerLeaseId()),
+                scopeCaptor.capture());
+        assertTrue(scopeCaptor.getValue().provided());
+        assertEquals(List.of(), scopeCaptor.getValue().functionCodes());
+        verify(tokenLifecycleService, never()).issuePreboundToken(
+                any(BusinessTaskScopedTokenEntity.class), anyString(), anyString(), anyString());
     }
 
     @Test

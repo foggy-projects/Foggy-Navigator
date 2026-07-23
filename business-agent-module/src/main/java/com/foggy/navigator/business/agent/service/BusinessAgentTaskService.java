@@ -348,6 +348,82 @@ public class BusinessAgentTaskService {
     }
 
     /**
+     * Performs a terminal safe-smoke capability check without resolving or dispatching a Worker.
+     * The token is never returned, carries an exact empty function scope, and is revoked before
+     * this method returns.
+     */
+    @Transactional
+    public SafeSmokeResult performOpenApiSafeSmoke(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(actorUserId, "actorUserId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(skillId, "skillId is required");
+        requireText(sessionId, "sessionId is required");
+
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
+        skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
+        String finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+                tenantId,
+                clientAppId,
+                requestedModelConfigId,
+                LlmModelCategory.GENERAL);
+
+        String taskId = "smk_" + UUID.randomUUID().toString().replace("-", "");
+        String plainToken = SecretTokenSupport.randomToken("btt_");
+        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
+        token.setTokenId("tst_" + UUID.randomUUID().toString().replace("-", ""));
+        token.setTokenHash(SecretTokenSupport.sha256(plainToken));
+        token.setTaskId(taskId);
+        token.setSessionId(sessionId);
+        token.setTenantId(tenantId);
+        token.setClientAppId(clientAppId);
+        token.setUpstreamUserId(upstreamUserId);
+        token.setNavigatorEffectiveUserId(actorUserId);
+        token.setSkillId(skillId);
+        token.setWorkerPoolId("SAFE_SMOKE");
+        token.setModelConfigId(finalModelConfigId);
+        token.setStatus(STATUS_ACTIVE);
+
+        BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken issued =
+                tokenLifecycleService.issueNewTokenWithScope(
+                        token,
+                        plainToken,
+                        BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(List.of()));
+        if (issued == null || issued.token() == null || issued.functionScopeSummary() == null) {
+            throw new IllegalStateException("SAFE_SMOKE_TOKEN_SCOPE_EVIDENCE_MISSING");
+        }
+        BusinessTaskScopedTokenEntity issuedToken = issued.token();
+        BusinessTaskScopedTokenPolicyService.FunctionScopeSummary summary = issued.functionScopeSummary();
+        if (summary.effectiveFunctionCount() != 0
+                || !summary.empty()
+                || !"[]".equals(issuedToken.getFunctionScopeJson())) {
+            throw new IllegalStateException("SAFE_SMOKE_TOKEN_FUNCTION_SCOPE_NOT_EMPTY");
+        }
+        tokenLifecycleService.revokeTaskScopedToken(
+                tenantId,
+                issuedToken.getTokenId(),
+                "system:safe-smoke",
+                "safe smoke verification completed");
+        return new SafeSmokeResult(
+                taskId,
+                sessionId,
+                finalModelConfigId,
+                summary.effectiveFunctionCount(),
+                summary.source(),
+                summary.empty(),
+                STATUS_REVOKED);
+    }
+
+    /**
      * Resolves and persists an exact Worker binding before an OpenAPI task can
      * reach any provider network boundary. Providers without a Biz Worker
      * launcher do not use Worker Gateway capabilities and therefore return no
@@ -424,8 +500,28 @@ public class BusinessAgentTaskService {
         token.setWorkerId(selectedWorkerId);
         token.setWorkerLeaseId(workerLeaseId);
         token.setStatus(STATUS_ACTIVE);
-        token = tokenLifecycleService.issuePreboundToken(
-                token, plainToken, selectedWorkerId, workerLeaseId);
+        BusinessTaskScopedTokenPolicyService.FunctionScopeSummary functionScopeSummary;
+        if (selectionRequest.isAllowedFunctionsProvided()) {
+            BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken issuedToken =
+                    tokenLifecycleService.issuePreboundTokenWithScope(
+                            token,
+                            plainToken,
+                            selectedWorkerId,
+                            workerLeaseId,
+                            BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.explicit(
+                                    selectionRequest.getAllowedFunctions()));
+            token = issuedToken.token();
+            functionScopeSummary = issuedToken.functionScopeSummary();
+        } else {
+            token = tokenLifecycleService.issuePreboundToken(
+                    token, plainToken, selectedWorkerId, workerLeaseId);
+            functionScopeSummary = tokenLifecycleService.summarizeFunctionScope(
+                    token,
+                    BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_CLIENT_APP_GRANTS);
+        }
+        if (functionScopeSummary == null) {
+            throw new IllegalStateException("task token function scope evidence is missing");
+        }
         registerRollbackRevocation(token.getTenantId(), token.getTokenId());
 
         return new PreparedOpenApiTaskScopedToken(
@@ -434,7 +530,10 @@ public class BusinessAgentTaskService {
                 selectedWorkerId,
                 workerLeaseId,
                 token.getWorkerPoolId(),
-                selectionRequest.getWorkerBackend().trim());
+                selectionRequest.getWorkerBackend().trim(),
+                functionScopeSummary.effectiveFunctionCount(),
+                functionScopeSummary.source(),
+                functionScopeSummary.empty());
     }
 
     @Transactional(readOnly = true)
@@ -682,7 +781,39 @@ public class BusinessAgentTaskService {
             String workerId,
             String workerLeaseId,
             String workerPoolId,
-            String workerBackend) {
+            String workerBackend,
+            int effectiveFunctionCount,
+            String functionScopeSource,
+            boolean functionScopeEmpty) {
+
+        public PreparedOpenApiTaskScopedToken(
+                String plainToken,
+                String tokenId,
+                String workerId,
+                String workerLeaseId,
+                String workerPoolId,
+                String workerBackend) {
+            this(
+                    plainToken,
+                    tokenId,
+                    workerId,
+                    workerLeaseId,
+                    workerPoolId,
+                    workerBackend,
+                    0,
+                    BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_CLIENT_APP_GRANTS,
+                    true);
+        }
+    }
+
+    public record SafeSmokeResult(
+            String taskId,
+            String sessionId,
+            String modelConfigId,
+            int effectiveFunctionCount,
+            String functionScopeSource,
+            boolean functionScopeEmpty,
+            String taskTokenStatus) {
     }
 
     private String resolveWorkerBackend(
@@ -848,14 +979,14 @@ public class BusinessAgentTaskService {
     }
 
     private List<String> cleanStringList(List<String> values) {
-        if (values == null || values.isEmpty()) {
+        if (values == null) {
             return null;
         }
         List<String> cleaned = values.stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .toList();
-        return cleaned.isEmpty() ? null : cleaned;
+        return cleaned;
     }
 
     private String resolveOptionalVisionModelConfigId(

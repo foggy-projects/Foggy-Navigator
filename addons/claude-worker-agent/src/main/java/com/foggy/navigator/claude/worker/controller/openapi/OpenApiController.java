@@ -69,10 +69,12 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Open API Controller — 面向第三方系统的集成接口
@@ -102,6 +104,22 @@ public class OpenApiController {
             "open api task submission returned no task id";
     private static final String BUSINESS_RUNTIME_BIND_FAILURE_REASON =
             "open api task token binding failed";
+    private static final String TOOL_SCOPE_SOURCE_RUNTIME_DEFAULT = "RUNTIME_DEFAULT";
+    private static final String TOOL_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY = "REQUEST_EXPLICIT_EMPTY";
+    private static final String TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST = "REQUEST_ALLOWLIST";
+    private static final String TOOL_SCOPE_SOURCE_SAFE_SMOKE_NO_RUNTIME = "SAFE_SMOKE_NO_RUNTIME";
+    private static final String TOOL_SCOPE_KIND_NAVIGATOR_BUSINESS_MCP =
+            "NAVIGATOR_BUSINESS_MCP_WRAPPERS";
+    private static final String TOOL_SCOPE_KIND_NO_RUNTIME = "NO_RUNTIME_MODEL_TOOL_SURFACE";
+    private static final Set<String> ALL_BUSINESS_TOOL_ALIASES = Set.of(
+            "business.*", "business.functions.*", "navigator.business_functions");
+    private static final Map<String, String> BUSINESS_TOOL_ALIASES = Map.of(
+            "business.functions.list", "list_business_functions",
+            "business.functions.schema", "get_business_function_schema",
+            "business.functions.invoke", "invoke_business_function",
+            "list_business_functions", "list_business_functions",
+            "get_business_function_schema", "get_business_function_schema",
+            "invoke_business_function", "invoke_business_function");
     private static final int MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH = 64 * 1024;
 
     private final OpenApiProvisioningService provisioningService;
@@ -544,7 +562,13 @@ public class OpenApiController {
                 agentResource,
                 modelResource,
                 workspaceResource,
-                metadata);
+                metadata,
+                form);
+        ToolScopeSummary toolScopeSummary = resolveToolScope(form.getAllowedTools());
+        metadata.put("effectiveToolCount", toolScopeSummary.effectiveToolCount());
+        metadata.put("toolScopeSource", toolScopeSummary.source());
+        metadata.put("toolScopeKind", TOOL_SCOPE_KIND_NAVIGATOR_BUSINESS_MCP);
+        metadata.put("runtimeDispatched", true);
         String businessRuntimeToken = enrichBusinessRuntimeContext(
                 tenantId,
                 metadata,
@@ -638,7 +662,151 @@ public class OpenApiController {
                 route.agentId(), route.skillId(), task.getId(), tenantId);
 
         SessionTaskEntity taskEntity = sessionQueryService.findTask(task.getId()).orElse(null);
-        return RX.ok(toOpenApiTaskDTO(task, route.agentId(), taskEntity));
+        OpenApiTaskDTO response = toOpenApiTaskDTO(task, route.agentId(), taskEntity);
+        applyScopeDiagnostics(response, metadata);
+        return RX.ok(response);
+    }
+
+    /**
+     * Terminal safe-smoke endpoint. It validates explicit empty scopes, creates and immediately
+     * revokes an empty-function task token, and never submits a task to a Worker or model runtime.
+     */
+    @PostMapping("/agents/{agentId}/safe-smoke")
+    public RX<OpenApiTaskDTO> safeSmokeAgent(
+            @PathVariable String agentId,
+            @RequestBody OpenApiQueryForm form,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, credential);
+        if (form == null) {
+            return RX.failB("SAFE_SMOKE_BODY_REQUIRED");
+        }
+        String message = form.resolveMessage();
+        if (!StringUtils.hasText(message)) {
+            return RX.failB("SAFE_SMOKE_MESSAGE_REQUIRED");
+        }
+        if (form.getMaxTurns() == null || form.getMaxTurns() != 1) {
+            return RX.failB("SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE");
+        }
+        String scopeError = validateSafeSmokeScopes(form);
+        if (scopeError != null) {
+            return RX.failB(scopeError);
+        }
+        if (StringUtils.hasText(form.getSystemPrompt())
+                || StringUtils.hasText(form.getFirstMsg())
+                || (form.getAttachments() != null && !form.getAttachments().isEmpty())) {
+            return RX.failB("SAFE_SMOKE_RUNTIME_INPUT_NOT_ALLOWED");
+        }
+
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
+        if (!StringUtils.hasText(upstreamUserId)) {
+            return RX.failB("SAFE_SMOKE_UPSTREAM_USER_REQUIRED");
+        }
+        String tenantId = credential.getTenantId();
+        String contextId = StringUtils.hasText(form.getContextId())
+                ? form.getContextId().trim()
+                : BusinessAgentSessionService.generateContextId();
+        try {
+            A2AgentResourceResolver resourceResolver = requireA2AgentResourceResolver();
+            A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
+                    tenantId,
+                    credential.getClientAppId(),
+                    upstreamUserId,
+                    route.agentId());
+            String requestedModelConfigId = extractRequestedModelConfigId(form);
+            String effectiveRequestedModelConfigId = StringUtils.hasText(requestedModelConfigId)
+                    ? requestedModelConfigId
+                    : agentResource.defaultModelConfigId();
+            A2AgentResourceResolver.ResolvedModelResource modelResource =
+                    resourceResolver.resolveRequiredModelForAgent(
+                            tenantId,
+                            credential.getClientAppId(),
+                            agentResource,
+                            effectiveRequestedModelConfigId,
+                            extractRequestedModelVariant(form),
+                            LlmModelCategory.GENERAL);
+            BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
+            if (service == null) {
+                return RX.failB("SAFE_SMOKE_TOKEN_SERVICE_UNAVAILABLE");
+            }
+            BusinessAgentTaskService.SafeSmokeResult result = service.performOpenApiSafeSmoke(
+                    tenantId,
+                    resolveAgentOwnerUserId(route.agentId(), tenantId),
+                    credential.getClientAppId(),
+                    upstreamUserId,
+                    route.skillId(),
+                    contextId,
+                    modelResource.modelConfigId());
+            LocalDateTime now = LocalDateTime.now();
+            return RX.ok(OpenApiTaskDTO.builder()
+                    .taskId(result.taskId())
+                    .agentId(route.agentId())
+                    .status("COMPLETED")
+                    .contextId(result.sessionId())
+                    .modelConfigId(result.modelConfigId())
+                    .modelConfigSource(modelResource.source())
+                    .workerBackend("NONE")
+                    .providerType("NONE")
+                    .taskSource("SAFE_SMOKE")
+                    .workerSource("NO_WORKER_DISPATCH")
+                    .backendSource("SAFE_SMOKE_NO_RUNTIME")
+                    .effectiveToolCount(0)
+                    .effectiveFunctionCount(result.effectiveFunctionCount())
+                    .toolScopeSource(TOOL_SCOPE_SOURCE_SAFE_SMOKE_NO_RUNTIME)
+                    .toolScopeKind(TOOL_SCOPE_KIND_NO_RUNTIME)
+                    .functionScopeSource(result.functionScopeSource())
+                    .taskTokenFunctionScopeEmpty(result.functionScopeEmpty())
+                    .runtimeDispatched(false)
+                    .taskTokenStatus(result.taskTokenStatus())
+                    .result("SAFE_SMOKE_VERIFIED_NO_RUNTIME_DISPATCH")
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            return RX.failB(firstNonBlank(
+                    sanitizeDiagnosticText(e.getMessage()),
+                    "SAFE_SMOKE_REJECTED"));
+        }
+    }
+
+    private String validateSafeSmokeScopes(OpenApiQueryForm form) {
+        if (!form.isAllowedToolsProvided()) {
+            return "SAFE_SMOKE_TOOL_SCOPE_REQUIRED";
+        }
+        if (form.getAllowedTools() == null) {
+            return "TOOL_SCOPE_EXPLICIT_NULL";
+        }
+        if (!cleanRequestListPreservingEmpty(form.getAllowedTools()).isEmpty()) {
+            return "SAFE_SMOKE_REQUIRES_EMPTY_TOOL_SCOPE";
+        }
+        if (!form.isAllowedFunctionsProvided()) {
+            return "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED";
+        }
+        if (form.getAllowedFunctions() == null) {
+            return "FUNCTION_SCOPE_EXPLICIT_NULL";
+        }
+        if (!cleanRequestListPreservingEmpty(form.getAllowedFunctions()).isEmpty()) {
+            return "SAFE_SMOKE_REQUIRES_EMPTY_FUNCTION_SCOPE";
+        }
+        return null;
+    }
+
+    private void applyScopeDiagnostics(OpenApiTaskDTO target, Map<String, Object> metadata) {
+        if (target == null || metadata == null) {
+            return;
+        }
+        target.setEffectiveToolCount(integerValue(metadata.get("effectiveToolCount")));
+        target.setEffectiveFunctionCount(integerValue(metadata.get("effectiveFunctionCount")));
+        target.setToolScopeSource(stringValue(metadata.get("toolScopeSource")));
+        target.setToolScopeKind(stringValue(metadata.get("toolScopeKind")));
+        target.setFunctionScopeSource(stringValue(metadata.get("functionScopeSource")));
+        target.setTaskTokenFunctionScopeEmpty(booleanValue(metadata.get("taskTokenFunctionScopeEmpty")));
+        target.setRuntimeDispatched(booleanValue(metadata.get("runtimeDispatched")));
+        target.setTaskTokenStatus(stringValue(metadata.get("taskTokenStatus")));
     }
 
     private String extractRequestedModelConfigId(OpenApiQueryForm form) {
@@ -787,7 +955,8 @@ public class OpenApiController {
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
             A2AgentResourceResolver.ResolvedModelResource modelResource,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
-            Map<String, Object> metadata) {
+            Map<String, Object> metadata,
+            OpenApiQueryForm form) {
         String physicalWorkerId = stringValue(metadata.get("workerId"));
         String routeId = firstNonBlank(
                 agentResource != null ? agentResource.workerPoolId() : null,
@@ -822,6 +991,9 @@ public class OpenApiController {
                 .directoryId(workspaceResource != null ? workspaceResource.directoryId() : null)
                 .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
                 .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)
+                .allowedTools(cleanRequestListPreservingEmpty(form.getAllowedTools()))
+                .allowedFunctionsProvided(form.isAllowedFunctionsProvided())
+                .allowedFunctions(form.getAllowedFunctions())
                 .build();
     }
 
@@ -1394,7 +1566,7 @@ public class OpenApiController {
         Map<String, Object> policy = new LinkedHashMap<>();
         putText(policy, "workdir", form.getWorkdir());
         putStringList(policy, "allowed_dirs", form.getAllowedDirs());
-        putStringList(policy, "allowed_tools", form.getAllowedTools());
+        putStringListPreservingEmpty(policy, "allowed_tools", form.getAllowedTools());
         if (policy.isEmpty()) {
             return;
         }
@@ -1473,6 +1645,46 @@ public class OpenApiController {
         }
     }
 
+    private void putStringListPreservingEmpty(Map<String, Object> target, String key, List<String> values) {
+        if (values == null) {
+            return;
+        }
+        target.put(key, cleanRequestListPreservingEmpty(values));
+    }
+
+    private List<String> cleanRequestListPreservingEmpty(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        return values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    private ToolScopeSummary resolveToolScope(List<String> allowedTools) {
+        if (allowedTools == null) {
+            return new ToolScopeSummary(3, TOOL_SCOPE_SOURCE_RUNTIME_DEFAULT);
+        }
+        List<String> cleaned = cleanRequestListPreservingEmpty(allowedTools);
+        if (cleaned.isEmpty()) {
+            return new ToolScopeSummary(0, TOOL_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY);
+        }
+        Set<String> effectiveTools = new LinkedHashSet<>();
+        for (String allowedTool : cleaned) {
+            String normalized = allowedTool.toLowerCase(Locale.ROOT);
+            if (ALL_BUSINESS_TOOL_ALIASES.contains(normalized)) {
+                return new ToolScopeSummary(3, TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST);
+            }
+            String toolName = BUSINESS_TOOL_ALIASES.get(normalized);
+            if (toolName != null) {
+                effectiveTools.add(toolName);
+            }
+        }
+        return new ToolScopeSummary(effectiveTools.size(), TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST);
+    }
+
     private String issueBusinessRuntimeToken(
             String tenantId,
             String actorUserId,
@@ -1517,10 +1729,19 @@ public class OpenApiController {
         runtimeContext.put("task_scoped_token", prepared.plainToken());
         runtimeContext.put("worker_id", prepared.workerId());
         runtimeContext.put("worker_lease_id", prepared.workerLeaseId());
+        if (workerSelectionRequest.getAllowedTools() != null) {
+            runtimeContext.put("allowed_tools", workerSelectionRequest.getAllowedTools());
+        }
         metadata.put("runtimeContext", runtimeContext);
         metadata.put("workerId", prepared.workerId());
         metadata.put("workerLeaseId", prepared.workerLeaseId());
+        metadata.put("effectiveFunctionCount", prepared.effectiveFunctionCount());
+        metadata.put("functionScopeSource", prepared.functionScopeSource());
+        metadata.put("taskTokenFunctionScopeEmpty", prepared.functionScopeEmpty());
         return prepared.plainToken();
+    }
+
+    private record ToolScopeSummary(int effectiveToolCount, String source) {
     }
 
     private RuntimeException openApiRequestRejected(Exception e) {
@@ -1723,6 +1944,18 @@ public class OpenApiController {
                 return Integer.parseInt(text.trim());
             } catch (NumberFormatException ignored) {
                 return null;
+            }
+        }
+        return null;
+    }
+
+    private Boolean booleanValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            if ("true".equalsIgnoreCase(text.trim()) || "false".equalsIgnoreCase(text.trim())) {
+                return Boolean.parseBoolean(text.trim());
             }
         }
         return null;
@@ -2367,7 +2600,15 @@ public class OpenApiController {
                     .providerType(stringValue(metadata.get("providerType")))
                     .taskSource(firstNonBlank(stringValue(metadata.get("taskSource")), stringValue(metadata.get("source"))))
                     .workerSource(stringValue(metadata.get("workerSource")))
-                    .backendSource(stringValue(metadata.get("backendSource")));
+                    .backendSource(stringValue(metadata.get("backendSource")))
+                    .effectiveToolCount(integerValue(metadata.get("effectiveToolCount")))
+                    .effectiveFunctionCount(integerValue(metadata.get("effectiveFunctionCount")))
+                    .toolScopeSource(stringValue(metadata.get("toolScopeSource")))
+                    .toolScopeKind(stringValue(metadata.get("toolScopeKind")))
+                    .functionScopeSource(stringValue(metadata.get("functionScopeSource")))
+                    .taskTokenFunctionScopeEmpty(booleanValue(metadata.get("taskTokenFunctionScopeEmpty")))
+                    .runtimeDispatched(booleanValue(metadata.get("runtimeDispatched")))
+                    .taskTokenStatus(stringValue(metadata.get("taskTokenStatus")));
         }
 
         if (taskEntity != null) {
@@ -2383,7 +2624,27 @@ public class OpenApiController {
                     .workerSource(firstNonBlank(stringValue(taskState.get("workerSource")),
                             stringValue(metadata != null ? metadata.get("workerSource") : null)))
                     .backendSource(firstNonBlank(stringValue(taskState.get("backendSource")),
-                            stringValue(metadata != null ? metadata.get("backendSource") : null)));
+                            stringValue(metadata != null ? metadata.get("backendSource") : null)))
+                    .effectiveToolCount(firstNonNull(
+                            integerValue(taskState.get("effectiveToolCount")),
+                            integerValue(metadata != null ? metadata.get("effectiveToolCount") : null)))
+                    .effectiveFunctionCount(firstNonNull(
+                            integerValue(taskState.get("effectiveFunctionCount")),
+                            integerValue(metadata != null ? metadata.get("effectiveFunctionCount") : null)))
+                    .toolScopeSource(firstNonBlank(stringValue(taskState.get("toolScopeSource")),
+                            stringValue(metadata != null ? metadata.get("toolScopeSource") : null)))
+                    .toolScopeKind(firstNonBlank(stringValue(taskState.get("toolScopeKind")),
+                            stringValue(metadata != null ? metadata.get("toolScopeKind") : null)))
+                    .functionScopeSource(firstNonBlank(stringValue(taskState.get("functionScopeSource")),
+                            stringValue(metadata != null ? metadata.get("functionScopeSource") : null)))
+                    .taskTokenFunctionScopeEmpty(firstNonNull(
+                            booleanValue(taskState.get("taskTokenFunctionScopeEmpty")),
+                            booleanValue(metadata != null ? metadata.get("taskTokenFunctionScopeEmpty") : null)))
+                    .runtimeDispatched(firstNonNull(
+                            booleanValue(taskState.get("runtimeDispatched")),
+                            booleanValue(metadata != null ? metadata.get("runtimeDispatched") : null)))
+                    .taskTokenStatus(firstNonBlank(stringValue(taskState.get("taskTokenStatus")),
+                            stringValue(metadata != null ? metadata.get("taskTokenStatus") : null)));
             if (StringUtils.hasText(taskEntity.getProviderTaskId())) {
                 builder.workerTaskId(taskEntity.getProviderTaskId()).providerTaskId(taskEntity.getProviderTaskId());
             }
@@ -2433,6 +2694,14 @@ public class OpenApiController {
                 .taskSource(firstNonBlank(taskEntity.getSource(), stringValue(taskState.get("taskSource"))))
                 .workerSource(stringValue(taskState.get("workerSource")))
                 .backendSource(stringValue(taskState.get("backendSource")))
+                .effectiveToolCount(integerValue(taskState.get("effectiveToolCount")))
+                .effectiveFunctionCount(integerValue(taskState.get("effectiveFunctionCount")))
+                .toolScopeSource(stringValue(taskState.get("toolScopeSource")))
+                .toolScopeKind(stringValue(taskState.get("toolScopeKind")))
+                .functionScopeSource(stringValue(taskState.get("functionScopeSource")))
+                .taskTokenFunctionScopeEmpty(booleanValue(taskState.get("taskTokenFunctionScopeEmpty")))
+                .runtimeDispatched(booleanValue(taskState.get("runtimeDispatched")))
+                .taskTokenStatus(stringValue(taskState.get("taskTokenStatus")))
                 .failureStage(failureStage)
                 .failureSummary(failureSummary)
                 .errorMessage(sanitizeDiagnosticText(taskEntity.getErrorMessage()))

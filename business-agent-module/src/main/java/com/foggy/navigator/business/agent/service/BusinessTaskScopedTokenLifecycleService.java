@@ -33,11 +33,34 @@ public class BusinessTaskScopedTokenLifecycleService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public IssuedTaskScopedToken issueNewTokenWithScope(
+            BusinessTaskScopedTokenEntity token,
+            String plainToken,
+            BusinessTaskScopedTokenPolicyService.FunctionScopeRequest functionScopeRequest) {
+        return persistNewToken(token, plainToken, functionScopeRequest);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public BusinessTaskScopedTokenEntity issuePreboundToken(
             BusinessTaskScopedTokenEntity token,
             String plainToken,
             String workerId,
             String workerLeaseId) {
+        return issuePreboundTokenWithScope(
+                token,
+                plainToken,
+                workerId,
+                workerLeaseId,
+                BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.unspecified()).token();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public IssuedTaskScopedToken issuePreboundTokenWithScope(
+            BusinessTaskScopedTokenEntity token,
+            String plainToken,
+            String workerId,
+            String workerLeaseId,
+            BusinessTaskScopedTokenPolicyService.FunctionScopeRequest functionScopeRequest) {
         requireText(workerId, "workerId is required for prebound token");
         requireText(workerLeaseId, "workerLeaseId is required for prebound token");
         if (token == null) {
@@ -55,21 +78,46 @@ public class BusinessTaskScopedTokenLifecycleService {
         }
         token.setWorkerId(normalizedWorkerId);
         token.setWorkerLeaseId(normalizedWorkerLeaseId);
-        return persistNewToken(token, plainToken);
+        return persistNewToken(token, plainToken, functionScopeRequest);
     }
 
     private BusinessTaskScopedTokenEntity persistNewToken(
             BusinessTaskScopedTokenEntity token, String plainToken) {
+        return persistNewToken(
+                token,
+                plainToken,
+                BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.unspecified()).token();
+    }
+
+    private IssuedTaskScopedToken persistNewToken(
+            BusinessTaskScopedTokenEntity token,
+            String plainToken,
+            BusinessTaskScopedTokenPolicyService.FunctionScopeRequest functionScopeRequest) {
         requireText(plainToken, "plainToken is required");
         if (token == null) {
             throw new IllegalArgumentException("token is required");
         }
         token.setTokenHash(SecretTokenSupport.sha256(plainToken));
-        tokenPolicyService.initializeNewToken(token);
+        BusinessTaskScopedTokenPolicyService.FunctionScopeSummary functionScopeSummary =
+                tokenPolicyService.initializeNewToken(token, functionScopeRequest);
         BusinessTaskScopedTokenEntity saved = tokenRepository.save(token);
         afterCommit(() -> tokenRuntimeStore.registerToken(
                 saved.getTenantId(), saved.getSessionId(), saved.getTaskId(), plainToken, saved.getExpiresAt()));
-        return saved;
+        return new IssuedTaskScopedToken(saved, functionScopeSummary);
+    }
+
+    public record IssuedTaskScopedToken(
+            BusinessTaskScopedTokenEntity token,
+            BusinessTaskScopedTokenPolicyService.FunctionScopeSummary functionScopeSummary) {
+    }
+
+    public BusinessTaskScopedTokenPolicyService.FunctionScopeSummary summarizeFunctionScope(
+            BusinessTaskScopedTokenEntity token,
+            String source) {
+        if (token == null) {
+            throw new IllegalArgumentException("token is required");
+        }
+        return tokenPolicyService.summarizeFunctionScope(token.getFunctionScopeJson(), source);
     }
 
     @Transactional(

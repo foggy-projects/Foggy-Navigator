@@ -137,9 +137,10 @@ export function resolveNavigatorBusinessMcpToolNames(
 export function resolveNavigatorBusinessMcpToolNamesFromAllowedTools(
   allowedTools: string[] | undefined
 ): NavigatorBusinessMcpToolName[] {
-  if (!allowedTools || allowedTools.length === 0) {
+  if (allowedTools === undefined) {
     return [...NAVIGATOR_BUSINESS_MCP_TOOL_NAMES]
   }
+  if (allowedTools.length === 0) return []
 
   const toolNames = new Set<NavigatorBusinessMcpToolName>()
   for (const tool of allowedTools) {

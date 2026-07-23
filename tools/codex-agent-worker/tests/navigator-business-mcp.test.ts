@@ -59,6 +59,12 @@ test('createRuntimeFromEnv reads gateway URL, token and allowed tools', () => {
 })
 
 test('resolveNavigatorBusinessMcpToolNamesFromAllowedTools maps grants to MCP tools', () => {
+  assert.deepEqual(resolveNavigatorBusinessMcpToolNamesFromAllowedTools(undefined), [
+    'list_business_functions',
+    'get_business_function_schema',
+    'invoke_business_function',
+  ])
+  assert.deepEqual(resolveNavigatorBusinessMcpToolNamesFromAllowedTools([]), [])
   assert.deepEqual(
     resolveNavigatorBusinessMcpToolNamesFromAllowedTools(['business.functions.invoke']),
     ['invoke_business_function']
