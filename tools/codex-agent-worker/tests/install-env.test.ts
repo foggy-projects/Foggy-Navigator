@@ -48,7 +48,9 @@ test('upgrade preserves existing identity and ledger unless an explicit override
     '',
   ].join('\n'))
 
-  const preserved = configureInstallEnv({ envPath, installDir: root })
+  // This assertion exercises preservation of the existing .env value. Do not let an
+  // ambient host-level installer override turn it into an explicit replacement.
+  const preserved = configureInstallEnv({ envPath, installDir: root, ledgerDir: '' })
   let content = fs.readFileSync(envPath, 'utf8')
   assert.match(content, /^CODEX_NAVIGATOR_WORKER_ID="existing-worker"$/m)
   assert.match(content, new RegExp(`^CODEX_TERMINATION_OPERATION_LEDGER_DIR=${JSON.stringify(originalLedger).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))

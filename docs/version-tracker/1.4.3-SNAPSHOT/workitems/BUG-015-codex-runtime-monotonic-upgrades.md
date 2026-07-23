@@ -123,7 +123,7 @@ open_questions: []
   - PASS: `tools/codex-app-server-worker`: `node --check scripts/runtime-dependency-version.mjs`; focused runtime/release tests (14/14); `node --import tsx --test --test-name-pattern='staged update preserves' tests/operations-upgrade.test.ts` (1/1).
   - PASS: both module `npm run typecheck` and `npm run build`; App Server `npm run verify:schema`; `git diff --check`.
   - PASS: App Server `npm run package:release`, including its full test/verify-schema/typecheck/build pipeline and release zip generation.
-  - PASS: SDK `npm run package:release -- --skip-verify --platform all --smoke full`; release smoke succeeded. Full package verification without `--skip-verify` reached 231 passing, 1 failing, 1 skipped test and did not package.
+  - PASS: SDK `npm run package:release -- --skip-verify --platform all --smoke full`; release smoke succeeded. A prior full package verification exposed an environment-sensitive `install-env` test: its no-override assertion inherited a host-level ledger environment variable. The test now explicitly supplies an empty override when validating preservation of the `.env` value, without changing installer precedence semantics; final release verification is rerun before publication.
   - PASS: SDK updater rename regression: `node --import tsx --test tests/runtime-dependency-version.test.ts tests/release-tooling.test.ts tests/start-environment-isolation.test.ts tests/windows-release-start.test.ts` (25/25); `npm run typecheck`; `npm run build`; `git diff --check`.
   - PASS: SDK `npm run package:release -- --skip-verify --platform all --smoke full` after the rename. `release/output/smoke-result.json` recorded `archive-structure`, `sha256-sidecars`, `forbidden-file-scan`, `candidate-npm-ci`, and `candidate-health`; the isolated Linux candidate returned health `ok`. The archive contains only `update-sdk.*` and `update-worker.*`, with no `update.*` SDK updater.
   - PASS: isolated release installer migration under `temp/test-artifacts/bug-015-sdk-updater-rename.43db4G`: pre-created legacy `update.sh` / `update.ps1`, then ran the packaged Linux `install.sh` with isolated `HOME` and `CODEX_WORKER_HOME`; legacy files were removed, `update-sdk.sh` / `update-sdk.ps1` were installed, and `@openai/codex-sdk` installed successfully at `0.144.1`.
@@ -132,7 +132,7 @@ open_questions: []
 - deviations: 一次早期手工验证误传 `--install-dir`（安装器实际使用 `CODEX_WORKER_HOME`），可能触发默认 `~/.codex-worker` 的升级/停止路径。随后未对该目录执行恢复、重启或其他写操作；后续所有验证均隔离 `HOME` 与 `CODEX_WORKER_HOME`。
 - residual_risks:
   - 更高的 Codex SDK/CLI 可能与较旧 Worker 本体不兼容；现有 candidate 验证、健康检查和回滚/保留故障证据行为未改变。
-  - SDK Worker 全量测试的既有 install-env 失败仍需单独修复后，才能取得无条件的发布包验证。
+  - SDK Worker 发布级验证需在最终提交上重新运行；不以 `--skip-verify` 的临时归档作为发布证据。
   - PowerShell 路径只通过静态/类型级覆盖，未在本 Linux 主机执行。
 - readiness: READY_FOR_SIGNOFF
 
