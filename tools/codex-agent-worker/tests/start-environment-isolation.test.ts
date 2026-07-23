@@ -88,8 +88,8 @@ test('PowerShell starters clear generic CODEX_HOME after dotenv import and befor
 test('installer and updater chains copy and invoke the sanitized starters', () => {
   const installSh = fs.readFileSync(path.join(workerDir, 'release', 'install.sh'), 'utf8')
   const installPs1 = fs.readFileSync(path.join(workerDir, 'release', 'install.ps1'), 'utf8')
-  const updateSh = fs.readFileSync(path.join(workerDir, 'release', 'update.sh'), 'utf8')
-  const updatePs1 = fs.readFileSync(path.join(workerDir, 'release', 'update.ps1'), 'utf8')
+  const updateSh = fs.readFileSync(path.join(workerDir, 'release', 'update-sdk.sh'), 'utf8')
+  const updatePs1 = fs.readFileSync(path.join(workerDir, 'release', 'update-sdk.ps1'), 'utf8')
 
   assert.match(installSh, /start\.sh/)
   assert.match(installPs1, /start\.ps1/)

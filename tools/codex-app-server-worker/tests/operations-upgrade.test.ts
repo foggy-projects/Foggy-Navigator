@@ -298,6 +298,39 @@ test('current Worker update commits transaction, removes marker, and restarts cl
   }
 })
 
+test('staged update preserves a newer installed Codex CLI instead of the candidate lockfile downgrade', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex monotonic dependency update #'))
+  const installDir = path.join(root, 'installed worker')
+  const candidateDir = path.join(root, 'candidate package', 'codex-app-server-worker')
+  const bootstrapDir = path.join(root, 'bootstrap')
+  const fakeBin = path.join(root, 'fake npm')
+  try {
+    prepareCandidate(candidateDir)
+    prepareCurrentInstall(installDir)
+    prepareFakeNpm(fakeBin)
+    const installedCodex = path.join(installDir, 'node_modules', '@openai', 'codex')
+    fs.mkdirSync(installedCodex, { recursive: true })
+    fs.writeFileSync(path.join(installedCodex, 'package.json'), JSON.stringify({ version: '0.145.0' }))
+    const updaterName = prepareBootstrapUpdater(bootstrapDir)
+    const updaterEnv = cleanLifecycleEnvironment(fakeBin)
+    updaterEnv.CAW_TEST_DOTENV_SOURCE = path.resolve('node_modules', 'dotenv')
+    const result = process.platform === 'win32'
+      ? spawnSync('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(bootstrapDir, updaterName),
+        '-Package', path.dirname(candidateDir), '-InstallDir', installDir, '-NoRestart',
+      ], { env: updaterEnv, encoding: 'utf8', timeout: 60_000 })
+      : spawnSync('bash', [
+        path.join(bootstrapDir, updaterName), '--package', path.dirname(candidateDir), '--install-dir', installDir, '--no-restart',
+      ], { env: updaterEnv, encoding: 'utf8', timeout: 60_000 })
+    assert.equal(result.status, 0, formatSpawnFailure(result))
+    assert.match(`${result.stdout}\n${result.stderr}`, /Preserving newer installed @openai\/codex 0\.145\.0/)
+    assert.equal(readInstalledPackageVersion(installDir, '@openai/codex'), '0.145.0')
+    assert.equal(readLockedPackageVersion(installDir, '@openai/codex'), '0.145.0')
+  } finally {
+    removeTemporaryTree(root)
+  }
+})
+
 test('running update drains with runtime identity evidence and fails closed when residue remains', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex runtime residue update #'))
   const installDir = path.join(root, 'current install')
@@ -1051,11 +1084,19 @@ function prepareCandidate(candidateDir: string): void {
   fs.copyFileSync('scripts/configure-install-env.mjs', path.join(candidateDir, 'scripts', 'configure-install-env.mjs'))
   fs.copyFileSync('scripts/process-tree.mjs', path.join(candidateDir, 'scripts', 'process-tree.mjs'))
   fs.copyFileSync('scripts/lifecycle-marker.mjs', path.join(candidateDir, 'scripts', 'lifecycle-marker.mjs'))
+  fs.copyFileSync('scripts/runtime-dependency-version.mjs', path.join(candidateDir, 'scripts', 'runtime-dependency-version.mjs'))
   fs.writeFileSync(path.join(candidateDir, 'package.json'), JSON.stringify({
     name: 'codex-app-server-worker',
     version: '0.1.1',
+    dependencies: { '@openai/codex': '0.144.3' },
   }))
-  fs.writeFileSync(path.join(candidateDir, 'package-lock.json'), '{"lockfileVersion":3}')
+  fs.writeFileSync(path.join(candidateDir, 'package-lock.json'), JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      '': { name: 'codex-app-server-worker', version: '0.1.1', dependencies: { '@openai/codex': '0.144.3' } },
+      'node_modules/@openai/codex': { version: '0.144.3' },
+    },
+  }))
   fs.writeFileSync(path.join(candidateDir, 'tsconfig.json'), '{}')
   fs.writeFileSync(path.join(candidateDir, 'VERSION'), '0.1.1\n')
   fs.writeFileSync(path.join(candidateDir, '.env.example'), '')
@@ -1064,6 +1105,16 @@ function prepareCandidate(candidateDir: string): void {
   if (process.platform !== 'win32') {
     for (const script of ['start.sh', 'stop.sh', 'update.sh']) fs.chmodSync(path.join(candidateDir, script), 0o755)
   }
+}
+
+function readInstalledPackageVersion(root: string, packageName: string): string {
+  const packagePath = path.join(root, 'node_modules', ...packageName.split('/'), 'package.json')
+  return JSON.parse(fs.readFileSync(packagePath, 'utf8')).version
+}
+
+function readLockedPackageVersion(root: string, packageName: string): string {
+  const lockfile = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
+  return lockfile.packages[`node_modules/${packageName}`].version
 }
 
 function prepareBootstrapUpdater(bootstrapDir: string): string {
@@ -1166,6 +1217,30 @@ if (process.argv[2] === 'ci') {
   const target = path.join(process.cwd(), 'node_modules', 'dotenv')
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.cpSync(process.env.CAW_TEST_DOTENV_SOURCE, target, { recursive: true })
+  const lock = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package-lock.json'), 'utf8'))
+  const codexVersion = lock.packages?.['node_modules/@openai/codex']?.version
+  if (codexVersion) {
+    const codexTarget = path.join(process.cwd(), 'node_modules', '@openai', 'codex')
+    fs.mkdirSync(codexTarget, { recursive: true })
+    fs.writeFileSync(path.join(codexTarget, 'package.json'), JSON.stringify({ version: codexVersion }))
+  }
+}
+if (process.argv[2] === 'install') {
+  const dependency = process.argv.find(value => value.startsWith('@openai/codex@'))
+  if (dependency) {
+    const version = dependency.slice('@openai/codex@'.length)
+    const packagePath = path.join(process.cwd(), 'package.json')
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+    packageJson.dependencies = { ...packageJson.dependencies, '@openai/codex': version }
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson))
+    const lockPath = path.join(process.cwd(), 'package-lock.json')
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+    lock.packages ??= {}
+    lock.packages[''] ??= {}
+    lock.packages[''].dependencies = { ...lock.packages[''].dependencies, '@openai/codex': version }
+    lock.packages['node_modules/@openai/codex'] = { ...(lock.packages['node_modules/@openai/codex'] || {}), version }
+    fs.writeFileSync(lockPath, JSON.stringify(lock))
+  }
 }
 `)
   fs.writeFileSync(path.join(fakeBin, 'npm.cmd'), '@echo off\r\nnode "%~dp0fake-npm.cjs" %*\r\n')

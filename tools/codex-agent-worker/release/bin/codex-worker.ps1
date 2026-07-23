@@ -123,11 +123,11 @@ function Invoke-Upgrade {
 function Invoke-UpgradeSdk {
     param([string[]]$Args)
 
-    $updateScript = Join-Path $InstallDir "update.ps1"
+    $updateScript = Join-Path $InstallDir "update-sdk.ps1"
     if (-not (Test-Path $updateScript)) {
-        Write-Host "update.ps1 not found at $InstallDir" -ForegroundColor Red
+        Write-Host "update-sdk.ps1 not found at $InstallDir" -ForegroundColor Red
         Write-Host "Your install may predate the upgrade-sdk feature. Run 'codex-worker upgrade' first to" -ForegroundColor Yellow
-        Write-Host "pull a newer worker version that ships update.ps1." -ForegroundColor Yellow
+        Write-Host "pull a newer worker version that ships update-sdk.ps1." -ForegroundColor Yellow
         exit 1
     }
 

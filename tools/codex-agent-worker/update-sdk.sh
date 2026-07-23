@@ -1,26 +1,22 @@
 #!/bin/bash
-# Codex Agent Worker - SDK Update (Release / OBS-installed)
-# Upgrades just @openai/codex-sdk (and the bundled codex CLI it ships)
-# WITHOUT replacing the worker itself.
+# Codex Agent Worker - Update bundled @openai/codex-sdk (and the codex CLI it ships)
+# Usage:
+#   ./update-sdk.sh
+#   ./update-sdk.sh --no-restart
+#   ./update-sdk.sh --sdk-version 0.144.1
+#   ./update-sdk.sh --sdk-version 0.142.5 --force --no-restart
+#   ./update-sdk.sh --registry https://registry.npmjs.org/
 #
-# Shipped INSIDE the OBS-distributed archive; lives in $INSTALL_DIR alongside
-# start.sh / stop.sh. End users normally invoke it via:
-#   codex-worker upgrade-sdk
-#   codex-worker upgrade-sdk --sdk-version 0.144.1
-#   codex-worker upgrade-sdk --sdk-version 0.142.5 --force --no-restart
-#   codex-worker upgrade-sdk --no-restart
-#   codex-worker upgrade-sdk --registry https://registry.npmjs.org/
-#
-# Differences from the dev-side update.sh (in tools/codex-agent-worker root):
-#   - No `npm run typecheck` (OBS install has no devDependencies and no src/)
-#   - Uses `npm install ... --omit=dev` to stay consistent with install.sh
-#   - Health-check smoke test after restart
-#   - On failure, hints user to run `codex-worker upgrade` to reinstall
+# Notes:
+#   - @openai/codex-sdk pulls @openai/codex (the CLI) as a transitive dep with platform-specific
+#     binaries. Upgrading the SDK upgrades the CLI.
+#   - Plain `npm update` won't bump across minors because package.json pins ^0.x.y; this script
+#     runs `npm install @openai/codex-sdk@<version>` so package.json + lockfile are rewritten.
 
 set -e
 
-INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEFAULT_PORT=3051
+WorkerDir="$(cd "$(dirname "$0")" && pwd)"
+DefaultPort=3051
 SdkVersion=""
 NoRestart=false
 Registry=""
@@ -75,36 +71,31 @@ if [ "$Force" = true ] && [ -z "$SdkVersion" ]; then
     exit 1
 fi
 
-if [ ! -f "$INSTALL_DIR/package.json" ]; then
-    echo -e "${RED}ERROR: package.json not found in $INSTALL_DIR.${NC}"
-    echo -e "${YELLOW}This script must be run from a Codex Worker install directory.${NC}"
-    exit 1
-fi
-
 if [ -n "$SdkVersion" ]; then
-    EnsureSdkScript="$INSTALL_DIR/scripts/ensure-sdk.mjs"
+    EnsureSdkScript="$WorkerDir/scripts/ensure-sdk.mjs"
     if [ ! -f "$EnsureSdkScript" ]; then
-        echo -e "${RED}ERROR: SDK preflight script not found: $EnsureSdkScript${NC}"
+        echo -e "${RED}SDK preflight script not found: $EnsureSdkScript${NC}"
         exit 1
     fi
-    CheckArgs=("$EnsureSdkScript" --worker-dir "$INSTALL_DIR" --check-target "$SdkVersion")
+    CheckArgs=("$EnsureSdkScript" --worker-dir "$WorkerDir" --check-target "$SdkVersion")
     if [ "$Force" = true ]; then
         CheckArgs+=(--force)
     fi
     node "${CheckArgs[@]}"
 fi
 
-# Read port
-Port=$DEFAULT_PORT
-if [ -f "$INSTALL_DIR/.env" ]; then
-    PortLine=$(grep "^CODEX_WORKER_PORT=" "$INSTALL_DIR/.env" 2>/dev/null || true)
+# Read port from .env
+Port=$DefaultPort
+if [ -f "$WorkerDir/.env" ]; then
+    PortLine=$(grep "^CODEX_WORKER_PORT=" "$WorkerDir/.env" 2>/dev/null || true)
     if [ -n "$PortLine" ]; then
         Port=$(echo "$PortLine" | cut -d= -f2 | tr -d ' ')
     fi
 fi
 
+# Locate npm
 if ! command -v npm >/dev/null 2>&1; then
-    echo -e "${RED}npm not found on PATH. Please install Node.js (>=20) first.${NC}"
+    echo -e "${RED}npm not found on PATH. Please install Node.js (>=18) first.${NC}"
     exit 1
 fi
 NpmPath="$(command -v npm)"
@@ -124,9 +115,10 @@ normalize_registry() {
     echo "${registry%/}"
 }
 
+# Helper: read a package.json version field via node (always available with npm)
 get_pkg_version() {
     local pkg="$1"
-    local pkgJson="$INSTALL_DIR/node_modules/$pkg/package.json"
+    local pkgJson="$WorkerDir/node_modules/$pkg/package.json"
     if [ ! -f "$pkgJson" ]; then
         echo "not-installed"
         return
@@ -168,37 +160,23 @@ npm_install_with_registry_fallback() {
     return 1
 }
 
-worker_running() {
-    lsof -i :$Port >/dev/null 2>&1
+resolve_sdk_version() {
+    local spec="${SdkVersion:-latest}"
+    local args=("view" "@openai/codex-sdk@$spec" "version")
+    if [ -n "$Registry" ]; then
+        args+=("--registry=$Registry")
+    fi
+    npm "${args[@]}" 2>/dev/null | tail -n 1
 }
 
-health_check() {
-    local timeout=$1
-    local deadline=$(( $(date +%s) + timeout ))
-    while [ $(date +%s) -lt $deadline ]; do
-        HealthBody=$(curl -sS --max-time 3 "http://localhost:$Port/health" 2>/dev/null || true)
-        if [ -n "$HealthBody" ] && printf '%s' "$HealthBody" | node -e '
-let input = "";
-process.stdin.on("data", chunk => input += chunk);
-process.stdin.on("end", () => {
-  try {
-    const health = JSON.parse(input);
-    process.exit(health.status === "ok" && health.codex_sdk_available === true && health.codex_sdk_compatible === true ? 0 : 1);
-  } catch { process.exit(1); }
-});'; then
-            printf '%s' "$HealthBody"
-            return 0
-        fi
-        sleep 1
-    done
-    return 1
-}
-
+# Detect if worker is running
 WasRunning=false
-if worker_running; then WasRunning=true; fi
+if lsof -i :$Port >/dev/null 2>&1; then
+    WasRunning=true
+fi
 
-echo -e "${CYAN}=== Codex Worker SDK Update ===${NC}"
-echo -e "${CYAN}Install dir: $INSTALL_DIR${NC}"
+echo -e "${CYAN}=== Codex Agent Worker Update ===${NC}"
+echo -e "${CYAN}Worker dir: $WorkerDir${NC}"
 echo -e "${CYAN}Port: $Port${NC}"
 echo -e "${CYAN}npm: $NpmPath${NC}"
 if [ -n "$Registry" ]; then
@@ -212,22 +190,35 @@ CliBefore=$(get_pkg_version "@openai/codex")
 echo -e "${GRAY}@openai/codex-sdk before: $SdkBefore${NC}"
 echo -e "${GRAY}@openai/codex (CLI) before: $CliBefore${NC}"
 
+ResolvedSdkVersion=$(resolve_sdk_version)
+if [ -z "$ResolvedSdkVersion" ]; then
+    echo -e "${RED}Could not resolve the requested @openai/codex-sdk version; refusing an unverified update.${NC}"
+    exit 1
+fi
+SdkComparison=$(node "$WorkerDir/scripts/runtime-dependency-version.mjs" --compare "$SdkBefore" "$ResolvedSdkVersion")
+if [ "$SdkComparison" = "1" ]; then
+    echo -e "${YELLOW}Installed @openai/codex-sdk $SdkBefore is newer than requested $ResolvedSdkVersion; leaving it unchanged.${NC}"
+    exit 0
+fi
+
 if [ "$WasRunning" = true ]; then
     echo -e "${YELLOW}Worker is running on port $Port. Stopping before upgrade...${NC}"
-    bash "$INSTALL_DIR/stop.sh"
+    bash "$WorkerDir/stop.sh"
 fi
 
-cd "$INSTALL_DIR"
+cd "$WorkerDir"
 
-if [ -n "$SdkVersion" ]; then
-    Target="@openai/codex-sdk@$SdkVersion"
-else
-    Target="@openai/codex-sdk@latest"
+Target="@openai/codex-sdk@$ResolvedSdkVersion"
+
+if ! npm_install_with_registry_fallback "$Target"; then
+    echo -e "${RED}npm install $Target failed.${NC}"
+    exit 1
 fi
 
-if ! npm_install_with_registry_fallback "$Target" --omit=dev; then
-    echo -e "${RED}npm install FAILED. Worker has not been restarted.${NC}"
-    echo -e "${YELLOW}Recovery: run 'codex-worker upgrade' to reinstall the pinned SDK from OBS.${NC}"
+echo -e "${CYAN}Running: npm run typecheck (sanity check)${NC}"
+if ! npm run typecheck; then
+    echo -e "${RED}typecheck FAILED after upgrade. The new SDK may have breaking changes.${NC}"
+    echo -e "${RED}Worker has NOT been restarted. Inspect errors above before retrying.${NC}"
     exit 1
 fi
 
@@ -238,26 +229,9 @@ echo -e "${GREEN}@openai/codex (CLI) after: $CliAfter${NC}"
 
 if [ "$NoRestart" = true ]; then
     echo -e "${YELLOW}Update complete. Worker not restarted because --no-restart was used.${NC}"
-    exit 0
-fi
-
-if [ "$WasRunning" = false ]; then
-    echo -e "${GREEN}Update complete. Worker was not running, so no restart was needed.${NC}"
-    exit 0
-fi
-
-echo -e "${CYAN}Restarting worker...${NC}"
-bash "$INSTALL_DIR/start.sh"
-
-echo -e "${CYAN}Health-checking worker on port $Port ...${NC}"
-HealthBody=$(health_check 30 || true)
-if [ -n "$HealthBody" ]; then
-    echo -e "${GREEN}Worker is healthy after SDK upgrade.${NC}"
-    echo -e "${GREEN}  /health: $HealthBody${NC}"
+elif [ "$WasRunning" = true ]; then
+    echo -e "${CYAN}Restarting worker...${NC}"
+    bash "$WorkerDir/start.sh"
 else
-    echo -e "${RED}Worker did NOT become healthy within 30s after SDK upgrade.${NC}"
-    echo -e "${YELLOW}The new SDK may have a breaking change. Check logs:${NC}"
-    echo -e "${YELLOW}  codex-worker logs${NC}"
-    echo -e "${YELLOW}Recovery: run 'codex-worker upgrade' to reinstall the worker-pinned SDK from OBS.${NC}"
-    exit 1
+    echo -e "${GREEN}Update complete. Worker was not running, so no restart was needed.${NC}"
 fi

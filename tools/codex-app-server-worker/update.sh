@@ -341,7 +341,7 @@ for required in \
   dist src tests contracts scripts package-lock.json tsconfig.json VERSION \
   start.ps1 start.sh stop.ps1 stop.sh update.ps1 update.sh install.ps1 install.sh \
   scripts/configure-install-env.mjs scripts/lifecycle-marker.mjs \
-  scripts/process-tree.mjs scripts/read-dotenv-value.mjs; do
+  scripts/process-tree.mjs scripts/read-dotenv-value.mjs scripts/runtime-dependency-version.mjs; do
   [[ -e "$CANDIDATE/$required" ]] || { echo "Release is missing $required" >&2; exit 1; }
 done
 for forbidden in .env logs node_modules CODEX_HOME auth.json; do
@@ -350,9 +350,17 @@ done
 
 VERSION="$(node -p 'require(process.argv[1]).version' "$CANDIDATE/package.json")"
 [[ "$(tr -d '\r\n' < "$CANDIDATE/VERSION")" == "$VERSION" ]] || { echo 'Release VERSION must exactly match package.json version' >&2; exit 1; }
-echo "Validating codex-app-server-worker $VERSION before drain..."
+PRESERVED_CODEX_VERSION="$(node "$CANDIDATE/scripts/runtime-dependency-version.mjs" \
+  --installed-root "$INSTALL_DIR" \
+  --candidate-root "$CANDIDATE" \
+  --package "@openai/codex")"
 previous_directory="$PWD"
 cd "$CANDIDATE"
+if [[ -n "$PRESERVED_CODEX_VERSION" ]]; then
+  echo "Preserving newer installed @openai/codex $PRESERVED_CODEX_VERSION..."
+  run_with_timeout npm install --package-lock-only --ignore-scripts --save-exact "@openai/codex@$PRESERVED_CODEX_VERSION"
+fi
+echo "Validating codex-app-server-worker $VERSION before drain..."
 run_with_timeout npm ci
 run_with_timeout npm test
 run_with_timeout npm run verify:schema

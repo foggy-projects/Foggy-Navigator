@@ -83,6 +83,11 @@ test('cross-platform release archives are deterministic and contain the same can
     assert.deepEqual(listZipEntries(firstZip), listTarGzEntries(firstTar))
     assert.ok(listZipEntries(firstZip).includes('codex-worker/VERSION'))
     assert.ok(listZipEntries(firstZip).includes('codex-worker/bin/codex-worker'))
+    assert.ok(listZipEntries(firstZip).includes('codex-worker/scripts/runtime-dependency-version.mjs'))
+    assert.ok(listZipEntries(firstZip).includes('codex-worker/update-sdk.sh'))
+    assert.ok(listZipEntries(firstZip).includes('codex-worker/update-sdk.ps1'))
+    assert.equal(listZipEntries(firstZip).includes('codex-worker/update.sh'), false)
+    assert.equal(listZipEntries(firstZip).includes('codex-worker/update.ps1'), false)
     assert.equal(listZipEntries(firstZip).some(name => name.includes('/release/')), false)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

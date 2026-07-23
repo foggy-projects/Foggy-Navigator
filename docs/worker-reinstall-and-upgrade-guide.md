@@ -1,7 +1,7 @@
 # Worker 安装、重装与升级指南
 
 > 适用对象：在个人电脑、远程开发机或服务器上安装和维护 Foggy Navigator Worker 的用户。  
-> 最后更新：2026-07-11
+> 最后更新：2026-07-23
 
 这份文档只解决三个问题：
 
@@ -141,6 +141,8 @@ gemini-worker upgrade
 
 Codex App Server Worker 没有额外的全局 CLI 包装命令。重复执行上方对应的一键安装命令即可读取 `latest.json` 并升级；已有旧版本会调用当前安装目录自带的 updater，保留 `.env`、状态目录和运行前后的启停状态。当前完整版本会直接 no-op；同版本残缺目录仅在 `package.json` 与 `VERSION` 身份一致且没有失败事务证据时自动补全。
 
+从 2026-07-23 起，Codex 两类 Worker 的重装和升级都遵循运行时版本单调性：若本机已安装的受管 Codex runtime 高于发布包锁定版本，安装器会先将候选 lockfile 提升到本机版本，再安装依赖；不会因为重装或 Worker 升级而回退。SDK Worker 的保护对象是 `@openai/codex-sdk`；App Server Worker 没有使用 SDK，保护的是实际运行的 `@openai/codex` CLI/runtime。候选版本更高时仍会正常升级。
+
 升级会保留原来的 `.env` 配置。建议升级前手动备份一份：
 
 ```powershell
@@ -198,7 +200,7 @@ Invoke-RestMethod http://127.0.0.1:3062/health
 | 状态 | `claude-worker status` | `codex-worker status` | 请求 `http://127.0.0.1:3062/health` | `gemini-worker status` |
 | 日志 | `claude-worker logs` | `codex-worker logs` | 查看 `~/.codex-app-server-worker/logs` | `gemini-worker logs` |
 | 升级 Worker | `claude-worker upgrade` | `codex-worker upgrade` | 重跑 OBS 一键安装命令 | `gemini-worker upgrade` |
-| 升级底层 SDK/CLI | — | `codex-worker upgrade-sdk` | 随 Worker 锁定版本发布 | — |
+| 升级底层 SDK/CLI | — | `codex-worker upgrade-sdk`（只会保持或升级） | 随 Worker 发布；保留更高的已安装 `@openai/codex` | — |
 
 ## 升级底层本体
 
@@ -248,6 +250,8 @@ codex-worker upgrade-sdk
 3. 重启 Worker
 4. 30 秒内轮询 `/health`，确认升级后能正常启动
 
+`upgrade-sdk` 会先解析目标版本并比较当前 SDK：目标版本低于已安装版本时会直接保留当前版本，不会停止或重启 Worker。即使指定 `--sdk-version` / `-SdkVersion` 或 `--force` / `-Force`，也不能绕过这条“不回退”规则。
+
 支持的选项：
 
 | 选项 (Windows) | 选项 (Linux/macOS) | 含义 |
@@ -258,19 +262,19 @@ codex-worker upgrade-sdk
 如果新 SDK 起不来（health 探测 30 秒超时），脚本会提示：
 
 ```
-Recovery: run 'codex-worker upgrade' to reinstall the worker-pinned SDK from OBS.
+Recovery: install a compatible newer SDK, then retry; Worker upgrade will preserve the installed SDK.
 ```
 
-`codex-worker upgrade` 会从 OBS 重新拉一份 worker archive 解压安装，archive 里 `package-lock.json` 会把 SDK 还原到该 worker 版本锁定的版本，相当于天然的回滚通道。
+`codex-worker upgrade` 会从 OBS 重新拉一份 worker archive 解压安装，但不会以 archive 的 `package-lock.json` 回退已经安装的更高 SDK；它会保留较高版本，或在 archive 版本更高时升级。因此它不再是 SDK 回滚通道。
 
 如果你直接用源码（`tools/codex-agent-worker`），路径稍有不同：
 
 ```powershell
 cd tools\codex-agent-worker
-powershell -ExecutionPolicy Bypass -File .\update.ps1
+powershell -ExecutionPolicy Bypass -File .\update-sdk.ps1
 ```
 
-源码版的 `update.ps1` 多跑一步 `npm run typecheck`；OBS 安装包没有 devDependencies 也没有 `src/`，所以发布版的 `update.ps1` 跳过 typecheck，改用启动后的 `/health` 探测兜底。
+源码版的 `update-sdk.ps1` 多跑一步 `npm run typecheck`；OBS 安装包没有 devDependencies 也没有 `src/`，所以发布版的 `update-sdk.ps1` 跳过 typecheck，改用启动后的 `/health` 探测兜底。`update-worker.ps1` 才是升级 Worker 本体的脚本。
 
 订阅模式需要确认 Worker 主机已经登录：
 
@@ -433,7 +437,7 @@ Copy-Item ~/.gemini-worker/.env ~/.gemini-worker/.env.backup -ErrorAction Silent
 | Worker | 源码目录 | 源码升级脚本 | OBS 安装包升级 |
 |--------|----------|--------------|----------------|
 | Claude | `tools/claude-agent-worker` | `update.ps1` / `update.sh` | 暂未透出独立 SDK 升级命令，需重装 |
-| Codex | `tools/codex-agent-worker` | `update.ps1` / `update.sh` | `codex-worker upgrade-sdk`（同时打包了 `release/update.ps1` / `release/update.sh`） |
+| Codex | `tools/codex-agent-worker` | `update-sdk.ps1` / `update-sdk.sh`（SDK）；`update-worker.ps1` / `update-worker.sh`（Worker） | `codex-worker upgrade-sdk`（同时打包了 `release/update-sdk.ps1` / `release/update-sdk.sh`） |
 | Codex App Server | `tools/codex-app-server-worker` | `update.ps1` / `update.sh` | 重跑稳定安装 URL，或调用安装目录 updater |
 | Gemini | `tools/gemini-agent-worker` | 无单独脚本，升级全局 `gemini` CLI | 同左 |
 

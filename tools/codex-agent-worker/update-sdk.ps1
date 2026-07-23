@@ -1,10 +1,10 @@
 # Codex Agent Worker - Update bundled @openai/codex-sdk (and the codex CLI it ships)
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File update.ps1
-#   powershell -ExecutionPolicy Bypass -File update.ps1 -NoRestart
-#   powershell -ExecutionPolicy Bypass -File update.ps1 -SdkVersion 0.144.1
-#   powershell -ExecutionPolicy Bypass -File update.ps1 -SdkVersion 0.142.5 -Force -NoRestart
-#   powershell -ExecutionPolicy Bypass -File update.ps1 -Registry https://registry.npmjs.org/
+#   powershell -ExecutionPolicy Bypass -File update-sdk.ps1
+#   powershell -ExecutionPolicy Bypass -File update-sdk.ps1 -NoRestart
+#   powershell -ExecutionPolicy Bypass -File update-sdk.ps1 -SdkVersion 0.144.1
+#   powershell -ExecutionPolicy Bypass -File update-sdk.ps1 -SdkVersion 0.142.5 -Force -NoRestart
+#   powershell -ExecutionPolicy Bypass -File update-sdk.ps1 -Registry https://registry.npmjs.org/
 #
 # Notes:
 #   - @openai/codex-sdk pulls @openai/codex (the CLI) as a transitive dep with platform-specific
@@ -146,6 +146,21 @@ function Invoke-NpmInstallWithRegistryFallback {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Resolve-SdkVersion {
+    param(
+        [string]$NpmPath,
+        [string]$RequestedVersion = "",
+        [string]$Registry = ""
+    )
+
+    $spec = if ($RequestedVersion) { $RequestedVersion } else { "latest" }
+    $viewArgs = @("view", "@openai/codex-sdk@$spec", "version")
+    if ($Registry) { $viewArgs += "--registry=$Registry" }
+    $lines = @(& $NpmPath @viewArgs 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $lines.Count -eq 0) { return "" }
+    return $lines[-1].Trim()
+}
+
 $Port = Get-Port -RootDir $WorkerDir
 $StopScript = Join-Path $WorkerDir "stop.ps1"
 $StartScript = Join-Path $WorkerDir "start.ps1"
@@ -179,6 +194,17 @@ $cliBefore = Get-CodexCliVersion -RootDir $WorkerDir
 Write-Host "@openai/codex-sdk before: $sdkBefore" -ForegroundColor Gray
 Write-Host "@openai/codex (CLI) before: $cliBefore" -ForegroundColor Gray
 
+$resolvedSdkVersion = Resolve-SdkVersion -NpmPath $Npm -RequestedVersion $SdkVersion -Registry $Registry
+if (-not $resolvedSdkVersion) {
+    throw "Could not resolve the requested @openai/codex-sdk version; refusing an unverified update."
+}
+$runtimeVersionHelper = Join-Path $WorkerDir "scripts\runtime-dependency-version.mjs"
+$sdkComparison = (& node $runtimeVersionHelper --compare $sdkBefore $resolvedSdkVersion).Trim()
+if ($sdkComparison -eq "1") {
+    Write-Host "Installed @openai/codex-sdk $sdkBefore is newer than requested $resolvedSdkVersion; leaving it unchanged." -ForegroundColor Yellow
+    exit 0
+}
+
 if ($wasRunning) {
     Write-Host "Worker is running on port $Port. Stopping before upgrade..." -ForegroundColor Yellow
     & powershell -ExecutionPolicy Bypass -File $StopScript
@@ -186,11 +212,7 @@ if ($wasRunning) {
 
 Set-Location $WorkerDir
 
-if ($SdkVersion) {
-    $target = "@openai/codex-sdk@$SdkVersion"
-} else {
-    $target = "@openai/codex-sdk@latest"
-}
+$target = "@openai/codex-sdk@$resolvedSdkVersion"
 
 if (-not (Invoke-NpmInstallWithRegistryFallback -NpmPath $Npm -Target $target -Registry $Registry)) {
     throw "npm install $target failed."

@@ -119,12 +119,13 @@ if [ -d "$SCRIPT_DIR/docs" ]; then
     cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
 fi
 
-for f in start.sh stop.sh start.ps1 stop.ps1 install.sh install.ps1 update.sh update.ps1 update-worker.sh update-worker.ps1; do
+for f in start.sh stop.sh start.ps1 stop.ps1 install.sh install.ps1 update-sdk.sh update-sdk.ps1 update-worker.sh update-worker.ps1; do
     if [ -f "$SCRIPT_DIR/$f" ]; then
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
 done
-chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/update.sh" "$INSTALL_DIR/update-worker.sh"
+rm -f "$INSTALL_DIR/update.sh" "$INSTALL_DIR/update.ps1"
+chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/update-sdk.sh" "$INSTALL_DIR/update-worker.sh"
 
 mkdir -p "$INSTALL_DIR/bin"
 cp "$SCRIPT_DIR/bin/codex-worker" "$INSTALL_DIR/bin/"
@@ -168,6 +169,16 @@ node "$CONFIGURE_ENV_SCRIPT" "$INSTALL_DIR/.env" "$INSTALL_DIR"
 echo ""
 echo -e "${CYAN}Installing runtime dependencies...${NC}"
 cd "$INSTALL_DIR"
+
+PRESERVED_SDK_VERSION=$(node "$SCRIPT_DIR/scripts/runtime-dependency-version.mjs" \
+    --installed-root "$INSTALL_DIR" \
+    --candidate-root "$INSTALL_DIR" \
+    --package "@openai/codex-sdk")
+if [ -n "$PRESERVED_SDK_VERSION" ]; then
+    echo -e "${CYAN}Preserving newer installed @openai/codex-sdk $PRESERVED_SDK_VERSION...${NC}"
+    npm install --package-lock-only --ignore-scripts --save-exact --omit=dev "@openai/codex-sdk@$PRESERVED_SDK_VERSION"
+fi
+
 rm -rf node_modules
 
 if [ -f package-lock.json ]; then

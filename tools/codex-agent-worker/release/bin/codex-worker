@@ -81,11 +81,11 @@ cmd_upgrade() {
 }
 
 cmd_upgrade_sdk() {
-    local UPDATE_SCRIPT="$INSTALL_DIR/update.sh"
+    local UPDATE_SCRIPT="$INSTALL_DIR/update-sdk.sh"
     if [ ! -f "$UPDATE_SCRIPT" ]; then
-        echo -e "${RED}update.sh not found at $INSTALL_DIR${NC}"
+        echo -e "${RED}update-sdk.sh not found at $INSTALL_DIR${NC}"
         echo -e "${YELLOW}Your install may predate the upgrade-sdk feature. Run 'codex-worker upgrade' first${NC}"
-        echo -e "${YELLOW}to pull a newer worker version that ships update.sh.${NC}"
+        echo -e "${YELLOW}to pull a newer worker version that ships update-sdk.sh.${NC}"
         return 1
     fi
     bash "$UPDATE_SCRIPT" "$@"

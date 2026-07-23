@@ -110,12 +110,13 @@ if (Test-Path $DocsDir) {
     Copy-Item $DocsDir (Join-Path $InstallDir "docs") -Recurse -Force
 }
 
-foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "stop.sh", "install.ps1", "install.sh", "update.ps1", "update.sh", "update-worker.ps1", "update-worker.sh")) {
+foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "stop.sh", "install.ps1", "install.sh", "update-sdk.ps1", "update-sdk.sh", "update-worker.ps1", "update-worker.sh")) {
     $srcFile = Join-Path $ScriptDir $f
     if (Test-Path $srcFile) {
         Copy-Item $srcFile $InstallDir -Force
     }
 }
+Remove-Item (Join-Path $InstallDir "update.sh"), (Join-Path $InstallDir "update.ps1") -Force -ErrorAction SilentlyContinue
 
 $BinDir = Join-Path $InstallDir "bin"
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
@@ -168,6 +169,23 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "Installing runtime dependencies..." -ForegroundColor Cyan
 Set-Location $InstallDir
+
+$PreservedSdkVersion = (& node (Join-Path $ScriptDir 'scripts\runtime-dependency-version.mjs') `
+    --installed-root $InstallDir `
+    --candidate-root $InstallDir `
+    --package '@openai/codex-sdk').Trim()
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Could not compare installed Codex SDK dependency version." -ForegroundColor Red
+    exit 1
+}
+if ($PreservedSdkVersion) {
+    Write-Host "Preserving newer installed @openai/codex-sdk $PreservedSdkVersion..." -ForegroundColor Cyan
+    & npm install --package-lock-only --ignore-scripts --save-exact --omit=dev "@openai/codex-sdk@$PreservedSdkVersion"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Could not preserve installed Codex SDK version." -ForegroundColor Red
+        exit 1
+    }
+}
 
 if (Test-Path "node_modules") {
     Remove-Item "node_modules" -Recurse -Force

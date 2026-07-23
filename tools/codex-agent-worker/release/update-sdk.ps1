@@ -10,7 +10,7 @@
 #   codex-worker upgrade-sdk -NoRestart
 #   codex-worker upgrade-sdk -Registry https://registry.npmjs.org/
 #
-# Differences from the dev-side update.ps1 (in tools/codex-agent-worker root):
+# Differences from the dev-side update-sdk.ps1 (in tools/codex-agent-worker root):
 #   - No `npm run typecheck` (OBS install has no devDependencies and no src/)
 #   - Uses `npm install ... --omit=dev` to stay consistent with install.ps1
 #   - Health-check smoke test after restart
@@ -140,6 +140,21 @@ function Invoke-NpmInstallWithRegistryFallback {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Resolve-SdkVersion {
+    param(
+        [string]$NpmPath,
+        [string]$RequestedVersion = "",
+        [string]$Registry = ""
+    )
+
+    $spec = if ($RequestedVersion) { $RequestedVersion } else { "latest" }
+    $viewArgs = @("view", "@openai/codex-sdk@$spec", "version")
+    if ($Registry) { $viewArgs += "--registry=$Registry" }
+    $lines = @(& $NpmPath @viewArgs 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $lines.Count -eq 0) { return "" }
+    return $lines[-1].Trim()
+}
+
 function Test-WorkerHealth {
     param([int]$ListenPort, [int]$TimeoutSec = 30)
 
@@ -204,6 +219,17 @@ $cliBefore = Get-PackageVersion -RootDir $InstallDir -PackageName "@openai/codex
 Write-Host "@openai/codex-sdk before: $sdkBefore" -ForegroundColor Gray
 Write-Host "@openai/codex (CLI) before: $cliBefore" -ForegroundColor Gray
 
+$resolvedSdkVersion = Resolve-SdkVersion -NpmPath $Npm -RequestedVersion $SdkVersion -Registry $Registry
+if (-not $resolvedSdkVersion) {
+    throw "Could not resolve the requested @openai/codex-sdk version; refusing an unverified update."
+}
+$runtimeVersionHelper = Join-Path $InstallDir "scripts\runtime-dependency-version.mjs"
+$sdkComparison = (& node $runtimeVersionHelper --compare $sdkBefore $resolvedSdkVersion).Trim()
+if ($sdkComparison -eq "1") {
+    Write-Host "Installed @openai/codex-sdk $sdkBefore is newer than requested $resolvedSdkVersion; leaving it unchanged." -ForegroundColor Yellow
+    exit 0
+}
+
 if ($wasRunning) {
     Write-Host "Worker is running on port $Port. Stopping before upgrade..." -ForegroundColor Yellow
     & powershell -ExecutionPolicy Bypass -File $StopScript
@@ -211,15 +237,11 @@ if ($wasRunning) {
 
 Set-Location $InstallDir
 
-if ($SdkVersion) {
-    $target = "@openai/codex-sdk@$SdkVersion"
-} else {
-    $target = "@openai/codex-sdk@latest"
-}
+$target = "@openai/codex-sdk@$resolvedSdkVersion"
 
 if (-not (Invoke-NpmInstallWithRegistryFallback -NpmPath $Npm -Target $target -ExtraArgs @("--omit=dev") -Registry $Registry)) {
     Write-Host "npm install FAILED. Worker has not been restarted." -ForegroundColor Red
-    Write-Host "Recovery: run 'codex-worker upgrade' to reinstall the pinned SDK from OBS." -ForegroundColor Yellow
+    Write-Host "Recovery: install a compatible newer SDK, then retry; Worker upgrade will preserve the installed SDK." -ForegroundColor Yellow
     exit 1
 }
 
@@ -252,6 +274,6 @@ else {
     Write-Host "Worker did NOT become healthy within 30s after SDK upgrade." -ForegroundColor Red
     Write-Host "The new SDK may have a breaking change. Check logs:" -ForegroundColor Yellow
     Write-Host "  codex-worker logs" -ForegroundColor Yellow
-    Write-Host "Recovery: run 'codex-worker upgrade' to reinstall the worker-pinned SDK from OBS." -ForegroundColor Yellow
+    Write-Host "Recovery: install a compatible newer SDK, then retry; Worker upgrade will preserve the installed SDK." -ForegroundColor Yellow
     exit 1
 }

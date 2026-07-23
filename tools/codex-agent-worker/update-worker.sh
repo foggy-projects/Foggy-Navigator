@@ -2,7 +2,7 @@
 # Codex Agent Worker - Worker self-update (Linux / macOS)
 #
 # Updates the worker release package itself. To update only @openai/codex-sdk
-# and its bundled Codex CLI, use update.sh instead.
+# and its bundled Codex CLI, use update-sdk.sh instead.
 #
 # Usage:
 #   ./update-worker.sh

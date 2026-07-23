@@ -252,7 +252,7 @@ try {
         'dist', 'src', 'tests', 'contracts', 'scripts', 'package-lock.json', 'tsconfig.json', 'VERSION',
         'start.ps1', 'start.sh', 'stop.ps1', 'stop.sh', 'update.ps1', 'update.sh', 'install.ps1', 'install.sh',
         'scripts\configure-install-env.mjs', 'scripts\lifecycle-marker.mjs',
-        'scripts\process-tree.mjs', 'scripts\read-dotenv-value.mjs'
+        'scripts\process-tree.mjs', 'scripts\read-dotenv-value.mjs', 'scripts\runtime-dependency-version.mjs'
     )) {
         if (-not (Test-Path (Join-Path $Candidate $Required))) { throw "Release is missing $Required" }
     }
@@ -262,6 +262,16 @@ try {
     $CandidateVersionFile = (Get-Content -Raw -LiteralPath (Join-Path $Candidate 'VERSION')).Trim()
     if ($CandidateVersionFile -cne [string]$PackageJson.version) {
         throw 'Release VERSION must exactly match package.json version'
+    }
+
+    $PreservedCodexVersion = (& node (Join-Path $Candidate 'scripts\runtime-dependency-version.mjs') `
+        --installed-root $InstallDir `
+        --candidate-root $Candidate `
+        --package '@openai/codex').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Could not compare installed Codex runtime dependency version' }
+    if ($PreservedCodexVersion) {
+        Write-Output "Preserving newer installed @openai/codex $PreservedCodexVersion..."
+        Invoke-Npm @('install', '--package-lock-only', '--ignore-scripts', '--save-exact', "@openai/codex@$PreservedCodexVersion") $Candidate
     }
 
     Write-Output "Validating codex-app-server-worker $($PackageJson.version) before drain..."

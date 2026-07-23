@@ -194,8 +194,10 @@ Existing `.env` bytes are preserved on update.
 - `CODEX_APP_SERVER_RUN_DIR`, `CODEX_APP_SERVER_LOG_DIR` and `CODEX_APP_SERVER_STATE_DIR`
   use process environment > `.env` > package default precedence in every lifecycle script. External
   values must be absolute paths; quote values containing spaces or `#` in `.env`.
-- An update installs the exact lockfile (`npm ci`), runs tests/schema verification/build, and only
-  replaces the package after a proven graceful drain. A non-proven drain never kills the Worker or
+- An update normally installs the exact lockfile (`npm ci`), but first raises its `@openai/codex`
+  entry when a verifiably newer CLI/runtime is already installed. It therefore preserves or upgrades
+  the managed runtime and never downgrades it during reinstall or update. It then runs tests/schema
+  verification/build and only replaces the package after a proven graceful drain. A non-proven drain never kills the Worker or
   its descendants; it preserves evidence, latches the lifecycle, and leaves the current package in place.
 - `lifecycle.lock` is the installation-wide, nonce-owned lock shared by start, stop and update. The
   external operation creates it atomically and holds it through its complete success or handled
@@ -299,7 +301,8 @@ stopped. Install `0.1.1` or newer into a new empty directory, or use an external
 that independently proves zero process residue before moving configuration and state. The updater
 never captures a fresh identity for a legacy PID and never drains or modifies a `0.1.0` target.
 
-Both update paths expand into a sibling staging directory and run exact-lockfile `npm ci`, tests,
+Both update paths expand into a sibling staging directory and first preserve a newer installed
+`@openai/codex` version by raising the staged lockfile when required; then they run `npm ci`, tests,
 schema verification, type checking and build before requesting a drain. Only managed application
 files and the validated `node_modules` tree are swapped. `.env`, `logs/`, durable state and any
 external CODEX_HOME remain in place. A swap failure before candidate startup restores the prior

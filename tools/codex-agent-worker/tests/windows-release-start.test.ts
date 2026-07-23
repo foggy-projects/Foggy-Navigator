@@ -28,7 +28,7 @@ test('packaged Windows starter probes IPv4 loopback before localhost', () => {
 
 test('packaged Windows update health checks probe IPv4 loopback before localhost', () => {
   assertIpv4FirstHealthProbe(path.join(workerDir, 'update-worker.ps1'), '$ListenPort')
-  assertIpv4FirstHealthProbe(path.join(workerDir, 'release', 'update.ps1'), '$ListenPort')
+  assertIpv4FirstHealthProbe(path.join(workerDir, 'release', 'update-sdk.ps1'), '$ListenPort')
 })
 
 test('packaged Windows starter allows the same readiness window as the development starter', () => {

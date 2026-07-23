@@ -1,7 +1,7 @@
 # Codex Agent Worker - Worker self-update (Windows)
 #
 # Updates the worker release package itself. To update only @openai/codex-sdk
-# and its bundled Codex CLI, use update.ps1 instead.
+# and its bundled Codex CLI, use update-sdk.ps1 instead.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File update-worker.ps1
