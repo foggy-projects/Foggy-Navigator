@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-017
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 bug_source: user-report
@@ -69,18 +69,18 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: CLI generates and prints `clientRequestId=<uuid>` before its first safe-ask network request and sends the same `X-Navigator-Client-Request-Id` on runtime-token and safe-smoke.
-- [ ] AC-2: Runtime-token and safe-smoke record sanitized received/issued-or-rejected/completed-or-failed stages; successful safe-smoke additionally records synthetic evidence creation and task-token revocation.
-- [ ] AC-3: `GET /api/v1/open/runtime-audits` and `navi upstream runtime audit` work without taskId/contextId/providerTaskId or an issued runtime access token, by exact request ID or a bounded time window.
-- [ ] AC-4: Audit authorization is same tenant + upstream system + ClientApp only, derives scope from a valid runtime key/secret, rejects other credential lanes, and performs no token issuance or execution-side mutation.
-- [ ] AC-5: Output contains every required stable field, preserves JSON booleans, returns null/`UNKNOWN` for unknown facts, and never folds unknown into false.
-- [ ] AC-6: Query validation enforces a 15-minute maximum window, bounded/default limit, no unbounded scan, operation allowlist, and explicit `AUDIT_RECORD_EXPIRED_OR_NOT_FOUND` for exact lookup misses.
-- [ ] AC-7: Persistence/query indexes cover ClientApp + time and exact correlation lookup; retention is configurable with a safe default and expired records are not returned.
-- [ ] AC-8: No stored or printed audit material includes secrets, tokens, authorization/API-key/header sets, prompts/messages, environment/workspace/business files, Worker/provider payloads, model responses, or raw stacks/bodies.
-- [ ] AC-9: Safe-ask still returns its existing terminal synthetic evidence on success; failure/response loss preserves the correlation ID, uses a stable sanitized error code, prints no raw HTTP body, performs no retry/fallback, and is never polled as a Worker task.
-- [ ] AC-10: Automated coverage includes all fifteen requested success/failure/isolation/retention/help cases, plus a minimal live Spring endpoint test proving no execution dispatch side effects.
-- [ ] AC-11: Top-level/runtime help, usage documentation, canonical route manifest, release features, version/provenance, package SHA-256, and copyable installation/query commands are complete.
-- [ ] AC-12: Release packages are built from a clean source-matched Git commit without staging or committing the user's pre-existing dirty paths.
+- [x] AC-1: CLI generates and prints `clientRequestId=<uuid>` before its first safe-ask network request and sends the same `X-Navigator-Client-Request-Id` on runtime-token and safe-smoke.
+- [x] AC-2: Runtime-token and safe-smoke record sanitized received/issued-or-rejected/completed-or-failed stages; successful safe-smoke additionally records synthetic evidence creation and task-token revocation.
+- [x] AC-3: `GET /api/v1/open/runtime-audits` and `navi upstream runtime audit` work without taskId/contextId/providerTaskId or an issued runtime access token, by exact request ID or a bounded time window.
+- [x] AC-4: Audit authorization is same tenant + upstream system + ClientApp only, derives scope from a valid runtime key/secret, rejects other credential lanes, and performs no token issuance or execution-side mutation.
+- [x] AC-5: Output contains every required stable field, preserves JSON booleans, returns null/`UNKNOWN` for unknown facts, and never folds unknown into false.
+- [x] AC-6: Query validation enforces a 15-minute maximum window, bounded/default limit, no unbounded scan, operation allowlist, and explicit `AUDIT_RECORD_EXPIRED_OR_NOT_FOUND` for exact lookup misses.
+- [x] AC-7: Persistence/query indexes cover ClientApp + time and exact correlation lookup; retention is configurable with a safe default and expired records are not returned.
+- [x] AC-8: No stored or printed audit material includes secrets, tokens, authorization/API-key/header sets, prompts/messages, environment/workspace/business files, Worker/provider payloads, model responses, or raw stacks/bodies.
+- [x] AC-9: Safe-ask still returns its existing terminal synthetic evidence on success; failure/response loss preserves the correlation ID, uses a stable sanitized error code, prints no raw HTTP body, performs no retry/fallback, and is never polled as a Worker task.
+- [x] AC-10: Automated coverage includes all fifteen requested success/failure/isolation/retention/help cases, plus a minimal live Spring endpoint test proving no execution dispatch side effects.
+- [x] AC-11: Top-level/runtime help, usage documentation, canonical route manifest, release features, version/provenance, package SHA-256, and copyable installation/query commands are complete.
+- [x] AC-12: Release packages are built from a clean source-matched Git commit without staging or committing the user's pre-existing dirty paths.
 
 ## Contract / Data / Security Constraints
 
@@ -143,13 +143,94 @@ Validation order is focused tests, affected Maven lane, one final package/instal
 
 ## Implementation Result
 
-- implementation_summary: pending
-- changed_paths: pending
-- tests_and_results: pending
-- manual_or_experience_evidence: pending
-- deviations: none
-- residual_risks: pending
-- readiness: pending
+- implementation_summary:
+  - Added a sanitized aggregate/stage audit model for correlated `runtime-token` and `safe-ask` chains, including retention, bounded cleanup, tri-state facts, terminal evidence, task-token revocation, and no-dispatch proof.
+  - Added `GET /api/v1/open/runtime-audits`, authenticated only by the ClientApp runtime key/secret and scoped server-side to exact tenant + upstream system + ClientApp ownership.
+  - Added `navi upstream runtime audit` with exact request-ID and bounded-window modes, stable key/value or JSON output, pre-network UUID correlation, stable sanitized failures, and no safe-ask retry/fallback.
+  - Preserved the dedicated safe-ask implementation because it is a small synthetic terminal path with exact empty tool/function scopes, immediate task-token revocation, and `runtimeDispatched=false`; normal ask remains the real Worker/model execution path.
+  - Added migration/rollback SQL, route-manifest provenance, help/runbook/release features, CLI 1.0.25 packages, and a refreshed tracked CLI snapshot.
+- changed_paths:
+  - Backend/controller:
+    - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java`
+    - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiControllerMessageMappingTest.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppRuntimeCredentialResolver.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/RuntimeRequestAuditProperties.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/RuntimeRequestAuditService.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/dto/RuntimeRequestAuditDTO.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/dto/RuntimeRequestAuditPageDTO.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/dto/RuntimeRequestAuditStageDTO.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/RuntimeRequestAuditEntity.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/RuntimeRequestAuditStageEntity.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/repository/RuntimeRequestAuditRepository.java`
+    - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/repository/RuntimeRequestAuditStageRepository.java`
+    - `business-agent-module/src/test/java/com/foggy/navigator/business/agent/service/RuntimeRequestAuditServiceTest.java`
+  - Authorization/provenance:
+    - `navigator-common/src/main/java/com/foggy/navigator/common/authorization/AuthorizationRouteCatalog.java`
+    - `navigator-common/src/main/resources/authorization/route-manifest-v1.csv`
+    - `navigator-common/src/test/java/com/foggy/navigator/common/authorization/AuthorizationContractTest.java`
+    - `navigator-common/src/test/java/com/foggy/navigator/common/authorization/AuthorizationRequiredSectionCatalogRegressionTest.java`
+    - `docs/version-tracker/1.4.3-SNAPSHOT/evidence/GOV-001-p0.5-method-route-manifest.csv`
+  - SDK/CLI/release:
+    - `navigator-open-sdk/pom.xml`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/api/AgentApi.java`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/api/BusinessAgentApi.java`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/CliArguments.java`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/model/businessagent/RuntimeRequestAuditDTO.java`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/model/businessagent/RuntimeRequestAuditPageDTO.java`
+    - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/model/businessagent/RuntimeRequestAuditStageDTO.java`
+    - `navigator-open-sdk/src/main/resources/com/foggy/navigator/sdk/cli/authorization-provenance.properties`
+    - `navigator-open-sdk/src/test/java/com/foggy/navigator/sdk/cli/UpstreamCliTest.java`
+    - `tools/navigator-upstream-cli/dist/package.sh`
+    - `tools/navigator-upstream-cli/dist/package.ps1`
+    - `tools/navigator-upstream/BUILD_INFO.json`
+    - `tools/navigator-upstream/RELEASE_MANIFEST.json`
+    - `tools/navigator-upstream/VERSION`
+    - `tools/navigator-upstream/lib/navigator-open-sdk-1.0.18.jar` (removed from the active snapshot; recoverable copy retained under task test artifacts)
+    - `tools/navigator-upstream/lib/navigator-open-sdk-1.0.25.jar`
+  - Migration/documentation:
+    - `docs/migration/2026-07-23-runtime-request-audit.sql`
+    - `docs/migration/2026-07-23-runtime-request-audit-rollback.sql`
+    - `docs/version-tracker/1.4.3-SNAPSHOT/README.md`
+    - `docs/version-tracker/1.4.3-SNAPSHOT/runbooks/BUG-017-runtime-request-audit.md`
+    - `docs/version-tracker/1.4.3-SNAPSHOT/workitems/BUG-017-runtime-request-audit-no-task-id.md`
+- tests_and_results:
+  - `mvn test -pl addons/claude-worker-agent -am -Dtest=RuntimeRequestAuditServiceTest,OpenApiControllerMessageMappingTest -Dsurefire.failIfNoSpecifiedTests=false` -> PASS; audit service 8/8 and controller 55/55.
+  - `mvn test -pl navigator-common -Dtest=AuthorizationContractTest,AuthorizationRequiredSectionCatalogRegressionTest,AuthorizationRequiredSectionValidationTest,AuthorizationDecisionAuditDraftTest` -> PASS; 18/18.
+  - `mvn test -pl addons/claude-worker-agent -am` -> PASS; 8-module reactor, 2,039 tests, 0 failures, 0 errors, 3 skipped.
+  - `mvn -f navigator-open-sdk/pom.xml test` -> PASS; 184 tests, including 143 CLI contract/live-loopback HTTP tests, 0 failures/errors.
+  - `mvn package -pl launcher -am -DskipTests` -> PASS; 14-module reactor, packaged the deployable launcher at 2026-07-23T18:34:37+08:00.
+  - `bash -n tools/navigator-upstream-cli/dist/package.sh tools/navigator-upstream-cli/dist/install.sh` -> PASS.
+  - `command -v pwsh` -> unavailable in the current Linux environment; Windows package generation and SHA validation passed, but `package.ps1`/Windows installation were not executed locally.
+  - `git diff --check` -> PASS; only existing CRLF-to-LF normalization warnings, no whitespace errors.
+  - Scoped audit DTO/entity forbidden-field scan -> PASS across 8 files; controller/CLI tests also assert raw body, token-shaped exception text, credential headers, and prompt/secret markers are not emitted.
+  - Clean package/install smoke -> PASS for `navi version`, top-level help, runtime help, three release features, and installed 1.0.25 jar selection.
+  - `docs/migration/2026-07-23-runtime-request-audit.sql` -> APPLIED to the local `coding_agent` database; both audit tables and the exact-request, scoped-time, expiry, and stage-time indexes were verified.
+  - Public OBS re-download -> PASS; Linux and Windows archives both matched `latest.json` SHA-256, and the public Linux installer produced CLI 1.0.25 with the expected version/provenance and runtime-audit help contract.
+- manual_or_experience_evidence:
+  - clean release commit: `61ad20bd3cdaee83cbf45abed3892527f6708411`
+  - version/build: `1.0.25`, `1.0.25+61ad20bd3cda`, `gitDirty=false`
+  - Linux package SHA-256: `3db939a3de082704e019ac5ba88618f7d787bffeeb5b47c04a779bc6fe7acb70`
+  - Windows package SHA-256: `7ade4de3d9e29c4a8c77a413f83b041eb47406269010fdb615826ff7761a2eda`
+  - package/install evidence root: `temp/test-artifacts/BUG-017-runtime-audit-release-aaAbnBVX/`
+  - public re-download/install evidence root: `temp/test-artifacts/BUG-017-runtime-audit-remote-F641zz/`
+  - generated release output: `tools/navigator-upstream-cli/dist/output/`
+  - release features: `runtime-request-audit`, `safe-ask-client-request-correlation`, `runtime-audit-no-task-id`
+  - release publication: clean source commit fast-forwarded to `origin/main`; Linux archive, Windows archive, `latest.json`, `install.sh`, and `install.ps1` returned successful OBS uploads on 2026-07-23.
+  - local deployment: launcher PID `2552943` started at 2026-07-23T18:34:49+08:00 from the newly packaged jar; `/actuator/health` and MySQL are `UP`.
+  - required runtime services: Navigator backend 8112, Claude Worker 3031, Codex Worker 3051, Gemini Worker 3072, local Biz Worker 3061, and WSL Biz Worker 3161 all reported ready/up.
+  - SIM readiness/owner-smoke: `world-sim-order-clerk-v2-dev-20260716-a` passed explicit readiness and owner-smoke for tenant `tenant_upstream_sandbox`, upstream system `foggy-world-sim`, modelConfig `ec356713-1d8e-41a5-920b-71ccf63133ff`, and directory `20260716-8b89`; no resource mutation or sibling-workspace change was needed.
+  - live safe-ask: `clientRequestId=8032ca98-bb34-4844-848b-95beaab154e9`, synthetic `taskId=smk_f62e1cbfb4f3475bbaef270b696a47e2`, status `COMPLETED`, task token `REVOKED`, and `runtimeDispatched=false`.
+  - live exact and bounded-window audit: both returned one sanitized terminal record with all seven expected lifecycle stages, zero effective tools/functions, no Worker/model/BusinessFunction dispatch, and no taskId dependency; evidence root `temp/test-artifacts/BUG-017-runtime-audit-live-20260723/`.
+- deviations:
+  - Existing SIM runtime resources were already correctly published and ready, so validation intentionally did not recreate or mutate Agent, ClientApp grant, model grant, Directory, WorkerHost, or BusinessFunction routes.
+  - No SIM source, profile, credential, account, or business-data file was modified.
+  - The historical 2026-07-23T14:30:09+08:00 request predates this server audit and cannot be reconstructed retroactively; the documented window query becomes authoritative for requests made after deployment/replay.
+- residual_risks:
+  - Apply `docs/migration/2026-07-23-runtime-request-audit.sql` before deploying this server build into any additional environment that uses Hibernate schema validation; the current local Navigator database is already migrated.
+  - A request that truly never reaches Navigator and an already-expired/unknown request intentionally share `AUDIT_RECORD_EXPIRED_OR_NOT_FOUND`; operators distinguish them using local correlation/time evidence and configured retention.
+  - Run the generated Windows archive through `install.ps1` on a PowerShell-capable host before a Windows-specific rollout; this workspace has no `pwsh` executable.
+- readiness: READY_FOR_SIGNOFF; implementation, local deployment, SIM resource readiness, public CLI publication, and live runtime-audit validation are complete. The implementing session does not self-assign `ACCEPTED`.
 
 ## References
 
