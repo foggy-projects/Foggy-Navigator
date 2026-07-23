@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: REL-002
-status: BLOCKED
+status: ULTRA_EXECUTING
 canonical: true
 execution_mode: ultra
 approved_by: project-owner-user-confirmed
@@ -107,9 +107,9 @@ Validation cost: focused checks are `<5m`; reactor/package/upload are `5-30m`. R
 ## Implementation Result
 
 - implementation_summary:
-  - 已准备 clean CLI `1.0.24` release candidate，并在发布前补充 Linux/WSL installer 对新建/既有 profile 的 `0600` 收紧，以及普通安装成功后 exit `0` 的修复。
-  - official OBS 上传未执行：发布凭据预检在任何 object write 前返回 `InvalidAccessKeyId`；远端 `latest.json` 仍为 `1.0.23+aa4a944e7f25`。
-  - 因 official 发布未完成，main provenance 保持 truthful：`source.version=1.0.24`、`published.version=1.0.23`、`SOURCE_NEWER_THAN_PUBLISHED`。恢复凭据后必须生成新的 clean release commit/buildId，不复用未发布 candidate。
+  - 已完成 Linux/WSL installer 对新建/既有 profile 的 `0600` 收紧，以及普通安装成功后 exit `0` 的修复。
+  - 先前宿主配置的 `InvalidAccessKeyId` 阻断已由 operator 提供的 `~/.obsutilconfig` 解除；该配置已收紧为 `0600`，只读 `obsutil ls -s` 预检通过。
+  - official 发布已恢复执行；将从本次新的 clean release commit 重建，不复用未发布的 `5b01d48e` candidate。
 - changed_paths:
   - `tools/navigator-upstream-cli/dist/install.sh`
   - `tools/navigator-upstream-cli/dist/upload.sh`
@@ -121,16 +121,15 @@ Validation cost: focused checks are `<5m`; reactor/package/upload are `5-30m`. R
   - PASS — release shell syntax、`git diff --check`、差异敏感值扫描。
   - PASS — clean detached candidate `5b01d48ef63e126a5fc0ecb7b41f6bdd00fded1e`, `gitDirty=false`; Windows SHA `32eccbc1e42541548877cb6b53ac0545488303a0de758e37f0a8504a90cedf04`, Linux SHA `fbd4953d8f08a1ea5186dbc42379c3067e691f6bc6bfae45b36ee50a27597c92`。
   - PASS — offline Linux install/upgrade；`safe-ask`、`allowed-tools`、`allowed-functions` 和 provenance help 可见；新建与既有 profile mode 均为 `0600`。
-  - BLOCKED — `/mnt/c/Users/oldse/.obsutilconfig` 已收紧为 `0600`，但 `obsutil ls -s` 返回 HTTP 403 `InvalidAccessKeyId`。
+  - PASS — `$HOME/.obsutilconfig` mode `0600`；`obsutil ls -s` 认证预检通过。
 - manual_or_experience_evidence:
   - 2026-07-23 remote `latest.json` read-only verification remains `version=1.0.23`, `buildId=1.0.23+aa4a944e7f25`, `gitDirty=false`，且 feature list 不包含 `safe-ask`、`ask-allowed-functions`、`runtime-profile-posix-0600`。
   - 未读取或输出 AK/SK；未上传任何 object；未读取 SIM runtime profile，未获取 token，未创建 task，未 dispatch Worker/model。
 - deviations:
   - 发布前离线 smoke 发现并修复了 Linux installer profile mode 与成功 exit code 两个 release-path 缺陷；均属于已批准的 POSIX profile/official installer 安全范围。
 - residual_risks:
-  - official 1.0.24 尚不存在，SIM 必须继续停在 provenance/capability gate，不得使用本地 candidate 或提交探测性 ask。
-  - 需要 operator 在本机安全更新有效 OBS AK/SK；不得把 credential 粘贴进 Git、文档或发布日志。
-- readiness: BLOCKED
+  - official 1.0.24 在 remote upload/smoke 完成前仍不存在，SIM 必须继续停在 provenance/capability gate。
+- readiness: ULTRA_EXECUTING
 
 ## References
 
