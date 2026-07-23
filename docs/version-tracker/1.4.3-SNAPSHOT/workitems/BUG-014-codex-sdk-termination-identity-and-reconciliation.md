@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-014
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 approved_by: user
@@ -69,8 +69,8 @@ open_questions: []
 - [x] AC-3: Worker 的安全 `TERMINATION_*` 拒绝码可到达 Java/UI；未确认 SDK operation 不再产生误导成功日志，用户确认“再次中止”后会关闭旧 operation 并派发新的一次性 capability。
 - [x] AC-4: 已 `CANCEL_REQUESTED` 的 SDK 任务在 Worker task 404 且精确进程快照证明不存在时变为 `ABORTED`，相关 termination operation 标记 observed，session/task 投影同步；证据不充分时状态不变。
 - [x] AC-5: 普通中止、再次中止、平台管理员 PID 终止和错误提示具备 Worker/Java/前端自动化回归；前端生产构建通过。
-- [ ] AC-6: Codex SDK Worker 使用新版本完成 all-platform `full` package smoke 并从 clean、pushed commit 发布；远端 `latest.json`、archive、checksum、bootstrap 与 evidence 校验通过，app-server Worker 明确未发布。
-- [ ] AC-7: 目标 Navigator 后端/前端和 PhysicalWorker 完成归属确认后的部署；health 显示 termination ready，现场任务 `20260722-6cfb` 通过受控路径收口，两个中止入口至少各完成一次安全 live 验证或明确记录环境阻断。
+- [x] AC-6: Codex SDK Worker 使用新版本完成 all-platform `full` package smoke 并从 clean、pushed commit 发布；远端 `latest.json`、archive、checksum、bootstrap 与 evidence 校验通过，app-server Worker 明确未发布。
+- [x] AC-7: 目标 Navigator 后端/前端和 PhysicalWorker 完成归属确认后的部署；health 显示 termination ready，现场任务 `20260722-6cfb` 通过受控路径收口，两个中止入口至少各完成一次安全 live 验证或明确记录环境阻断。
 
 ## Contract / Data / Security Constraints
 
@@ -143,14 +143,29 @@ open_questions: []
   - `pnpm --filter @foggy/navigator-frontend exec vitest run src/views/__tests__/ClaudeWorkerView.integration.test.ts`：通过；48/48。
   - `bash scripts/build-frontend.sh`：通过；类型检查、workspace 前端测试和生产构建均成功，Navigator frontend 273/273。
   - `mvn -q -pl addons/codex-worker-agent,session-module -am test`：未通过；未改动的 `navigator-common` 冻结 catalog 基线有 2 项既有差异（期望 201/实际 234，以及冻结证据字节不一致），受影响聚焦测试已独立通过。
+  - `cd tools/codex-agent-worker && npm run package:release -- --platform all --smoke full`：通过；执行 archive structure、SHA-256 sidecar、forbidden-file scan、候选包 `npm ci` 与候选 health，`packageVerificationSkipped=false`。
+  - `cd tools/codex-agent-worker && npm run publish:obs -- --obsutil <temporary-wrapper>`：通过；发布脚本逐项回读并校验远端 `latest.json`、三平台 archive、checksum、`install.sh`、`install.ps1` 与 release evidence。
+  - 目标后端 `mvn package -pl launcher -am -DskipTests`：14/14 reactor `BUILD SUCCESS`；目标前端 `bash scripts/start-build-frontend.sh`：通过。
   - `git diff --check`：通过。
-- manual_or_experience_evidence: OBS 发布、目标部署、termination health 与现场任务恢复待执行。
-- deviations: none
+- release_and_deployment_evidence:
+  - 源提交 `7d9b222d9c744ef4be5a6bd0a4d3f0b902ba0970` 已推送到 `origin/main`，发布时 Worker worktree clean，release evidence 记录 `gitDirty=false`。
+  - Codex SDK Worker `1.0.19` all-platform 产物：Linux/macOS SHA-256 `57ae605262ccde49a63adcba1c40eea3c240ec6fa074508f49b7d5e398038e00`；Windows SHA-256 `89f4d2bb388eab79064b0a179370fd91d314fa8eb19cd5deb674181aa085ad46`。
+  - OBS 远端 manifest 为 `product=codex-agent-worker`、`schemaVersion=1`、`version=1.0.19`、上述 git commit 与 archive hash/bytes；Codex app-server Worker 未修改、未发布。
+  - 目标 Navigator 进程归属已由 PID、cwd 与 JAR 路径共同确认；部署后 commit 为 `7d9b222d...`，后端 cwd 为 `/home/sa/Foggy-Navigator`、JAR 为 `launcher/target/launcher-1.0.0-SNAPSHOT.jar`、health `UP`。前端 Nginx 挂载同仓库 `packages/navigator-frontend/dist`，HTTP 200。
+  - PhysicalWorker `36508966` 的 Codex SDK Worker 已从 `1.0.18` 升级到 `1.0.19`；2026-07-23 live health 为 `ready=true`、`termination_ready=true`、`termination_reasons=[]`，Worker ID、termination auth 与持久 replay ledger 三项均 ready；Codex SDK `0.145.0` 满足最低 `0.144.1`。
+- manual_or_experience_evidence:
+  - 2026-07-23 现场任务 `20260722-6cfb` 初始为 `CANCEL_REQUESTED` / `TERMINATION_OPERATION_PENDING`，其 provider task/PID 已不在精确 Worker 进程快照中；两个现存 PID 均绑定其他任务。
+  - 调用正式 `POST /api/v1/tasks/20260722-6cfb/termination-retry` 后首次响应即为 `providerState=interrupted`、`status=ABORTED`；统一任务查询同步为 `ABORTED` 且 `errorMessage=null`，未终止任何无关进程。
+  - termination operation 只读核验显示：最新 `REMOTE_CANCEL` 为 `ABORTED/OBSERVED` 并具有 `observedAt`；更早的未确认 operation 保留为 `FAILED/UNCONFIRMED`、`TERMINATION_OPERATION_EXPIRED` 审计记录。
+  - 终态后再次调用普通 cancel 返回 `Task already in terminal state: ABORTED`，验证普通入口幂等。会话容器保持可继续的 `ACTIVE`，其 `updatedAt` 与任务收口同步更新；任务投影为权威终止状态。
+  - 目标任务已无绑定 PID，正向 live PID kill 不具备安全对象。按 fail-closed 边界，以目标 taskId 请求终止一个属于其他任务的 PID，后端返回 PID/task binding 无法确认的拒绝；调用前后两个 PID 和 task binding 完全不变，构成第二入口的 live 安全验证及环境阻断证据。
+- deviations:
+  - 未为了正向 PID smoke 创建或终止额外 live 任务；现场目标进程已退出，且仅有的两个 PID 属于其他任务。自动化已覆盖绑定 PID 的成功路径，live 环境采用明确 mismatch 拒绝和进程集合不变证明，避免扩大破坏性范围。
 - residual_risks:
   - `navigator-common` 冻结 catalog 基线失败不属于 BUG-014，独立 signoff 需明确接受或由其 owner 更新冻结证据。
-  - 目标 Worker 升级会清空内存 task registry；现场恢复只能使用本工作项的严格缺失核验路径。
+  - Worker `npm ci` 报告 1 项 low-severity 依赖漏洞；未影响本次构建、health 或终止链路，但应进入依赖维护队列。
   - 已暴露的 Bearer JWT 与 Java 启动参数中的 root password 仍需环境 owner 轮换。
-- readiness: ULTRA_EXECUTING
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
