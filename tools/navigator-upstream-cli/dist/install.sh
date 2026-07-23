@@ -64,6 +64,7 @@ NAVI_E2E_MOCK_LLM_URL=http://localhost:8200
 NAVI_POLL_INTERVAL_SECONDS=4
 EOF
 fi
+chmod 600 "$PROFILE"
 touch "$PROJECT_ROOT/.gitignore"
 grep -qxF '.navigator/upstream.env' "$PROJECT_ROOT/.gitignore" || printf '.navigator/upstream.env\n' >> "$PROJECT_ROOT/.gitignore"
 grep -qxF '.navi-upstream.env' "$PROJECT_ROOT/.gitignore" || printf '.navi-upstream.env\n' >> "$PROJECT_ROOT/.gitignore"

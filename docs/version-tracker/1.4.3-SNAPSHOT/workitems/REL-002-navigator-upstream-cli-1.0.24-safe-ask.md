@@ -30,6 +30,7 @@ open_questions: []
 - in_scope:
   - 将 CLI provenance 对齐为 `source.version=published.version=1.0.24`、`artifact.drift=SOURCE_MATCHES_PUBLISHED`。
   - 运行 focused SDK/CLI tests、shell syntax、双平台 package、离线 Linux install smoke。
+  - Linux/WSL installer 对新建或既有 `.navigator/upstream.env` 强制收紧为 `0600`，远程安装 smoke 必须验证该 mode。
   - 从 clean detached release worktree 上传 Windows/Linux archive、`latest.json`、`install.ps1`、`install.sh` 到既有 official OBS 分发根，并执行内建远程 Linux installer smoke。
   - 验证 `safe-ask`、`ask-allowed-functions`、`runtime-profile-posix-0600` feature、buildId/gitCommit/SHA 和安装后 provenance。
   - 提交并推送 release metadata、交付记录和脱敏验证证据；提供 SIM 升级及 fail-closed safe-ask handoff。

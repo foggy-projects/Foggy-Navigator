@@ -103,6 +103,12 @@ if [[ $SKIP_SMOKE == false ]]; then
     bash "$LINUX_INSTALL"
     NAVI="$TMP_ROOT/tools/navigator-upstream/navi"
     [[ -x $NAVI ]] || { echo "remote install smoke did not create $NAVI" >&2; exit 1; }
+    PROFILE="$TMP_ROOT/.navigator/upstream.env"
+    [[ -f $PROFILE ]] || { echo "remote install smoke did not create $PROFILE" >&2; exit 1; }
+    [[ $(stat -c '%a' "$PROFILE") == 600 ]] || {
+      echo "remote install smoke expected profile mode 600: $PROFILE" >&2
+      exit 1
+    }
     "$NAVI" version | grep -F "navigator-upstream-cli $VERSION" >/dev/null
     "$NAVI" upstream --help | grep -F 'function import' >/dev/null
     if "$NAVI" upstream ask --not-a-real-option >/dev/null 2>&1; then
