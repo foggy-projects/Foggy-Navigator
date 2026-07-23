@@ -81,4 +81,6 @@ echo 'Installed.'
 echo "  Config:  $PROFILE"
 echo '  Command: ./tools/navigator-upstream/navi upstream config check'
 echo '  E2E:     ./tools/navigator-upstream/navi-e2e config check'
-[[ $UPGRADE == true ]] && echo '  Upgrade complete.'
+if [[ $UPGRADE == true ]]; then
+  echo '  Upgrade complete.'
+fi
