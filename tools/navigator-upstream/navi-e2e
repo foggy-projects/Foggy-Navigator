@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+INSTALL_DIR=$SCRIPT_DIR
+if [[ $(basename "$SCRIPT_DIR") == "bin" ]]; then
+  INSTALL_DIR=$(dirname "$SCRIPT_DIR")
+fi
+
+project_root() {
+  if [[ -n ${NAVI_UPSTREAM_PROJECT_ROOT:-} ]]; then
+    (cd "$NAVI_UPSTREAM_PROJECT_ROOT" && pwd -P)
+  elif [[ $(basename "$(dirname "$INSTALL_DIR")") == "tools" ]]; then
+    dirname "$(dirname "$INSTALL_DIR")"
+  else
+    pwd -P
+  fi
+}
+
+has_option() {
+  local expected=$1
+  shift
+  local value
+  for value in "$@"; do
+    [[ $value == "$expected" || $value == "$expected="* ]] && return 0
+  done
+  return 1
+}
+
+LIB_DIR="$INSTALL_DIR/lib"
+[[ -d $LIB_DIR ]] || { echo "lib directory not found: $LIB_DIR" >&2; exit 1; }
+command -v java >/dev/null 2>&1 || { echo 'java not found in PATH. Install JDK 17+ first.' >&2; exit 1; }
+
+ROOT=$(project_root)
+PROFILE="$ROOT/.navigator/upstream.env"
+ARGS=("$@")
+if ! has_option --profile "${ARGS[@]}"; then
+  ARGS+=(--profile "$PROFILE")
+fi
+
+shopt -s nullglob
+JARS=("$LIB_DIR"/*.jar)
+[[ ${#JARS[@]} -gt 0 ]] || { echo "No jar files found in $LIB_DIR" >&2; exit 1; }
+CLASSPATH=$(IFS=:; printf '%s' "${JARS[*]}")
+cd "$ROOT"
+exec java -cp "$CLASSPATH" com.foggy.navigator.sdk.cli.E2eCli "${ARGS[@]}"

@@ -1,10 +1,10 @@
 {
-  "version": "1.0.25",
-  "released": "2026-07-23",
-  "buildTimeUtc": "2026-07-23T10:14:35Z",
-  "buildId": "1.0.25+61ad20bd3cda",
-  "gitCommit": "61ad20bd3cdaee83cbf45abed3892527f6708411",
-  "gitDirty": false,
+  "version": "1.0.26",
+  "released": "2026-07-24",
+  "buildTimeUtc": "2026-07-24T06:07:57Z",
+  "buildId": "1.0.26+d08e02018442.dirty",
+  "gitCommit": "d08e020184422ba814a4b733ebe21e5952bba23f",
+  "gitDirty": true,
   "features": [
     "config-check",
     "auth-login",
@@ -16,6 +16,11 @@
     "runtime-request-audit",
     "safe-ask-client-request-correlation",
     "runtime-audit-no-task-id",
+    "runtime-binding-audit",
+    "runtime-task-audit",
+    "runtime-audit-no-token-issuance",
+    "runtime-task-terminal-state-audit",
+    "runtime-audit-no-dispatch",
     "messages",
     "sessions",
     "skill-artifact-read",
@@ -62,11 +67,11 @@
     "ask-directory-actionable-error"
   ],
   "files": {
-    "windows": "1.0.25/navigator-upstream-cli-1.0.25-windows.zip",
-    "linux": "1.0.25/navigator-upstream-cli-1.0.25-linux.tar.gz"
+    "windows": "1.0.26/navigator-upstream-cli-1.0.26-windows.zip",
+    "linux": "1.0.26/navigator-upstream-cli-1.0.26-linux.tar.gz"
   },
   "sha256": {
-    "windows": "7ade4de3d9e29c4a8c77a413f83b041eb47406269010fdb615826ff7761a2eda",
-    "linux": "3db939a3de082704e019ac5ba88618f7d787bffeeb5b47c04a779bc6fe7acb70"
+    "windows": "ca0a6a34c19a96267f171a36dfed9ca3a492280acd0ae19ade448e9a47da9874",
+    "linux": "74b41bc1e5ed0e134c7b60de774fd4db86ecb9f1f4667549c8f7f201d1117877"
   }
 }

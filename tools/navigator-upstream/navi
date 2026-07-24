@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+INSTALL_DIR=$SCRIPT_DIR
+if [[ $(basename "$SCRIPT_DIR") == "bin" ]]; then
+  INSTALL_DIR=$(dirname "$SCRIPT_DIR")
+fi
+
+VERSION_FILE="$INSTALL_DIR/VERSION"
+VERSION=$(tr -d '\r\n' < "$VERSION_FILE" 2>/dev/null || printf 'unknown')
+
+project_root() {
+  if [[ -n ${NAVI_UPSTREAM_PROJECT_ROOT:-} ]]; then
+    (cd "$NAVI_UPSTREAM_PROJECT_ROOT" && pwd -P)
+  elif [[ $(basename "$(dirname "$INSTALL_DIR")") == "tools" ]]; then
+    dirname "$(dirname "$INSTALL_DIR")"
+  else
+    pwd -P
+  fi
+}
+
+has_option() {
+  local expected=$1
+  shift
+  local value
+  for value in "$@"; do
+    [[ $value == "$expected" || $value == "$expected="* ]] && return 0
+  done
+  return 1
+}
+
+release_base_url() {
+  if [[ -n ${NAVI_UPSTREAM_CLI_URL:-} ]]; then
+    printf '%s' "$NAVI_UPSTREAM_CLI_URL"
+  elif [[ -f "$INSTALL_DIR/RELEASE_URL" ]]; then
+    tr -d '\r\n' < "$INSTALL_DIR/RELEASE_URL"
+  fi
+}
+
+print_version() {
+  printf 'navigator-upstream-cli %s\n' "$VERSION"
+  if [[ -f "$INSTALL_DIR/BUILD_INFO.json" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r 'select(.buildTimeUtc) | "buildTimeUtc=\(.buildTimeUtc)"' "$INSTALL_DIR/BUILD_INFO.json"
+    jq -r 'select(.gitCommit) | "gitCommit=\(.gitCommit)"' "$INSTALL_DIR/BUILD_INFO.json"
+    jq -r 'select(.gitBranch) | "gitBranch=\(.gitBranch)"' "$INSTALL_DIR/BUILD_INFO.json"
+    jq -r 'select(.gitDirty != null) | "gitDirty=\(.gitDirty)"' "$INSTALL_DIR/BUILD_INFO.json"
+  fi
+  if [[ -f "$INSTALL_DIR/RELEASE_MANIFEST.json" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r 'select(.released) | "released=\(.released)"' "$INSTALL_DIR/RELEASE_MANIFEST.json"
+    jq -r 'select(.sha256.linux) | "packageSha256=\(.sha256.linux)"' "$INSTALL_DIR/RELEASE_MANIFEST.json"
+    jq -r 'select(.buildId) | "buildId=\(.buildId)"' "$INSTALL_DIR/RELEASE_MANIFEST.json"
+    jq -r 'select(.gitDirty != null) | "releaseGitDirty=\(.gitDirty)"' "$INSTALL_DIR/RELEASE_MANIFEST.json"
+  fi
+}
+
+self_update() {
+  local base_url
+  base_url=$(release_base_url)
+  if [[ -z $base_url ]]; then
+    echo 'No release URL configured.' >&2
+    echo 'Set NAVI_UPSTREAM_CLI_URL or reinstall from the remote install script.' >&2
+    exit 2
+  fi
+  local installer
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' RETURN
+  curl -fsSL "$base_url/install.sh?ts=$(date +%s)" -o "$installer"
+  bash "$installer" --project-root "$(project_root)" --release-base-url "$base_url" --upgrade
+}
+
+invoke_java_cli() {
+  local lib_dir="$INSTALL_DIR/lib"
+  [[ -d $lib_dir ]] || { echo "lib directory not found: $lib_dir" >&2; exit 1; }
+  command -v java >/dev/null 2>&1 || { echo 'java not found in PATH. Install JDK 17+ first.' >&2; exit 1; }
+
+  local root profile preferred_sdk_jar classpath
+  root=$(project_root)
+  profile="$root/.navigator/upstream.env"
+  local -a effective_args=("$@") sdk_jars dependency_jars classpath_entries
+  if ! has_option --profile "${effective_args[@]}"; then
+    effective_args+=(--profile "$profile")
+  fi
+
+  shopt -s nullglob
+  sdk_jars=("$lib_dir"/navigator-open-sdk-*.jar)
+  preferred_sdk_jar="$lib_dir/navigator-open-sdk-$VERSION.jar"
+  [[ -f $preferred_sdk_jar ]] || preferred_sdk_jar=$(printf '%s\n' "${sdk_jars[@]}" | sort | tail -n 1)
+  [[ -n $preferred_sdk_jar && -f $preferred_sdk_jar ]] || { echo "Navigator Open SDK jar not found in $lib_dir" >&2; exit 1; }
+  dependency_jars=("$lib_dir"/*.jar)
+  classpath_entries=("$preferred_sdk_jar")
+  local jar
+  for jar in "${dependency_jars[@]}"; do
+    [[ $jar == "$preferred_sdk_jar" ]] || classpath_entries+=("$jar")
+  done
+  classpath=$(IFS=:; printf '%s' "${classpath_entries[*]}")
+  cd "$root"
+  exec java -cp "$classpath" com.foggy.navigator.sdk.cli.UpstreamCli "${effective_args[@]}"
+}
+
+if [[ $# -ge 2 && $1 == self && ( $2 == update || $2 == upgrade ) ]]; then
+  self_update
+  exit 0
+fi
+if [[ $# -ge 1 && ( $1 == version || $1 == --version || $1 == -v ) ]]; then
+  print_version
+  exit 0
+fi
+invoke_java_cli "$@"
