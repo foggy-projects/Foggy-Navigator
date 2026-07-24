@@ -36,7 +36,11 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/v1/management/v1/**");
         registry.addInterceptor(authorizationShadowInterceptor)
                 .addPathPatterns("/api/**", "/internal/worker-gateway/v1/**", "/diagnostic-share/**")
-                .excludePathPatterns("/api/v1/management/v1/**");
+                .excludePathPatterns(
+                        "/api/v1/management/v1/**",
+                        "/api/v1/open/runtime/binding-audit",
+                        "/api/v1/open/runtime/task-audit"
+                );
     }
 
     /**

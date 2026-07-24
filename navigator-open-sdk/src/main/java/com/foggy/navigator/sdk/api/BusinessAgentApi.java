@@ -88,6 +88,38 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    public RuntimeBindingAuditDTO auditRuntimeBinding(
+            String appKey,
+            String appSecret,
+            String agentCode,
+            String upstreamUserId,
+            String modelConfigId,
+            String directoryId) {
+        StringBuilder path = new StringBuilder("/api/v1/open/runtime/binding-audit");
+        appendQuery(path, "agentCode", agentCode);
+        appendQuery(path, "upstreamUserId", upstreamUserId);
+        appendQuery(path, "modelConfigId", modelConfigId);
+        appendQuery(path, "directoryId", directoryId);
+        return http.get(path.toString(), Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret
+        ), new TypeReference<>() {});
+    }
+
+    public RuntimeTaskAuditDTO auditRuntimeTask(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId) {
+        StringBuilder path = new StringBuilder("/api/v1/open/runtime/task-audit");
+        appendQuery(path, "taskId", taskId);
+        return http.get(path.toString(), Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId
+        ), new TypeReference<>() {});
+    }
+
     public ClientAppDTO updateClientAppStatus(String clientAppId, UpdateStatusForm form) {
         return http.put("/api/v1/client-apps/" + clientAppId + "/status", form, new TypeReference<>() {});
     }

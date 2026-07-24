@@ -51,7 +51,10 @@ class WebMvcConfigTest {
         when(shadowRegistration.addPathPatterns(
                 "/api/**", "/internal/worker-gateway/v1/**", "/diagnostic-share/**"))
                 .thenReturn(shadowRegistration);
-        when(shadowRegistration.excludePathPatterns("/api/v1/management/v1/**")).thenReturn(shadowRegistration);
+        when(shadowRegistration.excludePathPatterns(
+                "/api/v1/management/v1/**",
+                "/api/v1/open/runtime/binding-audit",
+                "/api/v1/open/runtime/task-audit")).thenReturn(shadowRegistration);
 
         new WebMvcConfig(mock(AuthInterceptor.class), shadowInterceptor, typedManagementAuthInterceptor)
                 .addInterceptors(registry);
@@ -61,7 +64,10 @@ class WebMvcConfigTest {
         verify(managementRegistration).addPathPatterns("/api/v1/management/v1/**");
         verify(shadowRegistration).addPathPatterns(
                 "/api/**", "/internal/worker-gateway/v1/**", "/diagnostic-share/**");
-        verify(shadowRegistration).excludePathPatterns("/api/v1/management/v1/**");
+        verify(shadowRegistration).excludePathPatterns(
+                "/api/v1/management/v1/**",
+                "/api/v1/open/runtime/binding-audit",
+                "/api/v1/open/runtime/task-audit");
     }
 
     private static MockHttpServletRequest request(String path) {

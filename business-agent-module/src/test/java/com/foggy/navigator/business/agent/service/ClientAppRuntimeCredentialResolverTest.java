@@ -64,6 +64,22 @@ class ClientAppRuntimeCredentialResolverTest {
     }
 
     @Test
+    void resolveWithoutTenantAuthenticatesOwnerWithoutIssuingAccessToken() {
+        ClientAppRuntimeCredentialEntity credential = credential("tenant_1", "tms_app", "app_secret");
+        when(credentialRepository.findByAppKey("app_key")).thenReturn(Optional.of(credential));
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+
+        ResolvedClientAppCredentialDTO resolved =
+                resolver.resolve("app_key", "app_secret").orElseThrow();
+
+        assertEquals("tenant_1", resolved.getTenantId());
+        assertEquals("tms_app", resolved.getClientAppId());
+        assertEquals("cred_1", resolved.getCredentialId());
+        verifyNoInteractions(accessTokenRepository);
+        verifyNoInteractions(skillRegistryService);
+    }
+
+    @Test
     void resolve_rejectsWrongSecret() {
         ClientAppRuntimeCredentialEntity credential = credential("tenant_1", "tms_app", "app_secret");
         when(credentialRepository.findByAppKey("app_key")).thenReturn(Optional.of(credential));

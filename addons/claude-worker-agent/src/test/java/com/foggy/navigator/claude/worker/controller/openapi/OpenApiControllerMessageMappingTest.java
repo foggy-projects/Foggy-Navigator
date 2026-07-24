@@ -19,6 +19,8 @@ import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskMessagesResponse;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskDiagnosticsDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskEvidenceDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeBindingAuditDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
@@ -398,6 +400,106 @@ class OpenApiControllerMessageMappingTest {
 
         assertEquals("RUNTIME_AUDIT_QUERY_FAILED", response.getMsg());
         assertFalse(response.getMsg().contains("RUNTIME_SECRET_MUST_NOT_LEAK"));
+    }
+
+    @Test
+    void runtimeStateAuditEndpointsUseOnlyLongTermRuntimeCredentialAndExistingState() throws Exception {
+        RuntimeStateAuditService stateAuditService = mock(RuntimeStateAuditService.class);
+        RuntimeBindingAuditDTO binding = RuntimeBindingAuditDTO.builder()
+                .tenant("tenant-1")
+                .agentCode("agent-1")
+                .upstreamUserId("upstream-1")
+                .modelConfigId("model-1")
+                .directoryId("directory-1")
+                .physicalWorkerId("worker-1")
+                .auditAccessTokenIssued(false)
+                .auditRuntimeTokenIssued(false)
+                .auditTaskTokenIssued(false)
+                .taskCreated(false)
+                .contextCreated(false)
+                .sessionCreated(false)
+                .modelDispatched(false)
+                .businessFunctionDispatched(false)
+                .recoveryTriggered(false)
+                .provisioningResourceChanged(false)
+                .build();
+        RuntimeTaskAuditDTO task = RuntimeTaskAuditDTO.builder()
+                .taskId("task-existing")
+                .terminal(true)
+                .status("FAILED")
+                .taskTokenStatus("REVOKED")
+                .auditAccessTokenIssued(false)
+                .auditRuntimeTokenIssued(false)
+                .auditTaskTokenIssued(false)
+                .taskCreated(false)
+                .contextCreated(false)
+                .sessionCreated(false)
+                .modelDispatched(false)
+                .businessFunctionDispatched(false)
+                .recoveryTriggered(false)
+                .provisioningResourceChanged(false)
+                .build();
+        when(stateAuditService.auditBinding(
+                "runtime-key", "runtime-secret", "agent-1", "upstream-1", "model-1", "directory-1"))
+                .thenReturn(binding);
+        when(stateAuditService.auditTask(
+                "runtime-key", "runtime-secret", "upstream-1", "task-existing"))
+                .thenReturn(task);
+        OpenApiController controller = newController(stateAuditService);
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mockMvc.perform(get("/api/v1/open/runtime/binding-audit")
+                        .queryParam("agentCode", "agent-1")
+                        .queryParam("upstreamUserId", "upstream-1")
+                        .queryParam("modelConfigId", "model-1")
+                        .queryParam("directoryId", "directory-1")
+                        .header("X-Client-App-Key", "runtime-key")
+                        .header("X-Client-App-Secret", "runtime-secret"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tenant").value("tenant-1"))
+                .andExpect(jsonPath("$.data.auditAccessTokenIssued").value(false))
+                .andExpect(jsonPath("$.data.modelDispatched").value(false));
+
+        mockMvc.perform(get("/api/v1/open/runtime/task-audit")
+                        .queryParam("taskId", "task-existing")
+                        .header("X-Client-App-Key", "runtime-key")
+                        .header("X-Client-App-Secret", "runtime-secret")
+                        .header("X-Upstream-User-Id", "upstream-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.taskId").value("task-existing"))
+                .andExpect(jsonPath("$.data.taskTokenStatus").value("REVOKED"))
+                .andExpect(jsonPath("$.data.auditTaskTokenIssued").value(false))
+                .andExpect(jsonPath("$.data.recoveryTriggered").value(false));
+
+        verify(stateAuditService).auditBinding(
+                "runtime-key", "runtime-secret", "agent-1", "upstream-1", "model-1", "directory-1");
+        verify(stateAuditService).auditTask(
+                "runtime-key", "runtime-secret", "upstream-1", "task-existing");
+    }
+
+    @Test
+    void runtimeStateAuditRejectsForeignCredentialLanesAndOwnerOverridesWithoutQueryingState() {
+        RuntimeStateAuditService stateAuditService = mock(RuntimeStateAuditService.class);
+        OpenApiController controller = newController(stateAuditService);
+
+        for (String forbiddenHeader : List.of(
+                "Authorization", "X-Navi-Admin-Key", "X-Navi-Operator-Key",
+                "X-Navi-Principal-Credential", "X-Client-App-Control-Key",
+                "X-Client-App-Access-Token", "X-Task-Token", "X-Worker-Token",
+                "X-Tenant-Id", "X-Platform-Admin-Key", "X-System-Admin-Key")) {
+            HttpServletRequest request = mock(HttpServletRequest.class);
+            when(request.getHeader(forbiddenHeader)).thenReturn("forbidden");
+
+            assertEquals("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED",
+                    controller.auditRuntimeTask("task-existing", request).getMsg());
+        }
+
+        HttpServletRequest ownerOverride = mock(HttpServletRequest.class);
+        when(ownerOverride.getParameterMap()).thenReturn(Map.of("client-app-id", new String[]{"other"}));
+        assertEquals("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED",
+                controller.auditRuntimeBinding(
+                        "agent-1", "upstream-1", "model-1", "directory-1", ownerOverride).getMsg());
+        verifyNoInteractions(stateAuditService);
     }
 
     @Test
@@ -2952,6 +3054,21 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(RuntimeStateAuditService stateAuditService) {
+        return newController(
+                mock(UnifiedAgentResolver.class),
+                null,
+                null,
+                null,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                null,
+                null,
+                stateAuditService);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
     private OpenApiController newController(
             UnifiedAgentResolver agentResolver,
             ClientAppRuntimeCredentialResolver credentialResolver,
@@ -3062,10 +3179,37 @@ class OpenApiControllerMessageMappingTest {
             OpenApiAgentRouteService routeService,
             A2AgentResourceResolver resourceResolverOverride,
             RuntimeRequestAuditService auditService) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService,
+                routeService,
+                resourceResolverOverride,
+                auditService,
+                null);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            CodingAgentRepository codingAgentRepository,
+            OpenApiSessionQueryService sessionQueryService,
+            OpenApiAgentRouteService routeService,
+            A2AgentResourceResolver resourceResolverOverride,
+            RuntimeRequestAuditService auditService,
+            RuntimeStateAuditService stateAuditService) {
         ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
         when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
         ObjectProvider<RuntimeRequestAuditService> auditProvider = mock(ObjectProvider.class);
         when(auditProvider.getIfAvailable()).thenReturn(auditService);
+        ObjectProvider<RuntimeStateAuditService> stateAuditProvider = mock(ObjectProvider.class);
+        when(stateAuditProvider.getIfAvailable()).thenReturn(stateAuditService);
         ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
         when(taskProvider.getIfAvailable()).thenReturn(taskService);
         ObjectProvider<BusinessAgentSessionService> sessionProvider = mock(ObjectProvider.class);
@@ -3105,6 +3249,7 @@ class OpenApiControllerMessageMappingTest {
                 routeService,
                 credentialProvider,
                 auditProvider,
+                stateAuditProvider,
                 taskProvider,
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),

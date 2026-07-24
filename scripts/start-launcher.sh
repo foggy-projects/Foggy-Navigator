@@ -11,6 +11,7 @@ BACKEND_PORT=8112
 LOG_DIR="$REPO_ROOT/logs"
 JAR_PATH="$REPO_ROOT/launcher/target/launcher-1.0.0-SNAPSHOT.jar"
 ENV_FILE="$REPO_ROOT/launcher/.env"
+SECRET_TREE_DIR="${NAVIGATOR_ROOT_SECRET_TREE:-${XDG_CONFIG_HOME:-$HOME/.config}/foggy-navigator/launcher-root-secrets}"
 
 # Colors
 RED='\033[0;31m'
@@ -28,11 +29,35 @@ else
     echo -e "${YELLOW}Warning: $ENV_FILE not found, using defaults${NC}"
 fi
 
-# Set defaults if not set in .env
-ROOT_USERNAME=${ROOT_USERNAME:-root}
-ROOT_PASSWORD=${ROOT_PASSWORD:-root123}
-ROOT_EMAIL=${ROOT_EMAIL:-root@foggy.local}
-ROOT_PASSWORD_RESET=${ROOT_PASSWORD_RESET:-false}
+# Import system-root properties from a protected Spring config tree. Only the
+# directory path enters the service environment; credential values stay in
+# permission-restricted files and never enter argv or environment diagnostics.
+if [ ! -d "$SECRET_TREE_DIR" ]; then
+    echo -e "${RED}System-root secret tree not found: $SECRET_TREE_DIR${NC}"
+    exit 1
+fi
+SECRET_TREE_MODE=$(stat -c '%a' "$SECRET_TREE_DIR" 2>/dev/null || true)
+if [ -z "$SECRET_TREE_MODE" ] || [ $((8#$SECRET_TREE_MODE & 077)) -ne 0 ]; then
+    echo -e "${RED}Refusing insecure secret-tree permissions: $SECRET_TREE_DIR${NC}"
+    exit 1
+fi
+for SECRET_KEY in system.root.username system.root.password system.root.email system.root.password-reset; do
+    SECRET_FILE="$SECRET_TREE_DIR/$SECRET_KEY"
+    SECRET_MODE=$(stat -c '%a' "$SECRET_FILE" 2>/dev/null || true)
+    if [ ! -f "$SECRET_FILE" ] || [ -z "$SECRET_MODE" ] || [ $((8#$SECRET_MODE & 077)) -ne 0 ]; then
+        echo -e "${RED}Missing or insecure system-root property file: $SECRET_FILE${NC}"
+        exit 1
+    fi
+done
+SECRET_TREE_IMPORT="optional:configtree:${SECRET_TREE_DIR%/}/"
+if [ -n "${SPRING_CONFIG_IMPORT:-}" ]; then
+    export SPRING_CONFIG_IMPORT="$SECRET_TREE_IMPORT,$SPRING_CONFIG_IMPORT"
+else
+    export SPRING_CONFIG_IMPORT="$SECRET_TREE_IMPORT"
+fi
+unset ROOT_USERNAME ROOT_PASSWORD ROOT_EMAIL ROOT_PASSWORD_RESET
+unset SYSTEM_ROOT_USERNAME SYSTEM_ROOT_PASSWORD SYSTEM_ROOT_EMAIL SYSTEM_ROOT_PASSWORD_RESET
+
 SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
 JAVA_HEAP_MIN=${JAVA_HEAP_MIN:-1g}
 JAVA_HEAP_MAX=${JAVA_HEAP_MAX:-4g}
@@ -104,7 +129,6 @@ echo -e "${GRAY}  Java: ${JAVA_CMD}${NC}"
 echo -e "${GRAY}  JAR: ${JAR_PATH}${NC}"
 echo -e "${GRAY}  Profile: ${SPRING_PROFILES_ACTIVE}${NC}"
 echo -e "${GRAY}  Port: ${BACKEND_PORT}${NC}"
-echo -e "${GRAY}  Root User: ${ROOT_USERNAME}${NC}"
 echo -e "${GRAY}  JVM Heap: ${JAVA_HEAP_MIN} - ${JAVA_HEAP_MAX}${NC}"
 echo ""
 
@@ -126,10 +150,6 @@ if command -v setsid >/dev/null 2>&1; then
 fi
 
 nohup "${START_PREFIX[@]}" "${JAVA_CMD}" ${JAVA_OPTS} -Dfile.encoding=UTF-8 \
-    -Dsystem.root.username="${ROOT_USERNAME}" \
-    -Dsystem.root.password="${ROOT_PASSWORD}" \
-    -Dsystem.root.email="${ROOT_EMAIL}" \
-    -Dsystem.root.password-reset="${ROOT_PASSWORD_RESET}" \
     -jar "$JAR_PATH" \
     --spring.profiles.active="${SPRING_PROFILES_ACTIVE}" \
     > "$LOG_DIR/backend.log" 2> "$LOG_DIR/backend-error.log" &

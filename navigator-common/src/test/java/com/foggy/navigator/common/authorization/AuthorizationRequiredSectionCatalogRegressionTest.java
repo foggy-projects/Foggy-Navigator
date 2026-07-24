@@ -49,6 +49,8 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
             Map.entry("mvc:post:/api/v1/open/client-apps/runtime-token", false),
             Map.entry("mvc:get:/api/v1/open/frame-reports", false),
             Map.entry("mvc:get:/api/v1/open/runtime-audits", false),
+            Map.entry("mvc:get:/api/v1/open/runtime/binding-audit", false),
+            Map.entry("mvc:get:/api/v1/open/runtime/task-audit", false),
             Map.entry("mvc:get:/api/v1/open/skills/{skillId}/files/slice", false),
             Map.entry("mvc:get:/api/v1/open/skills/{skillId}/files/tree", false)
     );
@@ -57,6 +59,10 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
             "mvc:post:/api/v1/open/client-apps/runtime-token";
     private static final String RUNTIME_SELF_AUDIT_ROUTE =
             "mvc:get:/api/v1/open/runtime-audits";
+    private static final Set<String> RUNTIME_LONG_TERM_READ_ONLY_AUDIT_ROUTES = Set.of(
+            RUNTIME_SELF_AUDIT_ROUTE,
+            "mvc:get:/api/v1/open/runtime/binding-audit",
+            "mvc:get:/api/v1/open/runtime/task-audit");
 
     private static final Map<String, String> WORKER_GATEWAY_ACTION_BY_ROUTE = Map.of(
             "mvc:get:/internal/worker-gateway/v1/business-functions", "gateway.function.list",
@@ -151,13 +157,13 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         byte[] sourceBytes = Files.readAllBytes(source);
 
         assertArrayEquals(sourceBytes, Files.readAllBytes(evidence));
-        assertEquals(457, Files.readAllLines(source).size());
+        assertEquals(459, Files.readAllLines(source).size());
         assertEquals(AuthorizationRouteCatalog.EXPECTED_ENTRY_COUNT, sourceRows().size() - 1);
         assertEquals(AuthorizationRouteCatalog.EXPECTED_SHA_256, sha256(sourceBytes));
     }
 
     @Test
-    void runtimeCapabilityClassificationIsAnExactTwentyIngressCatalogSnapshot() {
+    void runtimeCapabilityClassificationIsAnExactTwentyTwoIngressCatalogSnapshot() {
         Map<String, Boolean> actualCapabilityByRoute = catalog.entriesByRouteId().values().stream()
                 .filter(entry -> RUNTIME_CAPABILITY_BY_ROUTE.containsKey(entry.routeId()))
                 .collect(Collectors.toMap(AuthorizationRouteManifestEntry::routeId,
@@ -203,7 +209,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
                 "platform dynamic tenant actions require authority, platform grant, and tenant authority together");
         Set<String> expectedDelegationRoutes = RUNTIME_CAPABILITY_BY_ROUTE.keySet().stream()
                 .filter(routeId -> !RUNTIME_TOKEN_EXCHANGE_ROUTE.equals(routeId))
-                .filter(routeId -> !RUNTIME_SELF_AUDIT_ROUTE.equals(routeId))
+                .filter(routeId -> !RUNTIME_LONG_TERM_READ_ONLY_AUDIT_ROUTES.contains(routeId))
                 .collect(Collectors.toSet());
         Map<String, AuthorizationRouteManifestEntry> delegationEntries = entries.stream()
                 .filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION))

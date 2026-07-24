@@ -8,6 +8,8 @@ import java.util.Optional;
 
 public interface ErrorDiagnosticRepository extends JpaRepository<ErrorDiagnosticEntity, String> {
     Optional<ErrorDiagnosticEntity> findFirstByTaskIdOrderByCreatedAtDesc(String taskId);
+    Optional<ErrorDiagnosticEntity> findFirstByTaskIdAndTenantIdOrderByOccurredAtDesc(
+            String taskId, String tenantId);
     Optional<ErrorDiagnosticEntity> findByDiagnosticIdAndOwnerUserIdAndTenantId(
             String diagnosticId, String ownerUserId, String tenantId);
     Optional<ErrorDiagnosticEntity> findByDiagnosticIdAndOwnerUserIdAndTenantIdIsNull(

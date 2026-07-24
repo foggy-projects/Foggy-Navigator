@@ -66,6 +66,9 @@ import com.foggy.navigator.sdk.model.businessagent.RotateUpstreamAdminCredential
 import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditPageDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditStageDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeBindingAuditDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskAuditDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskAuditStageDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
@@ -161,6 +164,17 @@ public class UpstreamCli {
             "RUNTIME_AUDIT_UNTIL_INVALID",
             "RUNTIME_AUDIT_WINDOW_INVALID",
             "RUNTIME_AUDIT_WINDOW_TOO_LARGE",
+            "RUNTIME_BINDING_AUDIT_AGENT_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_AGENT_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_DIRECTORY_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_DIRECTORY_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_MODEL_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_MODEL_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_NOT_FOUND",
+            "RUNTIME_BINDING_AUDIT_QUERY_FAILED",
+            "RUNTIME_BINDING_AUDIT_UPSTREAM_USER_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_WORKER_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_WORKER_NOT_FOUND",
             "RUNTIME_CLIENT_APP_CREDENTIAL_REQUIRED",
             "RUNTIME_CLIENT_APP_KEY_REQUIRED",
             "RUNTIME_CLIENT_APP_KEY_UNKNOWN",
@@ -169,6 +183,13 @@ public class UpstreamCli {
             "RUNTIME_CREDENTIAL_INACTIVE",
             "RUNTIME_CREDENTIAL_INVALID",
             "RUNTIME_CREDENTIAL_REQUIRED",
+            "RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED",
+            "RUNTIME_STATE_AUDIT_SERVICE_UNAVAILABLE",
+            "RUNTIME_TASK_AUDIT_FORBIDDEN",
+            "RUNTIME_TASK_AUDIT_NOT_FOUND",
+            "RUNTIME_TASK_AUDIT_QUERY_FAILED",
+            "RUNTIME_TASK_AUDIT_TASK_REQUIRED",
+            "RUNTIME_TASK_AUDIT_UPSTREAM_USER_REQUIRED",
             "SAFE_SMOKE_BODY_REQUIRED",
             "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED",
             "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE",
@@ -380,6 +401,8 @@ public class UpstreamCli {
             case "runtime", "runtime help" -> runtimeUsage();
             case "runtime token" -> runtimeToken(args);
             case "runtime audit" -> runtimeAudit(args);
+            case "runtime binding-audit" -> runtimeBindingAudit(args);
+            case "runtime task-audit" -> runtimeTaskAudit(args);
             case "runtime owner-smoke" -> ownerSmoke(args);
             case "runtime readiness", "runtime verify-agent-readiness" -> verifyAgentReadiness(args);
             case "runtime inspect" -> inspectRuntime(args);
@@ -545,7 +568,7 @@ public class UpstreamCli {
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
         out.println("Canonical lanes: platform, app, runtime. Run `navi upstream <lane> --help` for lane-specific commands.");
-        out.println("Commands: config check, auth login/whoami, runtime-token, runtime audit, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, safe-ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login/whoami, runtime-token, runtime audit/binding-audit/task-audit, owner-smoke, inspect runtime/permissions, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, safe-ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Legacy internal compatibility only: worker-pool list/create/register-worker/add-member/status. Do not use these commands to onboard OPENAI_CODEX or OPENAI_CODEX_APP_SERVER.");
         out.println("For an existing Physical Worker, use worker-host verify then update; use apply only for a new WorkerHost.");
         out.println("Typed-management introspection requires exactly one NAVI_PRINCIPAL_CREDENTIAL (or --principal-credential-env); NAVI_ADMIN_API_KEY is not S1 root or S2 platform/security authority.");
@@ -559,6 +582,8 @@ public class UpstreamCli {
         out.println("  safe-ask --upstream-user-id <id> --message <label> [--model-config-id <id>] [--model-variant <name>]  # forces maxTurns=1 and exact allowedTools=[]/allowedFunctions=[]; no Worker/model dispatch");
         out.println("  runtime audit --request-id <clientRequestId> [--operation runtime-token|safe-ask] [--json]");
         out.println("  runtime audit --since <offset-time> --until <offset-time> [--operation runtime-token|safe-ask] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("  runtime binding-audit --agent-code <id> --upstream-user-id <id> --model-config-id <id> --directory-id <id> [--json]");
+        out.println("  runtime task-audit --task-id <existingTaskId> [--upstream-user-id <id>] [--json]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
@@ -1293,6 +1318,64 @@ public class UpstreamCli {
             printJson(page);
         } else {
             printRuntimeAudits(page);
+        }
+        return 0;
+    }
+
+    private int runtimeBindingAudit(CliArguments args) throws Exception {
+        String appKey = clientAppKey(args);
+        String appSecret = config.required("NAVI_CLIENT_APP_SECRET", "client app secret");
+        String agentCode = requiredOptionOrConfig(args, "agent-code", "NAVI_AGENT_CODE", "agent code");
+        String upstreamUserId = upstreamUserId(args);
+        String modelConfigId = requiredOptionOrConfig(
+                args, "model-config-id", "NAVI_MODEL_CONFIG_ID", "model config id");
+        String directoryId = requiredOptionOrConfig(
+                args, "directory-id", "NAVI_DIRECTORY_ID", "directory id");
+        RuntimeBindingAuditDTO audit;
+        try {
+            audit = new BusinessAgentApi(runtimeAuditHttp()).auditRuntimeBinding(
+                    appKey,
+                    appSecret,
+                    agentCode,
+                    upstreamUserId,
+                    modelConfigId,
+                    directoryId);
+        } catch (NavigatorApiException e) {
+            throw runtimeStateAuditFailure(e, "RUNTIME_BINDING_AUDIT_QUERY_FAILED");
+        }
+        if (audit == null) {
+            throw new RuntimeRequestFailure("sanitizedErrorCode=RUNTIME_BINDING_AUDIT_EMPTY_RESPONSE");
+        }
+        if (args.flag("json")) {
+            printJson(audit);
+        } else {
+            printRuntimeBindingAudit(audit);
+        }
+        return 0;
+    }
+
+    private int runtimeTaskAudit(CliArguments args) throws Exception {
+        String appKey = clientAppKey(args);
+        String appSecret = config.required("NAVI_CLIENT_APP_SECRET", "client app secret");
+        String upstreamUserId = upstreamUserId(args);
+        String taskId = requiredOption(args, "task-id", "task id");
+        RuntimeTaskAuditDTO audit;
+        try {
+            audit = new BusinessAgentApi(runtimeAuditHttp()).auditRuntimeTask(
+                    appKey,
+                    appSecret,
+                    upstreamUserId,
+                    taskId);
+        } catch (NavigatorApiException e) {
+            throw runtimeStateAuditFailure(e, "RUNTIME_TASK_AUDIT_QUERY_FAILED");
+        }
+        if (audit == null) {
+            throw new RuntimeRequestFailure("sanitizedErrorCode=RUNTIME_TASK_AUDIT_EMPTY_RESPONSE");
+        }
+        if (args.flag("json")) {
+            printJson(audit);
+        } else {
+            printRuntimeTaskAudit(audit);
         }
         return 0;
     }
@@ -4633,6 +4716,13 @@ public class UpstreamCli {
                 "sanitizedErrorCode=" + code + " clientRequestId=" + valueOrNull(clientRequestId));
     }
 
+    private RuntimeRequestFailure runtimeStateAuditFailure(
+            NavigatorApiException error,
+            String fallback) {
+        return new RuntimeRequestFailure(
+                "sanitizedErrorCode=" + sanitizedRuntimeErrorCode(error, fallback));
+    }
+
     private String sanitizedRuntimeErrorCode(NavigatorApiException error, String fallback) {
         String message = error != null ? error.getMessage() : null;
         if (hasText(message)) {
@@ -5024,6 +5114,102 @@ public class UpstreamCli {
                 out.println(stagePrefix + "occurredAt=" + valueOrUnknown(stage.getOccurredAt()));
             }
         }
+    }
+
+    private void printRuntimeBindingAudit(RuntimeBindingAuditDTO audit) {
+        out.println("observedAt=" + valueOrUnknown(audit.getObservedAt()));
+        out.println("tenant=" + valueOrUnknown(audit.getTenant()));
+        out.println("upstreamUserId=" + valueOrUnknown(audit.getUpstreamUserId()));
+        out.println("agentCode=" + valueOrUnknown(audit.getAgentCode()));
+        out.println("agentEnabled=" + booleanOrUnknown(audit.getAgentEnabled()));
+        out.println("modelConfigId=" + valueOrUnknown(audit.getModelConfigId()));
+        out.println("modelVariant=" + valueOrUnknown(audit.getModelVariant()));
+        out.println("modelBackend=" + valueOrUnknown(audit.getModelBackend()));
+        out.println("directoryId=" + valueOrUnknown(audit.getDirectoryId()));
+        out.println("directoryEnabled=" + booleanOrUnknown(audit.getDirectoryEnabled()));
+        out.println("workerHost=" + valueOrUnknown(audit.getWorkerHost()));
+        out.println("physicalWorkerId=" + valueOrUnknown(audit.getPhysicalWorkerId()));
+        out.println("physicalWorkerStatus=" + valueOrUnknown(audit.getPhysicalWorkerStatus()));
+        out.println("directoryRolePort=" + valueOrUnknown(audit.getDirectoryRolePort()));
+        out.println("codexRolePort=" + valueOrUnknown(audit.getCodexRolePort()));
+        out.println("codexRoleSource=" + valueOrNull(audit.getCodexRoleSource()));
+        out.println("codexRoleSamePhysicalWorker=" + booleanOrUnknown(audit.getCodexRoleSamePhysicalWorker()));
+        out.println("activeTaskCount=" + valueOrUnknown(audit.getActiveTaskCount()));
+        printRuntimeStateAuditSideEffects(
+                audit.getAuditAccessTokenIssued(),
+                audit.getAuditRuntimeTokenIssued(),
+                audit.getAuditTaskTokenIssued(),
+                audit.getTaskCreated(),
+                audit.getContextCreated(),
+                audit.getSessionCreated(),
+                audit.getModelDispatched(),
+                audit.getBusinessFunctionDispatched(),
+                audit.getRecoveryTriggered(),
+                audit.getProvisioningResourceChanged());
+    }
+
+    private void printRuntimeTaskAudit(RuntimeTaskAuditDTO audit) {
+        out.println("observedAt=" + valueOrUnknown(audit.getObservedAt()));
+        out.println("taskId=" + valueOrUnknown(audit.getTaskId()));
+        out.println("terminal=" + booleanOrUnknown(audit.getTerminal()));
+        out.println("status=" + valueOrUnknown(audit.getStatus()));
+        out.println("sanitizedErrorCode=" + valueOrNull(audit.getSanitizedErrorCode()));
+        out.println("taskTokenStatus=" + valueOrUnknown(audit.getTaskTokenStatus()));
+        out.println("activeTaskRegistrationPresent="
+                + booleanOrUnknown(audit.getActiveTaskRegistrationPresent()));
+        out.println("dispatchCount=" + valueOrUnknown(audit.getDispatchCount()));
+        out.println("retryCount=" + valueOrUnknown(audit.getRetryCount()));
+        out.println("recoveryCount=" + valueOrUnknown(audit.getRecoveryCount()));
+        out.println("physicalWorkerId=" + valueOrUnknown(audit.getPhysicalWorkerId()));
+        out.println("modelConfigId=" + valueOrUnknown(audit.getModelConfigId()));
+        out.println("modelVariant=" + valueOrUnknown(audit.getModelVariant()));
+        out.println("createdAt=" + valueOrUnknown(audit.getCreatedAt()));
+        out.println("completedAt=" + valueOrNull(audit.getCompletedAt()));
+        List<RuntimeTaskAuditStageDTO> stages =
+                audit.getTerminalStages() != null ? audit.getTerminalStages() : List.of();
+        out.println("terminalStageCount=" + stages.size());
+        for (int i = 0; i < stages.size(); i++) {
+            RuntimeTaskAuditStageDTO stage = stages.get(i);
+            String prefix = "terminalStages[" + i + "].";
+            out.println(prefix + "stage=" + valueOrUnknown(stage.getStage()));
+            out.println(prefix + "status=" + valueOrUnknown(stage.getStatus()));
+            out.println(prefix + "sanitizedErrorCode=" + valueOrNull(stage.getSanitizedErrorCode()));
+            out.println(prefix + "occurredAt=" + valueOrUnknown(stage.getOccurredAt()));
+        }
+        printRuntimeStateAuditSideEffects(
+                audit.getAuditAccessTokenIssued(),
+                audit.getAuditRuntimeTokenIssued(),
+                audit.getAuditTaskTokenIssued(),
+                audit.getTaskCreated(),
+                audit.getContextCreated(),
+                audit.getSessionCreated(),
+                audit.getModelDispatched(),
+                audit.getBusinessFunctionDispatched(),
+                audit.getRecoveryTriggered(),
+                audit.getProvisioningResourceChanged());
+    }
+
+    private void printRuntimeStateAuditSideEffects(
+            Boolean auditAccessTokenIssued,
+            Boolean auditRuntimeTokenIssued,
+            Boolean auditTaskTokenIssued,
+            Boolean taskCreated,
+            Boolean contextCreated,
+            Boolean sessionCreated,
+            Boolean modelDispatched,
+            Boolean businessFunctionDispatched,
+            Boolean recoveryTriggered,
+            Boolean provisioningResourceChanged) {
+        out.println("auditAccessTokenIssued=" + booleanOrUnknown(auditAccessTokenIssued));
+        out.println("auditRuntimeTokenIssued=" + booleanOrUnknown(auditRuntimeTokenIssued));
+        out.println("auditTaskTokenIssued=" + booleanOrUnknown(auditTaskTokenIssued));
+        out.println("taskCreated=" + booleanOrUnknown(taskCreated));
+        out.println("contextCreated=" + booleanOrUnknown(contextCreated));
+        out.println("sessionCreated=" + booleanOrUnknown(sessionCreated));
+        out.println("modelDispatched=" + booleanOrUnknown(modelDispatched));
+        out.println("businessFunctionDispatched=" + booleanOrUnknown(businessFunctionDispatched));
+        out.println("recoveryTriggered=" + booleanOrUnknown(recoveryTriggered));
+        out.println("provisioningResourceChanged=" + booleanOrUnknown(provisioningResourceChanged));
     }
 
     private void printSystemAdminClientAppScope(UpstreamAdminClientAppScopeDTO scope) {

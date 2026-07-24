@@ -137,10 +137,26 @@ public class OpenApiController {
             "RUNTIME_AUDIT_UNTIL_INVALID",
             "RUNTIME_AUDIT_WINDOW_INVALID",
             "RUNTIME_AUDIT_WINDOW_TOO_LARGE",
+            "RUNTIME_BINDING_AUDIT_AGENT_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_AGENT_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_DIRECTORY_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_DIRECTORY_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_MODEL_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_MODEL_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_NOT_FOUND",
+            "RUNTIME_BINDING_AUDIT_UPSTREAM_USER_REQUIRED",
+            "RUNTIME_BINDING_AUDIT_WORKER_MISMATCH",
+            "RUNTIME_BINDING_AUDIT_WORKER_NOT_FOUND",
             "RUNTIME_CLIENT_APP_CREDENTIAL_REQUIRED",
             "RUNTIME_CLIENT_APP_KEY_REQUIRED",
             "RUNTIME_CLIENT_APP_KEY_UNKNOWN",
             "RUNTIME_CLIENT_APP_SCOPE_UNKNOWN",
+            "RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED",
+            "RUNTIME_STATE_AUDIT_SERVICE_UNAVAILABLE",
+            "RUNTIME_TASK_AUDIT_FORBIDDEN",
+            "RUNTIME_TASK_AUDIT_NOT_FOUND",
+            "RUNTIME_TASK_AUDIT_TASK_REQUIRED",
+            "RUNTIME_TASK_AUDIT_UPSTREAM_USER_REQUIRED",
             "SAFE_SMOKE_BODY_REQUIRED",
             "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED",
             "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE",
@@ -179,6 +195,7 @@ public class OpenApiController {
     private final OpenApiAgentRouteService agentRouteService;
     private final ObjectProvider<ClientAppRuntimeCredentialResolver> clientAppCredentialResolver;
     private final ObjectProvider<RuntimeRequestAuditService> runtimeRequestAuditService;
+    private final ObjectProvider<RuntimeStateAuditService> runtimeStateAuditService;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
@@ -533,6 +550,64 @@ public class OpenApiController {
                     limit));
         } catch (RuntimeException e) {
             return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_QUERY_FAILED"));
+        }
+    }
+
+    /**
+     * Strictly read-only projection of the currently durable ClientApp runtime binding.
+     */
+    @GetMapping("/runtime/binding-audit")
+    public RX<RuntimeBindingAuditDTO> auditRuntimeBinding(
+            @RequestParam String agentCode,
+            @RequestParam String upstreamUserId,
+            @RequestParam String modelConfigId,
+            @RequestParam String directoryId,
+            HttpServletRequest request) {
+        RuntimeStateAuditService auditService = runtimeStateAuditService.getIfAvailable();
+        if (auditService == null) {
+            return RX.failB("RUNTIME_STATE_AUDIT_SERVICE_UNAVAILABLE");
+        }
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        try {
+            return RX.ok(auditService.auditBinding(
+                    runtimeAuditAppKey(request),
+                    runtimeAuditAppSecret(request),
+                    agentCode,
+                    upstreamUserId,
+                    modelConfigId,
+                    directoryId));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_BINDING_AUDIT_QUERY_FAILED"));
+        }
+    }
+
+    /**
+     * Strictly read-only projection of one existing durable task and its terminal capability state.
+     */
+    @GetMapping("/runtime/task-audit")
+    public RX<RuntimeTaskAuditDTO> auditRuntimeTask(
+            @RequestParam String taskId,
+            HttpServletRequest request) {
+        RuntimeStateAuditService auditService = runtimeStateAuditService.getIfAvailable();
+        if (auditService == null) {
+            return RX.failB("RUNTIME_STATE_AUDIT_SERVICE_UNAVAILABLE");
+        }
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        try {
+            return RX.ok(auditService.auditTask(
+                    runtimeAuditAppKey(request),
+                    runtimeAuditAppSecret(request),
+                    firstHeader(request,
+                            "X-Upstream-User-Id",
+                            "X-Foggy-Upstream-User-Id",
+                            "X-Client-Upstream-User-Id"),
+                    taskId));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_TASK_AUDIT_QUERY_FAILED"));
         }
     }
 
@@ -2108,6 +2183,55 @@ public class OpenApiController {
                 "taskId",
                 "contextId",
                 "providerTaskId");
+    }
+
+    private boolean hasForbiddenRuntimeStateAuditCredential(HttpServletRequest request) {
+        if (request == null) {
+            return false;
+        }
+        if (hasAnyHeader(request,
+                "Authorization",
+                "X-API-Key",
+                "X-Navigator-API-Key",
+                "X-Navi-Admin-Key",
+                "X-Navi-Operator-Key",
+                "X-Navi-Principal-Credential",
+                "X-Client-App-Control-Key",
+                "X-Client-App-Access-Token",
+                "X-App-Access-Token",
+                "X-Foggy-App-Access-Token",
+                "X-Task-Token",
+                "X-Worker-Token",
+                "X-Tenant-Id",
+                "X-Platform-Admin-Key",
+                "X-System-Admin-Key",
+                "X-Operator-Token",
+                "X-Principal-Token")) {
+            return true;
+        }
+        return hasAnyNormalizedParameter(request,
+                "tenantId",
+                "targetTenantId",
+                "clientAppId",
+                "upstreamSystemId",
+                "sourceSystem",
+                "sourceTenantId",
+                "contextId",
+                "providerTaskId");
+    }
+
+    private String runtimeAuditAppKey(HttpServletRequest request) {
+        return firstHeader(request,
+                "X-Client-App-Key",
+                "X-App-Key",
+                "X-Foggy-App-Key");
+    }
+
+    private String runtimeAuditAppSecret(HttpServletRequest request) {
+        return firstHeader(request,
+                "X-Client-App-Secret",
+                "X-App-Secret",
+                "X-Foggy-App-Secret");
     }
 
     private boolean hasAnyHeader(HttpServletRequest request, String... names) {

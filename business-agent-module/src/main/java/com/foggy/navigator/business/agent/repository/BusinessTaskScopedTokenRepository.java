@@ -51,6 +51,9 @@ public interface BusinessTaskScopedTokenRepository extends JpaRepository<Busines
     Optional<BusinessTaskScopedTokenEntity> findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
             String workerTaskId, String tenantId, String clientAppId);
 
+    Optional<BusinessTaskScopedTokenEntity> findFirstByTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+            String taskId, String tenantId, String clientAppId);
+
     boolean existsByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionIdAndStatusAndExpiresAtAfter(
             String tenantId,
             String clientAppId,

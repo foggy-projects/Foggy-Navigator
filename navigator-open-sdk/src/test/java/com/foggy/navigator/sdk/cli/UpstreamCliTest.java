@@ -125,6 +125,75 @@ class UpstreamCliTest {
                           "stages":[{"stage":"RUNTIME_TOKEN_REQUEST_RECEIVED","status":"RECEIVED","sanitizedErrorCode":null,"occurredAt":"2026-07-23T06:30:09Z"}]
                         }]}}
                         """;
+            } else if ("__RUNTIME_BINDING_AUDIT__".equals(responseOverride)) {
+                response = """
+                        {"code":200,"data":{
+                          "observedAt":"2026-07-24T06:00:00Z",
+                          "tenant":"tenant-durable",
+                          "upstreamUserId":"upstream-durable",
+                          "agentCode":"agent-durable",
+                          "agentEnabled":true,
+                          "modelConfigId":"model-durable",
+                          "modelVariant":"codex-luna:high",
+                          "modelBackend":"OPENAI_CODEX",
+                          "directoryId":"directory-durable",
+                          "directoryEnabled":true,
+                          "workerHost":"worker-host-durable",
+                          "physicalWorkerId":"worker-durable",
+                          "physicalWorkerStatus":"ONLINE",
+                          "directoryRolePort":3131,
+                          "codexRolePort":3151,
+                          "codexRoleSource":"CLAUDE_WORKER_CODEX_CONFIG",
+                          "codexRoleSamePhysicalWorker":true,
+                          "activeTaskCount":0,
+                          "auditAccessTokenIssued":false,
+                          "auditRuntimeTokenIssued":false,
+                          "auditTaskTokenIssued":false,
+                          "taskCreated":false,
+                          "contextCreated":false,
+                          "sessionCreated":false,
+                          "modelDispatched":false,
+                          "businessFunctionDispatched":false,
+                          "recoveryTriggered":false,
+                          "provisioningResourceChanged":false
+                        }}
+                        """;
+            } else if ("__RUNTIME_TASK_AUDIT__".equals(responseOverride)) {
+                response = """
+                        {"code":200,"data":{
+                          "observedAt":"2026-07-24T06:01:00Z",
+                          "taskId":"task-existing",
+                          "terminal":true,
+                          "status":"FAILED",
+                          "sanitizedErrorCode":"CODEX_WORKER_REMOTE_ERROR",
+                          "taskTokenStatus":"REVOKED",
+                          "activeTaskRegistrationPresent":false,
+                          "dispatchCount":1,
+                          "retryCount":0,
+                          "recoveryCount":0,
+                          "physicalWorkerId":"worker-durable",
+                          "modelConfigId":"model-durable",
+                          "modelVariant":"codex-luna:high",
+                          "createdAt":"2026-07-23T15:43:22.889002",
+                          "completedAt":"2026-07-23T17:26:55.955344",
+                          "terminalStages":[{
+                            "stage":"TASK_TERMINAL",
+                            "status":"FAILED",
+                            "sanitizedErrorCode":"CODEX_WORKER_REMOTE_ERROR",
+                            "occurredAt":"2026-07-23T17:26:55.955344"
+                          }],
+                          "auditAccessTokenIssued":false,
+                          "auditRuntimeTokenIssued":false,
+                          "auditTaskTokenIssued":false,
+                          "taskCreated":false,
+                          "contextCreated":false,
+                          "sessionCreated":false,
+                          "modelDispatched":false,
+                          "businessFunctionDispatched":false,
+                          "recoveryTriggered":false,
+                          "provisioningResourceChanged":false
+                        }}
+                        """;
             } else if ("__MESSAGES_TERMINAL__".equals(responseOverride)) {
                 response = lastPath.contains("/messages")
                         ? """
@@ -2273,6 +2342,108 @@ class UpstreamCliTest {
         assertTrue(stderr.toString(StandardCharsets.UTF_8)
                 .contains("runtime lane refuses mixed credential material: NAVI_ADMIN_API_KEY"));
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void runtimeBindingAuditPrintsOnlyDurableWhitelistedFieldsWithoutIssuingTokens() {
+        responseOverride = "__RUNTIME_BINDING_AUDIT__";
+
+        int code = run(new String[]{"upstream", "runtime", "binding-audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--agent-code", "agent-request",
+                "--upstream-user-id", "upstream-request",
+                "--model-config-id", "model-request",
+                "--directory-id", "directory-request"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("GET", lastMethod);
+        assertTrue(lastPath.startsWith("/api/v1/open/runtime/binding-audit?"));
+        assertTrue(lastPath.contains("agentCode=agent-request"));
+        assertTrue(lastPath.contains("upstreamUserId=upstream-request"));
+        assertEquals(List.of(lastPath), requestPaths);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cas-runtime-secret", lastClientAppSecretHeader);
+        assertNull(lastClientAppAccessTokenHeader);
+        assertNull(lastClientAppControlKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertNull(lastTenantIdHeader);
+        assertTrue(output.contains("tenant=tenant-durable"));
+        assertTrue(output.contains("agentCode=agent-durable"));
+        assertTrue(output.contains("auditAccessTokenIssued=false"));
+        assertTrue(output.contains("auditRuntimeTokenIssued=false"));
+        assertTrue(output.contains("auditTaskTokenIssued=false"));
+        assertTrue(output.contains("modelDispatched=false"));
+        assertFalse(output.contains("cas-runtime-secret"));
+        assertFalse(output.contains("Authorization"));
+        assertFalse(output.contains("profile"));
+    }
+
+    @Test
+    void runtimeTaskAuditJsonPreservesRevokedTerminalStateWithoutFallbackOrSensitiveOutput() {
+        responseOverride = "__RUNTIME_TASK_AUDIT__";
+
+        int code = run(new String[]{"upstream", "runtime", "task-audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("GET", lastMethod);
+        assertEquals("/api/v1/open/runtime/task-audit?taskId=task-existing", lastPath);
+        assertEquals(List.of(lastPath), requestPaths);
+        assertEquals("upstream-request", lastUpstreamUserIdHeader);
+        assertNull(lastClientAppAccessTokenHeader);
+        assertNull(lastAuthorizationHeader);
+        assertTrue(output.contains("\"taskTokenStatus\" : \"REVOKED\""));
+        assertTrue(output.contains("\"dispatchCount\" : 1"));
+        assertTrue(output.contains("\"recoveryTriggered\" : false"));
+        assertFalse(output.contains("cas-runtime-secret"));
+        assertFalse(output.contains("prompt"));
+        assertFalse(output.contains("workspace"));
+        assertFalse(output.contains("responseBody"));
+    }
+
+    @Test
+    void runtimeTaskAuditFailureDoesNotRetryOrFallback() {
+        responseStatusOverride = 500;
+        responseOverride = "{\"code\":600,\"msg\":\"RUNTIME_TASK_AUDIT_NOT_FOUND\"}";
+
+        int code = run(new String[]{"upstream", "runtime", "task-audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-missing"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(1, code);
+        assertEquals(1, requestPaths.size());
+        assertEquals("/api/v1/open/runtime/task-audit?taskId=task-missing", lastPath);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("sanitizedErrorCode=RUNTIME_TASK_AUDIT_NOT_FOUND"));
+    }
+
+    @Test
+    void runtimeStateAuditRejectsForeignCredentialBeforeNetwork() {
+        int code = run(new String[]{"upstream", "runtime", "binding-audit",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--agent-code", "agent-request",
+                "--upstream-user-id", "upstream-request",
+                "--model-config-id", "model-request",
+                "--directory-id", "directory-request"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret",
+                "NAVI_CONTROL_API_KEY", "control-secret"));
+
+        assertEquals(2, code);
+        assertTrue(requestPaths.isEmpty());
+        assertFalse(stderr.toString(StandardCharsets.UTF_8).contains("control-secret"));
     }
 
     @Test
@@ -4983,8 +5154,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.25", provenance.sourceVersion());
-        assertEquals("1.0.25", provenance.publishedVersion());
+        assertEquals("1.0.26", provenance.sourceVersion());
+        assertEquals("1.0.26", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
