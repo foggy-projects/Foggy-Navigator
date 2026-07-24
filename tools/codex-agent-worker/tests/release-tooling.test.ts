@@ -23,6 +23,7 @@ import {
   assertGitPublishReady,
   assertPublishAllowed,
   compareSemver,
+  resolveObsutilConfig,
   verifyPublishedRelease,
 } from '../scripts/publish-obs.mjs'
 import { removeSmokeTempDirectory, resolveSmokeLevel, verifyArchiveStructure } from '../scripts/release-smoke.mjs'
@@ -177,6 +178,21 @@ test('publisher source requires verified package evidence before OBS mutation', 
   const packageScript = fs.readFileSync('scripts/package-release.mjs', 'utf8')
   assert.match(publisher, /packageVerificationSkipped/)
   assert.match(packageScript, /publishing refuses a candidate built with --skip-verify/i)
+})
+
+test('publisher resolves a current-user OBS config and supports an explicit override', () => {
+  assert.equal(resolveObsutilConfig(undefined, '/home/release-user'), '')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-worker-obs-config-'))
+  try {
+    const defaultConfig = path.join(root, '.obsutilconfig')
+    const override = path.join(root, 'release-obsutilconfig')
+    fs.writeFileSync(defaultConfig, 'ak=placeholder\n')
+    fs.writeFileSync(override, 'ak=override\n')
+    assert.equal(resolveObsutilConfig(undefined, root), defaultConfig)
+    assert.equal(resolveObsutilConfig(override, root), override)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('post-publish verification reads and hashes all platform archives plus mutable bootstraps', async () => {

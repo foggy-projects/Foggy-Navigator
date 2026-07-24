@@ -67,7 +67,7 @@ function parseArguments(args) {
     if (argument === '--allow-same-version') options.allowSameVersion = true
     else if (argument === '--allow-dirty') options.allowDirty = true
     else if (argument === '--allow-unpushed') options.allowUnpushed = true
-    else if (['--output-dir', '--obs-bucket', '--base-url', '--obsutil', '--smoke-result'].includes(argument)) {
+    else if (['--output-dir', '--obs-bucket', '--base-url', '--obsutil', '--obsutil-config', '--smoke-result'].includes(argument)) {
       const value = args[index + 1]
       if (!value) throw new Error(`Missing value for ${argument}`)
       options[argument.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase())] = value
@@ -139,8 +139,15 @@ function findObsutil(configured) {
   throw new Error('obsutil was not found or is not executable')
 }
 
-function upload(obsutil, source, destination) {
-  const result = spawnSync(obsutil, ['cp', source, destination, '-f'], { stdio: 'inherit', shell: false })
+export function resolveObsutilConfig(configured, homeDir = os.homedir()) {
+  const candidate = configured || path.join(homeDir, '.obsutilconfig')
+  return fs.existsSync(candidate) ? path.resolve(candidate) : ''
+}
+
+function upload(obsutil, source, destination, obsutilConfig) {
+  const args = ['cp', source, destination, '-f']
+  if (obsutilConfig) args.push('-config=' + obsutilConfig)
+  const result = spawnSync(obsutil, args, { stdio: 'inherit', shell: false })
   if (result.error || result.status !== 0) throw new Error(`obsutil upload failed: ${destination}`)
 }
 
@@ -208,18 +215,19 @@ async function main() {
   const remote = await readRemoteLatest(baseUrl)
   assertPublishAllowed(assets.manifest, remote, options.allowSameVersion)
   const obsutil = findObsutil(options.obsutil || process.env.CODEX_WORKER_OBSUTIL)
+  const obsutilConfig = resolveObsutilConfig(options.obsutilConfig || process.env.CODEX_WORKER_OBSUTIL_CONFIG)
   process.stdout.write(`Publishing ${RELEASE_PRODUCT} ${version}\nOBS: ${obsBucket}\nURL: ${baseUrl}\n`)
   for (const platform of RELEASE_PLATFORMS) {
     const item = assets.assets[platform]
-    upload(obsutil, item.archivePath, `${obsBucket}/${version}/${path.basename(item.archivePath)}`)
-    upload(obsutil, item.checksumPath, `${obsBucket}/${version}/${path.basename(item.checksumPath)}`)
+    upload(obsutil, item.archivePath, `${obsBucket}/${version}/${path.basename(item.archivePath)}`, obsutilConfig)
+    upload(obsutil, item.checksumPath, `${obsBucket}/${version}/${path.basename(item.checksumPath)}`, obsutilConfig)
   }
-  upload(obsutil, assets.evidencePath, `${obsBucket}/${version}/release-evidence.json`)
-  upload(obsutil, assets.installShPath, `${obsBucket}/install.sh`)
-  upload(obsutil, assets.installPs1Path, `${obsBucket}/install.ps1`)
+  upload(obsutil, assets.evidencePath, `${obsBucket}/${version}/release-evidence.json`, obsutilConfig)
+  upload(obsutil, assets.installShPath, `${obsBucket}/install.sh`, obsutilConfig)
+  upload(obsutil, assets.installPs1Path, `${obsBucket}/install.ps1`, obsutilConfig)
   const latestBeforeCommit = await readRemoteLatest(baseUrl)
   assertPublishAllowed(assets.manifest, latestBeforeCommit, options.allowSameVersion)
-  upload(obsutil, assets.latestPath, `${obsBucket}/latest.json`)
+  upload(obsutil, assets.latestPath, `${obsBucket}/latest.json`, obsutilConfig)
   await verifyPublishedRelease(baseUrl, assets)
   process.stdout.write(`Published and verified ${baseUrl}/latest.json\n`)
 }

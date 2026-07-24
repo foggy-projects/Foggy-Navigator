@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { collectReleaseEntries, createZip, listZipEntries, RELEASE_DIRECTORIES, RELEASE_FILES } from '../scripts/release-archive.mjs'
 import { createLatestManifest, injectReleaseBaseUrl, parseChecksumSidecar, prepareReleaseAssets } from '../scripts/release-assets.mjs'
-import { assertPublishAllowed, compareSemver, verifyPublishedRelease } from '../scripts/publish-obs.mjs'
+import { assertPublishAllowed, compareSemver, resolveObsutilConfig, verifyPublishedRelease } from '../scripts/publish-obs.mjs'
 import { resolveReleaseVersion } from '../scripts/release-version.mjs'
 import { discoverTestFiles } from '../scripts/run-tests.mjs'
 
@@ -18,6 +18,21 @@ test('release version matches package metadata, lockfile, and source APP_VERSION
 test('npm test uses the cross-platform test launcher instead of a shell glob', () => {
   const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { scripts: { test: string } }
   assert.equal(packageJson.scripts.test, 'node scripts/run-tests.mjs')
+})
+
+test('publisher resolves a current-user OBS config and supports an explicit override', () => {
+  assert.equal(resolveObsutilConfig(undefined, '/home/release-user'), '')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-obs-config-'))
+  try {
+    const defaultConfig = path.join(root, '.obsutilconfig')
+    const override = path.join(root, 'release-obsutilconfig')
+    fs.writeFileSync(defaultConfig, 'ak=placeholder\n')
+    fs.writeFileSync(override, 'ak=override\n')
+    assert.equal(resolveObsutilConfig(undefined, root), defaultConfig)
+    assert.equal(resolveObsutilConfig(override, root), override)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('cross-platform test launcher recursively discovers only test entrypoints', () => {

@@ -90,18 +90,19 @@ async function main() {
   const remote = await readRemoteLatest(baseUrl)
   assertPublishAllowed(assets.manifest, remote, options.allowSameVersion)
   const obsutil = findObsutil(options.obsutil || process.env.CODEX_APP_SERVER_OBSUTIL)
+  const obsutilConfig = resolveObsutilConfig(options.obsutilConfig || process.env.CODEX_APP_SERVER_OBSUTIL_CONFIG)
   process.stdout.write(`Publishing ${RELEASE_PRODUCT} ${version}\n`)
   process.stdout.write(`OBS: ${obsBucket}\nURL: ${baseUrl}\n`)
 
-  upload(obsutil, assets.archivePath, `${obsBucket}/${version}/${path.basename(assets.archivePath)}`)
-  upload(obsutil, assets.checksumPath, `${obsBucket}/${version}/${path.basename(assets.checksumPath)}`)
-  upload(obsutil, assets.installShPath, `${obsBucket}/install.sh`)
-  upload(obsutil, assets.installPs1Path, `${obsBucket}/install.ps1`)
+  upload(obsutil, assets.archivePath, `${obsBucket}/${version}/${path.basename(assets.archivePath)}`, obsutilConfig)
+  upload(obsutil, assets.checksumPath, `${obsBucket}/${version}/${path.basename(assets.checksumPath)}`, obsutilConfig)
+  upload(obsutil, assets.installShPath, `${obsBucket}/install.sh`, obsutilConfig)
+  upload(obsutil, assets.installPs1Path, `${obsBucket}/install.ps1`, obsutilConfig)
   // Narrow the concurrent-publisher window before committing the mutable pointer.
   const latestBeforeCommit = await readRemoteLatest(baseUrl)
   assertPublishAllowed(assets.manifest, latestBeforeCommit, options.allowSameVersion)
   // latest.json is the release commit point and must remain last.
-  upload(obsutil, assets.latestPath, `${obsBucket}/latest.json`)
+  upload(obsutil, assets.latestPath, `${obsBucket}/latest.json`, obsutilConfig)
 
   await verifyPublishedRelease(baseUrl, assets)
   process.stdout.write(`Published and verified ${baseUrl}/latest.json\n`)
@@ -114,7 +115,7 @@ function parseArguments(args) {
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
     if (argument === '--allow-same-version') options.allowSameVersion = true
-    else if (['--output-dir', '--obs-bucket', '--base-url', '--obsutil'].includes(argument)) {
+    else if (['--output-dir', '--obs-bucket', '--base-url', '--obsutil', '--obsutil-config'].includes(argument)) {
       const value = args[index + 1]
       if (!value) throw new Error(`Missing value for ${argument}`)
       options[argument.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase())] = value
@@ -157,8 +158,15 @@ function findObsutil(configured) {
   throw new Error('obsutil was not found or is not executable')
 }
 
-function upload(obsutil, source, destination) {
-  const result = spawnSync(obsutil, ['cp', source, destination, '-f'], { stdio: 'inherit', shell: false })
+export function resolveObsutilConfig(configured, homeDir = os.homedir()) {
+  const candidate = configured || path.join(homeDir, '.obsutilconfig')
+  return fs.existsSync(candidate) ? path.resolve(candidate) : ''
+}
+
+function upload(obsutil, source, destination, obsutilConfig) {
+  const args = ['cp', source, destination, '-f']
+  if (obsutilConfig) args.push('-config=' + obsutilConfig)
+  const result = spawnSync(obsutil, args, { stdio: 'inherit', shell: false })
   if (result.error || result.status !== 0) throw new Error(`obsutil upload failed: ${destination}`)
 }
 

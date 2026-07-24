@@ -256,6 +256,11 @@ match. Publishing rejects downgrades and same-version replacement. `-AllowSameVe
 canonical destination only with `CODEX_APP_SERVER_RELEASE_OBS_BUCKET`,
 `CODEX_APP_SERVER_RELEASE_BASE_URL`, or the equivalent publisher arguments.
 
+When it exists, the publisher explicitly supplies the current user's `~/.obsutilconfig` to
+`obsutil`. A controlled release environment can override it with
+`CODEX_APP_SERVER_OBSUTIL_CONFIG` or `--obsutil-config <path>`. Keep raw credentials out of
+the repository and release `.env` files.
+
 End users install the latest published release without knowing its version:
 
 ```powershell
