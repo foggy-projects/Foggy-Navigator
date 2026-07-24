@@ -113,6 +113,28 @@ class TerminationOperationServiceTest {
     }
 
     @Test
+    void acceptsRuntimeReconcileAndFindsLatestExactKind() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+        when(repository.saveAndFlush(any(TerminationOperationEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        TerminationOperationEntity operation = service.accept(new TerminationOperationService.CreateCommand(
+                "task-1", "provider-task-1", "session-1", "user-1", "tenant-1",
+                "CODEX", "worker-1", "RECONCILE_CANCEL", "UPSTREAM_USER",
+                "user-1", "RUNTIME_CLIENT", "runtime-reconcile:request-1",
+                "operator-stuck-task-reconciliation", "runtime-task-reconcile:rt_original",
+                null, null, 300));
+        TerminationOperationEntity otherKind = new TerminationOperationEntity();
+        otherKind.setKind("REMOTE_CANCEL");
+        when(repository.findByTaskIdOrderByCreatedAtDesc("task-1"))
+                .thenReturn(List.of(otherKind, operation));
+
+        assertEquals("RECONCILE_CANCEL", operation.getKind());
+        assertEquals(operation, service.findLatestForTaskAndKind("task-1", "RECONCILE_CANCEL"));
+    }
+
+    @Test
     void rejectsStaleTurnInterruptOutsideItsNarrowAuthorizationShape() {
         TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
         TerminationOperationService service = new TerminationOperationService(repository);

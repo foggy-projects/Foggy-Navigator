@@ -1434,6 +1434,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             String ownerUserId,
             String tenantId,
             String expectedPhysicalWorkerId,
+            String clientRequestId,
             boolean dryRun) {
         CodexTaskEntity observed = taskRepository.findByTaskId(taskId).orElse(null);
         if (observed == null || !matchesStaleTurnCleanupOwnerScope(observed, ownerUserId, tenantId)) {
@@ -1455,37 +1456,201 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             Map<String, Object> workerTask = client.getTaskStatus(observed.getWorkerTaskId())
                     .block(RESUME_RECONCILIATION_TIMEOUT);
             String workerStatus = stringValue(workerTask != null ? workerTask.get("status") : null);
-            if (!"aborted".equalsIgnoreCase(workerStatus)) {
-                throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+            if ("aborted".equalsIgnoreCase(workerStatus)) {
+                if (!dryRun) {
+                    reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+                }
+                return new RuntimeTaskClosureProvider.ReconciliationResult(
+                        !dryRun, false, dryRun ? observed.getStatus() : "ABORTED",
+                        "WORKER_TERMINAL_ABORTED", null);
             }
-            if (!dryRun) {
-                reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
-            }
-            return new RuntimeTaskClosureProvider.ReconciliationResult(
-                    !dryRun, false, dryRun ? observed.getStatus() : "ABORTED",
-                    "WORKER_TERMINAL_ABORTED", null);
         } catch (RuntimeException error) {
             WebClientResponseException responseError = findWorkerResponseError(error);
             if (responseError == null || responseError.getStatusCode().value() != 404) {
-                if (error instanceof IllegalStateException stateError) throw stateError;
+                if (!(error instanceof CodexWorkerClient.WorkerQueryRejectedException)) {
+                    throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE", error);
+                }
+            }
+        }
+
+        TerminationOperationEntity originalOperation = terminationOperationService != null
+                ? terminationOperationService.findLatestForTaskAndKind(taskId, "REMOTE_CANCEL")
+                : null;
+        validateOriginalReconciliationOperation(observed, originalOperation);
+        if (dryRun) {
+            try {
+                Map<String, Object> readiness = client.getTerminationReconciliationReadiness(
+                                observed.getWorkerTaskId(), originalOperation.getOperationId())
+                        .block(RESUME_RECONCILIATION_TIMEOUT);
+                validateWorkerReconciliationEvidence(
+                        observed, originalOperation, null, readiness, false);
+                return new RuntimeTaskClosureProvider.ReconciliationResult(
+                        false, false, observed.getStatus(),
+                        "WORKER_WIDE_ZERO_PROCESS_RECONCILIATION_READY", null);
+            } catch (RuntimeException error) {
+                if (error instanceof CodexWorkerClient.WorkerQueryRejectedException rejection) {
+                    throw new IllegalStateException(rejection.getCode(), error);
+                }
                 throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE", error);
             }
         }
-        if (dryRun) {
-            if (!sdkTaskAbsenceVerified(observed)) {
-                throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+
+        String reconciliationOperationId = runtimeReconciliationOperationId(clientRequestId);
+        TerminationOperationEntity existing = terminationOperationService.find(reconciliationOperationId);
+        if (existing != null) {
+            if (!Objects.equals(existing.getTaskId(), taskId)
+                    || !Objects.equals(existing.getWorkerId(), expectedPhysicalWorkerId)
+                    || !"RECONCILE_CANCEL".equals(existing.getKind())) {
+                throw new IllegalStateException("CLIENT_REQUEST_ID_OPERATION_MISMATCH");
+            }
+            CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(observed);
+            boolean consistent = isTerminalStatus(current.getStatus());
+            if (!consistent) {
+                try {
+                    Map<String, Object> evidence = client.getTerminationReconciliationReadiness(
+                                    observed.getWorkerTaskId(), originalOperation.getOperationId())
+                            .block(RESUME_RECONCILIATION_TIMEOUT);
+                    validateWorkerReconciliationEvidence(
+                            observed, originalOperation, null, evidence, false);
+                    terminationOperationService.markObservedTerminal(
+                            originalOperation.getOperationId(), "ABORTED");
+                    terminationOperationService.markObservedTerminal(
+                            reconciliationOperationId, "ABORTED");
+                    reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+                    current = taskRepository.findByTaskId(taskId).orElse(observed);
+                    consistent = isTerminalStatus(current.getStatus());
+                } catch (RuntimeException error) {
+                    if (error instanceof CodexWorkerClient.WorkerQueryRejectedException rejection) {
+                        throw new IllegalStateException(rejection.getCode(), error);
+                    }
+                    throw new IllegalStateException(
+                            "RUNTIME_TASK_RECONCILE_OPERATION_PENDING", error);
+                }
             }
             return new RuntimeTaskClosureProvider.ReconciliationResult(
-                    false, false, observed.getStatus(), "WORKER_TASK_AND_PROCESS_ABSENT", null);
+                    false, true, current.getStatus(),
+                    "WORKER_WIDE_ZERO_PROCESS_RECONCILED", null);
         }
-        boolean handled = repairStaleSdkCancellationIfVerifiedAbsent(observed);
-        if (!handled) {
-            throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+
+        TerminationOperationEntity reconciliationOperation = reserveRuntimeReconciliation(
+                observed, originalOperation, clientRequestId, reconciliationOperationId);
+        try {
+            terminationOperationService.markDispatchStarted(reconciliationOperationId);
+            TerminationOperationCapability capability = TerminationOperationCapability.issue(
+                    reconciliationOperation, client.terminationSigningSecret());
+            Map<String, Object> evidence = client.reconcileTermination(
+                            observed.getWorkerTaskId(), originalOperation.getOperationId(), capability)
+                    .block(RESUME_RECONCILIATION_TIMEOUT);
+            validateWorkerReconciliationEvidence(
+                    observed, originalOperation, reconciliationOperation, evidence, true);
+            terminationOperationService.markObservedTerminal(
+                    originalOperation.getOperationId(), "ABORTED");
+            terminationOperationService.markObservedTerminal(
+                    reconciliationOperationId, "ABORTED");
+            reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+        } catch (RuntimeException error) {
+            if (error instanceof CodexWorkerClient.WorkerQueryRejectedException rejection) {
+                terminationOperationService.markRejected(reconciliationOperationId, rejection.getCode());
+                throw new IllegalStateException(rejection.getCode(), error);
+            }
+            terminationOperationService.markUnconfirmed(
+                    reconciliationOperationId, "TERMINATION_RECONCILIATION_UNCONFIRMED");
+            throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE", error);
         }
         CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(observed);
         return new RuntimeTaskClosureProvider.ReconciliationResult(
-                isTerminalStatus(current.getStatus()), false, current.getStatus(),
-                "WORKER_TASK_AND_PROCESS_ABSENT", null);
+                true, false, current.getStatus(),
+                "WORKER_WIDE_ZERO_PROCESS_RECONCILED", null);
+    }
+
+    private void validateOriginalReconciliationOperation(
+            CodexTaskEntity task,
+            TerminationOperationEntity operation) {
+        if (operation == null
+                || !"REMOTE_CANCEL".equals(operation.getKind())
+                || !Objects.equals(operation.getTaskId(), task.getTaskId())
+                || !Objects.equals(operation.getProviderTaskId(), task.getWorkerTaskId())
+                || !Objects.equals(operation.getWorkerId(), task.getWorkerId())
+                || !("UNCONFIRMED".equals(operation.getDispatchState())
+                || "ACKNOWLEDGED".equals(operation.getDispatchState()))) {
+            throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void validateWorkerReconciliationEvidence(
+            CodexTaskEntity task,
+            TerminationOperationEntity originalOperation,
+            TerminationOperationEntity reconciliationOperation,
+            Map<String, Object> evidence,
+            boolean requireReconciliationOperation) {
+        Map<String, Object> processSnapshot = evidence != null
+                && evidence.get("process_snapshot") instanceof Map<?, ?> values
+                ? (Map<String, Object>) values : Map.of();
+        Map<String, Object> originalEvidence = evidence != null
+                && evidence.get("termination_operation") instanceof Map<?, ?> values
+                ? (Map<String, Object>) values : Map.of();
+        Map<String, Object> reconciliationEvidence = evidence != null
+                && evidence.get("reconciliation_operation") instanceof Map<?, ?> values
+                ? (Map<String, Object>) values : Map.of();
+        boolean valid = evidence != null
+                && Objects.equals(task.getWorkerTaskId(), stringValue(evidence.get("task_id")))
+                && Objects.equals(task.getWorkerId(), stringValue(evidence.get("worker_id")))
+                && booleanValue(evidence, "terminal_observed")
+                && "ABORTED".equalsIgnoreCase(stringValue(evidence.get("terminal_status")))
+                && "WORKER_WIDE_ZERO_PROCESS_RECONCILIATION".equals(
+                stringValue(evidence.get("terminal_source")))
+                && "WORKER_WIDE_ZERO_PROCESS_RECONCILED".equals(
+                stringValue(evidence.get("provider_status")))
+                && Integer.valueOf(0).equals(integerValue(processSnapshot.get("total")))
+                && Objects.equals(originalOperation.getOperationId(),
+                stringValue(originalEvidence.get("operation_id")))
+                && "OBSERVED_EXIT".equals(stringValue(originalEvidence.get("status")));
+        if (requireReconciliationOperation) {
+            valid = valid && reconciliationOperation != null
+                    && Objects.equals(reconciliationOperation.getOperationId(),
+                    stringValue(reconciliationEvidence.get("operation_id")))
+                    && "RECONCILE_CANCEL".equals(stringValue(reconciliationEvidence.get("kind")));
+        }
+        if (!valid) {
+            throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+        }
+    }
+
+    private TerminationOperationEntity reserveRuntimeReconciliation(
+            CodexTaskEntity observed,
+            TerminationOperationEntity originalOperation,
+            String clientRequestId,
+            String operationId) {
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity locked = taskRepository.findByTaskIdForUpdate(observed.getTaskId())
+                    .orElseThrow(() -> new IllegalArgumentException("RUNTIME_TASK_NOT_FOUND"));
+            if (!"CANCEL_REQUESTED".equals(locked.getStatus())) {
+                throw new IllegalStateException("RUNTIME_TASK_RECONCILE_NOT_CANCEL_REQUESTED");
+            }
+            TerminationOperationEntity existing = terminationOperationService.find(operationId);
+            if (existing != null) return existing;
+            return terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            locked.getTaskId(), locked.getWorkerTaskId(), locked.getSessionId(),
+                            locked.getUserId(), locked.getTenantId(), resolveProviderType(locked),
+                            locked.getWorkerId(), "RECONCILE_CANCEL", "UPSTREAM_USER",
+                            locked.getUserId(), "RUNTIME_CLIENT",
+                            "runtime-reconcile:" + clientRequestId,
+                            "operator-stuck-task-reconciliation",
+                            "runtime-task-reconcile:" + originalOperation.getOperationId(),
+                            null, null, 300),
+                    operationId);
+        });
+    }
+
+    private String runtimeReconciliationOperationId(String clientRequestId) {
+        if (!hasNonBlank(clientRequestId)
+                || !clientRequestId.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,95}")) {
+            throw new IllegalArgumentException("CLIENT_REQUEST_ID_INVALID");
+        }
+        String compact = clientRequestId.replaceAll("[^A-Za-z0-9]", "");
+        return "rc_" + compact.substring(0, Math.min(56, compact.length()));
     }
 
     private RemoteTerminationReservation reserveRuntimeTermination(

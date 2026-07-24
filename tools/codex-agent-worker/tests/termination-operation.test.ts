@@ -69,6 +69,15 @@ test('valid signed remote cancel is accepted once with matching task and short-l
   assert.equal(toTerminationOperationSummary(claims, 'CANCEL_REQUESTED').task_id, 'task-1')
 })
 
+test('durable receipt lookup proves only an exact previously consumed operation', t => {
+  const replayLedger = temporaryLedger(t)
+  replayLedger.consume('navigator-worker-1', 'operation-received', NOW + 60_000, NOW)
+
+  assert.equal(replayLedger.hasConsumed('navigator-worker-1', 'operation-received'), true)
+  assert.equal(replayLedger.hasConsumed('navigator-worker-1', 'operation-missing'), false)
+  assert.equal(replayLedger.hasConsumed('navigator-worker-2', 'operation-received'), false)
+})
+
 test('termination operation rejects missing authentication, tampering, expiry, replay, and mismatched task or PID', t => {
   const operation = signedOperation({ expected_pid: 321 })
   const options = {
@@ -251,6 +260,41 @@ test('operation kind and origin are constrained to explicit remote cancel or adm
       replayLedger,
     }),
     'TERMINATION_OPERATION_PROCESS_IDENTITY_INVALID',
+  )
+})
+
+test('reconcile cancel accepts only an upstream user origin and remains one-use', t => {
+  const replayLedger = temporaryLedger(t)
+  const operation = signedOperation({
+    operation_id: 'operation-reconcile',
+    kind: 'RECONCILE_CANCEL',
+    origin: 'UPSTREAM_USER',
+  })
+  const claims = validateTerminationOperation(operation.encoded, operation.signature, {
+    workerToken: 'worker-test-token',
+    expectedWorkerId: 'navigator-worker-1',
+    expectedKind: 'RECONCILE_CANCEL',
+    expectedTaskId: 'task-1',
+    now: () => NOW,
+    replayLedger,
+  })
+  assert.equal(claims.kind, 'RECONCILE_CANCEL')
+
+  const badOrigin = signedOperation({
+    operation_id: 'operation-reconcile-system',
+    kind: 'RECONCILE_CANCEL',
+    origin: 'UPSTREAM_SYSTEM',
+  })
+  assertValidationCode(
+    () => validateTerminationOperation(badOrigin.encoded, badOrigin.signature, {
+      workerToken: 'worker-test-token',
+      expectedWorkerId: 'navigator-worker-1',
+      expectedKind: 'RECONCILE_CANCEL',
+      expectedTaskId: 'task-1',
+      now: () => NOW,
+      replayLedger: temporaryLedger(t),
+    }),
+    'TERMINATION_OPERATION_ORIGIN_MISMATCH',
   )
 })
 

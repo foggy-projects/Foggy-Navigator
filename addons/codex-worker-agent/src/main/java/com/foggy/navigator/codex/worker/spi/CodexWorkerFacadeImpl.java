@@ -109,7 +109,8 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClos
             String clientRequestId,
             boolean dryRun) {
         return taskService.reconcileRuntimeTask(
-                taskId, ownerUserId, tenantId, expectedPhysicalWorkerId, dryRun);
+                taskId, ownerUserId, tenantId, expectedPhysicalWorkerId,
+                clientRequestId, dryRun);
     }
 
     @Override

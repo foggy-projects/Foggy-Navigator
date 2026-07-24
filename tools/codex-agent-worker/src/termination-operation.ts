@@ -125,6 +125,26 @@ export class TerminationOperationReceiptLedger {
     }
   }
 
+  /**
+   * Read-only proof that an exact operation was previously consumed by this
+   * Worker. Corrupt or unsafe ledger state fails closed instead of being
+   * treated as an absent receipt.
+   */
+  hasConsumed(workerId: string, operationId: string): boolean {
+    try {
+      return this.readReceiptIfPresent(
+        this.receiptPathFor(workerId, operationId),
+        workerId,
+        operationId,
+      ) !== undefined
+    } catch {
+      throw new TerminationOperationValidationError(
+        'TERMINATION_OPERATION_REPLAY_LEDGER_UNAVAILABLE',
+        503,
+      )
+    }
+  }
+
   /** Exposed only to allow isolated temporary-directory regression tests. */
   receiptPathFor(workerId: string, operationId: string): string {
     return path.join(this.directory, `${receiptKey(workerId, operationId)}.json`)
@@ -339,7 +359,7 @@ function parseClaims(encodedOperation: string): TerminationOperationClaims {
     throw new TerminationOperationValidationError('TERMINATION_OPERATION_UNSUPPORTED_VERSION', 400)
   }
   const kind = requireString(source, 'kind', 64)
-  if (kind !== 'REMOTE_CANCEL' && kind !== 'MANUAL_PID_KILL') {
+  if (kind !== 'REMOTE_CANCEL' && kind !== 'MANUAL_PID_KILL' && kind !== 'RECONCILE_CANCEL') {
     throw new TerminationOperationValidationError('TERMINATION_OPERATION_INVALID_CLAIMS', 400)
   }
   const origin = requireString(source, 'origin', 64)
@@ -440,6 +460,9 @@ export function validateTerminationOperation(
     throw new TerminationOperationValidationError('TERMINATION_OPERATION_ORIGIN_MISMATCH', 403)
   }
   if (claims.kind === 'MANUAL_PID_KILL' && claims.origin !== 'ADMIN_MANUAL') {
+    throw new TerminationOperationValidationError('TERMINATION_OPERATION_ORIGIN_MISMATCH', 403)
+  }
+  if (claims.kind === 'RECONCILE_CANCEL' && claims.origin !== 'UPSTREAM_USER') {
     throw new TerminationOperationValidationError('TERMINATION_OPERATION_ORIGIN_MISMATCH', 403)
   }
   // A manual signal must be pinned to the exact PID that was authorized.  Do

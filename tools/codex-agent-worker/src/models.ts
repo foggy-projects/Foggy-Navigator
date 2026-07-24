@@ -126,7 +126,7 @@ export interface TaskAttention {
   recoverable: true
 }
 
-export type TerminationOperationKind = 'REMOTE_CANCEL' | 'MANUAL_PID_KILL'
+export type TerminationOperationKind = 'REMOTE_CANCEL' | 'MANUAL_PID_KILL' | 'RECONCILE_CANCEL'
 export type TerminationOperationOrigin = 'UPSTREAM_USER' | 'UPSTREAM_SYSTEM' | 'ADMIN_MANUAL'
 export type TerminationOperationStatus =
   | 'CANCEL_REQUESTED'

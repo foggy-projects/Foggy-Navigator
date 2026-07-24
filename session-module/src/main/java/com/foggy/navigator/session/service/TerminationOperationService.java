@@ -76,6 +76,15 @@ public class TerminationOperationService {
         return repository.findById(operationId.trim()).orElse(null);
     }
 
+    @Transactional(readOnly = true)
+    public TerminationOperationEntity findLatestForTaskAndKind(String taskId, String kind) {
+        if (!hasText(taskId) || !hasText(kind)) return null;
+        return repository.findByTaskIdOrderByCreatedAtDesc(taskId).stream()
+                .filter(operation -> kind.equals(operation.getKind()))
+                .findFirst()
+                .orElse(null);
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markDispatchStarted(String operationId) {
         update(operationId, entity -> {
@@ -256,7 +265,8 @@ public class TerminationOperationService {
         }
         if (!"REMOTE_CANCEL".equals(command.kind())
                 && !"MANUAL_PID_KILL".equals(command.kind())
-                && !"STALE_TURN_INTERRUPT".equals(command.kind())) {
+                && !"STALE_TURN_INTERRUPT".equals(command.kind())
+                && !"RECONCILE_CANCEL".equals(command.kind())) {
             throw new IllegalArgumentException("TERMINATION_OPERATION_KIND_INVALID");
         }
         if ("REMOTE_CANCEL".equals(command.kind())) {
@@ -281,6 +291,14 @@ public class TerminationOperationService {
                 || !isServerIssuedAuthorizationDecision(
                         command.authorizationDecisionId(), command.actorType()))) {
             throw new IllegalArgumentException("TERMINATION_STALE_TURN_AUTHORIZATION_REQUIRED");
+        }
+        if ("RECONCILE_CANCEL".equals(command.kind())
+                && (!("UPSTREAM_USER".equals(command.origin()))
+                || !hasText(command.providerTaskId())
+                || command.expectedPid() != null
+                || command.expectedProcessIdentity() != null
+                || !hasText(command.authorizationDecisionId()))) {
+            throw new IllegalArgumentException("TERMINATION_RECONCILE_AUTHORIZATION_REQUIRED");
         }
     }
 

@@ -138,6 +138,34 @@ export class EventBroadcast {
   }
 
   /**
+   * Persist a safety-critical event before acknowledging it. Unlike normal
+   * streaming writes, persistence failures are returned to the caller so a
+   * terminal reconciliation can fail closed.
+   */
+  async emitDurably(event: WorkerEvent): Promise<void> {
+    if (this.closed) throw new Error('event broadcast is closed')
+    const durableWrite = this.pendingWrite.then(async () => {
+      const descriptor = await fs.promises.open(this.jsonlPath, 'a', 0o600)
+      try {
+        await descriptor.writeFile(JSON.stringify(event) + '\n', 'utf8')
+        await descriptor.sync()
+      } finally {
+        await descriptor.close()
+      }
+    })
+    this.pendingWrite = durableWrite.catch(() => undefined)
+    await durableWrite
+    this.events.push(event)
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber(event)
+      } catch {
+        // A disconnected observer cannot invalidate already durable evidence.
+      }
+    }
+  }
+
+  /**
    * Check if broadcast is closed
    */
   isClosed(): boolean {

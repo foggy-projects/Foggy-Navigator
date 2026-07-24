@@ -468,6 +468,54 @@ public class CodexWorkerClient {
                 .timeout(Duration.ofSeconds(10));
     }
 
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getTerminationReconciliationReadiness(
+            String taskId, String originalOperationId) {
+        requireTaskId(taskId);
+        requireOperationId(originalOperationId);
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/tasks/{taskId}/termination-reconciliation-readiness")
+                        .queryParam("original_operation_id", originalOperationId)
+                        .build(taskId))
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return terminationWorkerRejection(
+                            response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> reconcileTermination(
+            String taskId,
+            String originalOperationId,
+            TerminationOperationCapability capability) {
+        requireTaskId(taskId);
+        requireOperationId(originalOperationId);
+        requireCapability(capability);
+        return webClient.post()
+                .uri("/api/v1/tasks/{taskId}/termination-reconcile", taskId)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("original_operation_id", originalOperationId))
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    return terminationWorkerRejection(
+                            response.statusCode().value(), response.bodyToMono(Map.class));
+                })
+                .timeout(Duration.ofSeconds(15));
+    }
+
     /** Revalidates and retries the exact persisted App Server turn only. */
     @SuppressWarnings("unchecked")
     public Mono<Map<String, Object>> retryAbortTask(
@@ -708,6 +756,12 @@ public class CodexWorkerClient {
     private void requireTaskId(String taskId) {
         if (taskId == null || taskId.isBlank()) {
             throw new IllegalArgumentException("taskId is required");
+        }
+    }
+
+    private void requireOperationId(String operationId) {
+        if (operationId == null || !operationId.matches(OPERATION_ID_PATTERN)) {
+            throw new IllegalArgumentException("TERMINATION_OPERATION_ID_INVALID");
         }
     }
 

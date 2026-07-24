@@ -4197,6 +4197,192 @@ class CodexTaskServiceTest {
         verify(taskRepository, never()).save(any());
     }
 
+    @Test
+    void runtimeReconcileConsumesExactPersistedProofOnceAndDoesNotRedispatchOnReplay() {
+        CodexTaskEntity task = createTask(
+                "task-runtime-reconcile", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setWorkerTaskId("provider-task-1");
+        task.setCodexThreadId("thread-1");
+        TerminationOperationEntity original = terminationOperation(
+                "rt_original", "task-runtime-reconcile", "provider-task-1",
+                "worker-1", "REMOTE_CANCEL", "ACKNOWLEDGED");
+        TerminationOperationEntity reconciliation = terminationOperation(
+                "rc_request1", "task-runtime-reconcile", "provider-task-1",
+                "worker-1", "RECONCILE_CANCEL", "PENDING");
+
+        when(taskRepository.findByTaskId("task-runtime-reconcile"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdForUpdate("task-runtime-reconcile"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("provider-task-1"))
+                .thenReturn(Mono.just(Map.of("status", "cancel_requested")));
+        when(workerClient.terminationSigningSecret()).thenReturn("worker-token");
+        when(terminationOperationService.findLatestForTaskAndKind(
+                "task-runtime-reconcile", "REMOTE_CANCEL")).thenReturn(original);
+        when(terminationOperationService.find("rc_request1")).thenReturn(null);
+        when(terminationOperationService.accept(any(), eq("rc_request1")))
+                .thenReturn(reconciliation);
+        when(workerClient.reconcileTermination(
+                eq("provider-task-1"), eq("rt_original"), any(TerminationOperationCapability.class)))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "provider-task-1",
+                        "worker_id", "worker-1",
+                        "terminal_observed", true,
+                        "terminal_status", "ABORTED",
+                        "terminal_source", "WORKER_WIDE_ZERO_PROCESS_RECONCILIATION",
+                        "provider_status", "WORKER_WIDE_ZERO_PROCESS_RECONCILED",
+                        "process_snapshot", Map.of("total", 0),
+                        "termination_operation", Map.of(
+                                "operation_id", "rt_original",
+                                "status", "OBSERVED_EXIT"),
+                        "reconciliation_operation", Map.of(
+                                "operation_id", "rc_request1",
+                                "kind", "RECONCILE_CANCEL"))));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        var result = service.reconcileRuntimeTask(
+                "task-runtime-reconcile", "user-1", "tenant-1",
+                "worker-1", "request-1", false);
+        var replay = service.reconcileRuntimeTask(
+                "task-runtime-reconcile", "user-1", "tenant-1",
+                "worker-1", "request-1", false);
+
+        assertTrue(result.reconciliationChanged());
+        assertEquals("ABORTED", result.providerStatus());
+        assertTrue(replay.alreadyConsistent());
+        assertEquals("ABORTED", task.getStatus());
+        verify(workerClient, times(1)).reconcileTermination(
+                eq("provider-task-1"), eq("rt_original"), any(TerminationOperationCapability.class));
+        verify(terminationOperationService).markObservedTerminal("rt_original", "ABORTED");
+        verify(terminationOperationService).markObservedTerminal("rc_request1", "ABORTED");
+    }
+
+    @Test
+    void runtimeReconcileReplayRepairsNavigatorFromDurableWorkerProofWithoutSecondDispatch() {
+        CodexTaskEntity task = createTask(
+                "task-runtime-reconcile-replay", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setWorkerTaskId("provider-task-replay");
+        task.setCodexThreadId("thread-1");
+        TerminationOperationEntity original = terminationOperation(
+                "rt_original_replay", "task-runtime-reconcile-replay",
+                "provider-task-replay", "worker-1", "REMOTE_CANCEL", "UNCONFIRMED");
+        TerminationOperationEntity reconciliation = terminationOperation(
+                "rc_requestreplay", "task-runtime-reconcile-replay",
+                "provider-task-replay", "worker-1", "RECONCILE_CANCEL", "PENDING");
+
+        when(taskRepository.findByTaskId("task-runtime-reconcile-replay"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("provider-task-replay"))
+                .thenReturn(Mono.just(Map.of("status", "cancel_requested")));
+        when(terminationOperationService.findLatestForTaskAndKind(
+                "task-runtime-reconcile-replay", "REMOTE_CANCEL")).thenReturn(original);
+        when(terminationOperationService.find("rc_requestreplay")).thenReturn(reconciliation);
+        when(workerClient.getTerminationReconciliationReadiness(
+                "provider-task-replay", "rt_original_replay"))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "provider-task-replay",
+                        "worker_id", "worker-1",
+                        "terminal_observed", true,
+                        "terminal_status", "ABORTED",
+                        "terminal_source", "WORKER_WIDE_ZERO_PROCESS_RECONCILIATION",
+                        "provider_status", "WORKER_WIDE_ZERO_PROCESS_RECONCILED",
+                        "process_snapshot", Map.of("total", 0),
+                        "termination_operation", Map.of(
+                                "operation_id", "rt_original_replay",
+                                "status", "OBSERVED_EXIT"))));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        var result = service.reconcileRuntimeTask(
+                "task-runtime-reconcile-replay", "user-1", "tenant-1",
+                "worker-1", "request-replay", false);
+
+        assertFalse(result.reconciliationChanged());
+        assertTrue(result.alreadyConsistent());
+        assertEquals("ABORTED", result.providerStatus());
+        assertEquals("ABORTED", task.getStatus());
+        verify(workerClient, never()).reconcileTermination(anyString(), anyString(), any());
+        verify(terminationOperationService).markObservedTerminal("rt_original_replay", "ABORTED");
+        verify(terminationOperationService).markObservedTerminal("rc_requestreplay", "ABORTED");
+    }
+
+    @Test
+    void runtimeReconcileFailsClosedWhenWorkerProofDoesNotMatchOriginalOperation() {
+        CodexTaskEntity task = createTask(
+                "task-runtime-reconcile-invalid", "session-1", "worker-1", "dir-1",
+                "CANCEL_REQUESTED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setWorkerTaskId("provider-task-invalid");
+        TerminationOperationEntity original = terminationOperation(
+                "rt_original_invalid", "task-runtime-reconcile-invalid",
+                "provider-task-invalid", "worker-1", "REMOTE_CANCEL", "UNCONFIRMED");
+
+        when(taskRepository.findByTaskId("task-runtime-reconcile-invalid"))
+                .thenReturn(Optional.of(task));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://worker.example")
+                        .authToken("worker-token").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        when(workerClient.getTaskStatus("provider-task-invalid"))
+                .thenReturn(Mono.just(Map.of("status", "cancel_requested")));
+        when(terminationOperationService.findLatestForTaskAndKind(
+                "task-runtime-reconcile-invalid", "REMOTE_CANCEL")).thenReturn(original);
+        when(workerClient.getTerminationReconciliationReadiness(
+                "provider-task-invalid", "rt_original_invalid"))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "provider-task-invalid",
+                        "worker_id", "other-worker",
+                        "terminal_observed", true,
+                        "terminal_status", "ABORTED",
+                        "terminal_source", "WORKER_WIDE_ZERO_PROCESS_RECONCILIATION",
+                        "provider_status", "WORKER_WIDE_ZERO_PROCESS_RECONCILED",
+                        "process_snapshot", Map.of("total", 0),
+                        "termination_operation", Map.of(
+                                "operation_id", "rt_original_invalid",
+                                "status", "OBSERVED_EXIT"))));
+        ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.reconcileRuntimeTask(
+                        "task-runtime-reconcile-invalid", "user-1", "tenant-1",
+                        "worker-1", "request-invalid", true));
+
+        assertEquals("RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE", error.getMessage());
+        assertEquals("CANCEL_REQUESTED", task.getStatus());
+        verify(terminationOperationService, never()).accept(any(), anyString());
+        verify(workerClient, never()).reconcileTermination(anyString(), anyString(), any());
+    }
+
     private SessionTaskEntity inputSessionTask() {
         SessionTaskEntity task = new SessionTaskEntity();
         task.setTaskId("task-input");
@@ -4251,6 +4437,37 @@ class CodexTaskServiceTest {
         entity.setStatus(status);
         entity.setCreatedAt(createdAt);
         entity.setUpdatedAt(createdAt.plusMinutes(1));
+        return entity;
+    }
+
+    private TerminationOperationEntity terminationOperation(
+            String operationId,
+            String taskId,
+            String providerTaskId,
+            String workerId,
+            String kind,
+            String dispatchState) {
+        TerminationOperationEntity entity = new TerminationOperationEntity();
+        entity.setOperationId(operationId);
+        entity.setSchemaVersion(1);
+        entity.setTaskId(taskId);
+        entity.setProviderTaskId(providerTaskId);
+        entity.setSessionId("session-1");
+        entity.setOwnerUserId("user-1");
+        entity.setTenantId("tenant-1");
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        entity.setWorkerId(workerId);
+        entity.setKind(kind);
+        entity.setOrigin("UPSTREAM_USER");
+        entity.setActorId("user-1");
+        entity.setActorType("RUNTIME_CLIENT");
+        entity.setAuthorizationDecisionId("runtime-reconcile:test");
+        entity.setReasonCode("operator-stuck-task-reconciliation");
+        entity.setCorrelationId("runtime-task-reconcile:test");
+        entity.setStatus("ACCEPTED");
+        entity.setDispatchState(dispatchState);
+        entity.setRequestedAt(LocalDateTime.now());
+        entity.setExpiresAt(LocalDateTime.now().plusMinutes(5));
         return entity;
     }
 }

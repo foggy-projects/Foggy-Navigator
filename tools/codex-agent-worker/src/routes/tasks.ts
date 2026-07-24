@@ -2,11 +2,13 @@ import { Router, Request, Response } from 'express'
 import { config } from '../config.js'
 import {
   taskBroadcasts,
+  confirmTaskProcessExit,
   getTaskStatus,
   requestTaskCancellation,
 } from '../codex/sdk-wrapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { toTaskLifecycleState, type WorkerEvent } from '../models.js'
+import { listCodexCliProcesses } from '../codex/processes.js'
 import {
   TerminationOperationReceiptLedger,
   TerminationOperationValidationError,
@@ -18,6 +20,7 @@ const SSE_HEARTBEAT_INTERVAL_MS = 15_000
 
 export type TasksRouterDependencies = {
   terminationReplayLedger?: TerminationOperationReceiptLedger
+  listProcesses?: typeof listCodexCliProcesses
 }
 
 function startSseHeartbeat(res: Response): () => void {
@@ -65,8 +68,113 @@ function sendTerminationOperationError(res: Response, error: unknown): boolean {
 
 export function createTasksRouter(dependencies: TasksRouterDependencies = {}): Router {
   const router = Router()
+  const listProcesses = dependencies.listProcesses ?? listCodexCliProcesses
   const terminationReplayLedger = dependencies.terminationReplayLedger
     ?? new TerminationOperationReceiptLedger(config.terminationOperationLedgerDir)
+
+type ReconciliationProof = {
+  originalOperation: NonNullable<WorkerEvent['termination_operation']>
+  terminalEvent?: WorkerEvent
+  processCount: number
+}
+
+function findLastEvent(
+  events: WorkerEvent[],
+  predicate: (event: WorkerEvent) => boolean,
+): WorkerEvent | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (predicate(events[index])) return events[index]
+  }
+  return undefined
+}
+
+async function inspectReconciliationEvidence(
+  taskId: string,
+  originalOperationId: string,
+): Promise<ReconciliationProof> {
+  if (!originalOperationId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(originalOperationId)) {
+    throw new TerminationOperationValidationError('TERMINATION_RECONCILIATION_OPERATION_INVALID', 400)
+  }
+  if (!terminationReplayLedger.hasConsumed(config.navigatorWorkerId, originalOperationId)) {
+    throw new TerminationOperationValidationError(
+      'TERMINATION_RECONCILIATION_ORIGINAL_RECEIPT_MISSING',
+      409,
+    )
+  }
+
+  const diskBroadcast = new EventBroadcast(taskId)
+  const events = diskBroadcast.loadFromDisk()
+  const matchingEvents = events.filter(event => (
+    event.task_id === taskId
+    && event.termination_operation?.operation_id === originalOperationId
+    && event.termination_operation?.task_id === taskId
+    && event.termination_operation?.worker_id === config.navigatorWorkerId
+    && event.termination_operation?.kind === 'REMOTE_CANCEL'
+  ))
+  const terminalEvent = findLastEvent(matchingEvents, event => (
+    event.subtype === 'lifecycle_terminal'
+    && event.terminal_observed === true
+    && event.terminal_status === 'ABORTED'
+  ))
+  const unconfirmedEvent = findLastEvent(matchingEvents, event => (
+    event.subtype === 'termination_unconfirmed'
+    && event.lifecycle_state === 'CANCEL_REQUESTED'
+    && event.termination_operation?.status === 'UNCONFIRMED'
+  ))
+  const originalOperation = terminalEvent?.termination_operation ?? unconfirmedEvent?.termination_operation
+  if (!originalOperation) {
+    throw new TerminationOperationValidationError(
+      'TERMINATION_RECONCILIATION_ORIGINAL_EVENT_MISSING',
+      409,
+    )
+  }
+
+  let processes
+  try {
+    processes = await listProcesses()
+  } catch {
+    throw new TerminationOperationValidationError(
+      'TERMINATION_RECONCILIATION_PROCESS_SCAN_UNAVAILABLE',
+      503,
+    )
+  }
+  if (processes.length !== 0) {
+    throw new TerminationOperationValidationError(
+      'TERMINATION_RECONCILIATION_WORKER_PROCESS_PRESENT',
+      409,
+    )
+  }
+  return { originalOperation, terminalEvent, processCount: processes.length }
+}
+
+function reconciliationPayload(
+  taskId: string,
+  proof: ReconciliationProof,
+  reconciliationOperation?: ReturnType<typeof toTerminationOperationSummary>,
+) {
+  const observedAt = proof.terminalEvent?.occurred_at ?? new Date().toISOString()
+  const originalOperation = {
+    ...proof.originalOperation,
+    status: 'OBSERVED_EXIT' as const,
+    observed_at: observedAt,
+    result: 'WORKER_WIDE_ZERO_PROCESS_RECONCILED',
+  }
+  return {
+    task_id: taskId,
+    worker_id: config.navigatorWorkerId,
+    status: 'aborted',
+    lifecycle_state: 'ABORTED',
+    terminal_observed: true,
+    terminal_status: 'ABORTED',
+    terminal_source: 'WORKER_WIDE_ZERO_PROCESS_RECONCILIATION',
+    provider_status: 'WORKER_WIDE_ZERO_PROCESS_RECONCILED',
+    termination_operation: originalOperation,
+    reconciliation_operation: reconciliationOperation,
+    process_snapshot: {
+      total: proof.processCount,
+    },
+  }
+}
 
 /**
  * GET /api/v1/tasks/:taskId/subscribe — Reconnect to existing task's SSE stream
@@ -233,6 +341,92 @@ router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
     lifecycle_state: 'CANCEL_REQUESTED',
     termination_operation: operation,
   })
+})
+
+router.get('/api/v1/tasks/:taskId/termination-reconciliation-readiness', async (req: Request, res: Response) => {
+  const taskId = getSingleParam(req.params.taskId)
+  const originalOperationId = getSingleQuery(
+    req.query.original_operation_id as string | string[] | undefined,
+  ) ?? ''
+  try {
+    const proof = await inspectReconciliationEvidence(taskId, originalOperationId)
+    res.json({
+      ...reconciliationPayload(taskId, proof),
+      dry_run: true,
+      reconciliation_allowed: true,
+    })
+  } catch (error) {
+    if (sendTerminationOperationError(res, error)) return
+    throw error
+  }
+})
+
+router.post('/api/v1/tasks/:taskId/termination-reconcile', async (req: Request, res: Response) => {
+  const taskId = getSingleParam(req.params.taskId)
+  const originalOperationId = typeof req.body?.original_operation_id === 'string'
+    ? req.body.original_operation_id
+    : ''
+  try {
+    const proof = await inspectReconciliationEvidence(taskId, originalOperationId)
+    const claims = validateTerminationOperation(
+      req.headers['x-navigator-termination-operation'],
+      req.headers['x-navigator-termination-signature'],
+      {
+        workerToken: config.workerToken,
+        expectedWorkerId: config.navigatorWorkerId,
+        expectedKind: 'RECONCILE_CANCEL',
+        expectedTaskId: taskId,
+        replayLedger: terminationReplayLedger,
+      },
+    )
+    const reconciliationOperation = toTerminationOperationSummary(
+      claims,
+      'OBSERVED_EXIT',
+      'WORKER_WIDE_ZERO_PROCESS_RECONCILED',
+    )
+    if (!proof.terminalEvent) {
+      const inMemory = confirmTaskProcessExit(
+        taskId,
+        originalOperationId,
+        'WORKER_WIDE_ZERO_PROCESS_RECONCILED',
+      )
+      if (inMemory) {
+        await taskBroadcasts.get(taskId)?.flush()
+      } else {
+        const diskBroadcast = new EventBroadcast(taskId)
+        diskBroadcast.loadFromDisk()
+        const occurredAt = new Date().toISOString()
+        const terminalEvent: WorkerEvent = {
+          type: 'error',
+          task_id: taskId,
+          subtype: 'lifecycle_terminal',
+          error_code: 'CODEX_TURN_CANCELLED',
+          error_category: 'CANCELLED',
+          runtime_phase: 'TASK_RECONCILIATION',
+          recoverable: false,
+          occurred_at: occurredAt,
+          lifecycle_state: 'ABORTED',
+          terminal_observed: true,
+          terminal_status: 'ABORTED',
+          terminal_source: 'WORKER_WIDE_ZERO_PROCESS_RECONCILIATION',
+          provider_status: 'WORKER_WIDE_ZERO_PROCESS_RECONCILED',
+          termination_operation: {
+            ...proof.originalOperation,
+            status: 'OBSERVED_EXIT',
+            observed_at: occurredAt,
+            result: 'WORKER_WIDE_ZERO_PROCESS_RECONCILED',
+          },
+          seq: diskBroadcast.nextSeq(),
+        }
+        await diskBroadcast.emitDurably(terminalEvent)
+        proof.terminalEvent = terminalEvent
+      }
+    }
+    res.json(reconciliationPayload(taskId, proof, reconciliationOperation))
+  } catch (error) {
+    if (sendTerminationOperationError(res, error)) return
+    throw error
+  }
 })
 
   return router

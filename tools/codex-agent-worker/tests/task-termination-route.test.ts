@@ -9,6 +9,7 @@ import test from 'node:test'
 import express from 'express'
 import { config } from '../src/config.ts'
 import { taskBroadcasts, taskRegistry } from '../src/codex/sdk-wrapper.ts'
+import { EventBroadcast } from '../src/persistence/event-store.ts'
 import { createTasksRouter } from '../src/routes/tasks.ts'
 import { TerminationOperationReceiptLedger } from '../src/termination-operation.ts'
 
@@ -45,10 +46,33 @@ function signedCancel(
   }
 }
 
-async function startTasksServer() {
+function signedReconcile(taskId: string, operationId = 'route-reconcile-operation-1') {
+  const claims = {
+    schema_version: 1,
+    operation_id: operationId,
+    task_id: taskId,
+    worker_id: navigatorWorkerId,
+    kind: 'RECONCILE_CANCEL',
+    origin: 'UPSTREAM_USER',
+    actor_id: 'user-1',
+    actor_type: 'USER',
+    authorization_decision_id: 'decision-reconcile-1',
+    reason_code: 'OPERATOR_RECONCILE',
+    correlation_id: 'correlation-reconcile-1',
+    issued_at: new Date(Date.now() - 1_000).toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  }
+  const operation = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url')
+  return {
+    'X-Navigator-Termination-Operation': operation,
+    'X-Navigator-Termination-Signature': createHmac('sha256', token).update(operation, 'utf8').digest('base64url'),
+  }
+}
+
+async function startTasksServer(dependencies: Parameters<typeof createTasksRouter>[0] = {}) {
   const app = express()
   app.use(express.json())
-  app.use(createTasksRouter())
+  app.use(createTasksRouter(dependencies))
   const server = app.listen(0, '127.0.0.1')
   await once(server, 'listening')
   const address = server.address() as AddressInfo
@@ -66,6 +90,168 @@ test.beforeEach(() => {
   terminationOperationLedgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-task-route-ledger-'))
   config.terminationOperationLedgerDir = terminationOperationLedgerDir
   config.navigatorWorkerId = navigatorWorkerId
+})
+
+test('task reconciliation requires durable original receipt, matching unconfirmed event, and fresh zero-process proof', async () => {
+  const previousToken = config.workerToken
+  config.workerToken = token
+  const taskId = `task-reconcile-${Date.now()}`
+  const originalOperationId = 'route-original-operation-1'
+  const ledger = new TerminationOperationReceiptLedger(terminationOperationLedgerDir)
+  ledger.consume(navigatorWorkerId, originalOperationId, Date.now() + 60_000, Date.now())
+  const broadcast = new EventBroadcast(taskId)
+  broadcast.loadFromDisk()
+  broadcast.emit({
+    type: 'warning',
+    task_id: taskId,
+    subtype: 'termination_unconfirmed',
+    lifecycle_state: 'CANCEL_REQUESTED',
+    termination_operation: {
+      operation_id: originalOperationId,
+      task_id: taskId,
+      worker_id: navigatorWorkerId,
+      kind: 'REMOTE_CANCEL',
+      origin: 'UPSTREAM_USER',
+      actor_id: 'user-1',
+      actor_type: 'USER',
+      authorization_decision_id: 'decision-original-1',
+      reason_code: 'USER_CANCELLED',
+      correlation_id: 'correlation-original-1',
+      requested_at: new Date().toISOString(),
+      status: 'UNCONFIRMED',
+      result: 'SDK_CANCEL_PROCESS_BINDING_UNVERIFIED',
+    },
+    seq: broadcast.nextSeq(),
+  })
+  await broadcast.flush()
+  const server = await startTasksServer({
+    terminationReplayLedger: ledger,
+    listProcesses: async () => [],
+  })
+
+  try {
+    const readiness = await fetch(
+      `${server.baseUrl}/api/v1/tasks/${taskId}/termination-reconciliation-readiness`
+      + `?original_operation_id=${originalOperationId}`,
+    )
+    const readinessBody = await readiness.json()
+    assert.equal(readiness.status, 200)
+    assert.equal(readinessBody.dry_run, true)
+    assert.equal(readinessBody.reconciliation_allowed, true)
+    assert.equal(readinessBody.process_snapshot.total, 0)
+
+    const response = await fetch(`${server.baseUrl}/api/v1/tasks/${taskId}/termination-reconcile`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...signedReconcile(taskId),
+      },
+      body: JSON.stringify({ original_operation_id: originalOperationId }),
+    })
+    const body = await response.json()
+    assert.equal(response.status, 200)
+    assert.equal(body.status, 'aborted')
+    assert.equal(body.terminal_observed, true)
+    assert.equal(body.terminal_source, 'WORKER_WIDE_ZERO_PROCESS_RECONCILIATION')
+    assert.equal(body.termination_operation.operation_id, originalOperationId)
+    assert.equal(body.termination_operation.status, 'OBSERVED_EXIT')
+    assert.equal(body.reconciliation_operation.kind, 'RECONCILE_CANCEL')
+
+    const events = new EventBroadcast(taskId).loadFromDisk()
+    assert.equal(events.filter(event => (
+      event.subtype === 'lifecycle_terminal'
+      && event.terminal_source === 'WORKER_WIDE_ZERO_PROCESS_RECONCILIATION'
+    )).length, 1)
+
+    const replay = await fetch(`${server.baseUrl}/api/v1/tasks/${taskId}/termination-reconcile`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...signedReconcile(taskId),
+      },
+      body: JSON.stringify({ original_operation_id: originalOperationId }),
+    })
+    assert.equal(replay.status, 409)
+    assert.equal((await replay.json()).code, 'TERMINATION_OPERATION_REPLAYED')
+  } finally {
+    new EventBroadcast(taskId).cleanup()
+    config.workerToken = previousToken
+    await server.close()
+  }
+})
+
+test('task reconciliation fails closed when any durable proof is missing or a Codex process exists', async () => {
+  const previousToken = config.workerToken
+  config.workerToken = token
+  const taskId = `task-reconcile-blocked-${Date.now()}`
+  const originalOperationId = 'route-original-operation-blocked'
+  const ledger = new TerminationOperationReceiptLedger(terminationOperationLedgerDir)
+  const noReceiptServer = await startTasksServer({
+    terminationReplayLedger: ledger,
+    listProcesses: async () => [],
+  })
+  try {
+    const noReceipt = await fetch(
+      `${noReceiptServer.baseUrl}/api/v1/tasks/${taskId}/termination-reconciliation-readiness`
+      + `?original_operation_id=${originalOperationId}`,
+    )
+    assert.equal(noReceipt.status, 409)
+    assert.equal(
+      (await noReceipt.json()).code,
+      'TERMINATION_RECONCILIATION_ORIGINAL_RECEIPT_MISSING',
+    )
+  } finally {
+    await noReceiptServer.close()
+  }
+
+  ledger.consume(navigatorWorkerId, originalOperationId, Date.now() + 60_000, Date.now())
+  const broadcast = new EventBroadcast(taskId)
+  broadcast.emit({
+    type: 'warning',
+    task_id: taskId,
+    subtype: 'termination_unconfirmed',
+    lifecycle_state: 'CANCEL_REQUESTED',
+    termination_operation: {
+      operation_id: originalOperationId,
+      task_id: taskId,
+      worker_id: navigatorWorkerId,
+      kind: 'REMOTE_CANCEL',
+      origin: 'UPSTREAM_USER',
+      actor_id: 'user-1',
+      actor_type: 'USER',
+      authorization_decision_id: 'decision-original-blocked',
+      reason_code: 'USER_CANCELLED',
+      correlation_id: 'correlation-original-blocked',
+      requested_at: new Date().toISOString(),
+      status: 'UNCONFIRMED',
+    },
+    seq: broadcast.nextSeq(),
+  })
+  await broadcast.flush()
+  const processServer = await startTasksServer({
+    terminationReplayLedger: ledger,
+    listProcesses: async () => [{
+      pid: 777,
+      command: 'codex',
+      memory_mb: 1,
+      started_at: new Date().toISOString(),
+    }],
+  })
+  try {
+    const processPresent = await fetch(
+      `${processServer.baseUrl}/api/v1/tasks/${taskId}/termination-reconciliation-readiness`
+      + `?original_operation_id=${originalOperationId}`,
+    )
+    assert.equal(processPresent.status, 409)
+    assert.equal(
+      (await processPresent.json()).code,
+      'TERMINATION_RECONCILIATION_WORKER_PROCESS_PRESENT',
+    )
+  } finally {
+    new EventBroadcast(taskId).cleanup()
+    config.workerToken = previousToken
+    await processServer.close()
+  }
 })
 
 test.afterEach(() => {
