@@ -53,6 +53,7 @@ public class RuntimeRequestAuditService {
     public static final String STAGE_BUSINESS_FUNCTION_NOT_DISPATCHED = "BUSINESS_FUNCTION_NOT_DISPATCHED";
     public static final String STAGE_TERMINATION_REQUESTED = "TERMINATION_REQUESTED";
     public static final String STAGE_TERMINATION_DISPATCHED = "TERMINATION_DISPATCHED";
+    public static final String STAGE_TERMINATION_EVIDENCE_OBSERVED = "TERMINATION_EVIDENCE_OBSERVED";
     public static final String STAGE_TERMINATION_DRY_RUN_COMPLETED = "TERMINATION_DRY_RUN_COMPLETED";
     public static final String STAGE_RECONCILIATION_REQUESTED = "RECONCILIATION_REQUESTED";
     public static final String STAGE_RECONCILIATION_EVIDENCE_OBSERVED = "RECONCILIATION_EVIDENCE_OBSERVED";
@@ -239,12 +240,32 @@ public class RuntimeRequestAuditService {
         if (entity == null || !Boolean.TRUE.equals(entity.getTerminal())) {
             return;
         }
+        Instant now = Instant.now();
         applyTaskEvidence(entity, evidence);
-        entity.setResult(clean(evidence.result(), entity.getResult()));
+        String result = clean(evidence.result(), entity.getResult());
+        entity.setTerminal(true);
+        entity.setCompletedAt(now);
+        entity.setResult(result);
+        entity.setStatus(clean(evidence.taskStatus(), entity.getStatus()));
+        entity.setSafeErrorSummary(null);
         auditRepository.save(entity);
-        if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
-            appendStageOnce(entity.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, Instant.now());
+        if (OPERATION_TASK_TERMINATE.equals(normalizedOperation)
+                && Boolean.TRUE.equals(evidence.taskTerminal())) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TERMINATION_EVIDENCE_OBSERVED, "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_RECONCILE.equals(normalizedOperation)) {
+            appendStageOnce(entity.getClientRequestId(),
+                    "RECONCILIATION_CHANGED".equals(result)
+                            ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED
+                            : STAGE_RECONCILIATION_NO_CHANGE,
+                    "SUCCEEDED", null, now);
         }
+        if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+        }
+        appendStageOnce(entity.getClientRequestId(),
+                STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

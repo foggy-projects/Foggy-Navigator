@@ -4329,8 +4329,8 @@ class CodexTaskServiceTest {
                 "task-runtime-reconcile-replay", "user-1", "tenant-1",
                 "worker-1", "request-replay", false);
 
-        assertFalse(result.reconciliationChanged());
-        assertTrue(result.alreadyConsistent());
+        assertTrue(result.reconciliationChanged());
+        assertFalse(result.alreadyConsistent());
         assertEquals("ABORTED", result.providerStatus());
         assertEquals("ABORTED", task.getStatus());
         verify(workerClient, never()).reconcileTermination(anyString(), anyString(), any());

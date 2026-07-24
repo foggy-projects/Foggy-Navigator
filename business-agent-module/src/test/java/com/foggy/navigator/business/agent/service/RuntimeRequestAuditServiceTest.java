@@ -71,6 +71,12 @@ class RuntimeRequestAuditServiceTest {
 
         when(auditRepository.findByClientRequestId(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(audits.get(invocation.getArgument(0))));
+        when(auditRepository.findTopByTaskIdAndOperationOrderByReceivedAtDesc(
+                anyString(), anyString()))
+                .thenAnswer(invocation -> audits.values().stream()
+                        .filter(value -> invocation.getArgument(0).equals(value.getTaskId()))
+                        .filter(value -> invocation.getArgument(1).equals(value.getOperation()))
+                        .max(Comparator.comparing(RuntimeRequestAuditEntity::getReceivedAt)));
         when(auditRepository.saveAndFlush(any(RuntimeRequestAuditEntity.class)))
                 .thenAnswer(invocation -> saveAudit(invocation.getArgument(0)));
         when(auditRepository.save(any(RuntimeRequestAuditEntity.class)))
@@ -389,6 +395,37 @@ class RuntimeRequestAuditServiceTest {
         assertTrue(audit.getStages().stream()
                 .anyMatch(stage -> "TASK_TOKEN_REVOKED".equals(stage.getStage())));
         assertEquals(1, audits.size());
+    }
+
+    @Test
+    void failedReconciliationReplayConvergesSameAuditToSuccessfulTerminalEvidence() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle handle = service.beginTaskOperation(
+                requestId, "task-reconcile", "runtime-key", "runtime-secret",
+                "agent-1", "user-1", "task-1");
+        service.taskOperationFailed(handle, "RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE");
+
+        service.refreshCompletedTaskOperation(
+                "task-1", "task-reconcile", standardEvidence(
+                        "task-1", "CANCELLED", "REVOKED", true, 1,
+                        "RECONCILIATION_CHANGED"));
+
+        RuntimeRequestAuditDTO audit = exact(requestId);
+        assertAll(
+                () -> assertTrue(audit.getTerminal()),
+                () -> assertEquals("CANCELLED", audit.getStatus()),
+                () -> assertEquals("RECONCILIATION_CHANGED", audit.getResult()),
+                () -> assertEquals("OPERATOR_TERMINATED", audit.getSanitizedErrorCode()),
+                () -> assertNull(audit.getSafeErrorSummary()),
+                () -> assertEquals("REVOKED", audit.getTaskTokenStatus()),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "REQUEST_FAILED".equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "RECONCILIATION_EVIDENCE_OBSERVED".equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TASK_TOKEN_REVOKED".equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "REQUEST_COMPLETED".equals(stage.getStage()))));
     }
 
     private RuntimeRequestAuditService.TaskEvidence standardEvidence(

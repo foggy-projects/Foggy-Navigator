@@ -1506,6 +1506,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             }
             CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(observed);
             boolean consistent = isTerminalStatus(current.getStatus());
+            boolean changed = false;
             if (!consistent) {
                 try {
                     Map<String, Object> evidence = client.getTerminationReconciliationReadiness(
@@ -1521,6 +1522,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                             taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
                     current = taskRepository.findByTaskId(taskId).orElse(observed);
                     consistent = isTerminalStatus(current.getStatus());
+                    changed = consistent;
                 } catch (RuntimeException error) {
                     if (error instanceof CodexWorkerClient.WorkerQueryRejectedException rejection) {
                         throw new IllegalStateException(rejection.getCode(), error);
@@ -1530,7 +1532,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 }
             }
             return new RuntimeTaskClosureProvider.ReconciliationResult(
-                    false, true, current.getStatus(),
+                    changed, !changed && consistent, current.getStatus(),
                     "WORKER_WIDE_ZERO_PROCESS_RECONCILED", null);
         }
 
