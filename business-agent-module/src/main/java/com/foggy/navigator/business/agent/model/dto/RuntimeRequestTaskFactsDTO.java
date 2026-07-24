@@ -3,33 +3,19 @@ package com.foggy.navigator.business.agent.model.dto;
 import lombok.Builder;
 import lombok.Data;
 
-import java.time.Instant;
-import java.util.List;
-
-/** Stable, sanitized runtime self-audit response. Nullable booleans mean unknown. */
+/** Sanitized facts about the task referenced by one runtime request. */
 @Data
 @Builder
-public class RuntimeRequestAuditDTO {
-    private String clientRequestId;
-    private String operation;
-    private Instant receivedAt;
-    private Instant completedAt;
-    private Boolean terminal;
-    private String result;
-    private String sanitizedErrorCode;
-    private String safeErrorSummary;
-    private Boolean httpRequestReceived;
-    private Boolean runtimeTokenRequestReceived;
-    private Boolean runtimeTokenIssued;
-    private Boolean safeSmokeRequestReceived;
-    private Boolean syntheticEvidenceCreated;
+public class RuntimeRequestTaskFactsDTO {
     private String taskId;
+    private String status;
+    private Boolean terminal;
+    private String sanitizedErrorCode;
     private String agentCode;
     private String upstreamUserId;
     private String physicalWorkerId;
     private String modelConfigId;
     private String modelVariant;
-    private String status;
     private Integer requestedToolCount;
     private Integer effectiveToolCount;
     private String toolScopeKind;
@@ -45,7 +31,4 @@ public class RuntimeRequestAuditDTO {
     private Integer dispatchCount;
     private Integer retryCount;
     private Integer recoveryCount;
-    private RuntimeRequestTaskFactsDTO taskFacts;
-    private RuntimeRequestAuditSideEffectsDTO auditSideEffects;
-    private List<RuntimeRequestAuditStageDTO> stages;
 }

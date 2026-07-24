@@ -983,7 +983,18 @@ public class TaskDispatchFacade {
                 "attempt_number",
                 "attempt",
                 "idempotencyKey",
-                "idempotency_key");
+                "idempotency_key",
+                "requestedToolCount",
+                "effectiveToolCount",
+                "toolScopeKind",
+                "toolScopeSource",
+                "requestedFunctionCount",
+                "effectiveFunctionCount",
+                "functionScopeSource",
+                "taskTokenFunctionScopeEmpty",
+                "runtimeDispatched",
+                "modelDispatched",
+                "businessFunctionDispatched");
     }
 
     private String firstNonBlank(String... values) {

@@ -335,6 +335,74 @@ class RuntimeRequestAuditServiceTest {
         verify(auditRepository).findByExpiresAtBeforeOrderByExpiresAtAsc(any(Instant.class), any(Pageable.class));
     }
 
+    @Test
+    void recordsStandardAskScopeAtAdmissionAndSeparatesReadOnlyAuditSideEffects() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle handle = service.beginAsk(
+                requestId, resolvedCredential(), "agent-1", "user-1");
+        RuntimeRequestAuditService.TaskEvidence admission = standardEvidence(
+                null, "ADMITTED", "NOT_ISSUED", false, 0, "STANDARD_SCOPE_ADMITTED");
+        service.taskAdmissionRecorded(handle, admission);
+        service.taskOperationCompleted(handle, standardEvidence(
+                "task-1", "RUNNING", "ACTIVE", true, 1, "STANDARD_ASK_DISPATCHED"), false, true);
+
+        RuntimeRequestAuditDTO audit = exact(requestId);
+        assertAll(
+                () -> assertEquals("ask", audit.getOperation()),
+                () -> assertEquals("task-1", audit.getTaskId()),
+                () -> assertEquals(0, audit.getRequestedToolCount()),
+                () -> assertEquals(0, audit.getEffectiveToolCount()),
+                () -> assertEquals("NO_RUNTIME_MODEL_TOOL_SURFACE", audit.getToolScopeKind()),
+                () -> assertEquals("REQUEST_EXPLICIT_EMPTY", audit.getToolScopeSource()),
+                () -> assertEquals(0, audit.getRequestedFunctionCount()),
+                () -> assertEquals(0, audit.getEffectiveFunctionCount()),
+                () -> assertTrue(audit.getTaskTokenFunctionScopeEmpty()),
+                () -> assertTrue(audit.getRuntimeDispatched()),
+                () -> assertTrue(audit.getModelDispatched()),
+                () -> assertFalse(audit.getBusinessFunctionDispatched()),
+                () -> assertEquals(1, audit.getDispatchCount()),
+                () -> assertFalse(audit.getAuditSideEffects().getTaskCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getModelDispatched()),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "STANDARD_SCOPE_ADMITTED".equals(stage.getStage()))));
+    }
+
+    @Test
+    void taskTerminationClientRequestIdIsIdempotentAndAuditable() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle first = service.beginTaskOperation(
+                requestId, "task-terminate", "runtime-key", "runtime-secret",
+                "agent-1", "user-1", "task-1");
+        RuntimeRequestAuditService.AuditHandle replay = service.beginTaskOperation(
+                requestId, "task-terminate", "runtime-key", "runtime-secret",
+                "agent-1", "user-1", "task-1");
+        assertEquals(first, replay);
+        service.taskOperationCompleted(first, standardEvidence(
+                "task-1", "CANCELLED", "REVOKED", true, 1, "TERMINATION_COMPLETED"), false, true);
+
+        RuntimeRequestAuditDTO audit = exact(requestId);
+        assertEquals("task-terminate", audit.getOperation());
+        assertEquals("CANCELLED", audit.getStatus());
+        assertEquals("REVOKED", audit.getTaskTokenStatus());
+        assertTrue(audit.getStages().stream()
+                .anyMatch(stage -> "TERMINATION_DISPATCHED".equals(stage.getStage())));
+        assertTrue(audit.getStages().stream()
+                .anyMatch(stage -> "TASK_TOKEN_REVOKED".equals(stage.getStage())));
+        assertEquals(1, audits.size());
+    }
+
+    private RuntimeRequestAuditService.TaskEvidence standardEvidence(
+            String taskId, String status, String tokenStatus, boolean dispatched,
+            int dispatchCount, String result) {
+        return new RuntimeRequestAuditService.TaskEvidence(
+                taskId, status, "CANCELLED".equals(status),
+                "CANCELLED".equals(status) ? "OPERATOR_TERMINATED" : null,
+                "agent-1", "user-1", "worker-1", "model-1", "codex-luna:high",
+                0, 0, "NO_RUNTIME_MODEL_TOOL_SURFACE", "REQUEST_EXPLICIT_EMPTY",
+                0, 0, "REQUEST_EXPLICIT_EMPTY", true, tokenStatus,
+                dispatched, dispatched, false, dispatchCount, 0, 0, result);
+    }
+
     private RuntimeRequestAuditDTO exact(String requestId) {
         return service.querySelfAudit(
                         "runtime-key", "runtime-secret", requestId,

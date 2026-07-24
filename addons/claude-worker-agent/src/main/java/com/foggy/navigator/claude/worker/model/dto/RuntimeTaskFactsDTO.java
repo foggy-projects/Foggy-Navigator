@@ -3,16 +3,13 @@ package com.foggy.navigator.claude.worker.model.dto;
 import lombok.Builder;
 import lombok.Data;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/** Durable facts about the queried task, distinct from audit request effects. */
 @Data
 @Builder
-public class RuntimeTaskAuditDTO {
-    private Instant observedAt;
-    private RuntimeTaskFactsDTO taskFacts;
-    private RuntimeAuditSideEffectsDTO auditSideEffects;
+public class RuntimeTaskFactsDTO {
     private String taskId;
     private Boolean terminal;
     private String status;
@@ -34,19 +31,9 @@ public class RuntimeTaskAuditDTO {
     private String functionScopeSource;
     private Boolean taskTokenFunctionScopeEmpty;
     private Boolean runtimeDispatched;
-    private Boolean taskModelDispatched;
-    private Boolean taskBusinessFunctionDispatched;
-    private LocalDateTime createdAt;
-    private LocalDateTime completedAt;
-    private List<RuntimeTaskAuditStageDTO> terminalStages;
-    private Boolean auditAccessTokenIssued;
-    private Boolean auditRuntimeTokenIssued;
-    private Boolean auditTaskTokenIssued;
-    private Boolean taskCreated;
-    private Boolean contextCreated;
-    private Boolean sessionCreated;
     private Boolean modelDispatched;
     private Boolean businessFunctionDispatched;
-    private Boolean recoveryTriggered;
-    private Boolean provisioningResourceChanged;
+    private LocalDateTime createdAt;
+    private LocalDateTime completedAt;
+    private List<RuntimeTaskAuditStageDTO> stages;
 }

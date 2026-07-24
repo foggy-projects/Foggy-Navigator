@@ -28,9 +28,9 @@ import java.util.Set;
 public class AuthorizationRouteCatalog {
 
     public static final String RESOURCE_PATH = "authorization/route-manifest-v1.csv";
-    public static final int EXPECTED_ENTRY_COUNT = 458;
+    public static final int EXPECTED_ENTRY_COUNT = 461;
     public static final String EXPECTED_SHA_256 =
-            "8470c2d031c8cb523b98c3e4f76d53e90f3e673001be2dcad0ec87ffea82bec9";
+            "1a72934d145f786acf7e5447618390dded494ed1f33ae4338c931d7de5bafaaa";
     public static final String DEPLOYMENT_LAUNCHER = "NAVIGATOR_LAUNCHER";
     public static final String DEPLOYMENT_OBSERVER_BFF = "OBSERVER_BFF";
 

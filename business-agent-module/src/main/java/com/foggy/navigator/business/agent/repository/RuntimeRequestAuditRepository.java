@@ -13,6 +13,9 @@ public interface RuntimeRequestAuditRepository extends JpaRepository<RuntimeRequ
 
     Optional<RuntimeRequestAuditEntity> findByClientRequestId(String clientRequestId);
 
+    Optional<RuntimeRequestAuditEntity> findTopByTaskIdAndOperationOrderByReceivedAtDesc(
+            String taskId, String operation);
+
     Optional<RuntimeRequestAuditEntity> findByClientRequestIdAndTenantIdAndUpstreamSystemIdAndClientAppIdAndExpiresAtAfter(
             String clientRequestId,
             String tenantId,

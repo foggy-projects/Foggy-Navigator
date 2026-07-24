@@ -54,7 +54,10 @@ class WebMvcConfigTest {
         when(shadowRegistration.excludePathPatterns(
                 "/api/v1/management/v1/**",
                 "/api/v1/open/runtime/binding-audit",
-                "/api/v1/open/runtime/task-audit")).thenReturn(shadowRegistration);
+                "/api/v1/open/runtime/task-audit",
+                "/api/v1/open/runtime/termination-readiness",
+                "/api/v1/open/runtime/task-terminate",
+                "/api/v1/open/runtime/task-reconcile")).thenReturn(shadowRegistration);
 
         new WebMvcConfig(mock(AuthInterceptor.class), shadowInterceptor, typedManagementAuthInterceptor)
                 .addInterceptors(registry);
@@ -67,7 +70,10 @@ class WebMvcConfigTest {
         verify(shadowRegistration).excludePathPatterns(
                 "/api/v1/management/v1/**",
                 "/api/v1/open/runtime/binding-audit",
-                "/api/v1/open/runtime/task-audit");
+                "/api/v1/open/runtime/task-audit",
+                "/api/v1/open/runtime/termination-readiness",
+                "/api/v1/open/runtime/task-terminate",
+                "/api/v1/open/runtime/task-reconcile");
     }
 
     private static MockHttpServletRequest request(String path) {

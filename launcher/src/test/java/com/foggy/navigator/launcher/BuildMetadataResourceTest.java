@@ -19,6 +19,7 @@ class BuildMetadataResourceTest {
 
         assertFalse(build.getProperty("build.version", "").isBlank());
         assertFalse(build.getProperty("build.time", "").isBlank());
+        assertFalse(git.getProperty("git.commit.id.full", "").isBlank());
         assertFalse(git.getProperty("git.commit.id.abbrev", "").isBlank());
         assertFalse(git.getProperty("git.commit.time", "").isBlank());
         assertFalse(git.getProperty("git.dirty", "").isBlank());

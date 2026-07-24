@@ -3,7 +3,9 @@ package com.foggy.navigator.business.agent.service;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditDTO;
 import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditPageDTO;
+import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditSideEffectsDTO;
 import com.foggy.navigator.business.agent.model.dto.RuntimeRequestAuditStageDTO;
+import com.foggy.navigator.business.agent.model.dto.RuntimeRequestTaskFactsDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppRuntimeCredentialEntity;
 import com.foggy.navigator.business.agent.model.entity.RuntimeRequestAuditEntity;
@@ -34,6 +36,9 @@ public class RuntimeRequestAuditService {
 
     public static final String OPERATION_RUNTIME_TOKEN = "runtime-token";
     public static final String OPERATION_SAFE_ASK = "safe-ask";
+    public static final String OPERATION_ASK = "ask";
+    public static final String OPERATION_TASK_TERMINATE = "task-terminate";
+    public static final String OPERATION_TASK_RECONCILE = "task-reconcile";
 
     public static final String STAGE_CLIENT_REQUEST_RECEIVED = "CLIENT_REQUEST_RECEIVED";
     public static final String STAGE_RUNTIME_TOKEN_REQUEST_RECEIVED = "RUNTIME_TOKEN_REQUEST_RECEIVED";
@@ -42,6 +47,16 @@ public class RuntimeRequestAuditService {
     public static final String STAGE_SAFE_SMOKE_REQUEST_RECEIVED = "SAFE_SMOKE_REQUEST_RECEIVED";
     public static final String STAGE_SYNTHETIC_EVIDENCE_CREATED = "SYNTHETIC_EVIDENCE_CREATED";
     public static final String STAGE_TASK_TOKEN_REVOKED = "TASK_TOKEN_REVOKED";
+    public static final String STAGE_STANDARD_SCOPE_ADMITTED = "STANDARD_SCOPE_ADMITTED";
+    public static final String STAGE_RUNTIME_DISPATCHED = "RUNTIME_DISPATCHED";
+    public static final String STAGE_MODEL_DISPATCHED = "MODEL_DISPATCHED";
+    public static final String STAGE_BUSINESS_FUNCTION_NOT_DISPATCHED = "BUSINESS_FUNCTION_NOT_DISPATCHED";
+    public static final String STAGE_TERMINATION_REQUESTED = "TERMINATION_REQUESTED";
+    public static final String STAGE_TERMINATION_DISPATCHED = "TERMINATION_DISPATCHED";
+    public static final String STAGE_TERMINATION_DRY_RUN_COMPLETED = "TERMINATION_DRY_RUN_COMPLETED";
+    public static final String STAGE_RECONCILIATION_REQUESTED = "RECONCILIATION_REQUESTED";
+    public static final String STAGE_RECONCILIATION_EVIDENCE_OBSERVED = "RECONCILIATION_EVIDENCE_OBSERVED";
+    public static final String STAGE_RECONCILIATION_NO_CHANGE = "RECONCILIATION_NO_CHANGE";
     public static final String STAGE_REQUEST_COMPLETED = "REQUEST_COMPLETED";
     public static final String STAGE_REQUEST_FAILED = "REQUEST_FAILED";
 
@@ -49,7 +64,12 @@ public class RuntimeRequestAuditService {
     private static final Duration DEFAULT_RETENTION = Duration.ofHours(24);
     private static final Duration HARD_MAX_QUERY_WINDOW = Duration.ofMinutes(15);
     private static final int HARD_MAX_LIMIT = 100;
-    private static final Set<String> OPERATIONS = Set.of(OPERATION_RUNTIME_TOKEN, OPERATION_SAFE_ASK);
+    private static final Set<String> OPERATIONS = Set.of(
+            OPERATION_RUNTIME_TOKEN,
+            OPERATION_SAFE_ASK,
+            OPERATION_ASK,
+            OPERATION_TASK_TERMINATE,
+            OPERATION_TASK_RECONCILE);
 
     private final RuntimeRequestAuditRepository auditRepository;
     private final RuntimeRequestAuditStageRepository stageRepository;
@@ -73,6 +93,167 @@ public class RuntimeRequestAuditService {
             String taskTokenStatus,
             Boolean runtimeDispatched,
             String result) {
+    }
+
+    public record TaskEvidence(
+            String taskId,
+            String taskStatus,
+            Boolean taskTerminal,
+            String sanitizedErrorCode,
+            String agentCode,
+            String upstreamUserId,
+            String physicalWorkerId,
+            String modelConfigId,
+            String modelVariant,
+            Integer requestedToolCount,
+            Integer effectiveToolCount,
+            String toolScopeKind,
+            String toolScopeSource,
+            Integer requestedFunctionCount,
+            Integer effectiveFunctionCount,
+            String functionScopeSource,
+            Boolean taskTokenFunctionScopeEmpty,
+            String taskTokenStatus,
+            Boolean runtimeDispatched,
+            Boolean modelDispatched,
+            Boolean businessFunctionDispatched,
+            Integer dispatchCount,
+            Integer retryCount,
+            Integer recoveryCount,
+            String result) {
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AuditHandle beginAsk(
+            String clientRequestId,
+            ResolvedClientAppCredentialDTO credential,
+            String agentCode,
+            String upstreamUserId) {
+        return beginTaskOperation(
+                clientRequestId, OPERATION_ASK, resolveOwner(credential), agentCode, upstreamUserId, null);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AuditHandle beginTaskOperation(
+            String clientRequestId,
+            String operation,
+            String appKey,
+            String appSecret,
+            String agentCode,
+            String upstreamUserId,
+            String taskId) {
+        ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
+                .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+        return beginTaskOperation(
+                clientRequestId, operation, resolveOwner(credential), agentCode, upstreamUserId, taskId);
+    }
+
+    private AuditHandle beginTaskOperation(
+            String clientRequestId,
+            String operation,
+            OwnerScope owner,
+            String agentCode,
+            String upstreamUserId,
+            String taskId) {
+        String requestId = requireRequestId(clientRequestId);
+        String normalizedOperation = normalizeOperation(operation);
+        if (!Set.of(OPERATION_ASK, OPERATION_TASK_TERMINATE, OPERATION_TASK_RECONCILE)
+                .contains(normalizedOperation)) {
+            throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
+        }
+        cleanupExpiredBatch();
+        RuntimeRequestAuditEntity existing = auditRepository.findByClientRequestId(requestId).orElse(null);
+        if (existing != null) {
+            requireSameOwner(existing, owner);
+            if (!normalizedOperation.equals(existing.getOperation())
+                    || (StringUtils.hasText(taskId) && !taskId.trim().equals(existing.getTaskId()))) {
+                throw new IllegalArgumentException("CLIENT_REQUEST_ID_OPERATION_MISMATCH");
+            }
+            return new AuditHandle(requestId);
+        }
+        Instant now = Instant.now();
+        RuntimeRequestAuditEntity entity = baseEntity(
+                requestId, normalizedOperation, owner, agentCode, upstreamUserId, now);
+        entity.setTaskId(clean(taskId, null));
+        entity.setStatus("REQUEST_RECEIVED");
+        saveNew(entity);
+        appendStage(requestId, STAGE_CLIENT_REQUEST_RECEIVED, "RECEIVED", null, now);
+        if (!OPERATION_ASK.equals(normalizedOperation)) {
+            appendStage(requestId,
+                    OPERATION_TASK_RECONCILE.equals(normalizedOperation)
+                            ? STAGE_RECONCILIATION_REQUESTED
+                            : STAGE_TERMINATION_REQUESTED,
+                    "RECEIVED", null, now);
+        }
+        return new AuditHandle(requestId);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void taskAdmissionRecorded(AuditHandle handle, TaskEvidence evidence) {
+        RuntimeRequestAuditEntity entity = requireAudit(handle);
+        if (Boolean.TRUE.equals(entity.getTerminal())) {
+            return;
+        }
+        applyTaskEvidence(entity, evidence);
+        entity.setStatus("ADMITTED");
+        auditRepository.save(entity);
+        appendStage(entity.getClientRequestId(), STAGE_STANDARD_SCOPE_ADMITTED, "SUCCEEDED", null, Instant.now());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void taskOperationCompleted(AuditHandle handle, TaskEvidence evidence, boolean dryRun, boolean changed) {
+        RuntimeRequestAuditEntity entity = requireAudit(handle);
+        if (Boolean.TRUE.equals(entity.getTerminal())) {
+            return;
+        }
+        Instant now = Instant.now();
+        applyTaskEvidence(entity, evidence);
+        if (OPERATION_ASK.equals(entity.getOperation())) {
+            appendStage(entity.getClientRequestId(), STAGE_RUNTIME_DISPATCHED, "SUCCEEDED", null, now);
+            appendStage(entity.getClientRequestId(), STAGE_MODEL_DISPATCHED, "SUCCEEDED", null, now);
+            appendStage(entity.getClientRequestId(), STAGE_BUSINESS_FUNCTION_NOT_DISPATCHED, "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_TERMINATE.equals(entity.getOperation())) {
+            appendStage(entity.getClientRequestId(), dryRun
+                    ? STAGE_TERMINATION_DRY_RUN_COMPLETED
+                    : STAGE_TERMINATION_DISPATCHED, "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_RECONCILE.equals(entity.getOperation())) {
+            appendStage(entity.getClientRequestId(), changed
+                    ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED
+                    : STAGE_RECONCILIATION_NO_CHANGE, "SUCCEEDED", null, now);
+        }
+        if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
+            appendStage(entity.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+        }
+        complete(entity, clean(evidence.result(), "COMPLETED"), clean(evidence.taskStatus(), "COMPLETED"), now);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void refreshCompletedTaskOperation(String taskId, String operation, TaskEvidence evidence) {
+        String normalizedOperation = normalizeOperation(operation);
+        if (!Set.of(OPERATION_TASK_TERMINATE, OPERATION_TASK_RECONCILE).contains(normalizedOperation)) {
+            throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
+        }
+        RuntimeRequestAuditEntity entity = auditRepository
+                .findTopByTaskIdAndOperationOrderByReceivedAtDesc(taskId, normalizedOperation)
+                .orElse(null);
+        if (entity == null || !Boolean.TRUE.equals(entity.getTerminal())) {
+            return;
+        }
+        applyTaskEvidence(entity, evidence);
+        entity.setResult(clean(evidence.result(), entity.getResult()));
+        auditRepository.save(entity);
+        if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
+            appendStageOnce(entity.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, Instant.now());
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void taskOperationFailed(AuditHandle handle, String sanitizedErrorCode) {
+        RuntimeRequestAuditEntity entity = requireAudit(handle);
+        if (Boolean.TRUE.equals(entity.getTerminal())) {
+            return;
+        }
+        fail(entity, requireSanitizedCode(sanitizedErrorCode), "Runtime task operation did not complete", Instant.now());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -294,7 +475,35 @@ public class RuntimeRequestAuditService {
         entity.setFunctionScopeSource(UNKNOWN);
         entity.setTaskTokenStatus(UNKNOWN);
         entity.setRuntimeDispatched(null);
+        entity.setModelDispatched(null);
+        entity.setBusinessFunctionDispatched(null);
         return entity;
+    }
+
+    private void applyTaskEvidence(RuntimeRequestAuditEntity entity, TaskEvidence evidence) {
+        entity.setTaskId(clean(evidence.taskId(), entity.getTaskId()));
+        entity.setStatus(clean(evidence.taskStatus(), UNKNOWN));
+        entity.setSanitizedErrorCode(clean(evidence.sanitizedErrorCode(), null));
+        entity.setAgentCode(clean(evidence.agentCode(), entity.getAgentCode()));
+        entity.setUpstreamUserId(clean(evidence.upstreamUserId(), entity.getUpstreamUserId()));
+        entity.setPhysicalWorkerId(clean(evidence.physicalWorkerId(), null));
+        entity.setModelConfigId(clean(evidence.modelConfigId(), null));
+        entity.setModelVariant(clean(evidence.modelVariant(), null));
+        entity.setRequestedToolCount(evidence.requestedToolCount());
+        entity.setEffectiveToolCount(evidence.effectiveToolCount());
+        entity.setToolScopeKind(clean(evidence.toolScopeKind(), UNKNOWN));
+        entity.setToolScopeSource(clean(evidence.toolScopeSource(), UNKNOWN));
+        entity.setRequestedFunctionCount(evidence.requestedFunctionCount());
+        entity.setEffectiveFunctionCount(evidence.effectiveFunctionCount());
+        entity.setFunctionScopeSource(clean(evidence.functionScopeSource(), UNKNOWN));
+        entity.setTaskTokenFunctionScopeEmpty(evidence.taskTokenFunctionScopeEmpty());
+        entity.setTaskTokenStatus(clean(evidence.taskTokenStatus(), UNKNOWN));
+        entity.setRuntimeDispatched(evidence.runtimeDispatched());
+        entity.setModelDispatched(evidence.modelDispatched());
+        entity.setBusinessFunctionDispatched(evidence.businessFunctionDispatched());
+        entity.setDispatchCount(evidence.dispatchCount());
+        entity.setRetryCount(evidence.retryCount());
+        entity.setRecoveryCount(evidence.recoveryCount());
     }
 
     private void complete(RuntimeRequestAuditEntity entity, String result, String status, Instant now) {
@@ -302,7 +511,6 @@ public class RuntimeRequestAuditService {
         entity.setCompletedAt(now);
         entity.setResult(result);
         entity.setStatus(status);
-        entity.setSanitizedErrorCode(null);
         entity.setSafeErrorSummary(null);
         auditRepository.save(entity);
         appendStage(entity.getClientRequestId(), STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
@@ -345,6 +553,14 @@ public class RuntimeRequestAuditService {
         stageRepository.save(event);
     }
 
+    private void appendStageOnce(String requestId, String stage, String status, String errorCode, Instant occurredAt) {
+        boolean exists = stageRepository.findByClientRequestIdOrderByOccurredAtAscIdAsc(requestId).stream()
+                .anyMatch(value -> stage.equals(value.getStage()));
+        if (!exists) {
+            appendStage(requestId, stage, status, errorCode, occurredAt);
+        }
+    }
+
     private RuntimeRequestAuditDTO toDto(RuntimeRequestAuditEntity entity) {
         List<RuntimeRequestAuditStageDTO> stages = stageRepository
                 .findByClientRequestIdOrderByOccurredAtAscIdAsc(entity.getClientRequestId())
@@ -371,17 +587,81 @@ public class RuntimeRequestAuditService {
                 .safeSmokeRequestReceived(entity.getSafeSmokeRequestReceived())
                 .syntheticEvidenceCreated(entity.getSyntheticEvidenceCreated())
                 .taskId(entity.getTaskId())
+                .agentCode(entity.getAgentCode())
+                .upstreamUserId(entity.getUpstreamUserId())
+                .physicalWorkerId(entity.getPhysicalWorkerId())
+                .modelConfigId(entity.getModelConfigId())
+                .modelVariant(entity.getModelVariant())
                 .status(clean(entity.getStatus(), UNKNOWN))
+                .requestedToolCount(entity.getRequestedToolCount())
                 .effectiveToolCount(entity.getEffectiveToolCount())
                 .toolScopeKind(clean(entity.getToolScopeKind(), UNKNOWN))
                 .toolScopeSource(clean(entity.getToolScopeSource(), UNKNOWN))
+                .requestedFunctionCount(entity.getRequestedFunctionCount())
                 .effectiveFunctionCount(entity.getEffectiveFunctionCount())
                 .functionScopeSource(clean(entity.getFunctionScopeSource(), UNKNOWN))
                 .taskTokenFunctionScopeEmpty(entity.getTaskTokenFunctionScopeEmpty())
                 .taskTokenStatus(clean(entity.getTaskTokenStatus(), UNKNOWN))
                 .runtimeDispatched(entity.getRuntimeDispatched())
+                .modelDispatched(entity.getModelDispatched())
+                .businessFunctionDispatched(entity.getBusinessFunctionDispatched())
+                .dispatchCount(entity.getDispatchCount())
+                .retryCount(entity.getRetryCount())
+                .recoveryCount(entity.getRecoveryCount())
+                .taskFacts(toTaskFacts(entity))
+                .auditSideEffects(readOnlyAuditSideEffects())
                 .stages(stages)
                 .build();
+    }
+
+    private RuntimeRequestTaskFactsDTO toTaskFacts(RuntimeRequestAuditEntity entity) {
+        return RuntimeRequestTaskFactsDTO.builder()
+                .taskId(entity.getTaskId())
+                .status(clean(entity.getStatus(), UNKNOWN))
+                .terminal(isTerminalTaskStatus(entity.getStatus()))
+                .sanitizedErrorCode(entity.getSanitizedErrorCode())
+                .agentCode(entity.getAgentCode())
+                .upstreamUserId(entity.getUpstreamUserId())
+                .physicalWorkerId(entity.getPhysicalWorkerId())
+                .modelConfigId(entity.getModelConfigId())
+                .modelVariant(entity.getModelVariant())
+                .requestedToolCount(entity.getRequestedToolCount())
+                .effectiveToolCount(entity.getEffectiveToolCount())
+                .toolScopeKind(clean(entity.getToolScopeKind(), UNKNOWN))
+                .toolScopeSource(clean(entity.getToolScopeSource(), UNKNOWN))
+                .requestedFunctionCount(entity.getRequestedFunctionCount())
+                .effectiveFunctionCount(entity.getEffectiveFunctionCount())
+                .functionScopeSource(clean(entity.getFunctionScopeSource(), UNKNOWN))
+                .taskTokenFunctionScopeEmpty(entity.getTaskTokenFunctionScopeEmpty())
+                .taskTokenStatus(clean(entity.getTaskTokenStatus(), UNKNOWN))
+                .runtimeDispatched(entity.getRuntimeDispatched())
+                .modelDispatched(entity.getModelDispatched())
+                .businessFunctionDispatched(entity.getBusinessFunctionDispatched())
+                .dispatchCount(entity.getDispatchCount())
+                .retryCount(entity.getRetryCount())
+                .recoveryCount(entity.getRecoveryCount())
+                .build();
+    }
+
+    private RuntimeRequestAuditSideEffectsDTO readOnlyAuditSideEffects() {
+        return RuntimeRequestAuditSideEffectsDTO.builder()
+                .accessTokenIssued(false)
+                .runtimeTokenIssued(false)
+                .taskTokenIssued(false)
+                .taskCreated(false)
+                .contextCreated(false)
+                .sessionCreated(false)
+                .modelDispatched(false)
+                .businessFunctionDispatched(false)
+                .recoveryTriggered(false)
+                .provisioningResourceChanged(false)
+                .build();
+    }
+
+    private boolean isTerminalTaskStatus(String status) {
+        return StringUtils.hasText(status) && Set.of(
+                "COMPLETED", "FAILED", "CANCELLED", "ABORTED", "TIMED_OUT")
+                .contains(status.trim().toUpperCase(Locale.ROOT));
     }
 
     private OwnerScope resolveOwnerByAppKey(String appKey) {

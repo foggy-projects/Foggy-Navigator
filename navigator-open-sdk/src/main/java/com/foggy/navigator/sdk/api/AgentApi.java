@@ -213,6 +213,25 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
+        return askWithClientAppAccessToken(
+                agentId, question, contextId, maxTurns, clientContext, modelConfigId, modelVariant,
+                attachments, runtimeOptions, clientAppKey, clientAppAccessToken, upstreamUserId, null);
+    }
+
+    public AgentTask askWithClientAppAccessToken(
+            String agentId,
+            String question,
+            String contextId,
+            Integer maxTurns,
+            Map<String, Object> clientContext,
+            String modelConfigId,
+            String modelVariant,
+            List<Map<String, Object>> attachments,
+            Map<String, Object> runtimeOptions,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId,
+            String clientRequestId) {
         Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
                 null, null, clientContext, modelConfigId, modelVariant, attachments);
         mergeAskRuntimeOptions(body, runtimeOptions);
@@ -220,6 +239,10 @@ public class AgentApi {
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
         headers.put("X-Upstream-User-Id", upstreamUserId);
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            headers.put("X-Navigator-Client-Request-Id", clientRequestId);
+            headers.put("X-Navigator-Runtime-Operation", "ask");
+        }
         return http.post("/api/v1/open/agents/" + agentId + "/ask",
                 body, headers, new TypeReference<>() {});
     }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RuntimeRequestAuditDTO {
@@ -21,15 +22,29 @@ public class RuntimeRequestAuditDTO {
     private Boolean safeSmokeRequestReceived;
     private Boolean syntheticEvidenceCreated;
     private String taskId;
+    private String agentCode;
+    private String upstreamUserId;
+    private String physicalWorkerId;
+    private String modelConfigId;
+    private String modelVariant;
     private String status;
+    private Integer requestedToolCount;
     private Integer effectiveToolCount;
     private String toolScopeKind;
     private String toolScopeSource;
+    private Integer requestedFunctionCount;
     private Integer effectiveFunctionCount;
     private String functionScopeSource;
     private Boolean taskTokenFunctionScopeEmpty;
     private String taskTokenStatus;
     private Boolean runtimeDispatched;
+    private Boolean modelDispatched;
+    private Boolean businessFunctionDispatched;
+    private Integer dispatchCount;
+    private Integer retryCount;
+    private Integer recoveryCount;
+    private Map<String, Object> taskFacts;
+    private Map<String, Object> auditSideEffects;
     private List<RuntimeRequestAuditStageDTO> stages;
 
     public String getClientRequestId() { return clientRequestId; }
@@ -60,14 +75,28 @@ public class RuntimeRequestAuditDTO {
     public void setSyntheticEvidenceCreated(Boolean syntheticEvidenceCreated) { this.syntheticEvidenceCreated = syntheticEvidenceCreated; }
     public String getTaskId() { return taskId; }
     public void setTaskId(String taskId) { this.taskId = taskId; }
+    public String getAgentCode() { return agentCode; }
+    public void setAgentCode(String agentCode) { this.agentCode = agentCode; }
+    public String getUpstreamUserId() { return upstreamUserId; }
+    public void setUpstreamUserId(String upstreamUserId) { this.upstreamUserId = upstreamUserId; }
+    public String getPhysicalWorkerId() { return physicalWorkerId; }
+    public void setPhysicalWorkerId(String physicalWorkerId) { this.physicalWorkerId = physicalWorkerId; }
+    public String getModelConfigId() { return modelConfigId; }
+    public void setModelConfigId(String modelConfigId) { this.modelConfigId = modelConfigId; }
+    public String getModelVariant() { return modelVariant; }
+    public void setModelVariant(String modelVariant) { this.modelVariant = modelVariant; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Integer getRequestedToolCount() { return requestedToolCount; }
+    public void setRequestedToolCount(Integer requestedToolCount) { this.requestedToolCount = requestedToolCount; }
     public Integer getEffectiveToolCount() { return effectiveToolCount; }
     public void setEffectiveToolCount(Integer effectiveToolCount) { this.effectiveToolCount = effectiveToolCount; }
     public String getToolScopeKind() { return toolScopeKind; }
     public void setToolScopeKind(String toolScopeKind) { this.toolScopeKind = toolScopeKind; }
     public String getToolScopeSource() { return toolScopeSource; }
     public void setToolScopeSource(String toolScopeSource) { this.toolScopeSource = toolScopeSource; }
+    public Integer getRequestedFunctionCount() { return requestedFunctionCount; }
+    public void setRequestedFunctionCount(Integer requestedFunctionCount) { this.requestedFunctionCount = requestedFunctionCount; }
     public Integer getEffectiveFunctionCount() { return effectiveFunctionCount; }
     public void setEffectiveFunctionCount(Integer effectiveFunctionCount) { this.effectiveFunctionCount = effectiveFunctionCount; }
     public String getFunctionScopeSource() { return functionScopeSource; }
@@ -78,6 +107,20 @@ public class RuntimeRequestAuditDTO {
     public void setTaskTokenStatus(String taskTokenStatus) { this.taskTokenStatus = taskTokenStatus; }
     public Boolean getRuntimeDispatched() { return runtimeDispatched; }
     public void setRuntimeDispatched(Boolean runtimeDispatched) { this.runtimeDispatched = runtimeDispatched; }
+    public Boolean getModelDispatched() { return modelDispatched; }
+    public void setModelDispatched(Boolean modelDispatched) { this.modelDispatched = modelDispatched; }
+    public Boolean getBusinessFunctionDispatched() { return businessFunctionDispatched; }
+    public void setBusinessFunctionDispatched(Boolean businessFunctionDispatched) { this.businessFunctionDispatched = businessFunctionDispatched; }
+    public Integer getDispatchCount() { return dispatchCount; }
+    public void setDispatchCount(Integer dispatchCount) { this.dispatchCount = dispatchCount; }
+    public Integer getRetryCount() { return retryCount; }
+    public void setRetryCount(Integer retryCount) { this.retryCount = retryCount; }
+    public Integer getRecoveryCount() { return recoveryCount; }
+    public void setRecoveryCount(Integer recoveryCount) { this.recoveryCount = recoveryCount; }
+    public Map<String, Object> getTaskFacts() { return taskFacts; }
+    public void setTaskFacts(Map<String, Object> taskFacts) { this.taskFacts = taskFacts; }
+    public Map<String, Object> getAuditSideEffects() { return auditSideEffects; }
+    public void setAuditSideEffects(Map<String, Object> auditSideEffects) { this.auditSideEffects = auditSideEffects; }
     public List<RuntimeRequestAuditStageDTO> getStages() { return stages; }
     public void setStages(List<RuntimeRequestAuditStageDTO> stages) { this.stages = stages; }
 }

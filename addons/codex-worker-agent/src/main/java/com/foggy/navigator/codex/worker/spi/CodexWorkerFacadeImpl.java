@@ -9,6 +9,7 @@ import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.codex.CodexWorkerFacade;
+import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +27,7 @@ import java.util.*;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
+public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClosureProvider {
 
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
@@ -71,6 +72,44 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         taskService.abortTask(taskId);
         var reconciledTask = taskService.getTaskEntity(taskId);
         return Map.of("taskId", taskId, "status", reconciledTask.getStatus());
+    }
+
+    @Override
+    public boolean supports(String providerType) {
+        return CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType)
+                || CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE.equals(providerType);
+    }
+
+    @Override
+    public TerminationReadiness inspect(String taskId, String expectedPhysicalWorkerId) {
+        return taskService.inspectRuntimeTermination(taskId, expectedPhysicalWorkerId);
+    }
+
+    @Override
+    public TerminationResult terminate(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            String reason,
+            String clientRequestId,
+            boolean dryRun) {
+        return taskService.terminateRuntimeTask(
+                taskId, ownerUserId, tenantId, expectedPhysicalWorkerId,
+                reason, clientRequestId, dryRun);
+    }
+
+    @Override
+    public ReconciliationResult reconcile(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            int expectedDispatchCount,
+            String clientRequestId,
+            boolean dryRun) {
+        return taskService.reconcileRuntimeTask(
+                taskId, ownerUserId, tenantId, expectedPhysicalWorkerId, dryRun);
     }
 
     @Override

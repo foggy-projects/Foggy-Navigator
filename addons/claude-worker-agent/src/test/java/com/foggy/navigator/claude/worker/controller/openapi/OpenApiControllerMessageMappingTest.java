@@ -3210,6 +3210,7 @@ class OpenApiControllerMessageMappingTest {
         when(auditProvider.getIfAvailable()).thenReturn(auditService);
         ObjectProvider<RuntimeStateAuditService> stateAuditProvider = mock(ObjectProvider.class);
         when(stateAuditProvider.getIfAvailable()).thenReturn(stateAuditService);
+        ObjectProvider<RuntimeTaskClosureService> taskClosureProvider = mock(ObjectProvider.class);
         ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
         when(taskProvider.getIfAvailable()).thenReturn(taskService);
         ObjectProvider<BusinessAgentSessionService> sessionProvider = mock(ObjectProvider.class);
@@ -3250,6 +3251,7 @@ class OpenApiControllerMessageMappingTest {
                 credentialProvider,
                 auditProvider,
                 stateAuditProvider,
+                taskClosureProvider,
                 taskProvider,
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),

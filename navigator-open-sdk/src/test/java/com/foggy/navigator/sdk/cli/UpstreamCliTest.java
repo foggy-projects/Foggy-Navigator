@@ -2114,7 +2114,7 @@ class UpstreamCliTest {
     }
 
     @Test
-    void askOmitsToolAndFunctionAllowlistsWhenNeitherOptionNorConfigIsProvided() {
+    void askDefaultsToolAndFunctionAllowlistsToExplicitEmptyScope() {
         responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
 
         int code = run(new String[]{"upstream", "ask",
@@ -2126,8 +2126,8 @@ class UpstreamCliTest {
                 "--message", "default scope"}, Map.of());
 
         assertEquals(0, code);
-        assertFalse(lastBody.contains("\"allowedTools\""));
-        assertFalse(lastBody.contains("\"allowedFunctions\""));
+        assertTrue(lastBody.contains("\"allowedTools\":[]"));
+        assertTrue(lastBody.contains("\"allowedFunctions\":[]"));
     }
 
     @Test
@@ -5154,8 +5154,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.26", provenance.sourceVersion());
-        assertEquals("1.0.26", provenance.publishedVersion());
+        assertEquals("1.0.27", provenance.sourceVersion());
+        assertEquals("1.0.27", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)

@@ -403,6 +403,9 @@ public class UpstreamCli {
             case "runtime audit" -> runtimeAudit(args);
             case "runtime binding-audit" -> runtimeBindingAudit(args);
             case "runtime task-audit" -> runtimeTaskAudit(args);
+            case "runtime termination-readiness" -> runtimeTerminationReadiness(args);
+            case "runtime task-terminate" -> runtimeTaskTerminate(args);
+            case "runtime task-reconcile" -> runtimeTaskReconcile(args);
             case "runtime owner-smoke" -> ownerSmoke(args);
             case "runtime readiness", "runtime verify-agent-readiness" -> verifyAgentReadiness(args);
             case "runtime inspect" -> inspectRuntime(args);
@@ -580,8 +583,8 @@ public class UpstreamCli {
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv|none>] [--allowed-functions <csv|none>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  safe-ask --upstream-user-id <id> --message <label> [--model-config-id <id>] [--model-variant <name>]  # forces maxTurns=1 and exact allowedTools=[]/allowedFunctions=[]; no Worker/model dispatch");
-        out.println("  runtime audit --request-id <clientRequestId> [--operation runtime-token|safe-ask] [--json]");
-        out.println("  runtime audit --since <offset-time> --until <offset-time> [--operation runtime-token|safe-ask] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("  runtime audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
+        out.println("  runtime audit --since <offset-time> --until <offset-time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
         out.println("  runtime binding-audit --agent-code <id> --upstream-user-id <id> --model-config-id <id> --directory-id <id> [--json]");
         out.println("  runtime task-audit --task-id <existingTaskId> [--upstream-user-id <id>] [--json]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
@@ -733,11 +736,14 @@ public class UpstreamCli {
     }
 
     private int runtimeUsage() {
-        out.println("Usage: navi upstream runtime <token|audit|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
+        out.println("Usage: navi upstream runtime <token|audit|binding-audit|task-audit|termination-readiness|task-terminate|task-reconcile|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
         out.println("Runtime lane accepts only ClientApp runtime material (key/secret or access token) and rejects admin, control, and typed-management credentials.");
         out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
-        out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask] [--json]");
-        out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
+        out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("  termination-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
+        out.println("  task-terminate --task-id <id> --expected-physical-worker-id <id> --reason <code> [--dry-run | --confirm-task-id <id>] [--json]");
+        out.println("  task-reconcile --task-id <id> --expected-physical-worker-id <id> --expected-dispatch-count <n> [--dry-run | --confirm-task-id <id>] [--json]");
         out.println("Audit uses ClientApp key/secret only, derives tenant/system/ClientApp on the server, issues no token, and creates no task/context/session or runtime dispatch.");
         return 0;
     }
@@ -1378,6 +1384,83 @@ public class UpstreamCli {
             printRuntimeTaskAudit(audit);
         }
         return 0;
+    }
+
+    private int runtimeTerminationReadiness(CliArguments args) throws Exception {
+        String taskId = requiredOption(args, "task-id", "task id");
+        String expectedWorkerId = requiredOption(
+                args, "expected-physical-worker-id", "expected physical worker id");
+        Map<String, Object> result;
+        try {
+            result = new BusinessAgentApi(runtimeAuditHttp()).runtimeTerminationReadiness(
+                    clientAppKey(args),
+                    config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
+                    upstreamUserId(args), taskId, expectedWorkerId);
+        } catch (NavigatorApiException e) {
+            throw runtimeStateAuditFailure(e, "RUNTIME_TERMINATION_READINESS_FAILED");
+        }
+        printJson(result);
+        return 0;
+    }
+
+    private int runtimeTaskTerminate(CliArguments args) throws Exception {
+        String taskId = requiredOption(args, "task-id", "task id");
+        String expectedWorkerId = requiredOption(
+                args, "expected-physical-worker-id", "expected physical worker id");
+        boolean dryRun = args.flag("dry-run");
+        String confirmTaskId = args.option("confirm-task-id");
+        if (!dryRun && !taskId.equals(confirmTaskId)) {
+            throw new UpstreamCliException("task-terminate requires --confirm-task-id equal to --task-id");
+        }
+        String clientRequestId = beginRuntimeClientRequest(
+                "task-terminate", null, upstreamUserId(args));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("taskId", taskId);
+        body.put("expectedPhysicalWorkerId", expectedWorkerId);
+        body.put("reason", requiredOption(args, "reason", "termination reason"));
+        body.put("dryRun", dryRun);
+        if (!dryRun) body.put("confirmTaskId", confirmTaskId);
+        try {
+            Map<String, Object> result = new BusinessAgentApi(runtimeAuditHttp()).runtimeTaskTerminate(
+                    clientAppKey(args),
+                    config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
+                    upstreamUserId(args), clientRequestId, body);
+            printJson(result);
+            return 0;
+        } catch (NavigatorApiException e) {
+            throw runtimeRequestFailure(e, "RUNTIME_TASK_TERMINATE_FAILED", clientRequestId);
+        }
+    }
+
+    private int runtimeTaskReconcile(CliArguments args) throws Exception {
+        String taskId = requiredOption(args, "task-id", "task id");
+        String expectedWorkerId = requiredOption(
+                args, "expected-physical-worker-id", "expected physical worker id");
+        boolean dryRun = args.flag("dry-run");
+        String confirmTaskId = args.option("confirm-task-id");
+        if (!dryRun && !taskId.equals(confirmTaskId)) {
+            throw new UpstreamCliException("task-reconcile requires --confirm-task-id equal to --task-id");
+        }
+        Integer expectedDispatchCount = parseInteger(requiredOption(
+                args, "expected-dispatch-count", "expected dispatch count"));
+        String clientRequestId = beginRuntimeClientRequest(
+                "task-reconcile", null, upstreamUserId(args));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("taskId", taskId);
+        body.put("expectedPhysicalWorkerId", expectedWorkerId);
+        body.put("expectedDispatchCount", expectedDispatchCount);
+        body.put("dryRun", dryRun);
+        if (!dryRun) body.put("confirmTaskId", confirmTaskId);
+        try {
+            Map<String, Object> result = new BusinessAgentApi(runtimeAuditHttp()).runtimeTaskReconcile(
+                    clientAppKey(args),
+                    config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
+                    upstreamUserId(args), clientRequestId, body);
+            printJson(result);
+            return 0;
+        } catch (NavigatorApiException e) {
+            throw runtimeRequestFailure(e, "RUNTIME_TASK_RECONCILE_FAILED", clientRequestId);
+        }
     }
 
     private int upstreamClientAppIssueControlKey(CliArguments args, boolean legacyAlias) {
@@ -2590,6 +2673,8 @@ public class UpstreamCli {
         String message = requiredOption(args, "message", "message");
         Map<String, Object> clientContext = parseClientContext(args);
         Map<String, Object> runtimeOptions = buildAskRuntimeOptions(args);
+        String clientRequestId = java.util.UUID.randomUUID().toString();
+        out.println("clientRequestId=" + clientRequestId);
         AgentTask task;
         try {
             task = agentApi().askWithClientAppAccessToken(
@@ -2604,7 +2689,8 @@ public class UpstreamCli {
                     runtimeOptions,
                     clientAppKey(args),
                     clientAppAccessToken(args),
-                    upstreamUserId);
+                    upstreamUserId,
+                    clientRequestId);
         } catch (NavigatorApiException e) {
             throw actionableAskException(e);
         }
@@ -2632,12 +2718,17 @@ public class UpstreamCli {
         putText(options, "webSearchMode", optionalOptionOrConfig(args, "web-search-mode", "NAVI_CODEX_WEB_SEARCH_MODE"));
         putOptionalCsv(options, args, "allowedTools", "allowed-tools", "NAVI_ALLOWED_TOOLS");
         putOptionalCsv(options, args, "allowedFunctions", "allowed-functions", "NAVI_ALLOWED_FUNCTIONS");
+        // STANDARD runtime requests default to an explicit empty model-tool and
+        // BusinessFunction surface so admission facts are deterministic and
+        // task-token scope cannot silently inherit a broader runtime default.
+        options.putIfAbsent("allowedTools", List.of());
+        options.putIfAbsent("allowedFunctions", List.of());
         Boolean networkAccessEnabled = optionalBooleanOptionOrConfig(
                 args, "network-access-enabled", "NAVI_CODEX_NETWORK_ACCESS_ENABLED");
         if (networkAccessEnabled != null) {
             options.put("networkAccessEnabled", networkAccessEnabled);
         }
-        return options.isEmpty() ? null : options;
+        return options;
     }
 
     private int messages(CliArguments args) throws InterruptedException {

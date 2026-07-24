@@ -120,6 +120,50 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    public Map<String, Object> runtimeTerminationReadiness(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId,
+            String expectedPhysicalWorkerId) {
+        StringBuilder path = new StringBuilder("/api/v1/open/runtime/termination-readiness");
+        appendQuery(path, "taskId", taskId);
+        appendQuery(path, "expectedPhysicalWorkerId", expectedPhysicalWorkerId);
+        return http.get(path.toString(), Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId
+        ), new TypeReference<>() {});
+    }
+
+    public Map<String, Object> runtimeTaskTerminate(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String clientRequestId,
+            Map<String, Object> body) {
+        return http.post("/api/v1/open/runtime/task-terminate", body, Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId,
+                "X-Navigator-Client-Request-Id", clientRequestId
+        ), new TypeReference<>() {});
+    }
+
+    public Map<String, Object> runtimeTaskReconcile(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String clientRequestId,
+            Map<String, Object> body) {
+        return http.post("/api/v1/open/runtime/task-reconcile", body, Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId,
+                "X-Navigator-Client-Request-Id", clientRequestId
+        ), new TypeReference<>() {});
+    }
+
     public ClientAppDTO updateClientAppStatus(String clientAppId, UpdateStatusForm form) {
         return http.put("/api/v1/client-apps/" + clientAppId + "/status", form, new TypeReference<>() {});
     }

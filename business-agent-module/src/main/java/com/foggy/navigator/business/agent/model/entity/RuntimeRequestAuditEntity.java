@@ -95,11 +95,23 @@ public class RuntimeRequestAuditEntity {
     @Column(name = "task_id", length = 64)
     private String taskId;
 
+    @Column(name = "physical_worker_id", length = 128)
+    private String physicalWorkerId;
+
+    @Column(name = "model_config_id", length = 128)
+    private String modelConfigId;
+
+    @Column(name = "model_variant", length = 255)
+    private String modelVariant;
+
     @Column(name = "status", length = 64)
     private String status;
 
     @Column(name = "effective_tool_count")
     private Integer effectiveToolCount;
+
+    @Column(name = "requested_tool_count")
+    private Integer requestedToolCount;
 
     @Column(name = "tool_scope_kind", length = 128)
     private String toolScopeKind;
@@ -109,6 +121,9 @@ public class RuntimeRequestAuditEntity {
 
     @Column(name = "effective_function_count")
     private Integer effectiveFunctionCount;
+
+    @Column(name = "requested_function_count")
+    private Integer requestedFunctionCount;
 
     @Column(name = "function_scope_source", length = 128)
     private String functionScopeSource;
@@ -121,6 +136,21 @@ public class RuntimeRequestAuditEntity {
 
     @Column(name = "runtime_dispatched")
     private Boolean runtimeDispatched;
+
+    @Column(name = "model_dispatched")
+    private Boolean modelDispatched;
+
+    @Column(name = "business_function_dispatched")
+    private Boolean businessFunctionDispatched;
+
+    @Column(name = "dispatch_count")
+    private Integer dispatchCount;
+
+    @Column(name = "retry_count")
+    private Integer retryCount;
+
+    @Column(name = "recovery_count")
+    private Integer recoveryCount;
 
     @PrePersist
     protected void onCreate() {

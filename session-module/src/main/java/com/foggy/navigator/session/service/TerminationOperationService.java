@@ -29,10 +29,22 @@ public class TerminationOperationService {
 
     @Transactional
     public TerminationOperationEntity accept(CreateCommand command) {
+        return accept(command, null);
+    }
+
+    /**
+     * Accepts a server-derived stable operation id for runtime idempotency.
+     * The caller must derive it from an already validated client request id;
+     * arbitrary Worker or provider routing data is never accepted here.
+     */
+    @Transactional
+    public TerminationOperationEntity accept(CreateCommand command, String requestedOperationId) {
         validateCreate(command);
         LocalDateTime now = LocalDateTime.now();
         TerminationOperationEntity entity = new TerminationOperationEntity();
-        entity.setOperationId("to_" + UUID.randomUUID().toString().replace("-", ""));
+        entity.setOperationId(hasText(requestedOperationId)
+                ? requestedOperationId.trim()
+                : "to_" + UUID.randomUUID().toString().replace("-", ""));
         entity.setSchemaVersion(1);
         entity.setTaskId(command.taskId());
         entity.setProviderTaskId(blankToNull(command.providerTaskId()));
@@ -56,6 +68,12 @@ public class TerminationOperationService {
         int ttlSeconds = command.ttlSeconds() == null ? DEFAULT_TTL_SECONDS : command.ttlSeconds();
         entity.setExpiresAt(now.plusSeconds(Math.min(DEFAULT_TTL_SECONDS, Math.max(1, ttlSeconds))));
         return repository.saveAndFlush(entity);
+    }
+
+    @Transactional(readOnly = true)
+    public TerminationOperationEntity find(String operationId) {
+        if (!hasText(operationId)) return null;
+        return repository.findById(operationId.trim()).orElse(null);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

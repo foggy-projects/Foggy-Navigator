@@ -15,7 +15,9 @@ import com.foggy.navigator.business.agent.repository.BusinessTaskTerminalStateRe
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeBindingAuditDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeAuditSideEffectsDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditStageDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
@@ -24,11 +26,13 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.ErrorDiagnosticEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.entity.TerminationOperationEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.repository.ErrorDiagnosticRepository;
+import com.foggy.navigator.session.repository.TerminationOperationRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -80,6 +84,7 @@ public class RuntimeStateAuditService {
     private final BusinessAgentTaskRepository businessTaskRepository;
     private final BusinessAgentSessionRepository businessSessionRepository;
     private final ErrorDiagnosticRepository errorDiagnosticRepository;
+    private final TerminationOperationRepository terminationOperationRepository;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -196,12 +201,18 @@ public class RuntimeStateAuditService {
                 resolveOwnedToken(owner, task, terminal);
         requireTaskOwnership(owner, upstreamUserId.trim(), task, token);
 
-        String status = normalizedStatus(terminal.map(BusinessTaskTerminalStateEntity::getTerminalStatus)
+        String providerStatus = normalizedStatus(terminal.map(BusinessTaskTerminalStateEntity::getTerminalStatus)
                 .orElse(task.getStatus()));
-        boolean isTerminal = terminal.isPresent() || TERMINAL_STATUSES.contains(status);
+        List<TerminationOperationEntity> terminationOperations =
+                terminationOperationRepository.findByTaskIdOrderByCreatedAtDesc(task.getTaskId());
+        boolean operatorTerminated = terminationOperations.stream().anyMatch(this::isOperatorTermination);
+        String status = operatorTerminated && "ABORTED".equals(providerStatus) ? "CANCELLED" : providerStatus;
+        boolean isTerminal = terminal.isPresent() || TERMINAL_STATUSES.contains(providerStatus);
         Optional<ErrorDiagnosticEntity> diagnostic = errorDiagnosticRepository
                 .findFirstByTaskIdAndTenantIdOrderByOccurredAtDesc(task.getTaskId(), owner.getTenantId());
-        String sanitizedErrorCode = diagnostic.map(ErrorDiagnosticEntity::getErrorCode)
+        String sanitizedErrorCode = operatorTerminated && isTerminal
+                ? "OPERATOR_TERMINATED"
+                : diagnostic.map(ErrorDiagnosticEntity::getErrorCode)
                 .filter(StringUtils::hasText)
                 .orElse(null);
         String tokenStatus = resolveTokenStatus(token);
@@ -211,11 +222,14 @@ public class RuntimeStateAuditService {
         boolean activeRegistration = terminal.isEmpty()
                 && ACTIVE_STATUSES.contains(normalizedStatus(task.getStatus()));
 
+        Map<String, Object> state = parseState(task.getTaskStateJson());
+        boolean functionScopeEmpty = token.map(this::isFunctionScopeEmpty).orElse(false);
+        TaskScopeFacts scope = resolveScopeFacts(state, task, functionScopeEmpty);
         List<RuntimeTaskAuditStageDTO> stages = buildTerminalStages(
-                task, terminal.orElse(null), token.orElse(null), sanitizedErrorCode, status);
+                task, terminal.orElse(null), token.orElse(null), sanitizedErrorCode, status,
+                terminationOperations);
 
-        return RuntimeTaskAuditDTO.builder()
-                .observedAt(Instant.now())
+        RuntimeTaskFactsDTO taskFacts = RuntimeTaskFactsDTO.builder()
                 .taskId(task.getTaskId())
                 .terminal(isTerminal)
                 .status(status)
@@ -228,6 +242,50 @@ public class RuntimeStateAuditService {
                 .physicalWorkerId(task.getWorkerId())
                 .modelConfigId(task.getModelConfigId())
                 .modelVariant(task.getModel())
+                .requestedToolCount(scope.requestedToolCount())
+                .effectiveToolCount(scope.effectiveToolCount())
+                .toolScopeKind(scope.toolScopeKind())
+                .toolScopeSource(scope.toolScopeSource())
+                .requestedFunctionCount(scope.requestedFunctionCount())
+                .effectiveFunctionCount(scope.effectiveFunctionCount())
+                .functionScopeSource(scope.functionScopeSource())
+                .taskTokenFunctionScopeEmpty(scope.taskTokenFunctionScopeEmpty())
+                .runtimeDispatched(scope.runtimeDispatched())
+                .modelDispatched(scope.modelDispatched())
+                .businessFunctionDispatched(scope.businessFunctionDispatched())
+                .createdAt(task.getCreatedAt())
+                .completedAt(completedAt)
+                .stages(stages)
+                .build();
+        RuntimeAuditSideEffectsDTO auditSideEffects = noAuditSideEffects();
+
+        return RuntimeTaskAuditDTO.builder()
+                .observedAt(Instant.now())
+                .taskFacts(taskFacts)
+                .auditSideEffects(auditSideEffects)
+                .taskId(task.getTaskId())
+                .terminal(isTerminal)
+                .status(status)
+                .sanitizedErrorCode(sanitizedErrorCode)
+                .taskTokenStatus(tokenStatus)
+                .activeTaskRegistrationPresent(activeRegistration)
+                .dispatchCount(counts.dispatchCount())
+                .retryCount(counts.retryCount())
+                .recoveryCount(counts.recoveryCount())
+                .physicalWorkerId(task.getWorkerId())
+                .modelConfigId(task.getModelConfigId())
+                .modelVariant(task.getModel())
+                .requestedToolCount(scope.requestedToolCount())
+                .effectiveToolCount(scope.effectiveToolCount())
+                .toolScopeKind(scope.toolScopeKind())
+                .toolScopeSource(scope.toolScopeSource())
+                .requestedFunctionCount(scope.requestedFunctionCount())
+                .effectiveFunctionCount(scope.effectiveFunctionCount())
+                .functionScopeSource(scope.functionScopeSource())
+                .taskTokenFunctionScopeEmpty(scope.taskTokenFunctionScopeEmpty())
+                .runtimeDispatched(scope.runtimeDispatched())
+                .taskModelDispatched(scope.modelDispatched())
+                .taskBusinessFunctionDispatched(scope.businessFunctionDispatched())
                 .createdAt(task.getCreatedAt())
                 .completedAt(completedAt)
                 .terminalStages(stages)
@@ -319,7 +377,8 @@ public class RuntimeStateAuditService {
             BusinessTaskTerminalStateEntity terminal,
             BusinessTaskScopedTokenEntity token,
             String sanitizedErrorCode,
-            String status) {
+            String status,
+            List<TerminationOperationEntity> terminationOperations) {
         List<RuntimeTaskAuditStageDTO> stages = new ArrayList<>();
         addStage(stages, "TASK_REGISTERED", "RECORDED", null, task.getCreatedAt());
         if (token != null) {
@@ -327,6 +386,20 @@ public class RuntimeStateAuditService {
         }
         if (StringUtils.hasText(task.getProviderTaskId())) {
             addStage(stages, "PROVIDER_TASK_REGISTERED", "RECORDED", null, task.getCreatedAt());
+            addStage(stages, "RUNTIME_DISPATCH", "DISPATCHED", null, task.getCreatedAt());
+            addStage(stages, "MODEL_DISPATCH", "DISPATCHED", null, task.getCreatedAt());
+            addStage(stages, "BUSINESS_FUNCTION_DISPATCH", "NOT_DISPATCHED", null, task.getCreatedAt());
+        }
+        if (terminationOperations != null && !terminationOperations.isEmpty()) {
+            TerminationOperationEntity operation = terminationOperations.get(0);
+            addStage(stages, "TERMINATION_REQUESTED", operation.getStatus(),
+                    operation.getFailureCode(), operation.getRequestedAt());
+            addStage(stages, "TERMINATION_DISPATCH", operation.getDispatchState(),
+                    operation.getAttentionCode(), operation.getDispatchedAt());
+            if (operation.getObservedAt() != null) {
+                addStage(stages, "TERMINATION_OBSERVED", operation.getStatus(),
+                        operation.getFailureCode(), operation.getObservedAt());
+            }
         }
         if (terminal != null) {
             addStage(stages, "TASK_TERMINAL", status, sanitizedErrorCode, terminal.getTerminalAt());
@@ -348,6 +421,135 @@ public class RuntimeStateAuditService {
                 RuntimeTaskAuditStageDTO::getOccurredAt,
                 Comparator.nullsLast(Comparator.naturalOrder())));
         return List.copyOf(stages);
+    }
+
+    public OwnedRuntimeTask requireOwnedTask(
+            String appKey, String appSecret, String upstreamUserId, String taskId) {
+        ResolvedClientAppCredentialDTO owner = requireOwner(appKey, appSecret);
+        requireText(upstreamUserId, "RUNTIME_TASK_UPSTREAM_USER_REQUIRED");
+        requireText(taskId, "RUNTIME_TASK_REQUIRED");
+        SessionTaskEntity task = sessionTaskRepository.findByTaskId(taskId.trim())
+                .orElseThrow(() -> new IllegalArgumentException("RUNTIME_TASK_NOT_FOUND"));
+        if (!owner.getTenantId().equals(task.getTenantId())) {
+            throw new SecurityException("RUNTIME_TASK_FORBIDDEN");
+        }
+        Optional<BusinessTaskTerminalStateEntity> terminal =
+                terminalStateRepository.findByTenantIdAndWorkerTaskId(owner.getTenantId(), task.getTaskId());
+        Optional<BusinessTaskScopedTokenEntity> token = resolveOwnedToken(owner, task, terminal);
+        requireTaskOwnership(owner, upstreamUserId.trim(), task, token);
+        TaskAttemptCounts counts = resolveAttemptCounts(task);
+        return new OwnedRuntimeTask(
+                task.getTaskId(), task.getUserId(), task.getTenantId(), task.getProviderType(),
+                task.getWorkerId(), normalizedStatus(task.getStatus()),
+                TERMINAL_STATUSES.contains(normalizedStatus(task.getStatus())) || terminal.isPresent(),
+                counts.dispatchCount());
+    }
+
+    public record OwnedRuntimeTask(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String providerType,
+            String physicalWorkerId,
+            String status,
+            boolean terminal,
+            int dispatchCount) {
+    }
+
+    private RuntimeAuditSideEffectsDTO noAuditSideEffects() {
+        return RuntimeAuditSideEffectsDTO.builder()
+                .accessTokenIssued(false)
+                .runtimeTokenIssued(false)
+                .taskTokenIssued(false)
+                .taskCreated(false)
+                .contextCreated(false)
+                .sessionCreated(false)
+                .modelDispatched(false)
+                .businessFunctionDispatched(false)
+                .recoveryTriggered(false)
+                .provisioningResourceChanged(false)
+                .build();
+    }
+
+    private boolean isOperatorTermination(TerminationOperationEntity operation) {
+        return operation != null
+                && "REMOTE_CANCEL".equals(operation.getKind())
+                && "RUNTIME_CLIENT".equals(operation.getActorType())
+                && "operator-stuck-task-termination".equals(operation.getReasonCode());
+    }
+
+    private boolean isFunctionScopeEmpty(BusinessTaskScopedTokenEntity token) {
+        if (token == null || !StringUtils.hasText(token.getFunctionScopeJson())) return true;
+        try {
+            Object value = objectMapper.readValue(token.getFunctionScopeJson(), Object.class);
+            return value instanceof java.util.Collection<?> collection && collection.isEmpty();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private TaskScopeFacts resolveScopeFacts(
+            Map<String, Object> state, SessionTaskEntity task, boolean functionScopeEmpty) {
+        Integer requestedToolCount = nullableNonNegativeInt(state.get("requestedToolCount"));
+        Integer effectiveToolCount = nullableNonNegativeInt(state.get("effectiveToolCount"));
+        String toolScopeKind = textValue(state.get("toolScopeKind"));
+        String toolScopeSource = textValue(state.get("toolScopeSource"));
+        Integer requestedFunctionCount = nullableNonNegativeInt(state.get("requestedFunctionCount"));
+        Integer effectiveFunctionCount = nullableNonNegativeInt(state.get("effectiveFunctionCount"));
+        String functionScopeSource = textValue(state.get("functionScopeSource"));
+        Boolean tokenEmpty = booleanObject(state.get("taskTokenFunctionScopeEmpty"));
+
+        // Legacy STANDARD rows did durably persist the empty task-token function scope but
+        // not its equivalent admission projection. Preserve that durable fact during audit.
+        if (functionScopeEmpty) {
+            if (requestedToolCount == null) requestedToolCount = 0;
+            if (effectiveToolCount == null) effectiveToolCount = 0;
+            if (toolScopeKind == null) toolScopeKind = "NO_RUNTIME_MODEL_TOOL_SURFACE";
+            if (toolScopeSource == null) toolScopeSource = "REQUEST_EXPLICIT_EMPTY";
+            if (requestedFunctionCount == null) requestedFunctionCount = 0;
+            if (effectiveFunctionCount == null) effectiveFunctionCount = 0;
+            if (functionScopeSource == null) functionScopeSource = "REQUEST_EXPLICIT_EMPTY";
+            if (tokenEmpty == null) tokenEmpty = true;
+        }
+        boolean dispatched = StringUtils.hasText(task.getProviderTaskId());
+        return new TaskScopeFacts(
+                requestedToolCount, effectiveToolCount, toolScopeKind, toolScopeSource,
+                requestedFunctionCount, effectiveFunctionCount, functionScopeSource, tokenEmpty,
+                booleanObject(state.get("runtimeDispatched"), dispatched),
+                booleanObject(state.get("modelDispatched"), dispatched),
+                booleanObject(state.get("businessFunctionDispatched"), false));
+    }
+
+    private Integer nullableNonNegativeInt(Object value) {
+        if (value == null) return null;
+        return nonNegativeInt(value, 0);
+    }
+
+    private String textValue(Object value) {
+        return value != null && StringUtils.hasText(value.toString()) ? value.toString().trim() : null;
+    }
+
+    private Boolean booleanObject(Object value) {
+        return value instanceof Boolean flag ? flag : null;
+    }
+
+    private boolean booleanObject(Object value, boolean fallback) {
+        Boolean result = booleanObject(value);
+        return result != null ? result : fallback;
+    }
+
+    private record TaskScopeFacts(
+            Integer requestedToolCount,
+            Integer effectiveToolCount,
+            String toolScopeKind,
+            String toolScopeSource,
+            Integer requestedFunctionCount,
+            Integer effectiveFunctionCount,
+            String functionScopeSource,
+            Boolean taskTokenFunctionScopeEmpty,
+            Boolean runtimeDispatched,
+            Boolean modelDispatched,
+            Boolean businessFunctionDispatched) {
     }
 
     private void addStage(

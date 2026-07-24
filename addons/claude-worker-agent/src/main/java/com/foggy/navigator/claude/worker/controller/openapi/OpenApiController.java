@@ -157,6 +157,24 @@ public class OpenApiController {
             "RUNTIME_TASK_AUDIT_NOT_FOUND",
             "RUNTIME_TASK_AUDIT_TASK_REQUIRED",
             "RUNTIME_TASK_AUDIT_UPSTREAM_USER_REQUIRED",
+            "RUNTIME_TASK_FORBIDDEN",
+            "RUNTIME_TASK_NOT_FOUND",
+            "RUNTIME_TASK_REQUIRED",
+            "RUNTIME_TASK_UPSTREAM_USER_REQUIRED",
+            "RUNTIME_TASK_PROVIDER_UNSUPPORTED",
+            "RUNTIME_TASK_TERMINATION_FORBIDDEN",
+            "RUNTIME_TASK_TERMINATION_BLOCKED",
+            "RUNTIME_TASK_RECONCILE_FORBIDDEN",
+            "RUNTIME_TASK_RECONCILE_NOT_CANCEL_REQUESTED",
+            "RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT",
+            "RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE",
+            "EXPECTED_PHYSICAL_WORKER_MISMATCH",
+            "EXPECTED_DISPATCH_COUNT_MISMATCH",
+            "CONFIRM_TASK_ID_MISMATCH",
+            "WORKER_UNREACHABLE",
+            "WORKER_TASK_STATUS_UNREACHABLE",
+            "WORKER_TERMINATION_NOT_READY",
+            "WORKER_ACTIVE_TASK_NOT_PRESENT",
             "SAFE_SMOKE_BODY_REQUIRED",
             "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED",
             "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE",
@@ -196,6 +214,7 @@ public class OpenApiController {
     private final ObjectProvider<ClientAppRuntimeCredentialResolver> clientAppCredentialResolver;
     private final ObjectProvider<RuntimeRequestAuditService> runtimeRequestAuditService;
     private final ObjectProvider<RuntimeStateAuditService> runtimeStateAuditService;
+    private final ObjectProvider<RuntimeTaskClosureService> runtimeTaskClosureService;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
@@ -611,6 +630,72 @@ public class OpenApiController {
         }
     }
 
+    @GetMapping("/runtime/termination-readiness")
+    public RX<RuntimeTerminationReadinessDTO> runtimeTerminationReadiness(
+            @RequestParam String taskId,
+            @RequestParam String expectedPhysicalWorkerId,
+            HttpServletRequest request) {
+        RuntimeTaskClosureService service = runtimeTaskClosureService.getIfAvailable();
+        if (service == null) return RX.failB("RUNTIME_TASK_CLOSURE_SERVICE_UNAVAILABLE");
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        try {
+            return RX.ok(service.readiness(
+                    runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
+                    runtimeUpstreamUserId(request), taskId, expectedPhysicalWorkerId));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_TERMINATION_READINESS_FAILED"));
+        }
+    }
+
+    @PostMapping("/runtime/task-terminate")
+    public RX<RuntimeTaskClosureDTO> runtimeTaskTerminate(
+            @RequestBody RuntimeTaskTerminateForm form,
+            HttpServletRequest request) {
+        RuntimeTaskClosureService service = runtimeTaskClosureService.getIfAvailable();
+        if (service == null) return RX.failB("RUNTIME_TASK_CLOSURE_SERVICE_UNAVAILABLE");
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        if (form == null) return RX.failB("RUNTIME_TASK_TERMINATE_BODY_REQUIRED");
+        try {
+            return RX.ok(service.terminate(
+                    runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
+                    runtimeUpstreamUserId(request),
+                    firstHeader(request, "X-Navigator-Client-Request-Id"),
+                    form.getTaskId(), form.getExpectedPhysicalWorkerId(), form.getReason(),
+                    form.getConfirmTaskId(), Boolean.TRUE.equals(form.getDryRun())));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_TASK_TERMINATE_FAILED"));
+        }
+    }
+
+    @PostMapping("/runtime/task-reconcile")
+    public RX<RuntimeTaskClosureDTO> runtimeTaskReconcile(
+            @RequestBody RuntimeTaskReconcileForm form,
+            HttpServletRequest request) {
+        RuntimeTaskClosureService service = runtimeTaskClosureService.getIfAvailable();
+        if (service == null) return RX.failB("RUNTIME_TASK_CLOSURE_SERVICE_UNAVAILABLE");
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        if (form == null || form.getExpectedDispatchCount() == null) {
+            return RX.failB("RUNTIME_TASK_RECONCILE_FIELDS_REQUIRED");
+        }
+        try {
+            return RX.ok(service.reconcile(
+                    runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
+                    runtimeUpstreamUserId(request),
+                    firstHeader(request, "X-Navigator-Client-Request-Id"),
+                    form.getTaskId(), form.getExpectedPhysicalWorkerId(),
+                    form.getExpectedDispatchCount(), form.getConfirmTaskId(),
+                    Boolean.TRUE.equals(form.getDryRun())));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_TASK_RECONCILE_FAILED"));
+        }
+    }
+
     /**
      * 向 Agent 发送查询（异步模式）
      * <p>
@@ -631,6 +716,20 @@ public class OpenApiController {
                 "X-Upstream-User-Id",
                 "X-Foggy-Upstream-User-Id",
                 "X-Client-Upstream-User-Id");
+        RuntimeRequestAuditService requestAuditService = runtimeRequestAuditService.getIfAvailable();
+        RuntimeRequestAuditService.AuditHandle askRequestAudit = null;
+        String clientRequestId = firstHeader(request, "X-Navigator-Client-Request-Id");
+        if (StringUtils.hasText(clientRequestId)) {
+            if (requestAuditService == null) {
+                return RX.failB("RUNTIME_AUDIT_SERVICE_UNAVAILABLE");
+            }
+            try {
+                askRequestAudit = requestAuditService.beginAsk(
+                        clientRequestId, clientAppCredential, agentId, upstreamUserId);
+            } catch (RuntimeException e) {
+                return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_RECORDING_FAILED"));
+            }
+        }
 
         String messageContent = form.resolveMessage();
         if (messageContent == null || messageContent.isBlank()) {
@@ -767,10 +866,34 @@ public class OpenApiController {
                 metadata,
                 form);
         ToolScopeSummary toolScopeSummary = resolveToolScope(form.getAllowedTools());
+        metadata.put("requestedToolCount", requestedScopeCount(form.getAllowedTools()));
         metadata.put("effectiveToolCount", toolScopeSummary.effectiveToolCount());
         metadata.put("toolScopeSource", toolScopeSummary.source());
-        metadata.put("toolScopeKind", TOOL_SCOPE_KIND_NAVIGATOR_BUSINESS_MCP);
+        metadata.put("toolScopeKind", toolScopeSummary.effectiveToolCount() == 0
+                ? TOOL_SCOPE_KIND_NO_RUNTIME
+                : TOOL_SCOPE_KIND_NAVIGATOR_BUSINESS_MCP);
+        metadata.put("requestedFunctionCount", requestedScopeCount(form.getAllowedFunctions()));
+        if (form.isAllowedFunctionsProvided()
+                && cleanRequestListPreservingEmpty(form.getAllowedFunctions()).isEmpty()) {
+            metadata.put("effectiveFunctionCount", 0);
+            metadata.put("functionScopeSource", "REQUEST_EXPLICIT_EMPTY");
+            metadata.put("taskTokenFunctionScopeEmpty", true);
+        }
         metadata.put("runtimeDispatched", true);
+        metadata.put("modelDispatched", true);
+        metadata.put("businessFunctionDispatched", false);
+        if (askRequestAudit != null) {
+            try {
+                requestAuditService.taskAdmissionRecorded(
+                        askRequestAudit,
+                        requestAuditEvidence(
+                                null, "ADMITTED", false, null, route.agentId(), upstreamUserId,
+                                stringValue(metadata.get("workerId")), modelConfigId, modelResource.modelName(),
+                                metadata, "STANDARD_SCOPE_ADMITTED", false));
+            } catch (RuntimeException e) {
+                return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
+            }
+        }
         String businessRuntimeToken = enrichBusinessRuntimeContext(
                 tenantId,
                 metadata,
@@ -866,6 +989,21 @@ public class OpenApiController {
         SessionTaskEntity taskEntity = sessionQueryService.findTask(task.getId()).orElse(null);
         OpenApiTaskDTO response = toOpenApiTaskDTO(task, route.agentId(), taskEntity);
         applyScopeDiagnostics(response, metadata);
+        if (askRequestAudit != null) {
+            try {
+                requestAuditService.taskOperationCompleted(
+                        askRequestAudit,
+                        requestAuditEvidence(
+                                response.getTaskId(), response.getStatus(), false, null,
+                                route.agentId(), upstreamUserId, stringValue(metadata.get("workerId")),
+                                response.getModelConfigId(), modelResource.modelName(), metadata,
+                                "STANDARD_ASK_DISPATCHED", true),
+                        false,
+                        true);
+            } catch (RuntimeException e) {
+                return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
+            }
+        }
         return RX.ok(response);
     }
 
@@ -1066,6 +1204,47 @@ public class OpenApiController {
         target.setTaskTokenFunctionScopeEmpty(booleanValue(metadata.get("taskTokenFunctionScopeEmpty")));
         target.setRuntimeDispatched(booleanValue(metadata.get("runtimeDispatched")));
         target.setTaskTokenStatus(stringValue(metadata.get("taskTokenStatus")));
+    }
+
+    private RuntimeRequestAuditService.TaskEvidence requestAuditEvidence(
+            String taskId,
+            String status,
+            boolean terminal,
+            String sanitizedErrorCode,
+            String agentCode,
+            String upstreamUserId,
+            String physicalWorkerId,
+            String modelConfigId,
+            String modelVariant,
+            Map<String, Object> metadata,
+            String result,
+            boolean dispatched) {
+        return new RuntimeRequestAuditService.TaskEvidence(
+                taskId,
+                status,
+                terminal,
+                sanitizedErrorCode,
+                agentCode,
+                upstreamUserId,
+                physicalWorkerId,
+                modelConfigId,
+                modelVariant,
+                integerValue(metadata.get("requestedToolCount")),
+                integerValue(metadata.get("effectiveToolCount")),
+                stringValue(metadata.get("toolScopeKind")),
+                stringValue(metadata.get("toolScopeSource")),
+                integerValue(metadata.get("requestedFunctionCount")),
+                integerValue(metadata.get("effectiveFunctionCount")),
+                stringValue(metadata.get("functionScopeSource")),
+                booleanValue(metadata.get("taskTokenFunctionScopeEmpty")),
+                dispatched ? "ACTIVE" : "NOT_ISSUED",
+                dispatched,
+                dispatched,
+                false,
+                dispatched ? 1 : 0,
+                0,
+                0,
+                result);
     }
 
     private String extractRequestedModelConfigId(OpenApiQueryForm form) {
@@ -1944,6 +2123,11 @@ public class OpenApiController {
         return new ToolScopeSummary(effectiveTools.size(), TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST);
     }
 
+    private Integer requestedScopeCount(List<String> values) {
+        if (values == null) return null;
+        return cleanRequestListPreservingEmpty(values).size();
+    }
+
     private String issueBusinessRuntimeToken(
             String tenantId,
             String actorUserId,
@@ -2232,6 +2416,13 @@ public class OpenApiController {
                 "X-Client-App-Secret",
                 "X-App-Secret",
                 "X-Foggy-App-Secret");
+    }
+
+    private String runtimeUpstreamUserId(HttpServletRequest request) {
+        return firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
     }
 
     private boolean hasAnyHeader(HttpServletRequest request, String... names) {

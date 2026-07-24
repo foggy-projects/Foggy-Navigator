@@ -41,6 +41,7 @@ import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.session.service.TerminationOperationService;
 import jakarta.persistence.EntityManager;
@@ -1323,6 +1324,228 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      */
     public void abortTask(String taskId) {
         dispatchAuthorizedAbort(reserveAuthorizedAbort(taskId, null));
+    }
+
+    public RuntimeTaskClosureProvider.TerminationReadiness inspectRuntimeTermination(
+            String taskId, String expectedPhysicalWorkerId) {
+        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null) {
+            return new RuntimeTaskClosureProvider.TerminationReadiness(
+                    false, false, false, false, false, false, "RUNTIME_TASK_NOT_FOUND");
+        }
+        if (!Objects.equals(entity.getWorkerId(), expectedPhysicalWorkerId)) {
+            return new RuntimeTaskClosureProvider.TerminationReadiness(
+                    false, false, false, false, false, false, "EXPECTED_PHYSICAL_WORKER_MISMATCH");
+        }
+        if (isTerminalStatus(entity.getStatus())) {
+            return new RuntimeTaskClosureProvider.TerminationReadiness(
+                    true, false, true, true, true, false, "TASK_ALREADY_TERMINAL");
+        }
+        try {
+            CodexWorkerClient client = terminationClient(entity);
+            Map<String, Object> health = client.healthCheck().block(Duration.ofSeconds(5));
+            boolean authConfigured = booleanValue(health, "termination_auth_configured");
+            boolean workerIdConfigured = booleanValue(health, "termination_worker_id_configured");
+            boolean ready = booleanValue(health, "termination_ready");
+            boolean active = false;
+            try {
+                Map<String, Object> workerTask = client.getTaskStatus(entity.getWorkerTaskId())
+                        .block(Duration.ofSeconds(5));
+                String status = stringValue(workerTask != null ? workerTask.get("status") : null);
+                active = "running".equalsIgnoreCase(status) || "cancel_requested".equalsIgnoreCase(status);
+            } catch (RuntimeException error) {
+                WebClientResponseException responseError = findWorkerResponseError(error);
+                if (responseError == null || responseError.getStatusCode().value() != 404) {
+                    return new RuntimeTaskClosureProvider.TerminationReadiness(
+                            false, false, ready, authConfigured, workerIdConfigured,
+                            false, "WORKER_TASK_STATUS_UNREACHABLE");
+                }
+            }
+            String blocked = !ready ? "WORKER_TERMINATION_NOT_READY"
+                    : !active ? "WORKER_ACTIVE_TASK_NOT_PRESENT" : null;
+            return new RuntimeTaskClosureProvider.TerminationReadiness(
+                    true, active, ready, authConfigured, workerIdConfigured,
+                    ready && active, blocked);
+        } catch (RuntimeException error) {
+            return new RuntimeTaskClosureProvider.TerminationReadiness(
+                    false, false, false, false, false, false, "WORKER_UNREACHABLE");
+        }
+    }
+
+    public RuntimeTaskClosureProvider.TerminationResult terminateRuntimeTask(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            String reason,
+            String clientRequestId,
+            boolean dryRun) {
+        RuntimeTaskClosureProvider.TerminationReadiness readiness =
+                inspectRuntimeTermination(taskId, expectedPhysicalWorkerId);
+        CodexTaskEntity observed = taskRepository.findByTaskId(taskId).orElse(null);
+        if (observed == null || !matchesStaleTurnCleanupOwnerScope(observed, ownerUserId, tenantId)) {
+            throw new TerminationDispatchException("RUNTIME_TASK_TERMINATION_FORBIDDEN", false);
+        }
+        if (isTerminalStatus(observed.getStatus())) {
+            return new RuntimeTaskClosureProvider.TerminationResult(
+                    true, false, false, false, observed.getStatus(), null, null);
+        }
+        if (dryRun) {
+            return new RuntimeTaskClosureProvider.TerminationResult(
+                    false, false, false, !readiness.terminateAllowed(), observed.getStatus(), null,
+                    readiness.blockedReason());
+        }
+        if (!readiness.terminateAllowed()) {
+            throw new TerminationDispatchException(
+                    firstNonBlank(readiness.blockedReason(), "RUNTIME_TASK_TERMINATION_BLOCKED"), true);
+        }
+
+        String operationId = runtimeTerminationOperationId(clientRequestId);
+        TerminationOperationEntity existing = terminationOperationService != null
+                ? terminationOperationService.find(operationId) : null;
+        if (existing != null) {
+            if (!Objects.equals(existing.getTaskId(), taskId)
+                    || !Objects.equals(existing.getWorkerId(), expectedPhysicalWorkerId)) {
+                throw new TerminationDispatchException("CLIENT_REQUEST_ID_OPERATION_MISMATCH", false);
+            }
+            CodexTaskEntity replayed = taskRepository.findByTaskId(taskId).orElse(observed);
+            return new RuntimeTaskClosureProvider.TerminationResult(
+                    isTerminalStatus(replayed.getStatus()), false, true,
+                    !isTerminalStatus(replayed.getStatus()), replayed.getStatus(), operationId, null);
+        }
+
+        RemoteTerminationReservation reservation = reserveRuntimeTermination(
+                taskId, ownerUserId, tenantId, expectedPhysicalWorkerId, reason,
+                clientRequestId, operationId);
+        if (reservation == null) {
+            CodexTaskEntity terminal = taskRepository.findByTaskId(taskId).orElse(observed);
+            return new RuntimeTaskClosureProvider.TerminationResult(
+                    true, false, false, false, terminal.getStatus(), null, null);
+        }
+        dispatchAuthorizedAbort(reservation);
+        CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(observed);
+        return new RuntimeTaskClosureProvider.TerminationResult(
+                isTerminalStatus(current.getStatus()), true, false,
+                !isTerminalStatus(current.getStatus()), current.getStatus(), operationId, null);
+    }
+
+    public RuntimeTaskClosureProvider.ReconciliationResult reconcileRuntimeTask(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            boolean dryRun) {
+        CodexTaskEntity observed = taskRepository.findByTaskId(taskId).orElse(null);
+        if (observed == null || !matchesStaleTurnCleanupOwnerScope(observed, ownerUserId, tenantId)) {
+            throw new IllegalArgumentException("RUNTIME_TASK_RECONCILE_FORBIDDEN");
+        }
+        if (!Objects.equals(observed.getWorkerId(), expectedPhysicalWorkerId)) {
+            throw new IllegalArgumentException("EXPECTED_PHYSICAL_WORKER_MISMATCH");
+        }
+        if (isTerminalStatus(observed.getStatus())) {
+            return new RuntimeTaskClosureProvider.ReconciliationResult(
+                    false, true, observed.getStatus(), "NAVIGATOR_ALREADY_TERMINAL", null);
+        }
+        if (!"CANCEL_REQUESTED".equals(observed.getStatus())) {
+            throw new IllegalStateException("RUNTIME_TASK_RECONCILE_NOT_CANCEL_REQUESTED");
+        }
+
+        CodexWorkerClient client = terminationClient(observed);
+        try {
+            Map<String, Object> workerTask = client.getTaskStatus(observed.getWorkerTaskId())
+                    .block(RESUME_RECONCILIATION_TIMEOUT);
+            String workerStatus = stringValue(workerTask != null ? workerTask.get("status") : null);
+            if (!"aborted".equalsIgnoreCase(workerStatus)) {
+                throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+            }
+            if (!dryRun) {
+                reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+            }
+            return new RuntimeTaskClosureProvider.ReconciliationResult(
+                    !dryRun, false, dryRun ? observed.getStatus() : "ABORTED",
+                    "WORKER_TERMINAL_ABORTED", null);
+        } catch (RuntimeException error) {
+            WebClientResponseException responseError = findWorkerResponseError(error);
+            if (responseError == null || responseError.getStatusCode().value() != 404) {
+                if (error instanceof IllegalStateException stateError) throw stateError;
+                throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE", error);
+            }
+        }
+        if (dryRun) {
+            if (!sdkTaskAbsenceVerified(observed)) {
+                throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+            }
+            return new RuntimeTaskClosureProvider.ReconciliationResult(
+                    false, false, observed.getStatus(), "WORKER_TASK_AND_PROCESS_ABSENT", null);
+        }
+        boolean handled = repairStaleSdkCancellationIfVerifiedAbsent(observed);
+        if (!handled) {
+            throw new IllegalStateException("RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT");
+        }
+        CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(observed);
+        return new RuntimeTaskClosureProvider.ReconciliationResult(
+                isTerminalStatus(current.getStatus()), false, current.getStatus(),
+                "WORKER_TASK_AND_PROCESS_ABSENT", null);
+    }
+
+    private RemoteTerminationReservation reserveRuntimeTermination(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            String reason,
+            String clientRequestId,
+            String operationId) {
+        return inTerminationTransaction(() -> {
+            CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("RUNTIME_TASK_NOT_FOUND"));
+            if (!matchesStaleTurnCleanupOwnerScope(entity, ownerUserId, tenantId)) {
+                throw new SecurityException("RUNTIME_TASK_TERMINATION_FORBIDDEN");
+            }
+            if (!Objects.equals(entity.getWorkerId(), expectedPhysicalWorkerId)) {
+                throw new IllegalArgumentException("EXPECTED_PHYSICAL_WORKER_MISMATCH");
+            }
+            if (isTerminalStatus(entity.getStatus())) return null;
+            if (!hasNonBlank(entity.getWorkerTaskId())) {
+                throw new IllegalStateException("TERMINATION_REMOTE_TASK_UNAVAILABLE");
+            }
+            if (terminationOperationService == null) {
+                throw new IllegalStateException("TERMINATION_AUDIT_UNAVAILABLE");
+            }
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            entity.getTaskId(), entity.getWorkerTaskId(), entity.getSessionId(),
+                            entity.getUserId(), entity.getTenantId(), resolveProviderType(entity),
+                            entity.getWorkerId(), "REMOTE_CANCEL", "UPSTREAM_USER",
+                            entity.getUserId(), "RUNTIME_CLIENT",
+                            "runtime-closure:" + clientRequestId,
+                            firstNonBlank(reason, "operator-stuck-task-termination"),
+                            "runtime-task-terminate:" + clientRequestId,
+                            null, null, 300),
+                    operationId);
+            String previousStatus = entity.getStatus();
+            String previousRuntimeAcceptanceState = entity.getRuntimeAcceptanceState();
+            entity.setStatus("CANCEL_REQUESTED");
+            entity.setErrorMessage(null);
+            persistTask(entity);
+            if (!"CANCEL_REQUESTED".equals(previousStatus)) publishStatusChange(entity, previousStatus);
+            return new RemoteTerminationReservation(
+                    entity.getTaskId(), entity.getWorkerTaskId(), previousStatus,
+                    previousRuntimeAcceptanceState, operation);
+        });
+    }
+
+    private String runtimeTerminationOperationId(String clientRequestId) {
+        if (!hasNonBlank(clientRequestId)
+                || !clientRequestId.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,95}")) {
+            throw new IllegalArgumentException("CLIENT_REQUEST_ID_INVALID");
+        }
+        String compact = clientRequestId.replaceAll("[^A-Za-z0-9]", "");
+        return "rt_" + compact.substring(0, Math.min(56, compact.length()));
+    }
+
+    private boolean booleanValue(Map<String, Object> values, String key) {
+        return values != null && Boolean.TRUE.equals(values.get(key));
     }
 
     /**
