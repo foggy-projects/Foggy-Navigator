@@ -5,10 +5,13 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RuntimeTaskAuditDTO {
     private Instant observedAt;
+    private Map<String, Object> taskFacts;
+    private Map<String, Object> auditSideEffects;
     private String taskId;
     private Boolean terminal;
     private String status;
@@ -21,6 +24,17 @@ public class RuntimeTaskAuditDTO {
     private String physicalWorkerId;
     private String modelConfigId;
     private String modelVariant;
+    private Integer requestedToolCount;
+    private Integer effectiveToolCount;
+    private String toolScopeKind;
+    private String toolScopeSource;
+    private Integer requestedFunctionCount;
+    private Integer effectiveFunctionCount;
+    private String functionScopeSource;
+    private Boolean taskTokenFunctionScopeEmpty;
+    private Boolean runtimeDispatched;
+    private Boolean taskModelDispatched;
+    private Boolean taskBusinessFunctionDispatched;
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
     private List<RuntimeTaskAuditStageDTO> terminalStages;
@@ -37,6 +51,10 @@ public class RuntimeTaskAuditDTO {
 
     public Instant getObservedAt() { return observedAt; }
     public void setObservedAt(Instant observedAt) { this.observedAt = observedAt; }
+    public Map<String, Object> getTaskFacts() { return taskFacts; }
+    public void setTaskFacts(Map<String, Object> taskFacts) { this.taskFacts = taskFacts; }
+    public Map<String, Object> getAuditSideEffects() { return auditSideEffects; }
+    public void setAuditSideEffects(Map<String, Object> auditSideEffects) { this.auditSideEffects = auditSideEffects; }
     public String getTaskId() { return taskId; }
     public void setTaskId(String taskId) { this.taskId = taskId; }
     public Boolean getTerminal() { return terminal; }
@@ -61,6 +79,28 @@ public class RuntimeTaskAuditDTO {
     public void setModelConfigId(String modelConfigId) { this.modelConfigId = modelConfigId; }
     public String getModelVariant() { return modelVariant; }
     public void setModelVariant(String modelVariant) { this.modelVariant = modelVariant; }
+    public Integer getRequestedToolCount() { return requestedToolCount; }
+    public void setRequestedToolCount(Integer requestedToolCount) { this.requestedToolCount = requestedToolCount; }
+    public Integer getEffectiveToolCount() { return effectiveToolCount; }
+    public void setEffectiveToolCount(Integer effectiveToolCount) { this.effectiveToolCount = effectiveToolCount; }
+    public String getToolScopeKind() { return toolScopeKind; }
+    public void setToolScopeKind(String toolScopeKind) { this.toolScopeKind = toolScopeKind; }
+    public String getToolScopeSource() { return toolScopeSource; }
+    public void setToolScopeSource(String toolScopeSource) { this.toolScopeSource = toolScopeSource; }
+    public Integer getRequestedFunctionCount() { return requestedFunctionCount; }
+    public void setRequestedFunctionCount(Integer requestedFunctionCount) { this.requestedFunctionCount = requestedFunctionCount; }
+    public Integer getEffectiveFunctionCount() { return effectiveFunctionCount; }
+    public void setEffectiveFunctionCount(Integer effectiveFunctionCount) { this.effectiveFunctionCount = effectiveFunctionCount; }
+    public String getFunctionScopeSource() { return functionScopeSource; }
+    public void setFunctionScopeSource(String functionScopeSource) { this.functionScopeSource = functionScopeSource; }
+    public Boolean getTaskTokenFunctionScopeEmpty() { return taskTokenFunctionScopeEmpty; }
+    public void setTaskTokenFunctionScopeEmpty(Boolean taskTokenFunctionScopeEmpty) { this.taskTokenFunctionScopeEmpty = taskTokenFunctionScopeEmpty; }
+    public Boolean getRuntimeDispatched() { return runtimeDispatched; }
+    public void setRuntimeDispatched(Boolean runtimeDispatched) { this.runtimeDispatched = runtimeDispatched; }
+    public Boolean getTaskModelDispatched() { return taskModelDispatched; }
+    public void setTaskModelDispatched(Boolean taskModelDispatched) { this.taskModelDispatched = taskModelDispatched; }
+    public Boolean getTaskBusinessFunctionDispatched() { return taskBusinessFunctionDispatched; }
+    public void setTaskBusinessFunctionDispatched(Boolean taskBusinessFunctionDispatched) { this.taskBusinessFunctionDispatched = taskBusinessFunctionDispatched; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getCompletedAt() { return completedAt; }

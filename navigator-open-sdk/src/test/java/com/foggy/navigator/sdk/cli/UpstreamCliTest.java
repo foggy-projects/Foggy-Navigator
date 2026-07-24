@@ -162,6 +162,43 @@ class UpstreamCliTest {
                 response = """
                         {"code":200,"data":{
                           "observedAt":"2026-07-24T06:01:00Z",
+                          "taskFacts":{
+                            "taskId":"task-existing",
+                            "terminal":true,
+                            "status":"FAILED",
+                            "sanitizedErrorCode":"CODEX_WORKER_REMOTE_ERROR",
+                            "taskTokenStatus":"REVOKED",
+                            "activeTaskRegistrationPresent":false,
+                            "dispatchCount":1,
+                            "retryCount":0,
+                            "recoveryCount":0,
+                            "physicalWorkerId":"worker-durable",
+                            "modelConfigId":"model-durable",
+                            "modelVariant":"codex-luna:high",
+                            "requestedToolCount":0,
+                            "effectiveToolCount":0,
+                            "toolScopeKind":"NO_RUNTIME_MODEL_TOOL_SURFACE",
+                            "toolScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                            "requestedFunctionCount":0,
+                            "effectiveFunctionCount":0,
+                            "functionScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                            "taskTokenFunctionScopeEmpty":true,
+                            "runtimeDispatched":true,
+                            "modelDispatched":true,
+                            "businessFunctionDispatched":false
+                          },
+                          "auditSideEffects":{
+                            "accessTokenIssued":false,
+                            "runtimeTokenIssued":false,
+                            "taskTokenIssued":false,
+                            "taskCreated":false,
+                            "contextCreated":false,
+                            "sessionCreated":false,
+                            "modelDispatched":false,
+                            "businessFunctionDispatched":false,
+                            "recoveryTriggered":false,
+                            "provisioningResourceChanged":false
+                          },
                           "taskId":"task-existing",
                           "terminal":true,
                           "status":"FAILED",
@@ -174,6 +211,17 @@ class UpstreamCliTest {
                           "physicalWorkerId":"worker-durable",
                           "modelConfigId":"model-durable",
                           "modelVariant":"codex-luna:high",
+                          "requestedToolCount":0,
+                          "effectiveToolCount":0,
+                          "toolScopeKind":"NO_RUNTIME_MODEL_TOOL_SURFACE",
+                          "toolScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                          "requestedFunctionCount":0,
+                          "effectiveFunctionCount":0,
+                          "functionScopeSource":"REQUEST_EXPLICIT_EMPTY",
+                          "taskTokenFunctionScopeEmpty":true,
+                          "runtimeDispatched":true,
+                          "taskModelDispatched":true,
+                          "taskBusinessFunctionDispatched":false,
                           "createdAt":"2026-07-23T15:43:22.889002",
                           "completedAt":"2026-07-23T17:26:55.955344",
                           "terminalStages":[{
@@ -2403,6 +2451,14 @@ class UpstreamCliTest {
         assertNull(lastAuthorizationHeader);
         assertTrue(output.contains("\"taskTokenStatus\" : \"REVOKED\""));
         assertTrue(output.contains("\"dispatchCount\" : 1"));
+        assertTrue(output.contains("\"taskFacts\""));
+        assertTrue(output.contains("\"auditSideEffects\""));
+        assertTrue(output.contains("\"requestedToolCount\" : 0"));
+        assertTrue(output.contains("\"effectiveToolCount\" : 0"));
+        assertTrue(output.contains("\"toolScopeKind\" : \"NO_RUNTIME_MODEL_TOOL_SURFACE\""));
+        assertTrue(output.contains("\"taskTokenFunctionScopeEmpty\" : true"));
+        assertTrue(output.contains("\"runtimeDispatched\" : true"));
+        assertTrue(output.contains("\"taskModelDispatched\" : true"));
         assertTrue(output.contains("\"recoveryTriggered\" : false"));
         assertFalse(output.contains("cas-runtime-secret"));
         assertFalse(output.contains("prompt"));
@@ -5154,8 +5210,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.27", provenance.sourceVersion());
-        assertEquals("1.0.27", provenance.publishedVersion());
+        assertEquals("1.0.28", provenance.sourceVersion());
+        assertEquals("1.0.28", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
