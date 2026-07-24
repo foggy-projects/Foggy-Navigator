@@ -2581,6 +2581,53 @@ class UpstreamCliTest {
     }
 
     @Test
+    void runtimeTaskReconcileCanReplayTheExactPrintedClientRequestId() {
+        responseOverride = """
+                {"code":200,"data":{
+                  "taskId":"task-existing",
+                  "reconciliationChanged":false,
+                  "alreadyConsistent":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "task-reconcile",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--expected-dispatch-count", "1",
+                "--confirm-task-id", "task-existing",
+                "--replay-client-request-id", "request-reconcile-replay-1",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, code, stderr.toString(StandardCharsets.UTF_8));
+        assertEquals(1, requestPaths.size());
+        assertEquals("request-reconcile-replay-1", lastClientRequestIdHeader);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8)
+                .startsWith("clientRequestId=request-reconcile-replay-1"));
+    }
+
+    @Test
+    void runtimeTaskReconcileRejectsInvalidReplayClientRequestIdBeforeNetwork() {
+        int code = run(new String[]{"upstream", "runtime", "task-reconcile",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--expected-dispatch-count", "1",
+                "--confirm-task-id", "task-existing",
+                "--replay-client-request-id", "invalid request id",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(2, code);
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
     void runtimeStateAuditRejectsForeignCredentialBeforeNetwork() {
         int code = run(new String[]{"upstream", "runtime", "binding-audit",
                 "--base-url", baseUrl(),
@@ -5305,8 +5352,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.30", provenance.sourceVersion());
-        assertEquals("1.0.30", provenance.publishedVersion());
+        assertEquals("1.0.31", provenance.sourceVersion());
+        assertEquals("1.0.31", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)

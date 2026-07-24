@@ -50,6 +50,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -76,6 +78,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.doReturn;
@@ -4316,7 +4319,11 @@ class CodexTaskServiceTest {
                         "termination_operation", Map.of(
                                 "operation_id", "rt_original_replay",
                                 "status", "OBSERVED_EXIT"))));
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        TransactionStatus transactionStatus = mock(TransactionStatus.class);
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
         ReflectionTestUtils.setField(service, "terminationOperationService", terminationOperationService);
+        ReflectionTestUtils.setField(service, "terminationTransactionManager", transactionManager);
 
         var result = service.reconcileRuntimeTask(
                 "task-runtime-reconcile-replay", "user-1", "tenant-1",
@@ -4329,6 +4336,8 @@ class CodexTaskServiceTest {
         verify(workerClient, never()).reconcileTermination(anyString(), anyString(), any());
         verify(terminationOperationService).markObservedTerminal("rt_original_replay", "ABORTED");
         verify(terminationOperationService).markObservedTerminal("rc_requestreplay", "ABORTED");
+        verify(transactionManager).getTransaction(any());
+        verify(transactionManager).commit(transactionStatus);
     }
 
     @Test

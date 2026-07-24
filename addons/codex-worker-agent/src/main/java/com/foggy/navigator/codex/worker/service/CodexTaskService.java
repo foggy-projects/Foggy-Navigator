@@ -1458,7 +1458,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             String workerStatus = stringValue(workerTask != null ? workerTask.get("status") : null);
             if ("aborted".equalsIgnoreCase(workerStatus)) {
                 if (!dryRun) {
-                    reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+                    reconcileRuntimeAbortedTask(
+                            taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
                 }
                 return new RuntimeTaskClosureProvider.ReconciliationResult(
                         !dryRun, false, dryRun ? observed.getStatus() : "ABORTED",
@@ -1516,7 +1517,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                             originalOperation.getOperationId(), "ABORTED");
                     terminationOperationService.markObservedTerminal(
                             reconciliationOperationId, "ABORTED");
-                    reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+                    reconcileRuntimeAbortedTask(
+                            taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
                     current = taskRepository.findByTaskId(taskId).orElse(observed);
                     consistent = isTerminalStatus(current.getStatus());
                 } catch (RuntimeException error) {
@@ -1547,7 +1549,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                     originalOperation.getOperationId(), "ABORTED");
             terminationOperationService.markObservedTerminal(
                     reconciliationOperationId, "ABORTED");
-            reconcileAbortedTask(taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
+            reconcileRuntimeAbortedTask(
+                    taskId, observed.getWorkerTaskId(), observed.getCodexThreadId());
         } catch (RuntimeException error) {
             if (error instanceof CodexWorkerClient.WorkerQueryRejectedException rejection) {
                 terminationOperationService.markRejected(reconciliationOperationId, rejection.getCode());
@@ -3025,6 +3028,24 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     @Transactional
     public void reconcileAbortedTask(String taskId, String workerTaskId, String codexThreadId) {
+        reconcileAbortedTaskLocked(taskId, workerTaskId, codexThreadId);
+    }
+
+    /**
+     * Runtime reconciliation is invoked from this service itself, so the
+     * public {@link Transactional} proxy boundary is not applied. Use the
+     * explicit termination transaction before acquiring the task row lock.
+     */
+    private void reconcileRuntimeAbortedTask(
+            String taskId, String workerTaskId, String codexThreadId) {
+        inTerminationTransaction(() -> {
+            reconcileAbortedTaskLocked(taskId, workerTaskId, codexThreadId);
+            return null;
+        });
+    }
+
+    private void reconcileAbortedTaskLocked(
+            String taskId, String workerTaskId, String codexThreadId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) return;
         String previousStatus = entity.getStatus();

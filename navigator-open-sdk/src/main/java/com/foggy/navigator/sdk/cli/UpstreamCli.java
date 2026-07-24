@@ -742,8 +742,8 @@ public class UpstreamCli {
         out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
         out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
         out.println("  termination-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
-        out.println("  task-terminate --task-id <id> --expected-physical-worker-id <id> --reason <code> [--dry-run | --confirm-task-id <id>] [--json]");
-        out.println("  task-reconcile --task-id <id> --expected-physical-worker-id <id> --expected-dispatch-count <n> [--dry-run | --confirm-task-id <id>] [--json]");
+        out.println("  task-terminate --task-id <id> --expected-physical-worker-id <id> --reason <code> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
+        out.println("  task-reconcile --task-id <id> --expected-physical-worker-id <id> --expected-dispatch-count <n> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
         out.println("Audit uses ClientApp key/secret only, derives tenant/system/ClientApp on the server, issues no token, and creates no task/context/session or runtime dispatch.");
         return 0;
     }
@@ -1413,7 +1413,8 @@ public class UpstreamCli {
             throw new UpstreamCliException("task-terminate requires --confirm-task-id equal to --task-id");
         }
         String clientRequestId = beginRuntimeClientRequest(
-                "task-terminate", null, upstreamUserId(args));
+                "task-terminate", null, upstreamUserId(args),
+                args.option("replay-client-request-id"));
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("taskId", taskId);
         body.put("expectedPhysicalWorkerId", expectedWorkerId);
@@ -1444,7 +1445,8 @@ public class UpstreamCli {
         Integer expectedDispatchCount = parseInteger(requiredOption(
                 args, "expected-dispatch-count", "expected dispatch count"));
         String clientRequestId = beginRuntimeClientRequest(
-                "task-reconcile", null, upstreamUserId(args));
+                "task-reconcile", null, upstreamUserId(args),
+                args.option("replay-client-request-id"));
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("taskId", taskId);
         body.put("expectedPhysicalWorkerId", expectedWorkerId);
@@ -4788,7 +4790,20 @@ public class UpstreamCli {
     }
 
     private String beginRuntimeClientRequest(String operation, String agentCode, String upstreamUserId) {
-        String clientRequestId = UUID.randomUUID().toString();
+        return beginRuntimeClientRequest(operation, agentCode, upstreamUserId, null);
+    }
+
+    private String beginRuntimeClientRequest(
+            String operation,
+            String agentCode,
+            String upstreamUserId,
+            String replayClientRequestId) {
+        String clientRequestId = hasText(replayClientRequestId)
+                ? replayClientRequestId.trim()
+                : UUID.randomUUID().toString();
+        if (!clientRequestId.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,95}")) {
+            throw new UpstreamCliException("replay client request id is invalid");
+        }
         activeClientRequestId = clientRequestId;
         activeRuntimeOperation = operation;
         activeRuntimeAgentCode = agentCode;

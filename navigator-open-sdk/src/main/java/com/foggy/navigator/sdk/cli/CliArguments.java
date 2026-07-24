@@ -113,6 +113,7 @@ final class CliArguments {
             "provider-type",
             "reason",
             "reason-reference",
+            "replay-client-request-id",
             "request-id",
             "request-code",
             "requested-tenant-id",
