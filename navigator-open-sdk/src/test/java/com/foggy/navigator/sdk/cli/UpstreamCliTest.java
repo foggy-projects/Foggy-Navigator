@@ -2486,6 +2486,101 @@ class UpstreamCliTest {
     }
 
     @Test
+    void runtimeTerminationReadinessAllowsFailClosedWorkerExpectationWithoutMutation() {
+        responseOverride = """
+                {"code":200,"data":{
+                  "taskExists":true,
+                  "taskId":"task-existing",
+                  "terminal":false,
+                  "status":"RUNNING",
+                  "physicalWorkerId":"worker-durable",
+                  "terminateAllowed":true,
+                  "dryRun":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "termination-readiness",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, code);
+        assertEquals("GET", lastMethod);
+        assertTrue(lastPath.contains("/api/v1/open/runtime/termination-readiness?"));
+        assertTrue(lastPath.contains("taskId=task-existing"));
+        assertTrue(lastPath.contains("expectedPhysicalWorkerId=worker-durable"));
+        assertEquals(1, requestPaths.size());
+    }
+
+    @Test
+    void runtimeTaskTerminateCarriesExpectedWorkerAndConfirmWithOneRequest() {
+        responseOverride = """
+                {"code":200,"data":{
+                  "taskId":"task-existing",
+                  "terminal":true,
+                  "status":"CANCELLED",
+                  "sanitizedErrorCode":"OPERATOR_TERMINATED",
+                  "reconcileRequired":false
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "task-terminate",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--reason", "operator-stuck-task-termination",
+                "--confirm-task-id", "task-existing",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, code);
+        assertEquals("POST", lastMethod);
+        assertEquals("/api/v1/open/runtime/task-terminate", lastPath);
+        assertTrue(lastBody.contains("\"expectedPhysicalWorkerId\":\"worker-durable\""));
+        assertTrue(lastBody.contains("\"confirmTaskId\":\"task-existing\""));
+        assertFalse(lastBody.contains("\"dryRun\":true"));
+        assertEquals(1, requestPaths.size());
+        assertNotNull(lastClientRequestIdHeader);
+    }
+
+    @Test
+    void runtimeTaskReconcileCarriesExpectedWorkerDispatchAndConfirmWithOneRequest() {
+        responseOverride = """
+                {"code":200,"data":{
+                  "taskId":"task-existing",
+                  "reconciliationChanged":false,
+                  "reconcileRequired":false
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "task-reconcile",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--expected-dispatch-count", "1",
+                "--confirm-task-id", "task-existing",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, code);
+        assertEquals("POST", lastMethod);
+        assertEquals("/api/v1/open/runtime/task-reconcile", lastPath);
+        assertTrue(lastBody.contains("\"expectedPhysicalWorkerId\":\"worker-durable\""));
+        assertTrue(lastBody.contains("\"expectedDispatchCount\":1"));
+        assertTrue(lastBody.contains("\"confirmTaskId\":\"task-existing\""));
+        assertEquals(1, requestPaths.size());
+        assertNotNull(lastClientRequestIdHeader);
+    }
+
+    @Test
     void runtimeStateAuditRejectsForeignCredentialBeforeNetwork() {
         int code = run(new String[]{"upstream", "runtime", "binding-audit",
                 "--base-url", baseUrl(),
@@ -5210,8 +5305,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.28", provenance.sourceVersion());
-        assertEquals("1.0.28", provenance.publishedVersion());
+        assertEquals("1.0.29", provenance.sourceVersion());
+        assertEquals("1.0.29", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
