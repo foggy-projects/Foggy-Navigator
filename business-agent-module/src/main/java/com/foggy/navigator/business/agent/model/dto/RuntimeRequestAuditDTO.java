@@ -11,6 +11,8 @@ import java.util.List;
 @Builder
 public class RuntimeRequestAuditDTO {
     private String clientRequestId;
+    private String parentClientRequestId;
+    private String correlationId;
     private String operation;
     private Instant receivedAt;
     private Instant completedAt;
@@ -21,6 +23,11 @@ public class RuntimeRequestAuditDTO {
     private Boolean httpRequestReceived;
     private Boolean runtimeTokenRequestReceived;
     private Boolean runtimeTokenIssued;
+    private Integer runtimeTokenExchangeCount;
+    private Boolean standardAskRequestReceived;
+    private Boolean admissionCompleted;
+    private Boolean taskCreated;
+    private Boolean taskTokenIssued;
     private Boolean safeSmokeRequestReceived;
     private Boolean syntheticEvidenceCreated;
     private String taskId;

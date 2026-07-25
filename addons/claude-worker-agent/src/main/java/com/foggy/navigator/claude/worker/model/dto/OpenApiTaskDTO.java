@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 @Data
 @Builder
 public class OpenApiTaskDTO {
+    private String clientRequestId;
 
     /** 任务 ID */
     private String taskId;

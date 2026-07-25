@@ -31,6 +31,10 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
+        # Runtime request-audit Instants are normalized through JDBC in UTC.
+        # LocalDateTime domain fields retain their explicit domain-zone handling.
+        jdbc:
+          time_zone: UTC
 
 server:
   port: 8112

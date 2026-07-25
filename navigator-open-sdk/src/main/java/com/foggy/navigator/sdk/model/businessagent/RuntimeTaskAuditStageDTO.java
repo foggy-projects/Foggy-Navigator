@@ -2,14 +2,14 @@ package com.foggy.navigator.sdk.model.businessagent;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RuntimeTaskAuditStageDTO {
     private String stage;
     private String status;
     private String sanitizedErrorCode;
-    private LocalDateTime occurredAt;
+    private OffsetDateTime occurredAt;
 
     public String getStage() { return stage; }
     public void setStage(String stage) { this.stage = stage; }
@@ -17,6 +17,6 @@ public class RuntimeTaskAuditStageDTO {
     public void setStatus(String status) { this.status = status; }
     public String getSanitizedErrorCode() { return sanitizedErrorCode; }
     public void setSanitizedErrorCode(String sanitizedErrorCode) { this.sanitizedErrorCode = sanitizedErrorCode; }
-    public LocalDateTime getOccurredAt() { return occurredAt; }
-    public void setOccurredAt(LocalDateTime occurredAt) { this.occurredAt = occurredAt; }
+    public OffsetDateTime getOccurredAt() { return occurredAt; }
+    public void setOccurredAt(OffsetDateTime occurredAt) { this.occurredAt = occurredAt; }
 }

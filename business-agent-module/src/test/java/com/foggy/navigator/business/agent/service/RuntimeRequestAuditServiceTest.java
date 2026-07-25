@@ -77,6 +77,13 @@ class RuntimeRequestAuditServiceTest {
                         .filter(value -> invocation.getArgument(0).equals(value.getTaskId()))
                         .filter(value -> invocation.getArgument(1).equals(value.getOperation()))
                         .max(Comparator.comparing(RuntimeRequestAuditEntity::getReceivedAt)));
+        when(auditRepository.findTopByTaskIdAndOperationAndExpiresAtAfterOrderByReceivedAtDesc(
+                anyString(), anyString(), any(Instant.class)))
+                .thenAnswer(invocation -> audits.values().stream()
+                        .filter(value -> invocation.getArgument(0).equals(value.getTaskId()))
+                        .filter(value -> invocation.getArgument(1).equals(value.getOperation()))
+                        .filter(value -> value.getExpiresAt().isAfter(invocation.getArgument(2)))
+                        .max(Comparator.comparing(RuntimeRequestAuditEntity::getReceivedAt)));
         when(auditRepository.saveAndFlush(any(RuntimeRequestAuditEntity.class)))
                 .thenAnswer(invocation -> saveAudit(invocation.getArgument(0)));
         when(auditRepository.save(any(RuntimeRequestAuditEntity.class)))
@@ -367,10 +374,108 @@ class RuntimeRequestAuditServiceTest {
                 () -> assertTrue(audit.getModelDispatched()),
                 () -> assertFalse(audit.getBusinessFunctionDispatched()),
                 () -> assertEquals(1, audit.getDispatchCount()),
+                () -> assertFalse(audit.getAuditSideEffects().getNewTaskCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getNewContextCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getNewSessionCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getAccessTokenIssued()),
+                () -> assertFalse(audit.getAuditSideEffects().getRuntimeTokenIssued()),
+                () -> assertFalse(audit.getAuditSideEffects().getTaskTokenIssued()),
                 () -> assertFalse(audit.getAuditSideEffects().getTaskCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getContextCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getSessionCreated()),
                 () -> assertFalse(audit.getAuditSideEffects().getModelDispatched()),
+                () -> assertFalse(audit.getAuditSideEffects().getModelRedispatched()),
+                () -> assertFalse(audit.getAuditSideEffects().getBusinessFunctionDispatched()),
+                () -> assertFalse(audit.getAuditSideEffects().getRetryTriggered()),
+                () -> assertFalse(audit.getAuditSideEffects().getRecoveryTriggered()),
+                () -> assertFalse(audit.getAuditSideEffects().getProvisioningResourceChanged()),
                 () -> assertTrue(audit.getStages().stream()
                         .anyMatch(stage -> "STANDARD_SCOPE_ADMITTED".equals(stage.getStage()))));
+    }
+
+    @Test
+    void correlatesRuntimeTokenParentWithStandardAskAndQueriesByRequestIdAndWindow() {
+        String tokenRequestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle token = service.beginRuntimeToken(
+                tokenRequestId, "runtime-token", "runtime-key", "agent-1", "user-1");
+        service.runtimeTokenIssued(token);
+        String askRequestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle ask = service.beginAskRequest(
+                askRequestId, tokenRequestId, "runtime-key", "agent-1", "user-1");
+        service.authenticationCompleted(ask);
+        service.taskAdmissionRecorded(ask, standardEvidence(
+                null, "ADMITTED", "NOT_ISSUED", false, 0, "STANDARD_SCOPE_ADMITTED"));
+        service.taskDispatchRecorded(ask, standardEvidence(
+                "task-1", "RUNNING", "ACTIVE", true, 1, "STANDARD_ASK_DISPATCHED"));
+
+        RuntimeRequestAuditDTO exact = exact(askRequestId);
+        RuntimeRequestAuditPageDTO window = service.querySelfAudit(
+                "runtime-key", "runtime-secret", null,
+                exact.getReceivedAt().minusSeconds(1), exact.getReceivedAt().plusSeconds(1),
+                "ask", "agent-1", "user-1", 20);
+
+        assertAll(
+                () -> assertEquals(tokenRequestId, exact.getParentClientRequestId()),
+                () -> assertEquals(tokenRequestId, exact.getCorrelationId()),
+                () -> assertTrue(exact.getRuntimeTokenRequestReceived()),
+                () -> assertTrue(exact.getRuntimeTokenIssued()),
+                () -> assertEquals(1, exact.getRuntimeTokenExchangeCount()),
+                () -> assertTrue(exact.getStandardAskRequestReceived()),
+                () -> assertFalse(exact.getTerminal()),
+                () -> assertEquals(1, window.getCount()),
+                () -> assertEquals(askRequestId, window.getItems().get(0).getClientRequestId()));
+    }
+
+    @Test
+    void preTaskFailureRemainsQueryableWithNullTaskIdAndExplicitNotStages() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle ask = service.beginAskRequest(
+                requestId, null, "runtime-key", "agent-1", "user-1");
+        service.authenticationFailed(ask, "RUNTIME_ACCESS_TOKEN_INVALID");
+
+        RuntimeRequestAuditDTO audit = exact(requestId);
+
+        assertAll(
+                () -> assertTrue(audit.getTerminal()),
+                () -> assertNull(audit.getTaskId()),
+                () -> assertFalse(audit.getTaskCreated()),
+                () -> assertFalse(audit.getTaskTokenIssued()),
+                () -> assertFalse(audit.getRuntimeDispatched()),
+                () -> assertFalse(audit.getModelDispatched()),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TASK_NOT_CREATED".equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TASK_TOKEN_NOT_ISSUED".equals(stage.getStage()))),
+                () -> assertFalse(audit.getAuditSideEffects().getNewTaskCreated()),
+                () -> assertFalse(audit.getAuditSideEffects().getRuntimeTokenIssued()),
+                () -> assertFalse(audit.getAuditSideEffects().getModelRedispatched()),
+                () -> assertFalse(audit.getAuditSideEffects().getProvisioningResourceChanged()));
+    }
+
+    @Test
+    void terminalEventMakesRevocationAndTerminalStateVisibleWithoutChangingDispatchCounters() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle ask = service.beginAsk(
+                requestId, resolvedCredential(), "agent-1", "user-1");
+        service.taskAdmissionRecorded(ask, standardEvidence(
+                null, "ADMITTED", "NOT_ISSUED", false, 0, "STANDARD_SCOPE_ADMITTED"));
+        service.taskDispatchRecorded(ask, standardEvidence(
+                "task-1", "RUNNING", "ACTIVE", true, 1, "STANDARD_ASK_DISPATCHED"));
+
+        service.taskTerminalRecorded("task-1", "ABORTED", "OPERATOR_TERMINATED");
+        RuntimeRequestAuditDTO audit = exact(requestId);
+
+        assertAll(
+                () -> assertTrue(audit.getTerminal()),
+                () -> assertEquals("ABORTED", audit.getStatus()),
+                () -> assertEquals("REVOKED", audit.getTaskTokenStatus()),
+                () -> assertEquals(1, audit.getDispatchCount()),
+                () -> assertEquals(0, audit.getRetryCount()),
+                () -> assertEquals(0, audit.getRecoveryCount()),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TASK_TERMINAL".equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TASK_TOKEN_REVOKED".equals(stage.getStage()))));
     }
 
     @Test

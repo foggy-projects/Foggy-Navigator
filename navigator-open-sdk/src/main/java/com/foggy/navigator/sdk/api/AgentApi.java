@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Agent 交互 API（A2A 协议）
@@ -215,7 +216,8 @@ public class AgentApi {
             String upstreamUserId) {
         return askWithClientAppAccessToken(
                 agentId, question, contextId, maxTurns, clientContext, modelConfigId, modelVariant,
-                attachments, runtimeOptions, clientAppKey, clientAppAccessToken, upstreamUserId, null);
+                attachments, runtimeOptions, clientAppKey, clientAppAccessToken, upstreamUserId,
+                UUID.randomUUID().toString());
     }
 
     public AgentTask askWithClientAppAccessToken(
@@ -239,10 +241,13 @@ public class AgentApi {
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
         headers.put("X-Upstream-User-Id", upstreamUserId);
-        if (clientRequestId != null && !clientRequestId.isBlank()) {
-            headers.put("X-Navigator-Client-Request-Id", clientRequestId);
-            headers.put("X-Navigator-Runtime-Operation", "ask");
-        }
+        String effectiveClientRequestId = clientRequestId == null || clientRequestId.isBlank()
+                ? UUID.randomUUID().toString()
+                : UUID.fromString(clientRequestId.trim()).toString();
+        headers.put("X-Navigator-Client-Request-Id", effectiveClientRequestId);
+        headers.put("X-Navigator-Runtime-Operation", "ask");
+        headers.put("X-Navigator-Parent-Client-Request-Id",
+                http.runtimeTokenRequestId(clientAppAccessToken));
         return http.post("/api/v1/open/agents/" + agentId + "/ask",
                 body, headers, new TypeReference<>() {});
     }

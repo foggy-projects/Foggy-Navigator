@@ -9,4 +9,5 @@ public class ResolvedClientAppCredentialDTO {
     private String credentialId;
     private String tenantId;
     private String clientAppId;
+    private String runtimeTokenClientRequestId;
 }

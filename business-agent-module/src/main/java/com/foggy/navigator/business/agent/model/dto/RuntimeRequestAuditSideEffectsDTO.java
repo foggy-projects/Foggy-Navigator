@@ -7,6 +7,9 @@ import lombok.Data;
 @Data
 @Builder
 public class RuntimeRequestAuditSideEffectsDTO {
+    private Boolean newTaskCreated;
+    private Boolean newContextCreated;
+    private Boolean newSessionCreated;
     private Boolean accessTokenIssued;
     private Boolean runtimeTokenIssued;
     private Boolean taskTokenIssued;
@@ -14,7 +17,9 @@ public class RuntimeRequestAuditSideEffectsDTO {
     private Boolean contextCreated;
     private Boolean sessionCreated;
     private Boolean modelDispatched;
+    private Boolean modelRedispatched;
     private Boolean businessFunctionDispatched;
+    private Boolean retryTriggered;
     private Boolean recoveryTriggered;
     private Boolean provisioningResourceChanged;
 }

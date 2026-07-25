@@ -7,6 +7,7 @@ import com.foggy.navigator.sdk.model.businessagent.*;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Foggy Navigator Business Agent 控制面 API
@@ -44,7 +45,8 @@ public class BusinessAgentApi {
     }
 
     public ClientAppRuntimeAccessTokenDTO exchangeRuntimeAccessToken(String appKey, String appSecret) {
-        return exchangeRuntimeAccessToken(appKey, appSecret, null, null, null, null);
+        return exchangeRuntimeAccessToken(
+                appKey, appSecret, UUID.randomUUID().toString(), "runtime-token", null, null);
     }
 
     public ClientAppRuntimeAccessTokenDTO exchangeRuntimeAccessToken(
@@ -61,7 +63,18 @@ public class BusinessAgentApi {
         headers.put("X-Navigator-Runtime-Operation", operation);
         headers.put("X-Navigator-Agent-Code", agentCode);
         headers.put("X-Upstream-User-Id", upstreamUserId);
-        return http.post("/api/v1/open/client-apps/runtime-token", null, headers, new TypeReference<>() {});
+        ClientAppRuntimeAccessTokenDTO token =
+                http.post("/api/v1/open/client-apps/runtime-token", null, headers, new TypeReference<>() {});
+        if (token != null) {
+            if (token.getClientRequestId() == null || token.getClientRequestId().isBlank()) {
+                token.setClientRequestId(clientRequestId);
+            }
+            if (token.getCorrelationId() == null || token.getCorrelationId().isBlank()) {
+                token.setCorrelationId(token.getClientRequestId());
+            }
+            http.rememberRuntimeTokenRequestId(token.getAccessToken(), token.getClientRequestId());
+        }
+        return token;
     }
 
     public RuntimeRequestAuditPageDTO queryRuntimeAudits(

@@ -15,4 +15,6 @@ public class ClientAppRuntimeAccessTokenDTO {
     private String tokenType;
     private Long expiresInSeconds;
     private LocalDateTime expiresAt;
+    private String clientRequestId;
+    private String correlationId;
 }

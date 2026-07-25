@@ -33,6 +33,8 @@ public class BusinessAgentApiSmokeTest {
     private static String lastOperatorKeyHeader;
     private static String lastUpstreamAdminKeyHeader;
     private static String lastUpstreamUserIdHeader;
+    private static String lastClientRequestIdHeader;
+    private static String lastParentClientRequestIdHeader;
     private static String lastBody;
     private static String responseOverride;
     private NavigatorClient client;
@@ -54,6 +56,9 @@ public class BusinessAgentApiSmokeTest {
             lastOperatorKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Operator-Key");
             lastUpstreamAdminKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Admin-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
+            lastClientRequestIdHeader = exchange.getRequestHeaders().getFirst("X-Navigator-Client-Request-Id");
+            lastParentClientRequestIdHeader =
+                    exchange.getRequestHeaders().getFirst("X-Navigator-Parent-Client-Request-Id");
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
             String responseStr = responseOverride != null ? responseOverride : "{\"code\":0, \"data\":{}}";
@@ -93,6 +98,8 @@ public class BusinessAgentApiSmokeTest {
         lastOperatorKeyHeader = null;
         lastUpstreamAdminKeyHeader = null;
         lastUpstreamUserIdHeader = null;
+        lastClientRequestIdHeader = null;
+        lastParentClientRequestIdHeader = null;
         lastBody = null;
         responseOverride = "{\"code\":0, \"data\":{}}";
     }
@@ -448,7 +455,33 @@ public class BusinessAgentApiSmokeTest {
         assertTrue(lastBody.contains("\"message\":\"提交运单\""));
         assertTrue(lastBody.contains("\"contextId\":\"ctx-1\""));
         assertFalse(lastBody.contains("cas-secret"));
+        assertDoesNotThrow(() -> java.util.UUID.fromString(lastClientRequestIdHeader));
         assertCommon();
+    }
+
+    @Test
+    public void javaApplicationPathGeneratesRequestIdsBeforeNetworkAndCorrelatesTokenToAsk() {
+        responseOverride = """
+                {"accessToken":"cat-correlated","tokenType":"Bearer","expiresInSeconds":1800,
+                 "appKey":"cak-test"}
+                """;
+        ClientAppRuntimeAccessTokenDTO token = client.businessAgent()
+                .exchangeRuntimeAccessToken("cak-test", "cas-secret");
+        String runtimeTokenRequestId = lastClientRequestIdHeader;
+
+        responseOverride = "{\"taskId\":\"task-openapi\",\"status\":\"SUBMITTED\"}";
+        var task = client.agents().askWithClientAppAccessToken(
+                "tms_skill", "fixture only", null, 1,
+                "cak-test", token.getAccessToken(), "fixture-user");
+
+        assertAll(
+                () -> assertNotNull(task),
+                () -> assertDoesNotThrow(() -> java.util.UUID.fromString(runtimeTokenRequestId)),
+                () -> assertDoesNotThrow(() -> java.util.UUID.fromString(lastClientRequestIdHeader)),
+                () -> assertNotEquals(runtimeTokenRequestId, lastClientRequestIdHeader),
+                () -> assertEquals(runtimeTokenRequestId, lastParentClientRequestIdHeader),
+                () -> assertEquals(runtimeTokenRequestId, token.getClientRequestId()),
+                () -> assertEquals(runtimeTokenRequestId, token.getCorrelationId()));
     }
 
     @Test

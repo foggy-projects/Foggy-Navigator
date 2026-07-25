@@ -1,9 +1,14 @@
 package com.foggy.navigator.sdk.model;
 
+import java.time.Instant;
 import java.util.List;
 
 public class AgentReadiness {
     private String overallStatus;
+    private Instant serverTime;
+    private String serverTimezone;
+    private String auditStorageTimezone;
+    private String taskIdDateTimezone;
     private String baseUrl;
     private String clientAppId;
     private String clientAppName;
@@ -46,6 +51,18 @@ public class AgentReadiness {
 
     public String getOverallStatus() { return overallStatus; }
     public void setOverallStatus(String overallStatus) { this.overallStatus = overallStatus; }
+
+    public Instant getServerTime() { return serverTime; }
+    public void setServerTime(Instant serverTime) { this.serverTime = serverTime; }
+
+    public String getServerTimezone() { return serverTimezone; }
+    public void setServerTimezone(String serverTimezone) { this.serverTimezone = serverTimezone; }
+
+    public String getAuditStorageTimezone() { return auditStorageTimezone; }
+    public void setAuditStorageTimezone(String auditStorageTimezone) { this.auditStorageTimezone = auditStorageTimezone; }
+
+    public String getTaskIdDateTimezone() { return taskIdDateTimezone; }
+    public void setTaskIdDateTimezone(String taskIdDateTimezone) { this.taskIdDateTimezone = taskIdDateTimezone; }
 
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }

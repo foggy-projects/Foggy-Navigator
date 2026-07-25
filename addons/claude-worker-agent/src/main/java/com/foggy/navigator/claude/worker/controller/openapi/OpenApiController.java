@@ -79,6 +79,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -505,7 +506,7 @@ public class OpenApiController {
         }
         ClientAppRuntimeAccessTokenDTO token;
         try {
-            token = resolver.issueAccessToken(appKey, appSecret);
+            token = resolver.issueAccessToken(appKey, appSecret, Duration.ofMinutes(30), clientRequestId);
         } catch (RuntimeException e) {
             String code = runtimeCredentialErrorCode(e);
             if (audit != null) {
@@ -708,31 +709,53 @@ public class OpenApiController {
             @PathVariable String agentId,
             @RequestBody OpenApiQueryForm form,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
-        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
-                requireOpenApiAgentRoute(agentId, clientAppCredential);
-        String tenantId = clientAppCredential.getTenantId();
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
                 "X-Foggy-Upstream-User-Id",
                 "X-Client-Upstream-User-Id");
         RuntimeRequestAuditService requestAuditService = runtimeRequestAuditService.getIfAvailable();
-        RuntimeRequestAuditService.AuditHandle askRequestAudit = null;
         String clientRequestId = firstHeader(request, "X-Navigator-Client-Request-Id");
-        if (StringUtils.hasText(clientRequestId)) {
-            if (requestAuditService == null) {
-                return RX.failB("RUNTIME_AUDIT_SERVICE_UNAVAILABLE");
-            }
-            try {
-                askRequestAudit = requestAuditService.beginAsk(
-                        clientRequestId, clientAppCredential, agentId, upstreamUserId);
-            } catch (RuntimeException e) {
-                return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_RECORDING_FAILED"));
-            }
+        if (!StringUtils.hasText(clientRequestId)) {
+            clientRequestId = UUID.randomUUID().toString();
         }
+        if (requestAuditService == null) {
+            return RX.failB("RUNTIME_AUDIT_SERVICE_UNAVAILABLE");
+        }
+        RuntimeRequestAuditService.AuditHandle askRequestAudit;
+        try {
+            askRequestAudit = requestAuditService.beginAskRequest(
+                    clientRequestId,
+                    firstHeader(request, "X-Navigator-Parent-Client-Request-Id"),
+                    firstHeader(request, "X-Client-App-Key", "X-App-Key", "X-Foggy-App-Key"),
+                    agentId,
+                    upstreamUserId);
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_AUDIT_RECORDING_FAILED"));
+        }
+        ResolvedClientAppCredentialDTO clientAppCredential;
+        try {
+            clientAppCredential = requireClientAppRuntimeToken(request);
+            requestAuditService.authenticationCompleted(askRequestAudit);
+        } catch (RuntimeException e) {
+            requestAuditService.authenticationFailed(askRequestAudit, "RUNTIME_AUTHENTICATION_FAILED");
+            return RX.failB("RUNTIME_AUTHENTICATION_FAILED");
+        }
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route;
+        try {
+            route = requireOpenApiAgentRoute(agentId, clientAppCredential);
+        } catch (RuntimeException e) {
+            requestAuditService.askFailed(askRequestAudit, "AGENT_ROUTE_RESOLUTION_FAILED");
+            throw e;
+        }
+        String tenantId = clientAppCredential.getTenantId();
 
+        if (form == null) {
+            requestAuditService.askFailed(askRequestAudit, "STANDARD_ASK_BODY_REQUIRED");
+            return RX.failB("request body is required");
+        }
         String messageContent = form.resolveMessage();
         if (messageContent == null || messageContent.isBlank()) {
+            requestAuditService.askFailed(askRequestAudit, "STANDARD_ASK_MESSAGE_REQUIRED");
             return RX.failB("message is required");
         }
 
@@ -742,38 +765,55 @@ public class OpenApiController {
                 ? form.getContextId().trim()
                 : BusinessAgentSessionService.generateContextId();
         if (requestedContextId && !StringUtils.hasText(upstreamUserId)) {
+            requestAuditService.askFailed(askRequestAudit, "UPSTREAM_USER_ID_REQUIRED");
             return RX.failB("upstream user id is required when contextId is provided");
         }
 
-        A2AgentResourceResolver resourceResolver = requireA2AgentResourceResolver();
-        A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
-                tenantId,
-                clientAppCredential.getClientAppId(),
-                upstreamUserId,
-                route.agentId());
+        A2AgentResourceResolver resourceResolver;
+        A2AgentResourceResolver.ResolvedAgentResource agentResource;
         String requestedModelConfigId = extractRequestedModelConfigId(form);
         String requestedModelVariant = extractRequestedModelVariant(form);
-        String effectiveRequestedModelConfigId = StringUtils.hasText(requestedModelConfigId)
-                ? requestedModelConfigId
-                : agentResource.defaultModelConfigId();
-        A2AgentResourceResolver.ResolvedModelResource modelResource = resourceResolver.resolveRequiredModelForAgent(
-                tenantId,
-                clientAppCredential.getClientAppId(),
-                agentResource,
-                effectiveRequestedModelConfigId,
-                requestedModelVariant,
-                LlmModelCategory.GENERAL);
-        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResourceForAsk(
-                resourceResolver,
-                tenantId,
-                clientAppCredential,
-                upstreamUserId,
-                agentResource,
-                form);
+        A2AgentResourceResolver.ResolvedModelResource modelResource;
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource;
+        try {
+            resourceResolver = requireA2AgentResourceResolver();
+            agentResource = resourceResolver.resolveRequiredAgent(
+                    tenantId,
+                    clientAppCredential.getClientAppId(),
+                    upstreamUserId,
+                    route.agentId());
+            String effectiveRequestedModelConfigId = StringUtils.hasText(requestedModelConfigId)
+                    ? requestedModelConfigId
+                    : agentResource.defaultModelConfigId();
+            modelResource = resourceResolver.resolveRequiredModelForAgent(
+                    tenantId,
+                    clientAppCredential.getClientAppId(),
+                    agentResource,
+                    effectiveRequestedModelConfigId,
+                    requestedModelVariant,
+                    LlmModelCategory.GENERAL);
+            workspaceResource = resolveWorkspaceResourceForAsk(
+                    resourceResolver,
+                    tenantId,
+                    clientAppCredential,
+                    upstreamUserId,
+                    agentResource,
+                    form);
+        } catch (RuntimeException e) {
+            requestAuditService.askFailed(askRequestAudit, "STANDARD_ASK_RESOURCE_RESOLUTION_FAILED");
+            throw e;
+        }
         if (requiresTaskDirectory(agentResource, modelResource) && workspaceResource == null) {
+            requestAuditService.askFailed(askRequestAudit, "TASK_DIRECTORY_REQUIRED");
             return RX.failB(TASK_DIRECTORY_REQUIRED_MESSAGE);
         }
-        String agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+        String agentOwnerUserId;
+        try {
+            agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+        } catch (RuntimeException e) {
+            requestAuditService.askFailed(askRequestAudit, "AGENT_OWNER_RESOLUTION_FAILED");
+            throw e;
+        }
         if (requestedContextId) {
             try {
                 validateBusinessAgentContextOwnershipIfNeeded(
@@ -784,6 +824,7 @@ public class OpenApiController {
                         route.agentId(),
                         agentOwnerUserId);
             } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                requestAuditService.askFailed(askRequestAudit, "CONTEXT_OWNERSHIP_REJECTED");
                 return RX.failB(firstNonBlank(
                         sanitizeDiagnosticText(e.getMessage()),
                         "open api request rejected"));
@@ -796,8 +837,14 @@ public class OpenApiController {
                 .modelConfigId(modelConfigId)
                 .requestSource("OPEN_API")
                 .build();
-        A2aAgent agent = agentResolver.resolveAgent(route.agentId(), ctx)
-                .orElseThrow(() -> RX.throwB("Agent not found: " + route.agentId()));
+        A2aAgent agent;
+        try {
+            agent = agentResolver.resolveAgent(route.agentId(), ctx)
+                    .orElseThrow(() -> RX.throwB("Agent not found: " + route.agentId()));
+        } catch (RuntimeException e) {
+            requestAuditService.askFailed(askRequestAudit, "AGENT_RESOLUTION_FAILED");
+            throw e;
+        }
 
         String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
@@ -894,15 +941,21 @@ public class OpenApiController {
                 return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
             }
         }
-        String businessRuntimeToken = enrichBusinessRuntimeContext(
-                tenantId,
-                metadata,
-                route.agentId(),
-                route.skillId(),
-                clientAppCredential,
-                request,
-                contextId,
-                workerSelectionRequest);
+        String businessRuntimeToken;
+        try {
+            businessRuntimeToken = enrichBusinessRuntimeContext(
+                    tenantId,
+                    metadata,
+                    route.agentId(),
+                    route.skillId(),
+                    clientAppCredential,
+                    request,
+                    contextId,
+                    workerSelectionRequest);
+        } catch (RuntimeException e) {
+            requestAuditService.askFailed(askRequestAudit, "TASK_TOKEN_ISSUANCE_FAILED");
+            throw e;
+        }
         if (!metadata.isEmpty()) {
             message.setMetadata(metadata);
         }
@@ -932,6 +985,7 @@ public class OpenApiController {
                     tenantId,
                     businessRuntimeToken,
                     BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON);
+            requestAuditService.askFailed(askRequestAudit, "STANDARD_ASK_SUBMIT_REJECTED");
             return RX.failB(firstNonBlank(
                     sanitizeDiagnosticText(e.getMessage()),
                     "open api request rejected"));
@@ -940,6 +994,7 @@ public class OpenApiController {
                     tenantId,
                     businessRuntimeToken,
                     BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON);
+            requestAuditService.askFailed(askRequestAudit, "STANDARD_ASK_SUBMIT_FAILED");
             throw e;
         }
         if (task == null || !StringUtils.hasText(task.getId())) {
@@ -947,6 +1002,7 @@ public class OpenApiController {
                     tenantId,
                     businessRuntimeToken,
                     BUSINESS_RUNTIME_MISSING_TASK_REASON);
+            requestAuditService.askFailed(askRequestAudit, "TASK_NOT_CREATED");
             return RX.failB(BUSINESS_RUNTIME_MISSING_TASK_REASON);
         }
         if (!StringUtils.hasText(task.getContextId())) {
@@ -960,6 +1016,7 @@ public class OpenApiController {
                     tenantId,
                     businessRuntimeToken,
                     BUSINESS_RUNTIME_BIND_FAILURE_REASON);
+            requestAuditService.askFailed(askRequestAudit, "TASK_TOKEN_BIND_REJECTED");
             return RX.failB(firstNonBlank(
                     sanitizeDiagnosticText(e.getMessage()),
                     "open api request rejected"));
@@ -968,7 +1025,27 @@ public class OpenApiController {
                     tenantId,
                     businessRuntimeToken,
                     BUSINESS_RUNTIME_BIND_FAILURE_REASON);
+            requestAuditService.askFailed(askRequestAudit, "TASK_TOKEN_BIND_FAILED");
             throw e;
+        }
+        try {
+            requestAuditService.taskDispatchRecorded(
+                    askRequestAudit,
+                    requestAuditEvidence(
+                            task.getId(),
+                            task.getStatus() != null ? mapA2aState(task.getStatus().getState()) : "SUBMITTED",
+                            false,
+                            null,
+                            route.agentId(),
+                            upstreamUserId,
+                            stringValue(metadata.get("workerId")),
+                            modelConfigId,
+                            modelResource.modelName(),
+                            metadata,
+                            "STANDARD_ASK_DISPATCHED",
+                            true));
+        } catch (RuntimeException e) {
+            return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
         }
         if (clientContextJson != null) {
             sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, route.agentId(), clientContextJson);
@@ -988,22 +1065,8 @@ public class OpenApiController {
 
         SessionTaskEntity taskEntity = sessionQueryService.findTask(task.getId()).orElse(null);
         OpenApiTaskDTO response = toOpenApiTaskDTO(task, route.agentId(), taskEntity);
+        response.setClientRequestId(clientRequestId);
         applyScopeDiagnostics(response, metadata);
-        if (askRequestAudit != null) {
-            try {
-                requestAuditService.taskOperationCompleted(
-                        askRequestAudit,
-                        requestAuditEvidence(
-                                response.getTaskId(), response.getStatus(), false, null,
-                                route.agentId(), upstreamUserId, stringValue(metadata.get("workerId")),
-                                response.getModelConfigId(), modelResource.modelName(), metadata,
-                                "STANDARD_ASK_DISPATCHED", true),
-                        false,
-                        true);
-            } catch (RuntimeException e) {
-                return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
-            }
-        }
         return RX.ok(response);
     }
 

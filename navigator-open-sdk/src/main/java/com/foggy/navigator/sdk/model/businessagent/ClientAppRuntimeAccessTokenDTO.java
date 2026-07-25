@@ -15,6 +15,8 @@ public class ClientAppRuntimeAccessTokenDTO {
     private String tokenType;
     private Long expiresInSeconds;
     private LocalDateTime expiresAt;
+    private String clientRequestId;
+    private String correlationId;
 
     public String getTokenId() { return tokenId; }
     public void setTokenId(String tokenId) { this.tokenId = tokenId; }
@@ -34,4 +36,8 @@ public class ClientAppRuntimeAccessTokenDTO {
     public void setExpiresInSeconds(Long expiresInSeconds) { this.expiresInSeconds = expiresInSeconds; }
     public LocalDateTime getExpiresAt() { return expiresAt; }
     public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+    public String getCorrelationId() { return correlationId; }
+    public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
 }

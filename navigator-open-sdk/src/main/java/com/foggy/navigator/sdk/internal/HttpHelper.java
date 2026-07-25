@@ -24,6 +24,7 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Internal HTTP helper — wraps Java HttpClient + Jackson for Navigator Open API calls.
@@ -32,6 +33,7 @@ import java.util.Map;
  * or the Foggy framework convention {@code {"code": 200, "data": ..., "msg": "..."}}
  */
 public class HttpHelper {
+    private final Map<String, String> runtimeTokenRequestIds = new ConcurrentHashMap<>();
 
     private static final Logger log = LoggerFactory.getLogger(HttpHelper.class);
 
@@ -86,6 +88,17 @@ public class HttpHelper {
 
     public ObjectMapper getObjectMapper() {
         return objectMapper;
+    }
+
+    public void rememberRuntimeTokenRequestId(String accessToken, String clientRequestId) {
+        if (accessToken != null && !accessToken.isBlank()
+                && clientRequestId != null && !clientRequestId.isBlank()) {
+            runtimeTokenRequestIds.put(accessToken, clientRequestId);
+        }
+    }
+
+    public String runtimeTokenRequestId(String accessToken) {
+        return accessToken == null ? null : runtimeTokenRequestIds.get(accessToken);
     }
 
     // ===== HTTP methods =====

@@ -28,6 +28,7 @@ import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.session.repository.ErrorDiagnosticRepository;
 import com.foggy.navigator.session.repository.TerminationOperationRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -318,7 +319,7 @@ class RuntimeStateAuditServiceTest {
         assertEquals("worker-observed", audit.getPhysicalWorkerId());
         assertEquals("model-observed", audit.getModelConfigId());
         assertEquals("codex-luna:high", audit.getModelVariant());
-        assertEquals(completed, audit.getCompletedAt());
+        assertEquals(completed.atZone(IdGenerator.TASK_ID_DATE_ZONE).toOffsetDateTime(), audit.getCompletedAt());
         assertTrue(audit.getTerminalStages().size() >= 6);
         assertNotNull(audit.getTaskFacts());
         assertNotNull(audit.getAuditSideEffects());

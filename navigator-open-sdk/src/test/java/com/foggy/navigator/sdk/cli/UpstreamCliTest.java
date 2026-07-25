@@ -222,13 +222,13 @@ class UpstreamCliTest {
                           "runtimeDispatched":true,
                           "taskModelDispatched":true,
                           "taskBusinessFunctionDispatched":false,
-                          "createdAt":"2026-07-23T15:43:22.889002",
-                          "completedAt":"2026-07-23T17:26:55.955344",
+                          "createdAt":"2026-07-23T15:43:22.889002+08:00",
+                          "completedAt":"2026-07-23T17:26:55.955344+08:00",
                           "terminalStages":[{
                             "stage":"TASK_TERMINAL",
                             "status":"FAILED",
                             "sanitizedErrorCode":"CODEX_WORKER_REMOTE_ERROR",
-                            "occurredAt":"2026-07-23T17:26:55.955344"
+                            "occurredAt":"2026-07-23T17:26:55.955344+08:00"
                           }],
                           "auditAccessTokenIssued":false,
                           "auditRuntimeTokenIssued":false,
@@ -492,6 +492,10 @@ class UpstreamCliTest {
         assertTrue(runtimeOutput.contains("rejects admin, control, and typed-management credentials"));
         assertTrue(runtimeOutput.contains("audit --request-id <clientRequestId>"));
         assertTrue(runtimeOutput.contains("--since <ISO-8601 offset time> --until <ISO-8601 offset time>"));
+        assertTrue(runtimeOutput.contains("STANDARD ask audit is task-id independent"));
+        assertTrue(runtimeOutput.contains("parentClientRequestId correlation"));
+        assertTrue(runtimeOutput.contains("Audit timestamps are RFC 3339 UTC instants"));
+        assertTrue(runtimeOutput.contains("taskIdDateTimezone"));
         assertTrue(requestPaths.isEmpty());
     }
 
@@ -5352,8 +5356,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.31", provenance.sourceVersion());
-        assertEquals("1.0.31", provenance.publishedVersion());
+        assertEquals("1.0.32", provenance.sourceVersion());
+        assertEquals("1.0.32", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)

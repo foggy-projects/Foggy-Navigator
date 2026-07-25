@@ -9,6 +9,8 @@ import java.util.Map;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RuntimeRequestAuditDTO {
     private String clientRequestId;
+    private String parentClientRequestId;
+    private String correlationId;
     private String operation;
     private Instant receivedAt;
     private Instant completedAt;
@@ -19,6 +21,11 @@ public class RuntimeRequestAuditDTO {
     private Boolean httpRequestReceived;
     private Boolean runtimeTokenRequestReceived;
     private Boolean runtimeTokenIssued;
+    private Integer runtimeTokenExchangeCount;
+    private Boolean standardAskRequestReceived;
+    private Boolean admissionCompleted;
+    private Boolean taskCreated;
+    private Boolean taskTokenIssued;
     private Boolean safeSmokeRequestReceived;
     private Boolean syntheticEvidenceCreated;
     private String taskId;
@@ -49,6 +56,10 @@ public class RuntimeRequestAuditDTO {
 
     public String getClientRequestId() { return clientRequestId; }
     public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+    public String getParentClientRequestId() { return parentClientRequestId; }
+    public void setParentClientRequestId(String parentClientRequestId) { this.parentClientRequestId = parentClientRequestId; }
+    public String getCorrelationId() { return correlationId; }
+    public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
     public String getOperation() { return operation; }
     public void setOperation(String operation) { this.operation = operation; }
     public Instant getReceivedAt() { return receivedAt; }
@@ -69,6 +80,16 @@ public class RuntimeRequestAuditDTO {
     public void setRuntimeTokenRequestReceived(Boolean runtimeTokenRequestReceived) { this.runtimeTokenRequestReceived = runtimeTokenRequestReceived; }
     public Boolean getRuntimeTokenIssued() { return runtimeTokenIssued; }
     public void setRuntimeTokenIssued(Boolean runtimeTokenIssued) { this.runtimeTokenIssued = runtimeTokenIssued; }
+    public Integer getRuntimeTokenExchangeCount() { return runtimeTokenExchangeCount; }
+    public void setRuntimeTokenExchangeCount(Integer runtimeTokenExchangeCount) { this.runtimeTokenExchangeCount = runtimeTokenExchangeCount; }
+    public Boolean getStandardAskRequestReceived() { return standardAskRequestReceived; }
+    public void setStandardAskRequestReceived(Boolean standardAskRequestReceived) { this.standardAskRequestReceived = standardAskRequestReceived; }
+    public Boolean getAdmissionCompleted() { return admissionCompleted; }
+    public void setAdmissionCompleted(Boolean admissionCompleted) { this.admissionCompleted = admissionCompleted; }
+    public Boolean getTaskCreated() { return taskCreated; }
+    public void setTaskCreated(Boolean taskCreated) { this.taskCreated = taskCreated; }
+    public Boolean getTaskTokenIssued() { return taskTokenIssued; }
+    public void setTaskTokenIssued(Boolean taskTokenIssued) { this.taskTokenIssued = taskTokenIssued; }
     public Boolean getSafeSmokeRequestReceived() { return safeSmokeRequestReceived; }
     public void setSafeSmokeRequestReceived(Boolean safeSmokeRequestReceived) { this.safeSmokeRequestReceived = safeSmokeRequestReceived; }
     public Boolean getSyntheticEvidenceCreated() { return syntheticEvidenceCreated; }

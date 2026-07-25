@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.event;
 
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenLifecycleService;
+import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -23,6 +24,9 @@ class BusinessTaskScopedTokenTerminalListenerTest {
 
     @Mock
     private BusinessTaskScopedTokenLifecycleService tokenLifecycleService;
+
+    @Mock
+    private RuntimeRequestAuditService runtimeRequestAuditService;
 
     @ParameterizedTest
     @ValueSource(strings = {
@@ -53,6 +57,8 @@ class BusinessTaskScopedTokenTerminalListenerTest {
                 "tenant_01",
                 "worker_task_01",
                 BusinessTaskScopedTokenTerminalListener.REVOKED_BY);
+        verify(runtimeRequestAuditService).taskTerminalRecorded(
+                "worker_task_01", status, null);
     }
 
     @ParameterizedTest
@@ -193,6 +199,7 @@ class BusinessTaskScopedTokenTerminalListenerTest {
     }
 
     private BusinessTaskScopedTokenTerminalListener listener() {
-        return new BusinessTaskScopedTokenTerminalListener(tokenLifecycleService);
+        return new BusinessTaskScopedTokenTerminalListener(
+                tokenLifecycleService, runtimeRequestAuditService);
     }
 }

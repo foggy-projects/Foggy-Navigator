@@ -741,6 +741,8 @@ public class UpstreamCli {
         out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
         out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
         out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("    STANDARD ask audit is task-id independent; Java SDK requests expose clientRequestId and parentClientRequestId correlation.");
+        out.println("    Audit timestamps are RFC 3339 UTC instants; readiness reports serverTimezone, auditStorageTimezone, and taskIdDateTimezone.");
         out.println("  termination-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
         out.println("  task-terminate --task-id <id> --expected-physical-worker-id <id> --reason <code> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
         out.println("  task-reconcile --task-id <id> --expected-physical-worker-id <id> --expected-dispatch-count <n> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
@@ -2546,6 +2548,10 @@ public class UpstreamCli {
     }
 
     private void printAgentReadiness(AgentReadiness readiness) {
+        out.println("serverTime=" + valueOrEmpty(readiness.getServerTime()));
+        out.println("serverTimezone=" + valueOrEmpty(readiness.getServerTimezone()));
+        out.println("auditStorageTimezone=" + valueOrEmpty(readiness.getAuditStorageTimezone()));
+        out.println("taskIdDateTimezone=" + valueOrEmpty(readiness.getTaskIdDateTimezone()));
         out.println("baseUrl=" + valueOrEmpty(readiness.getBaseUrl()));
         out.println("clientAppId=" + valueOrEmpty(readiness.getClientAppId()));
         out.println("clientAppName=" + redact(readiness.getClientAppName()));
@@ -5186,6 +5192,8 @@ public class UpstreamCli {
             RuntimeRequestAuditDTO audit = items.get(i);
             String prefix = "audit[" + i + "].";
             out.println(prefix + "clientRequestId=" + valueOrNull(audit.getClientRequestId()));
+            out.println(prefix + "parentClientRequestId=" + valueOrNull(audit.getParentClientRequestId()));
+            out.println(prefix + "correlationId=" + valueOrNull(audit.getCorrelationId()));
             out.println(prefix + "operation=" + valueOrUnknown(audit.getOperation()));
             out.println(prefix + "receivedAt=" + valueOrUnknown(audit.getReceivedAt()));
             out.println(prefix + "completedAt=" + valueOrNull(audit.getCompletedAt()));
@@ -5196,19 +5204,39 @@ public class UpstreamCli {
             out.println(prefix + "httpRequestReceived=" + booleanOrUnknown(audit.getHttpRequestReceived()));
             out.println(prefix + "runtimeTokenRequestReceived=" + booleanOrUnknown(audit.getRuntimeTokenRequestReceived()));
             out.println(prefix + "runtimeTokenIssued=" + booleanOrUnknown(audit.getRuntimeTokenIssued()));
+            out.println(prefix + "runtimeTokenExchangeCount=" + valueOrUnknown(audit.getRuntimeTokenExchangeCount()));
+            out.println(prefix + "standardAskRequestReceived=" + booleanOrUnknown(audit.getStandardAskRequestReceived()));
+            out.println(prefix + "admissionCompleted=" + booleanOrUnknown(audit.getAdmissionCompleted()));
+            out.println(prefix + "taskCreated=" + booleanOrUnknown(audit.getTaskCreated()));
+            out.println(prefix + "taskTokenIssued=" + booleanOrUnknown(audit.getTaskTokenIssued()));
             out.println(prefix + "safeSmokeRequestReceived=" + booleanOrUnknown(audit.getSafeSmokeRequestReceived()));
             out.println(prefix + "syntheticEvidenceCreated=" + booleanOrUnknown(audit.getSyntheticEvidenceCreated()));
             out.println(prefix + "taskId=" + valueOrNull(audit.getTaskId()));
+            out.println(prefix + "agentCode=" + valueOrNull(audit.getAgentCode()));
+            out.println(prefix + "upstreamUserId=" + valueOrNull(audit.getUpstreamUserId()));
+            out.println(prefix + "physicalWorkerId=" + valueOrNull(audit.getPhysicalWorkerId()));
+            out.println(prefix + "modelConfigId=" + valueOrNull(audit.getModelConfigId()));
+            out.println(prefix + "modelVariant=" + valueOrNull(audit.getModelVariant()));
             out.println(prefix + "status=" + valueOrUnknown(audit.getStatus()));
+            out.println(prefix + "requestedToolCount=" + valueOrUnknown(audit.getRequestedToolCount()));
             out.println(prefix + "effectiveToolCount=" + valueOrUnknown(audit.getEffectiveToolCount()));
             out.println(prefix + "toolScopeKind=" + valueOrUnknown(audit.getToolScopeKind()));
             out.println(prefix + "toolScopeSource=" + valueOrUnknown(audit.getToolScopeSource()));
+            out.println(prefix + "requestedFunctionCount=" + valueOrUnknown(audit.getRequestedFunctionCount()));
             out.println(prefix + "effectiveFunctionCount=" + valueOrUnknown(audit.getEffectiveFunctionCount()));
             out.println(prefix + "functionScopeSource=" + valueOrUnknown(audit.getFunctionScopeSource()));
             out.println(prefix + "taskTokenFunctionScopeEmpty="
                     + booleanOrUnknown(audit.getTaskTokenFunctionScopeEmpty()));
             out.println(prefix + "taskTokenStatus=" + valueOrUnknown(audit.getTaskTokenStatus()));
             out.println(prefix + "runtimeDispatched=" + booleanOrUnknown(audit.getRuntimeDispatched()));
+            out.println(prefix + "modelDispatched=" + booleanOrUnknown(audit.getModelDispatched()));
+            out.println(prefix + "businessFunctionDispatched="
+                    + booleanOrUnknown(audit.getBusinessFunctionDispatched()));
+            out.println(prefix + "dispatchCount=" + valueOrUnknown(audit.getDispatchCount()));
+            out.println(prefix + "retryCount=" + valueOrUnknown(audit.getRetryCount()));
+            out.println(prefix + "recoveryCount=" + valueOrUnknown(audit.getRecoveryCount()));
+            out.println(prefix + "taskFacts=" + valueOrNull(audit.getTaskFacts()));
+            out.println(prefix + "auditSideEffects=" + valueOrNull(audit.getAuditSideEffects()));
             List<RuntimeRequestAuditStageDTO> stages = audit.getStages() != null ? audit.getStages() : List.of();
             out.println(prefix + "stageCount=" + stages.size());
             for (int j = 0; j < stages.size(); j++) {

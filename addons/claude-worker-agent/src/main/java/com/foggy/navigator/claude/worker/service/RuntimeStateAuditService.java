@@ -31,6 +31,7 @@ import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.session.repository.ErrorDiagnosticRepository;
 import com.foggy.navigator.session.repository.TerminationOperationRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -42,6 +43,7 @@ import org.springframework.util.StringUtils;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -253,8 +255,8 @@ public class RuntimeStateAuditService {
                 .runtimeDispatched(scope.runtimeDispatched())
                 .modelDispatched(scope.modelDispatched())
                 .businessFunctionDispatched(scope.businessFunctionDispatched())
-                .createdAt(task.getCreatedAt())
-                .completedAt(completedAt)
+                .createdAt(toTaskOffsetDateTime(task.getCreatedAt()))
+                .completedAt(toTaskOffsetDateTime(completedAt))
                 .stages(stages)
                 .build();
         RuntimeAuditSideEffectsDTO auditSideEffects = noAuditSideEffects();
@@ -286,8 +288,8 @@ public class RuntimeStateAuditService {
                 .runtimeDispatched(scope.runtimeDispatched())
                 .taskModelDispatched(scope.modelDispatched())
                 .taskBusinessFunctionDispatched(scope.businessFunctionDispatched())
-                .createdAt(task.getCreatedAt())
-                .completedAt(completedAt)
+                .createdAt(toTaskOffsetDateTime(task.getCreatedAt()))
+                .completedAt(toTaskOffsetDateTime(completedAt))
                 .terminalStages(stages)
                 .auditAccessTokenIssued(false)
                 .auditRuntimeTokenIssued(false)
@@ -565,8 +567,12 @@ public class RuntimeStateAuditService {
                 .stage(stage)
                 .status(status)
                 .sanitizedErrorCode(errorCode)
-                .occurredAt(occurredAt)
+                .occurredAt(toTaskOffsetDateTime(occurredAt))
                 .build());
+    }
+
+    private OffsetDateTime toTaskOffsetDateTime(LocalDateTime value) {
+        return value == null ? null : value.atZone(IdGenerator.TASK_ID_DATE_ZONE).toOffsetDateTime();
     }
 
     private Map<String, Object> parseState(String json) {

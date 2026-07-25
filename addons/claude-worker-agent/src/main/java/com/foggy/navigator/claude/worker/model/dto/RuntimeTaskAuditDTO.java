@@ -4,7 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 @Data
@@ -36,8 +36,8 @@ public class RuntimeTaskAuditDTO {
     private Boolean runtimeDispatched;
     private Boolean taskModelDispatched;
     private Boolean taskBusinessFunctionDispatched;
-    private LocalDateTime createdAt;
-    private LocalDateTime completedAt;
+    private OffsetDateTime createdAt;
+    private OffsetDateTime completedAt;
     private List<RuntimeTaskAuditStageDTO> terminalStages;
     private Boolean auditAccessTokenIssued;
     private Boolean auditRuntimeTokenIssued;

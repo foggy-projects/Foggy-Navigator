@@ -3,7 +3,7 @@ package com.foggy.navigator.claude.worker.model.dto;
 import lombok.Builder;
 import lombok.Data;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /** Durable facts about the queried task, distinct from audit request effects. */
@@ -33,7 +33,7 @@ public class RuntimeTaskFactsDTO {
     private Boolean runtimeDispatched;
     private Boolean modelDispatched;
     private Boolean businessFunctionDispatched;
-    private LocalDateTime createdAt;
-    private LocalDateTime completedAt;
+    private OffsetDateTime createdAt;
+    private OffsetDateTime completedAt;
     private List<RuntimeTaskAuditStageDTO> stages;
 }

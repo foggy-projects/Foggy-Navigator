@@ -88,7 +88,7 @@ public class ClientAppRuntimeCredentialResolver {
 
     @Transactional
     public ClientAppRuntimeAccessTokenDTO issueAccessToken(String appKey, String appSecret) {
-        return issueAccessToken(appKey, appSecret, DEFAULT_ACCESS_TOKEN_TTL);
+        return issueAccessToken(appKey, appSecret, DEFAULT_ACCESS_TOKEN_TTL, null);
     }
 
     @Transactional
@@ -96,12 +96,21 @@ public class ClientAppRuntimeCredentialResolver {
             String appKey,
             String appSecret,
             Duration requestedTtl) {
+        return issueAccessToken(appKey, appSecret, requestedTtl, null);
+    }
+
+    @Transactional
+    public ClientAppRuntimeAccessTokenDTO issueAccessToken(
+            String appKey,
+            String appSecret,
+            Duration requestedTtl,
+            String clientRequestId) {
         requireText(appKey, "client app key is required");
         requireText(appSecret, "client app secret is required");
 
         ClientAppRuntimeCredentialEntity credential = runtimeCredentialRepository.findByAppKey(appKey)
                 .orElseThrow(() -> new IllegalArgumentException("invalid client app credential"));
-        return issueAccessToken(credential.getTenantId(), appKey, appSecret, requestedTtl);
+        return issueAccessToken(credential.getTenantId(), appKey, appSecret, requestedTtl, clientRequestId);
     }
 
     @Transactional
@@ -110,6 +119,16 @@ public class ClientAppRuntimeCredentialResolver {
             String appKey,
             String appSecret,
             Duration requestedTtl) {
+        return issueAccessToken(tenantId, appKey, appSecret, requestedTtl, null);
+    }
+
+    @Transactional
+    public ClientAppRuntimeAccessTokenDTO issueAccessToken(
+            String tenantId,
+            String appKey,
+            String appSecret,
+            Duration requestedTtl,
+            String clientRequestId) {
         requireText(tenantId, "tenantId is required");
         requireText(appKey, "client app key is required");
         requireText(appSecret, "client app secret is required");
@@ -130,6 +149,7 @@ public class ClientAppRuntimeCredentialResolver {
         entity.setClientAppId(credential.getClientAppId());
         entity.setCredentialId(credential.getCredentialId());
         entity.setAppKey(credential.getAppKey());
+        entity.setClientRequestId(normalizeRequestId(clientRequestId));
         entity.setStatus(ClientAppService.STATUS_ACTIVE);
         entity.setExpiresAt(expiresAt);
         ClientAppRuntimeAccessTokenEntity saved = accessTokenRepository.save(entity);
@@ -144,6 +164,8 @@ public class ClientAppRuntimeCredentialResolver {
         dto.setTokenType("Bearer");
         dto.setExpiresInSeconds(ttl.toSeconds());
         dto.setExpiresAt(saved.getExpiresAt());
+        dto.setClientRequestId(saved.getClientRequestId());
+        dto.setCorrelationId(saved.getClientRequestId());
         return dto;
     }
 
@@ -169,6 +191,7 @@ public class ClientAppRuntimeCredentialResolver {
                 .credentialId(token.getCredentialId())
                 .tenantId(token.getTenantId())
                 .clientAppId(token.getClientAppId())
+                .runtimeTokenClientRequestId(token.getClientRequestId())
                 .build());
     }
 
@@ -257,5 +280,12 @@ public class ClientAppRuntimeCredentialResolver {
         if (!StringUtils.hasText(value)) {
             throw new IllegalArgumentException(message);
         }
+    }
+
+    private String normalizeRequestId(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return UUID.fromString(value.trim()).toString();
     }
 }

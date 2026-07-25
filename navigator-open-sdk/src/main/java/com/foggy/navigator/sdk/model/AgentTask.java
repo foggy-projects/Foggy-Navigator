@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AgentTask {
+    private String clientRequestId;
     private String taskId;
     private String agentId;
     private String status;
@@ -41,6 +42,8 @@ public class AgentTask {
 
     public String getTaskId() { return taskId; }
     public void setTaskId(String taskId) { this.taskId = taskId; }
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
     public String getAgentId() { return agentId; }
     public void setAgentId(String agentId) { this.agentId = agentId; }
     public String getStatus() { return status; }

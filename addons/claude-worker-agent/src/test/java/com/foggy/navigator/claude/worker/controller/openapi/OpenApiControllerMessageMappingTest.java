@@ -58,6 +58,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -187,7 +188,11 @@ class OpenApiControllerMessageMappingTest {
         when(auditService.beginRuntimeToken(
                 handle.clientRequestId(), "safe-ask", "runtime-key", "agent-1", "upstream-a"))
                 .thenReturn(handle);
-        when(credentialResolver.issueAccessToken("runtime-key", "runtime-secret")).thenReturn(token);
+        when(credentialResolver.issueAccessToken(
+                "runtime-key",
+                "runtime-secret",
+                Duration.ofMinutes(30),
+                handle.clientRequestId())).thenReturn(token);
 
         var response = controller.issueClientAppRuntimeToken(request);
 
@@ -214,7 +219,11 @@ class OpenApiControllerMessageMappingTest {
         when(auditService.beginRuntimeToken(
                 handle.clientRequestId(), "safe-ask", "runtime-key", null, null))
                 .thenReturn(handle);
-        when(credentialResolver.issueAccessToken("runtime-key", "runtime-secret"))
+        when(credentialResolver.issueAccessToken(
+                "runtime-key",
+                "runtime-secret",
+                Duration.ofMinutes(30),
+                handle.clientRequestId()))
                 .thenThrow(new IllegalArgumentException("raw upstream response and secret runtime-secret"));
 
         var response = controller.issueClientAppRuntimeToken(request);
@@ -677,6 +686,29 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("FAILED", terminalStatusFromTaskStatus(controller, "FAILED"));
         assertEquals("CANCELLED", terminalStatusFromTaskStatus(controller, "CANCELLED"));
         assertNull(terminalStatusFromTaskStatus(controller, "RUNNING"));
+    }
+
+    @Test
+    void durableAbortedProjectionOverridesStaleWorkerWorkingStatus() throws Exception {
+        OpenApiController controller = newController();
+        A2aTask staleWorkerTask = A2aTask.builder()
+                .id("task-aborted")
+                .contextId("ctx-aborted")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.WORKING).build())
+                .build();
+        SessionTaskEntity durableTask = openApiTask(
+                "task-aborted", "tenant-1", "agent-1", "ABORTED");
+
+        Method method = OpenApiController.class.getDeclaredMethod(
+                "toOpenApiTaskDTO",
+                A2aTask.class,
+                String.class,
+                SessionTaskEntity.class);
+        method.setAccessible(true);
+        var result = (com.foggy.navigator.claude.worker.model.dto.OpenApiTaskDTO) method.invoke(
+                controller, staleWorkerTask, "agent-1", durableTask);
+
+        assertEquals("CANCELLED", result.getStatus());
     }
 
     @Test
@@ -3107,7 +3139,9 @@ class OpenApiControllerMessageMappingTest {
                 taskService,
                 codingAgentRepository,
                 sessionQueryService,
-                defaultRouteService());
+                defaultRouteService(),
+                null,
+                defaultAuditService());
     }
 
     private OpenApiAgentRouteService defaultRouteService() {
@@ -3124,6 +3158,19 @@ class OpenApiControllerMessageMappingTest {
                             true);
                 });
         return routeService;
+    }
+
+    private RuntimeRequestAuditService defaultAuditService() {
+        RuntimeRequestAuditService auditService = mock(RuntimeRequestAuditService.class);
+        when(auditService.beginAskRequest(
+                any(String.class),
+                nullable(String.class),
+                nullable(String.class),
+                any(String.class),
+                nullable(String.class)))
+                .thenAnswer(invocation -> new RuntimeRequestAuditService.AuditHandle(
+                        invocation.getArgument(0, String.class)));
+        return auditService;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -3143,7 +3190,8 @@ class OpenApiControllerMessageMappingTest {
                 codingAgentRepository,
                 sessionQueryService,
                 routeService,
-                null);
+                null,
+                defaultAuditService());
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -3165,7 +3213,7 @@ class OpenApiControllerMessageMappingTest {
                 sessionQueryService,
                 routeService,
                 resourceResolverOverride,
-                null);
+                defaultAuditService());
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

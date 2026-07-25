@@ -37,6 +37,9 @@ public class ClientAppRuntimeAccessTokenEntity {
     @Column(length = 96, nullable = false)
     private String appKey;
 
+    @Column(length = 36)
+    private String clientRequestId;
+
     @Column(length = 32, nullable = false)
     private String status;
 

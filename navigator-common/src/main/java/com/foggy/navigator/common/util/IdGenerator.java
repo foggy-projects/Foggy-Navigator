@@ -1,6 +1,8 @@
 package com.foggy.navigator.common.util;
 
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -10,6 +12,7 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public final class IdGenerator {
 
+    public static final ZoneId TASK_ID_DATE_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.BASIC_ISO_DATE;
 
     private IdGenerator() {}
@@ -18,7 +21,11 @@ public final class IdGenerator {
      * 生成短 ID: yyyyMMdd-xxxx (13 chars)
      */
     public static String shortId() {
-        String date = LocalDate.now().format(DATE_FMT);
+        return shortId(Clock.systemUTC());
+    }
+
+    static String shortId(Clock clock) {
+        String date = LocalDate.now(clock.withZone(TASK_ID_DATE_ZONE)).format(DATE_FMT);
         int rand = ThreadLocalRandom.current().nextInt(0x10000);
         return date + "-" + String.format("%04x", rand);
     }

@@ -38,6 +38,12 @@ public class RuntimeRequestAuditEntity {
     @Column(name = "operation", nullable = false, length = 32)
     private String operation;
 
+    @Column(name = "parent_client_request_id", length = 36)
+    private String parentClientRequestId;
+
+    @Column(name = "correlation_id", nullable = false, length = 36)
+    private String correlationId;
+
     @Column(name = "tenant_id", nullable = false, length = 128)
     private String tenantId;
 
@@ -85,6 +91,21 @@ public class RuntimeRequestAuditEntity {
 
     @Column(name = "runtime_token_issued")
     private Boolean runtimeTokenIssued;
+
+    @Column(name = "runtime_token_exchange_count")
+    private Integer runtimeTokenExchangeCount;
+
+    @Column(name = "standard_ask_request_received")
+    private Boolean standardAskRequestReceived;
+
+    @Column(name = "admission_completed")
+    private Boolean admissionCompleted;
+
+    @Column(name = "task_created")
+    private Boolean taskCreated;
+
+    @Column(name = "task_token_issued")
+    private Boolean taskTokenIssued;
 
     @Column(name = "safe_smoke_request_received")
     private Boolean safeSmokeRequestReceived;

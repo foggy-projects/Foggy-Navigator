@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.event;
 
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenLifecycleService;
+import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.annotation.Order;
@@ -24,6 +25,7 @@ public class BusinessTaskScopedTokenTerminalListener {
             "ABORTED", "CANCELLED", "CANCELED");
 
     private final BusinessTaskScopedTokenLifecycleService tokenLifecycleService;
+    private final RuntimeRequestAuditService runtimeRequestAuditService;
 
     @TransactionalEventListener(
             phase = TransactionPhase.BEFORE_COMMIT,
@@ -56,6 +58,10 @@ public class BusinessTaskScopedTokenTerminalListener {
                     terminal.tenantId(),
                     terminal.workerTaskId(),
                     REVOKED_BY);
+            runtimeRequestAuditService.taskTerminalRecorded(
+                    terminal.workerTaskId(),
+                    terminal.status(),
+                    null);
         } catch (RuntimeException e) {
             // The durable tombstone written before commit remains the
             // authorization authority. Replaying the event retries this row

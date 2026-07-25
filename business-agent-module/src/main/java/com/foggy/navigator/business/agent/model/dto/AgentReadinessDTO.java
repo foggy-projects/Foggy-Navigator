@@ -2,12 +2,17 @@ package com.foggy.navigator.business.agent.model.dto;
 
 import lombok.Data;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
 @Data
 public class AgentReadinessDTO {
     private String overallStatus;
+    private Instant serverTime;
+    private String serverTimezone;
+    private String auditStorageTimezone;
+    private String taskIdDateTimezone;
     private String baseUrl;
     private String clientAppId;
     private String clientAppName;

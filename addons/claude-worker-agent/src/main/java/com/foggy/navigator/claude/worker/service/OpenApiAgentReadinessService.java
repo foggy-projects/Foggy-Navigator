@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessCheckDTO;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
+import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.business.agent.model.dto.PhysicalWorkerDiagnosticDTO;
@@ -39,6 +40,8 @@ import org.springframework.util.StringUtils;
 import java.lang.reflect.Array;
 import java.net.URI;
 import java.util.ArrayList;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -98,6 +101,10 @@ public class OpenApiAgentReadinessService {
         AgentReadinessPreflightForm safeForm = form == null ? new AgentReadinessPreflightForm() : form;
 
         AgentReadinessDTO result = new AgentReadinessDTO();
+        result.setServerTime(Instant.now());
+        result.setServerTimezone(ZoneId.systemDefault().getId());
+        result.setAuditStorageTimezone("UTC");
+        result.setTaskIdDateTimezone(IdGenerator.TASK_ID_DATE_ZONE.getId());
         result.setBaseUrl(baseUrl);
         result.setClientAppId(credential.getClientAppId());
         result.setAgentCode(agentId);

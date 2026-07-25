@@ -3,7 +3,7 @@ package com.foggy.navigator.sdk.model.businessagent;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -35,8 +35,8 @@ public class RuntimeTaskAuditDTO {
     private Boolean runtimeDispatched;
     private Boolean taskModelDispatched;
     private Boolean taskBusinessFunctionDispatched;
-    private LocalDateTime createdAt;
-    private LocalDateTime completedAt;
+    private OffsetDateTime createdAt;
+    private OffsetDateTime completedAt;
     private List<RuntimeTaskAuditStageDTO> terminalStages;
     private Boolean auditAccessTokenIssued;
     private Boolean auditRuntimeTokenIssued;
@@ -101,10 +101,10 @@ public class RuntimeTaskAuditDTO {
     public void setTaskModelDispatched(Boolean taskModelDispatched) { this.taskModelDispatched = taskModelDispatched; }
     public Boolean getTaskBusinessFunctionDispatched() { return taskBusinessFunctionDispatched; }
     public void setTaskBusinessFunctionDispatched(Boolean taskBusinessFunctionDispatched) { this.taskBusinessFunctionDispatched = taskBusinessFunctionDispatched; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    public LocalDateTime getCompletedAt() { return completedAt; }
-    public void setCompletedAt(LocalDateTime completedAt) { this.completedAt = completedAt; }
+    public OffsetDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
+    public OffsetDateTime getCompletedAt() { return completedAt; }
+    public void setCompletedAt(OffsetDateTime completedAt) { this.completedAt = completedAt; }
     public List<RuntimeTaskAuditStageDTO> getTerminalStages() { return terminalStages; }
     public void setTerminalStages(List<RuntimeTaskAuditStageDTO> terminalStages) { this.terminalStages = terminalStages; }
     public Boolean getAuditAccessTokenIssued() { return auditAccessTokenIssued; }
