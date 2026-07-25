@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-018
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 bug_source: user-report
@@ -74,21 +74,21 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The Java/runtime-profile STANDARD application path creates and exposes a UUID clientRequestId before its first network request.
-- [ ] AC-2: Runtime-token and STANDARD ask use the same clientRequestId or explicit parent/correlation identifiers with a documented one-to-one chain and exchange count.
-- [ ] AC-3: A successful STANDARD ask is queryable by exact request ID and by equivalent bounded UTC or offset windows without taskId.
-- [ ] AC-4: A request failing before task creation remains terminal and queryable by request ID with `taskId=null` and explicit `NOT_CREATED`/`NOT_ISSUED`/`NOT_DISPATCHED` stages.
-- [ ] AC-5: Empty request-scoped tools/functions are persisted at admission and remain visible after terminal/closure state.
-- [ ] AC-6: Audit output contains every owner-required field, complete sanitized stages, `taskFacts`, and `auditSideEffects`.
-- [ ] AC-7: Audit queries issue no token, create no task/context/session, trigger no retry/recovery/reconcile/dispatch, call no Worker/model/BusinessFunction, and change no provisioning resource.
-- [ ] AC-8: Terminal task state and task-token revocation update the correlated STANDARD request audit without redispatch or synthetic Worker evidence.
-- [ ] AC-9: Runtime readiness/actuator evidence exposes serverTime, serverTimezone, auditStorageTimezone, and taskIdDateTimezone.
-- [ ] AC-10: RFC-3339 UTC and Asia/Shanghai cross-date conversions and task-ID-date/createdAt consistency are covered by automated tests.
-- [ ] AC-11: Existing task-status read API exposes terminal state after reconciliation; terminal-event behavior, visibility delay, polling endpoint, and idempotent consumption are documented and tested at the Navigator boundary.
-- [ ] AC-12: No prompt, response, token, credential, authorization/header content, raw HTTP body, workspace path, or business data is stored or returned.
-- [ ] AC-13: Manifest/help advertise the new STANDARD request-audit, correlation, no-task-ID/no-side-effect, and time-basis capabilities.
-- [ ] AC-14: A clean source-matched server and CLI release is built, provenance and SHA-256 values are recorded, migration/ddl-auto validation passes, and the deployed health endpoint is UP.
-- [ ] AC-15: No historical task or SIM provisioning/resource was modified during implementation or validation.
+- [x] AC-1: The Java/runtime-profile STANDARD application path creates and exposes a UUID clientRequestId before its first network request.
+- [x] AC-2: Runtime-token and STANDARD ask use the same clientRequestId or explicit parent/correlation identifiers with a documented one-to-one chain and exchange count.
+- [x] AC-3: A successful STANDARD ask is queryable by exact request ID and by equivalent bounded UTC or offset windows without taskId.
+- [x] AC-4: A request failing before task creation remains terminal and queryable by request ID with `taskId=null` and explicit `NOT_CREATED`/`NOT_ISSUED`/`NOT_DISPATCHED` stages.
+- [x] AC-5: Empty request-scoped tools/functions are persisted at admission and remain visible after terminal/closure state.
+- [x] AC-6: Audit output contains every owner-required field, complete sanitized stages, `taskFacts`, and `auditSideEffects`.
+- [x] AC-7: Audit queries issue no token, create no task/context/session, trigger no retry/recovery/reconcile/dispatch, call no Worker/model/BusinessFunction, and change no provisioning resource.
+- [x] AC-8: Terminal task state and task-token revocation update the correlated STANDARD request audit without redispatch or synthetic Worker evidence.
+- [x] AC-9: Runtime readiness/actuator evidence exposes serverTime, serverTimezone, auditStorageTimezone, and taskIdDateTimezone.
+- [x] AC-10: RFC-3339 UTC and Asia/Shanghai cross-date conversions and task-ID-date/createdAt consistency are covered by automated tests.
+- [x] AC-11: Existing task-status read API exposes terminal state after reconciliation; terminal-event behavior, visibility delay, polling endpoint, and idempotent consumption are documented and tested at the Navigator boundary.
+- [x] AC-12: No prompt, response, token, credential, authorization/header content, raw HTTP body, workspace path, or business data is stored or returned.
+- [x] AC-13: Manifest/help advertise the new STANDARD request-audit, correlation, no-task-ID/no-side-effect, and time-basis capabilities.
+- [x] AC-14: A clean source-matched server and CLI release is built, provenance and SHA-256 values are recorded, migration/ddl-auto validation passes, and the deployed health endpoint is UP.
+- [x] AC-15: No historical task or SIM provisioning/resource was modified during implementation or validation.
 
 ## Contract / Data / Security Constraints
 
@@ -194,6 +194,12 @@ Validation order is focused red/green tests, affected Maven modules, launcher pa
   - Navigator MySQL schema inspection showed the BUG-018 columns absent before migration.
   - `docs/migration/2026-07-25-standard-ask-request-audit-correlation.sql` applied successfully on 2026-07-25.
   - Post-migration `INFORMATION_SCHEMA` inspection confirmed all eight added columns; `runtime_request_audit.correlation_id` is NOT NULL.
+  - A clean independent clone at implementation commit `d1dd1daef7e09945ace89aff56fd7c8fccb92919` produced launcher provenance `gitDirty=false`.
+  - Deployed launcher provenance: artifact `launcher`, version `1.0.0-SNAPSHOT`, branch `main`, commit `d1dd1daef7e09945ace89aff56fd7c8fccb92919`, build time `2026-07-25T02:33:47.112Z`, JAR SHA-256 `646ae047b4614e2be3ae095da4c86134569eda6558b1250c0a281fe0902286d5`.
+  - Deployed server started with `SPRING_JPA_HIBERNATE_DDL_AUTO=validate`; `/actuator/health` returned `UP` with MySQL `UP`.
+  - CLI `1.0.32` provenance: buildId `1.0.32+d1dd1daef7e0`, commit `d1dd1daef7e09945ace89aff56fd7c8fccb92919`, `gitDirty=false`, build time `2026-07-25T02:36:17Z`, Linux package SHA-256 `e4d629d0c738daa4a8f54e35d56010e28554e1ea62c82382f7f4954c34ebfdea`.
+  - OBS upload completed for Linux/Windows archives, `latest.json`, and installers; the remote installer smoke passed and remote `latest.json` resolves to CLI `1.0.32` with the expected clean commit and Linux SHA-256.
+  - Runtime help advertises task-ID-independent exact/window audit, parent correlation, accepted operations, RFC-3339 UTC request-audit timestamps, and readiness time-basis fields.
 - deviations:
   - Runtime-token and STANDARD ask use an explicit parent/child chain instead of reusing one request ID across two HTTP requests. This is within AC-2 and avoids ambiguous reuse when one runtime token serves more than one ask.
   - No historical missing STANDARD ask audit was synthesized. Existing rows received only the structural `correlation_id=client_request_id` migration backfill.
@@ -201,7 +207,7 @@ Validation order is focused red/green tests, affected Maven modules, launcher pa
   - A transport failure before a request reaches Navigator has only the SDK-side generated ID; no server can persist a request it never receives.
   - SSE terminal delivery is asynchronous and best-effort. Consumers must treat the read-only task-status API as authoritative and poll idempotently when an event is absent.
   - Existing historical asks that did not create request-audit rows remain unqueryable by design; repairing them would fabricate evidence.
-- readiness: ULTRA_EXECUTING
+- readiness: READY_FOR_SIGNOFF
 
 ## Frozen Runtime Contracts
 
