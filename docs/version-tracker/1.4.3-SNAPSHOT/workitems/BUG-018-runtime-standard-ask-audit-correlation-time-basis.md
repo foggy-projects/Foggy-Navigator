@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-018
-status: READY_FOR_SIGNOFF
+status: ACCEPTED
 canonical: true
 execution_mode: ultra
 bug_source: user-report
@@ -207,7 +207,7 @@ Validation order is focused red/green tests, affected Maven modules, launcher pa
   - A transport failure before a request reaches Navigator has only the SDK-side generated ID; no server can persist a request it never receives.
   - SSE terminal delivery is asynchronous and best-effort. Consumers must treat the read-only task-status API as authoritative and poll idempotently when an event is absent.
   - Existing historical asks that did not create request-audit rows remain unqueryable by design; repairing them would fabricate evidence.
-- readiness: READY_FOR_SIGNOFF
+- readiness: ACCEPTED
 
 ## Frozen Runtime Contracts
 
@@ -246,3 +246,13 @@ Validation order is focused red/green tests, affected Maven modules, launcher pa
 - predecessor: `BUG-017-runtime-request-audit-no-task-id.md`
 - runtime closure: `FEAT-002-runtime-standard-task-termination-reconciliation.md`
 - owner request: 2026-07-25
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted
+- signed_off_by: independent-root-signoff
+- signed_off_at: 2026-07-25
+- acceptance_record: `docs/version-tracker/1.4.3-SNAPSHOT/evidence/BUG-018-independent-signoff.md`
+- blocking_items: none
+- follow_up_required: no
