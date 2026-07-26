@@ -19,9 +19,12 @@ Date: 2026-07-26
   attempts crossed cwd validation and created provider tasks, then failed
   terminally in the only allowed `codex-luna:high` channel with the sanitized
   code `CODEX_AUTH_REQUIRED`.
-- Natural terminal-success V2 result/receipt evidence is not yet proven live
-  because the configured provider channel did not reach terminal success.
-- Delivery remains `BLOCKED`; it is not ready for independent signoff.
+- After the target Worker was configured from the gitignored operator-supplied
+  provider profile and restarted in `api_key` mode, bounded ASK
+  `20260726-6700` naturally completed in about six seconds. It produced a
+  durable, recoverable V2 final-output receipt and authoritative provider
+  terminal-success signal without tools or BusinessFunctions.
+- Delivery is `READY_FOR_SIGNOFF`; it is not marked `ACCEPTED`.
 
 ## Provenance
 
@@ -56,7 +59,7 @@ Date: 2026-07-26
   - version: `1.0.25`
   - health: `ok`, `ready=true`, `active_tasks=0`
   - Codex SDK: `0.145.0`, compatible
-  - auth mode: `codex_login`
+  - auth mode after operator-authorized provider configuration: `api_key`
   - termination readiness: ready, identity/auth/replay ledger configured
 - Worker release artifacts:
   - Linux/macOS SHA-256:
@@ -202,6 +205,90 @@ terminal `FAILED`, provider process absent, no final-output/completion receipt,
 proves that the cwd blocker was removed, but it is not a natural-success V2
 receipt sample.
 
+## Natural Completion Live Evidence
+
+The operator supplied a gitignored provider profile with an API key and base
+URL. The profile was validated without printing either value, restricted to
+mode `0600`, and installed into the exact owned 3151 Worker by replacing only
+the two provider configuration fields. No Navigator model configuration,
+Agent, Directory, grant or binding was changed. `NAVI_TEST_MODEL` was omitted;
+the existing allowed alias `codex-luna:high` was used and resolved to
+`gpt-5.6-luna`.
+
+The exact host `Ubuntu-24.04` Worker was restarted using its installed
+`stop.sh` and `start.sh`. Post-restart and post-ASK health both reported:
+
+- Worker `1.0.25`, ready and `active_tasks=0`;
+- Codex SDK `0.145.0`, compatible;
+- auth mode `api_key`;
+- termination readiness enabled.
+
+One bounded SIM runtime ASK was then submitted using the existing runtime
+profile:
+
+- task: `20260726-6700`
+- expected Physical Worker: `ddc45293`
+- requested model variant: `codex-luna:high`
+- effective model variant: `gpt-5.6-luna`
+- max turns: `1`
+- requested/effective tool count: `0/0`
+- requested/effective BusinessFunction count: `0/0`
+- tool/function scope source: `REQUEST_EXPLICIT_EMPTY`
+- task-token function scope empty: `true`
+- created: `2026-07-26T11:57:30.684185+08:00`
+- completed: `2026-07-26T11:57:36.706822+08:00`
+
+The natural terminal task facts were:
+
+- terminal/status: `true/COMPLETED`
+- task token: `REVOKED`
+- active registration: absent
+- dispatch/retry/recovery: `1/0/0`
+- runtime/model dispatched: `true/true`
+- BusinessFunction dispatched: `false`
+
+Completion-readiness observed:
+
+- Worker reachable/task known/state: `true/true/COMPLETED`
+- provider process present/state: `false/ABSENT`
+- provider active/terminal/status: `false/true/COMPLETED`
+- last progress:
+  `2026-07-26T03:57:36.668Z`
+- final output present/durable/recoverable: `true/true/true`
+- final output digest:
+  `sha256:c2e3ac47f4a325469c1a2d5f117e463ec943c721986d5d9f09ac4540b7d80526`
+- final output recorded:
+  `2026-07-26T03:57:36.658Z`
+- structured output present: `false`
+- completion signal present/source:
+  `true/PROVIDER_TERMINAL_EVENT`
+- completion signal recorded:
+  `2026-07-26T03:57:36.658Z`
+
+The assessment returned:
+
+- stale registration suspected: `false`
+- worker process absent: `true`
+- completion candidate/authoritative: `true/true`
+- completion reconciliation supported: `false`
+- termination reconciliation supported: `false`
+- reconcile required: `false`
+- reason/action: `TASK_ALREADY_TERMINAL/NO_ACTION_ALREADY_TERMINAL`
+- source:
+  `DURABLE_TASK+CODEX_COMPLETION_RECEIPT_V2+WORKER_PROCESS_SNAPSHOT`
+
+Two completion-readiness queries produced identical durable facts, Worker
+terminal identity, evidence facts and assessment semantics except for their
+observation/assessment timestamps. Two task-audit queries differed only in
+`observedAt`. Both readiness responses returned every audit side-effect field
+as `false`; task token, active registration and dispatch/retry/recovery counts
+remained `REVOKED`, absent and `1/0/0`.
+
+This live sample proves that provider process absence after a real successful
+completion is distinguished from stale registration by the authoritative,
+identity-bound durable result/receipt pair. It also proves that the readiness
+query does not need to read or return model content.
+
 ## Query Side-Effect Assertions
 
 The completion-readiness queries explicitly returned all fourteen fields as
@@ -286,7 +373,7 @@ existing abort/cancel closure path. Its minimum safety contract is:
 
 ## Remaining Blockers
 
-1. The only model variant allowed by the bound model configuration reaches a
-   provider/auth-class terminal failure, so a natural terminal-success ASK and
-   V2 durable result/receipt have not been observed live.
-Final status: `BLOCKED`.
+None for implementation handoff. Independent signoff is still required before
+the delivery can be marked `ACCEPTED`.
+
+Final status: `READY_FOR_SIGNOFF`.

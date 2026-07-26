@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: FEAT-003
-status: BLOCKED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -207,8 +207,8 @@ Every successful or fail-closed readiness response must explicitly report:
 - [x] AC-8 API、CLI、Worker response、logs and committed evidence contain no credential/profile/header、prompt、response、message body、raw event/result、workspace path、PID or process command.
 - [x] AC-9 unsupported provider/runtime returns stable `UNSUPPORTED/UNKNOWN` and never falls back to another Worker, provider, process or credential lane.
 - [x] AC-10 Worker and Navigator artifacts have clean provenance; route manifest/auth tests, Worker tests, affected Maven tests, CLI package/help/feature manifest and launcher health all pass.
-- [ ] AC-11 live smoke uses bounded new test-owned SIM ASK tasks: one naturally completes, one may have its exact owned Codex CLI terminated after an initial observation, and environment-invalid requests fail terminally before provider execution. No BusinessFunction or business/workspace content is used.
-- [ ] AC-12 live evidence proves natural completion is not confused with stale registration, forced process absence without authoritative result is not reported as completed, and readiness queries do not change task/token/registration/counter state.
+- [x] AC-11 live smoke uses bounded new test-owned SIM ASK tasks: one naturally completes, one may have its exact owned Codex CLI terminated after an initial observation, and environment-invalid requests fail terminally before provider execution. No BusinessFunction or business/workspace content is used.
+- [x] AC-12 live evidence proves natural completion is not confused with stale registration, forced process absence without authoritative result is not reported as completed, and readiness queries do not change task/token/registration/counter state.
 - [x] AC-13 Worker/CLI restart and termination records include only sanitized ownership, version, time and outcome; port alone is never accepted as process ownership.
 - [x] AC-14 no terminate/reconcile/retry/recovery/finalize operation is invoked against historical task `20260725-6a2e`.
 
@@ -407,22 +407,33 @@ This delivery does not implement mutation. A later independently approved work i
   - 两次授权重启后的历史任务 `20260725-6a2e` 仍为
     `RUNNING/ACTIVE`、registration present、dispatch/retry/recovery `1/0/0`；
     未发生 retry、recovery、termination 或 reconciliation。
+  - operator-supplied provider profile 经脱敏 shape 校验并限制为 `0600` 后，仅将
+    API key/base URL 写入 exact 3151 Worker；未修改 Navigator modelConfig、Agent、
+    Directory、grant 或 binding。Worker 重启后 health 为 `api_key` auth mode，
+    `ready=true`、`active_tasks=0`。
+  - 新 SIM ASK `20260726-6700` 使用现有 `codex-luna:high` alias、单轮、显式 empty
+    tool/function scope，在约六秒内自然 `COMPLETED`；task token `REVOKED`、
+    registration absent、dispatch/retry/recovery `1/0/0`，BusinessFunction 未分派。
+  - completion-readiness 返回 Worker task/provider terminal `COMPLETED`、
+    provider process `ABSENT`、durable/recoverable final output、authoritative
+    `PROVIDER_TERMINAL_EVENT` 和稳定 SHA-256 digest；
+    `completionCandidate=true`、`completionEvidenceAuthoritative=true`、
+    `recommendedAction=NO_ACTION_ALREADY_TERMINAL`。两次 readiness 查询的 durable、
+    Worker terminal、evidence 和 assessment 语义稳定，十四项查询副作用全部为
+    false；两次 task-audit 仅 `observedAt` 不同。
   - durable evidence:
     `docs/version-tracker/1.4.3-SNAPSHOT/evidence/FEAT-003-implementation-evidence.md`。
 - deviations:
   - exact bound Worker 1.0.25 部署、process-absence live proof 和环境拒绝快速终态
     proof 已完成。用户显式授权后，目标 WSL 上按已有绑定创建了 exact delegated cwd，
     未修改 Directory 或 binding；后续两次 ASK 均越过 cwd 校验并创建 provider task，
-    但唯一允许的 `codex-luna:high` 通道以 `CODEX_AUTH_REQUIRED` 终态失败。
+    但当时的 provider auth lane 以 `CODEX_AUTH_REQUIRED` 终态失败。operator 后续提供
+    可用 provider profile 后，同一 modelConfig/alias 的自然成功 ASK 已完成。
   - 2026-07-26 用户已授权多次新 ASK；未对任何旧任务执行 retry/resume/recovery。
   - clean publish 和 8112 clean deployment 已完成；该项不再构成偏差。
 - residual_risks:
-  - 现场已能区分 registration residue 与底层 provider process absence，但尚无自然
-    terminal success 的 V2 durable result/receipt live 样本；实际完成判定仍仅由自动化
-    fixture 覆盖。当前阻断是绑定 modelConfig 唯一允许的 provider/model 通道未成功，
-    不是 delegated cwd 缺失。
-  - Worker、CLI 和 launcher clean provenance 已完成；当前剩余风险仅是 live
-    natural-success V2 result/receipt 未能通过现有 provider/auth lane 取得。
+  - implementation acceptance 已满足；独立 signoff 尚未执行，因此不得标记
+    `ACCEPTED`。
   - immediate/async fast-terminal token revoke 与 sanitized error fallback 已部署到
     8112，并由 `20260726-a7b8` 的 durable audit 证明；本项不再是现场差异。
   - 旧 test-owned tasks 中仍有非终态/待 reconcile 样本；本次没有对其执行
@@ -436,11 +447,9 @@ This delivery does not implement mutation. A later independently approved work i
   - FEAT-001 runtime exact-self read-only credential/audit foundation。
   - FEAT-002 task/Worker identity、termination readiness 和 zero-redispatch foundation。
 - omitted_validation_and_reason:
-  - 自然完成 V2 receipt live proof 未完成：exact delegated cwd 已按授权创建，但绑定
-    modelConfig 唯一允许的 `codex-luna:high` provider 通道以 auth-class 错误终态失败。
-    未刷新 credential、修改 modelConfig 或切换未授权 provider lane。
-  - independent signoff 未执行：AC-11/12 尚未满足。
-- readiness: BLOCKED
+  - independent signoff 未执行：implementation evidence 已满足 AC-11/12，等待独立
+    `foggy-delivery-signoff`。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
