@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-019
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -70,18 +70,18 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: 敏感字段的 string、true、false、number、null、array 和 object 值统一输出为 `"[REDACTED]"`。
-- [ ] AC-2: 多个敏感/普通字段混合、嵌套敏感字段和已为 `[REDACTED]` 的输入保持合法、完整 JSON。
-- [ ] AC-3: 与已知敏感值词法相同的 boolean/number/null primitive 不被裸文本替换；普通 primitive 类型保持不变。
-- [ ] AC-4: `runtime task-audit --json` 的完整 stdout 可解析，且没有前缀、ANSI 或诊断混入。
-- [ ] AC-5: `runtime task-completion-readiness --json` 的完整 stdout 可解析，且没有前缀、ANSI 或诊断混入。
-- [ ] AC-6: 两个 runtime JSON regression fixtures 的十四项 side-effect fields 全部存在且为 boolean。
-- [ ] AC-7: synthetic secret sentinel 不出现在 stdout、stderr 或输出 snapshot。
-- [ ] AC-8: 两个 runtime 查询仍各自只发出一个 GET，不新增任何 mutation、token issuance 或 dispatch。
-- [ ] AC-9: owning module tests、CLI tests、affected build、package 和离线 artifact smoke 通过。
-- [ ] AC-10: 新 CLI provenance 记录 version、commit、branch、gitDirty、checksum 和相对 artifact location；`gitDirty=false`。
-- [ ] AC-11: Server commit compatibility review 证明无需 Server 改动或重启。
-- [ ] AC-12: 提交只包含 BUG-019 owning code、tests、release metadata 和本 canonical work item。
+- [x] AC-1: 敏感字段的 string、true、false、number、null、array 和 object 值统一输出为 `"[REDACTED]"`。
+- [x] AC-2: 多个敏感/普通字段混合、嵌套敏感字段和已为 `[REDACTED]` 的输入保持合法、完整 JSON。
+- [x] AC-3: 与已知敏感值词法相同的 boolean/number/null primitive 不被裸文本替换；普通 primitive 类型保持不变。
+- [x] AC-4: `runtime task-audit --json` 的完整 stdout 可解析，且没有前缀、ANSI 或诊断混入。
+- [x] AC-5: `runtime task-completion-readiness --json` 的完整 stdout 可解析，且没有前缀、ANSI 或诊断混入。
+- [x] AC-6: 两个 runtime JSON regression fixtures 的十四项 side-effect fields 全部存在且为 boolean。
+- [x] AC-7: synthetic secret sentinel 不出现在 stdout、stderr 或输出 snapshot。
+- [x] AC-8: 两个 runtime 查询仍各自只发出一个 GET，不新增任何 mutation、token issuance 或 dispatch。
+- [x] AC-9: owning module tests、CLI tests、affected build、package 和离线 artifact smoke 通过。
+- [x] AC-10: 新 CLI provenance 记录 version、commit、branch、gitDirty、checksum 和相对 artifact location；`gitDirty=false`。
+- [x] AC-11: Server commit compatibility review 证明无需 Server 改动或重启。
+- [x] AC-12: 提交只包含 BUG-019 owning code、tests、release metadata 和本 canonical work item。
 
 ## Contract / Data / Security Constraints
 
@@ -154,15 +154,83 @@ open_questions: []
 
 ## Implementation Result
 
-- implementation_summary: pending
-- changed_paths: pending
-- tests_and_results: pending
-- manual_or_experience_evidence: pending
+- implementation_summary:
+  - root cause 为 `UpstreamCli#printJson` 在 Jackson 序列化后对整段 JSON text 调用 known-secret raw replacement；当 secret 值为 `false`、`true`、number 或 `null` 的 lexical form 时，JSON primitive 会被替换成未加引号的 `[REDACTED]`。
+  - structured JSON redaction 的唯一 owning implementation 固定在 `SecretMasker`：先转 `JsonNode`，按字段名递归脱敏，再由 Jackson 序列化；普通 string node 继续应用原有 known-secret/content redactor。
+  - 命中敏感字段的整个值不论原类型均统一替换为 JSON string `"[REDACTED]"`；字段不删除，普通 boolean/number/null 保持原类型。
+  - `runtime task-audit` 与 `runtime task-completion-readiness` 的 endpoint、GET method、query、DTO 和 Server authoritative evidence/ownership/Physical Worker 语义均未修改。
+- changed_paths:
+  - `navigator-open-sdk/pom.xml`
+  - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/SecretMasker.java`
+  - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java`
+  - `navigator-open-sdk/src/main/resources/com/foggy/navigator/sdk/cli/authorization-provenance.properties`
+  - `navigator-open-sdk/src/test/java/com/foggy/navigator/sdk/cli/SecretMaskerTest.java`
+  - `navigator-open-sdk/src/test/java/com/foggy/navigator/sdk/cli/UpstreamCliTest.java`
+  - `tools/navigator-upstream-cli/dist/package.ps1`
+  - `tools/navigator-upstream-cli/dist/package.sh`
+  - `docs/version-tracker/1.4.3-SNAPSHOT/workitems/BUG-019-upstream-cli-structured-json-redaction.md`
+- tests_and_results:
+  - pre-fix focused reproduction: 2 tests run，1 failure；synthetic secret `false` 破坏 `recoveryTriggered:false`，确认问题。
+  - focused redaction/runtime CLI tests: PASS。
+  - `mvn -q -pl navigator-open-sdk test`: PASS，197 tests，0 failures，0 errors，0 skipped。
+  - `mvn -q -pl navigator-open-sdk package`: PASS。
+  - `git diff --check` 与 `bash -n tools/navigator-upstream-cli/dist/package.sh`: PASS。
+  - baseline contract comparison: Server/API runtime contract paths 与 `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3` 无差异。
+- manual_or_experience_evidence:
+  - clean local package: PASS；Linux 与 Windows archive 均生成。
+  - checksum verification: PASS。
+  - Linux wrapper `navi version`: PASS。
+  - Linux runtime help 同时包含 `task-audit` 与 `task-completion-readiness`: PASS。
+  - Linux/Windows archive 内 `BUILD_INFO.json` version/commit/branch/gitDirty/feature 一致: PASS。
+- artifact_provenance:
+  - version: `1.0.35`
+  - build_id: `1.0.35+c1c44f64f229`
+  - git_commit: `c1c44f64f22923ccb5ad97f086c649cdac5688fa`
+  - git_branch: `main`
+  - git_dirty: `false`
+  - linux_artifact: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.35-linux.tar.gz`
+  - linux_sha256: `073b345c2b61386419b0baea3c416d4cf5d67597e94ee3b7f0aae9cac9594c72`
+  - windows_artifact: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.35-windows.zip`
+  - windows_sha256: `0d8918f00a500a0f145bbd99119d00490861e165d8bd4bcfbc050babcfb23e2c`
+  - metadata: `tools/navigator-upstream-cli/dist/output/BUILD_INFO.json`
+  - release_manifest: `tools/navigator-upstream-cli/dist/output/RELEASE_MANIFEST.json`
 - deviations: none
-- residual_risks: pending
+- residual_risks:
+  - 当前 Linux 环境没有 `pwsh`，未原生执行 Windows wrapper；Windows archive 已由官方 package script 生成并通过 checksum、archive BUILD_INFO 和文件结构检查。
+  - 未更新远端下载 pointer 或 OBS；TMS 必须显式安装上述 1.0.35 制品，不能继续使用缓存的 1.0.34。
+  - 未执行 live ASK 或共享运行态检查；TMS 仍需在其受控验证窗口使用新 CLI 执行一次 clean live ASK，再运行两个只读 JSON 查询形成新 evidence。
 - reused_evidence: Server/CLI contract baseline commit `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3`。
 - omitted_validation_and_reason: live runtime/deployment/OBS upload prohibited by scope。
-- readiness: ULTRA_EXECUTING
+- readiness: READY_FOR_SIGNOFF
+
+## TMS Revalidation Commands
+
+安装新 artifact 后先核对：
+
+```bash
+navi version
+```
+
+预期 provenance：version `1.0.35`、commit `c1c44f64f22923ccb5ad97f086c649cdac5688fa`、branch `main`、gitDirty `false`。
+
+在 TMS 自有受控 lane 完成一次 clean live ASK 后，只读获取新 evidence：
+
+```bash
+navi upstream runtime task-audit \
+  --upstream-user-id <upstream-user-id> \
+  --task-id <task-id> \
+  --json \
+  | jq -e .
+
+navi upstream runtime task-completion-readiness \
+  --upstream-user-id <upstream-user-id> \
+  --task-id <task-id> \
+  --expected-physical-worker-id <physical-worker-id> \
+  --json \
+  | jq -e .
+```
+
+两个命令均不得复用旧的损坏输出；新 stdout 应作为完整 JSON artifact 保存，并逐项核对十四项 side-effect fields 均存在且为 boolean。
 
 ## References
 
