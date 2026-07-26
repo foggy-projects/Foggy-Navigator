@@ -124,6 +124,7 @@ build/
 !.env.example
 .navi-upstream.env
 .navigator/upstream.env
+.navigator/upstream.env.pre-runtime-closure-*
 .navigator/*.env
 .navigator/*.json
 .navigator/tenants/*.env
