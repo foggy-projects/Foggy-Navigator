@@ -248,8 +248,11 @@ public class RuntimeTaskClosureService {
         return RuntimeAuditSideEffectsDTO.builder()
                 .accessTokenIssued(false).runtimeTokenIssued(false).taskTokenIssued(false)
                 .taskCreated(false).contextCreated(false).sessionCreated(false)
+                .workerCommandDispatched(false)
                 .modelDispatched(false).businessFunctionDispatched(false)
-                .recoveryTriggered(false).provisioningResourceChanged(false)
+                .retryTriggered(false).recoveryTriggered(false)
+                .terminationTriggered(false).reconciliationTriggered(false)
+                .provisioningResourceChanged(false)
                 .build();
     }
 }

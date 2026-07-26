@@ -216,7 +216,7 @@ public class RuntimeStateAuditService {
                 ? "OPERATOR_TERMINATED"
                 : diagnostic.map(ErrorDiagnosticEntity::getErrorCode)
                 .filter(StringUtils::hasText)
-                .orElse(null);
+                .orElseGet(() -> safeTaskErrorCode(task.getErrorMessage()));
         String tokenStatus = resolveTokenStatus(token);
         LocalDateTime completedAt = terminal.map(BusinessTaskTerminalStateEntity::getTerminalAt)
                 .orElse(isTerminal ? task.getUpdatedAt() : null);
@@ -466,9 +466,13 @@ public class RuntimeStateAuditService {
                 .taskCreated(false)
                 .contextCreated(false)
                 .sessionCreated(false)
+                .workerCommandDispatched(false)
                 .modelDispatched(false)
                 .businessFunctionDispatched(false)
+                .retryTriggered(false)
                 .recoveryTriggered(false)
+                .terminationTriggered(false)
+                .reconciliationTriggered(false)
                 .provisioningResourceChanged(false)
                 .build();
     }
@@ -529,6 +533,26 @@ public class RuntimeStateAuditService {
 
     private String textValue(Object value) {
         return value != null && StringUtils.hasText(value.toString()) ? value.toString().trim() : null;
+    }
+
+    private String safeTaskErrorCode(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String candidate = value.trim();
+        if (candidate.length() > 128 || !candidate.matches("[A-Z][A-Z0-9_]{2,127}")) {
+            return null;
+        }
+        return candidate.startsWith("CODEX_")
+                || candidate.startsWith("CLAUDE_")
+                || candidate.startsWith("GEMINI_")
+                || candidate.startsWith("LANGGRAPH_")
+                || candidate.startsWith("PROVIDER_")
+                || candidate.startsWith("RUNTIME_")
+                || candidate.startsWith("TASK_")
+                || candidate.startsWith("WORKER_")
+                ? candidate
+                : null;
     }
 
     private Boolean booleanObject(Object value) {

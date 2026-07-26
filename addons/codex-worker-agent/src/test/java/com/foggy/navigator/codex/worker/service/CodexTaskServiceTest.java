@@ -238,6 +238,58 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void completionReadinessAcceptsOnlyExactWorkerTaskAndDispatchBoundReceipt() {
+        CodexTaskEntity task = completionReadinessTask("task-complete", "worker-task-complete");
+        when(workerClient.getTaskCompletionReadiness("worker-task-complete"))
+                .thenReturn(Mono.just(completionObservation(
+                        "worker-1", "worker-task-complete", 1)));
+
+        var observed = service.inspectRuntimeCompletionReadiness(
+                "task-complete", "worker-1", 1);
+
+        assertEquals(true, observed.workerReachable());
+        assertEquals(true, observed.identityVerified());
+        assertEquals("CODEX_COMPLETION_RECEIPT_V2", observed.evidenceSchema());
+        assertEquals("worker-task-complete", observed.providerTaskId());
+        assertEquals(1, observed.receiptDispatchCount());
+        assertEquals(true, observed.resultRecoverable());
+        assertNull(observed.sanitizedErrorCode());
+        verify(workerClient).getTaskCompletionReadiness("worker-task-complete");
+    }
+
+    @Test
+    void completionReadinessFailsClosedForDispatchOrWorkerIdentityMismatch() {
+        completionReadinessTask("task-mismatch", "worker-task-mismatch");
+        when(workerClient.getTaskCompletionReadiness("worker-task-mismatch"))
+                .thenReturn(Mono.just(completionObservation(
+                        "worker-other", "worker-task-mismatch", 2)));
+
+        var observed = service.inspectRuntimeCompletionReadiness(
+                "task-mismatch", "worker-1", 1);
+
+        assertEquals(true, observed.workerReachable());
+        assertEquals(false, observed.identityVerified());
+        assertEquals("WORKER_COMPLETION_EVIDENCE_IDENTITY_MISMATCH",
+                observed.sanitizedErrorCode());
+    }
+
+    @Test
+    void completionReadinessReportsUnsupportedWithoutCallingAppServerWorker() {
+        CodexTaskEntity task = completionReadinessTask("task-app", "provider-task-app");
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+
+        var observed = service.inspectRuntimeCompletionReadiness(
+                "task-app", "worker-1", 1);
+
+        assertNull(observed.workerReachable());
+        assertEquals("UNKNOWN", observed.providerProcessState());
+        assertEquals("RUNTIME_COMPLETION_READINESS_UNSUPPORTED",
+                observed.sanitizedErrorCode());
+        verifyNoInteractions(workerClient);
+    }
+
+    @Test
     void sdkProviderParamsCannotOverrideRouteToAppServer() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> service.createTaskDirect(Map.of(
@@ -2803,6 +2855,31 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void workingDirectoryRejectionPublishesDefinitiveTerminalEvent() {
+        CodexTaskEntity entity = createTask(
+                "task-cwd-rejected", "session-2", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 26, 10, 30)
+        );
+        when(taskRepository.findByTaskIdForUpdate("task-cwd-rejected"))
+                .thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.failTask(
+                "task-cwd-rejected",
+                "task-cwd-rejected",
+                null,
+                "CODEX_WORKING_DIRECTORY_UNAVAILABLE");
+
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-cwd-rejected".equals(event.getTaskId())
+                        && "FAILED".equals(event.getStatus())
+                        && "CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(event.getErrorMessage())
+                        && Boolean.FALSE.equals(event.getRecoverable())
+        ));
+    }
+
+    @Test
     void preAcceptanceFailurePublishesDefinitiveTerminalEvent() {
         CodexTaskEntity entity = createTask(
                 "task-not-accepted", "session-2", "worker-1", "dir-1", "RUNNING",
@@ -4447,6 +4524,55 @@ class CodexTaskServiceTest {
         entity.setCreatedAt(createdAt);
         entity.setUpdatedAt(createdAt.plusMinutes(1));
         return entity;
+    }
+
+    private CodexTaskEntity completionReadinessTask(String taskId, String workerTaskId) {
+        CodexTaskEntity entity = createTask(
+                taskId, "session-completion", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 25, 9, 0));
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        entity.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        entity.setWorkerTaskId(workerTaskId);
+        when(taskRepository.findByTaskId(taskId)).thenReturn(Optional.of(entity));
+        lenient().when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://worker.example")
+                        .authToken("worker-token")
+                        .build());
+        lenient().when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "worker-token"))
+                .thenReturn(workerClient);
+        return entity;
+    }
+
+    private Map<String, Object> completionObservation(
+            String workerId, String providerTaskId, int dispatchCount) {
+        Map<String, Object> observed = new LinkedHashMap<>();
+        observed.put("worker_id", workerId);
+        observed.put("task_id", providerTaskId);
+        observed.put("provider_task_id", providerTaskId);
+        observed.put("dispatch_count", dispatchCount);
+        observed.put("worker_observed_at", "2026-07-25T01:02:03Z");
+        observed.put("worker_task_known", false);
+        observed.put("worker_task_state", "UNKNOWN");
+        observed.put("provider_process_present", false);
+        observed.put("provider_process_state", "ABSENT");
+        observed.put("provider_active_task_present", null);
+        observed.put("provider_task_terminal", true);
+        observed.put("provider_terminal_status", "COMPLETED");
+        observed.put("final_output_present", true);
+        observed.put("final_output_durable", true);
+        observed.put("final_output_digest",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        observed.put("final_output_recorded_at", "2026-07-25T01:02:02Z");
+        observed.put("structured_output_present", false);
+        observed.put("structured_output_digest", null);
+        observed.put("completion_signal_present", true);
+        observed.put("completion_signal_source", "PROVIDER_TERMINAL_EVENT");
+        observed.put("completion_signal_recorded_at", "2026-07-25T01:02:02Z");
+        observed.put("result_recoverable", true);
+        observed.put("completion_evidence_schema", "CODEX_COMPLETION_RECEIPT_V2");
+        return observed;
     }
 
     private TerminationOperationEntity terminationOperation(

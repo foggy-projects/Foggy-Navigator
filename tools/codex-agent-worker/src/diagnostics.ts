@@ -67,6 +67,8 @@ function stableSdkErrorCode(text: string): string {
   const normalized = text.toLowerCase()
   if (/^codex_stream_unconfirmed$/.test(normalized)) return 'CODEX_STREAM_UNCONFIRMED'
   if (/no rollout found for thread id/i.test(text)) return 'CODEX_THREAD_NOT_FOUND'
+  if (/(?:model\b.*(?:not supported|unsupported|not available|not found)|(?:not supported|unsupported)\b.*model)/.test(normalized)) return 'CODEX_MODEL_UNSUPPORTED'
+  if (/invalid request|bad request|\b400\b/.test(normalized)) return 'CODEX_INVALID_REQUEST'
   if (/rate.?limit|quota|too many requests|\b429\b/.test(normalized)) return 'CODEX_RATE_LIMITED'
   if (/timed?\s*out|deadline/.test(normalized)) return 'CODEX_TURN_TIMEOUT'
   if (/unauthoriz|authentication|login|required|credential|bearer|api[_-]?key|token|secret|password|\b401\b/.test(normalized)) return 'CODEX_AUTH_REQUIRED'
@@ -86,6 +88,8 @@ function safeMessage(code: string): string {
     case 'CODEX_WORKER_NETWORK_ERROR': return 'Codex Worker 与运行时连接异常'
     case 'CODEX_STREAM_UNCONFIRMED': return 'Codex 运行时报告了待核验错误，任务状态尚未终态'
     case 'CODEX_THREAD_NOT_FOUND': return 'Codex 会话在当前 Worker Home 中不存在'
+    case 'CODEX_MODEL_UNSUPPORTED': return 'Codex 当前账号或运行时不支持请求的模型'
+    case 'CODEX_INVALID_REQUEST': return 'Codex 运行时拒绝了当前请求参数'
     default: return 'Codex 运行时返回未分类错误'
   }
 }

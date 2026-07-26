@@ -25,6 +25,10 @@ import {
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { safeSdkError } from '../diagnostics.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+import {
+  completionReceiptStore,
+  type CompletionReceiptStore,
+} from '../persistence/completion-receipt.js'
 import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import {
   canonicalizeCodexCliProcessStartedAt,
@@ -72,6 +76,7 @@ export type RunQueryDependencies = {
   cancellationForceGraceMs?: number
   cancellationPollIntervalMs?: number
   prepareResumeToolsModelCatalog?: typeof prepareResumeToolsModelCatalog
+  completionReceiptStore?: CompletionReceiptStore
 }
 
 /**
@@ -852,6 +857,8 @@ function emitWorkerEvent(
   event: Omit<WorkerEvent, 'seq'>
 ): WorkerEvent {
   const eventWithSeq = createEventWithSeq(broadcast, event)
+  const entry = taskRegistry.get(eventWithSeq.task_id)
+  if (entry) entry.lastProgressAt = Date.now()
   broadcast.emit(eventWithSeq)
   return eventWithSeq
 }
@@ -1408,6 +1415,7 @@ export async function runQuery(
     threadId,
     model: requestedModel,
     startedAt: Date.now(),
+    lastProgressAt: Date.now(),
   }
   entry.cancelExecution = operation => {
     void settleAuthorizedTaskCancellation(taskId, operation.operation_id, dependencies)
@@ -1697,6 +1705,7 @@ export async function runQuery(
 
           for (const we of workerEvents) {
             recordFileHints(we)
+            entry.lastProgressAt = Date.now()
             broadcast.emit(we)
           }
           break
@@ -1764,12 +1773,13 @@ export async function runQuery(
           flushPendingAssistantAsCommentary()
           // The SDK types describe this as a stream error, but it does not
           // carry the durable provider-terminal evidence required to end a
-          // Navigator task. Preserve ownership and wait for an explicit
-          // turn.failed or verified process-exit observation instead.
+          // Navigator task. Publish only the fixed, sanitized classification,
+          // preserve ownership, and wait for an explicit turn.failed or
+          // verified process-exit observation instead.
           broadcast.emit(createErrorEvent(
             taskId,
             resolvedThreadId,
-            'CODEX_STREAM_UNCONFIRMED',
+            event.message,
             broadcast.nextSeq(),
           ))
           markTaskAttention(taskId, {
@@ -1827,6 +1837,30 @@ export async function runQuery(
       taskId, resolvedThreadId, pendingAssistantText,
       totalUsage, resolvedModel, durationMs, numTurns, broadcast.nextSeq()
     )
+    const resultText = resultEvent.result ?? ''
+    let structuredOutputPresent = false
+    if (runOptions.outputSchema) {
+      try {
+        JSON.parse(resultText)
+        structuredOutputPresent = true
+      } catch {
+        structuredOutputPresent = false
+      }
+    }
+    try {
+      await (dependencies.completionReceiptStore ?? completionReceiptStore).persist({
+        taskId,
+        workerId: config.navigatorWorkerId,
+        providerThreadId: resolvedThreadId,
+        resultText,
+        structuredOutputPresent,
+      })
+    } catch {
+      // Completion evidence is additive. A receipt persistence failure must not
+      // fabricate a FAILED task or suppress the provider's real result event.
+      console.warn(`[completion-receipt] persistence unavailable task=${taskId}`)
+    }
+    entry.lastProgressAt = Date.now()
     broadcast.emit(resultEvent)
 
     finalizeTask(
@@ -1837,7 +1871,7 @@ export async function runQuery(
         : 'PROVIDER_COMPLETED',
     )
 
-  } catch {
+  } catch (error) {
     flushPendingAssistantAsCommentary()
     if (abortController.signal.aborted || entry.status === 'cancel_requested') {
       const operationId = entry.terminationOperation?.operation_id
@@ -1859,8 +1893,14 @@ export async function runQuery(
     } else {
       // A local SDK/stream exception does not prove the managed CLI exited.
       // Preserve task ownership until a provider terminal event or verified
-      // process exit is observed, and avoid reflecting raw runtime errors into
-      // the public event stream where they might contain sensitive details.
+      // process exit is observed. createErrorEvent exposes only a fixed safe
+      // classification and never reflects the raw runtime error.
+      broadcast.emit(createErrorEvent(
+        taskId,
+        resolvedThreadId,
+        error instanceof Error ? error.message : String(error ?? ''),
+        broadcast.nextSeq(),
+      ))
       markTaskAttention(taskId, {
         code: 'PROCESS_UNVERIFIED',
         message: 'Codex SDK stream ended without a provider terminal observation; task remains active pending diagnostics',

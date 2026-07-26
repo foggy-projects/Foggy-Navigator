@@ -13,6 +13,7 @@ import com.foggy.navigator.business.agent.service.ClientAppControlCredentialServ
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
+import com.foggy.navigator.business.agent.service.TerminalTaskBindingException;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
@@ -20,7 +21,13 @@ import com.foggy.navigator.claude.worker.model.dto.OpenTaskMessagesResponse;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskDiagnosticsDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskEvidenceDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeBindingAuditDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeAuditSideEffectsDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeCompletionEvidenceFactsDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeCompletionReconciliationAssessmentDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskCompletionReadinessDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeWorkerObservedFactsDTO;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
@@ -509,6 +516,94 @@ class OpenApiControllerMessageMappingTest {
                 controller.auditRuntimeBinding(
                         "agent-1", "upstream-1", "model-1", "directory-1", ownerOverride).getMsg());
         verifyNoInteractions(stateAuditService);
+    }
+
+    @Test
+    void runtimeCompletionReadinessMapsContentFreeFactsAndRejectsForeignCredentialLane() throws Exception {
+        RuntimeTaskCompletionReadinessService completionService =
+                mock(RuntimeTaskCompletionReadinessService.class);
+        RuntimeTaskCompletionReadinessDTO readiness = RuntimeTaskCompletionReadinessDTO.builder()
+                .taskFacts(RuntimeTaskFactsDTO.builder()
+                        .taskId("task-existing")
+                        .terminal(false)
+                        .status("RUNNING")
+                        .physicalWorkerId("worker-1")
+                        .dispatchCount(1)
+                        .build())
+                .workerObservedFacts(RuntimeWorkerObservedFactsDTO.builder()
+                        .workerReachable(true)
+                        .workerTaskKnown(false)
+                        .providerProcessPresent(false)
+                        .providerProcessState("ABSENT")
+                        .build())
+                .completionEvidenceFacts(RuntimeCompletionEvidenceFactsDTO.builder()
+                        .finalOutputPresent(true)
+                        .finalOutputDurable(true)
+                        .finalOutputDigest(
+                                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                        .completionSignalPresent(true)
+                        .completionSignalSource("PROVIDER_TERMINAL_EVENT")
+                        .resultRecoverable(true)
+                        .build())
+                .reconciliationAssessment(RuntimeCompletionReconciliationAssessmentDTO.builder()
+                        .completionCandidate(true)
+                        .completionEvidenceAuthoritative(true)
+                        .completionReconciliationSupported(true)
+                        .recommendedAction("COMPLETION_RECONCILIATION_AVAILABLE")
+                        .build())
+                .auditSideEffects(RuntimeAuditSideEffectsDTO.builder()
+                        .accessTokenIssued(false)
+                        .runtimeTokenIssued(false)
+                        .taskTokenIssued(false)
+                        .taskCreated(false)
+                        .contextCreated(false)
+                        .sessionCreated(false)
+                        .workerCommandDispatched(false)
+                        .modelDispatched(false)
+                        .businessFunctionDispatched(false)
+                        .retryTriggered(false)
+                        .recoveryTriggered(false)
+                        .terminationTriggered(false)
+                        .reconciliationTriggered(false)
+                        .provisioningResourceChanged(false)
+                        .build())
+                .build();
+        when(completionService.inspect(
+                "runtime-key", "runtime-secret", "upstream-1",
+                "task-existing", "worker-1")).thenReturn(readiness);
+        OpenApiController controller = newController(null, completionService);
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mockMvc.perform(get("/api/v1/open/runtime/task-completion-readiness")
+                        .queryParam("taskId", "task-existing")
+                        .queryParam("expectedPhysicalWorkerId", "worker-1")
+                        .header("X-Client-App-Key", "runtime-key")
+                        .header("X-Client-App-Secret", "runtime-secret")
+                        .header("X-Upstream-User-Id", "upstream-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.taskFacts.taskId").value("task-existing"))
+                .andExpect(jsonPath("$.data.workerObservedFacts.providerProcessState")
+                        .value("ABSENT"))
+                .andExpect(jsonPath("$.data.completionEvidenceFacts.finalOutputDigest")
+                        .value("sha256:"
+                                + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+                .andExpect(jsonPath("$.data.reconciliationAssessment.recommendedAction")
+                        .value("COMPLETION_RECONCILIATION_AVAILABLE"))
+                .andExpect(jsonPath("$.data.auditSideEffects.workerCommandDispatched")
+                        .value(false))
+                .andExpect(jsonPath("$.data.auditSideEffects.reconciliationTriggered")
+                        .value(false));
+
+        mockMvc.perform(get("/api/v1/open/runtime/task-completion-readiness")
+                        .queryParam("taskId", "task-existing")
+                        .queryParam("expectedPhysicalWorkerId", "worker-1")
+                        .header("Authorization", "forbidden"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.msg")
+                        .value("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED"));
+        verify(completionService).inspect(
+                "runtime-key", "runtime-secret", "upstream-1",
+                "task-existing", "worker-1");
     }
 
     @Test
@@ -1196,6 +1291,124 @@ class OpenApiControllerMessageMappingTest {
                 "worker_session_1",
                 "preselected-worker",
                 "bwl_test_01");
+    }
+
+    @Test
+    void askAgent_revokesTaskTokenWhenSubmissionReturnsImmediateTerminalTask() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("触发受控的提交前环境拒绝");
+        form.setAllowedTools(List.of());
+        form.setAllowedFunctions(List.of());
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_immediate_terminal"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-immediate-terminal")
+                .contextId("ctx-1")
+                .metadata(Map.of(
+                        "sessionId", "worker_session_1",
+                        "workerId", "preselected-worker"))
+                .status(A2aTaskStatus.builder()
+                        .state(A2aTaskState.FAILED)
+                        .description("CODEX_WORKING_DIRECTORY_UNAVAILABLE")
+                        .build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNotNull(result.getData());
+        assertEquals("FAILED", result.getData().getStatus());
+        verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
+                "tenant-1",
+                "btt_immediate_terminal",
+                "task-immediate-terminal",
+                "worker_session_1",
+                "preselected-worker",
+                "bwl_test_01");
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_immediate_terminal",
+                "system",
+                "open api task returned terminal after submission");
+    }
+
+    @Test
+    void askAgentReturnsCreatedTaskWhenTerminalMarkerWinsTokenBindingRace() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("触发受控的提交前环境拒绝");
+        form.setAllowedTools(List.of());
+        form.setAllowedFunctions(List.of());
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_terminal_race"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-terminal-race")
+                .contextId("ctx-1")
+                .metadata(Map.of(
+                        "sessionId", "worker_session_1",
+                        "workerId", "preselected-worker"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+        doThrow(new TerminalTaskBindingException(
+                "cannot bind task token to a terminal worker task"))
+                .when(taskService)
+                .bindOpenApiTaskScopedTokenToWorkerTask(
+                        "tenant-1",
+                        "btt_terminal_race",
+                        "task-terminal-race",
+                        "worker_session_1",
+                        "preselected-worker",
+                        "bwl_test_01");
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNotNull(result.getData());
+        assertEquals("task-terminal-race", result.getData().getTaskId());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_terminal_race",
+                "system",
+                "open api task returned terminal after submission");
     }
 
     @Test
@@ -3252,6 +3465,50 @@ class OpenApiControllerMessageMappingTest {
             A2AgentResourceResolver resourceResolverOverride,
             RuntimeRequestAuditService auditService,
             RuntimeStateAuditService stateAuditService) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService,
+                routeService,
+                resourceResolverOverride,
+                auditService,
+                stateAuditService,
+                null);
+    }
+
+    private OpenApiController newController(
+            RuntimeStateAuditService stateAuditService,
+            RuntimeTaskCompletionReadinessService completionReadinessService) {
+        return newController(
+                mock(UnifiedAgentResolver.class),
+                mock(ClientAppRuntimeCredentialResolver.class),
+                mock(BusinessAgentSessionService.class),
+                mock(BusinessAgentTaskService.class),
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                mock(OpenApiAgentRouteService.class),
+                null,
+                null,
+                stateAuditService,
+                completionReadinessService);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            CodingAgentRepository codingAgentRepository,
+            OpenApiSessionQueryService sessionQueryService,
+            OpenApiAgentRouteService routeService,
+            A2AgentResourceResolver resourceResolverOverride,
+            RuntimeRequestAuditService auditService,
+            RuntimeStateAuditService stateAuditService,
+            RuntimeTaskCompletionReadinessService completionReadinessService) {
         ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
         when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
         ObjectProvider<RuntimeRequestAuditService> auditProvider = mock(ObjectProvider.class);
@@ -3259,6 +3516,9 @@ class OpenApiControllerMessageMappingTest {
         ObjectProvider<RuntimeStateAuditService> stateAuditProvider = mock(ObjectProvider.class);
         when(stateAuditProvider.getIfAvailable()).thenReturn(stateAuditService);
         ObjectProvider<RuntimeTaskClosureService> taskClosureProvider = mock(ObjectProvider.class);
+        ObjectProvider<RuntimeTaskCompletionReadinessService> completionReadinessProvider =
+                mock(ObjectProvider.class);
+        when(completionReadinessProvider.getIfAvailable()).thenReturn(completionReadinessService);
         ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
         when(taskProvider.getIfAvailable()).thenReturn(taskService);
         ObjectProvider<BusinessAgentSessionService> sessionProvider = mock(ObjectProvider.class);
@@ -3300,6 +3560,7 @@ class OpenApiControllerMessageMappingTest {
                 auditProvider,
                 stateAuditProvider,
                 taskClosureProvider,
+                completionReadinessProvider,
                 taskProvider,
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),

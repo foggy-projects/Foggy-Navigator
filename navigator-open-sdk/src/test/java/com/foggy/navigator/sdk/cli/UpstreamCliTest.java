@@ -2521,6 +2521,72 @@ class UpstreamCliTest {
     }
 
     @Test
+    void runtimeTaskCompletionReadinessUsesOneReadOnlyRequestAndPrintsContentFreeFacts() {
+        responseOverride = """
+                {"code":200,"data":{
+                  "taskFacts":{"taskId":"task-existing","terminal":false,"status":"RUNNING"},
+                  "workerObservedFacts":{
+                    "workerReachable":true,
+                    "providerProcessPresent":false,
+                    "providerProcessState":"ABSENT"
+                  },
+                  "completionEvidenceFacts":{
+                    "finalOutputPresent":true,
+                    "finalOutputDurable":true,
+                    "finalOutputDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "completionSignalPresent":true,
+                    "completionSignalSource":"PROVIDER_TERMINAL_EVENT",
+                    "resultRecoverable":true
+                  },
+                  "reconciliationAssessment":{
+                    "completionCandidate":true,
+                    "recommendedAction":"COMPLETION_RECONCILIATION_AVAILABLE"
+                  },
+                  "auditSideEffects":{
+                    "accessTokenIssued":false,
+                    "runtimeTokenIssued":false,
+                    "taskTokenIssued":false,
+                    "taskCreated":false,
+                    "contextCreated":false,
+                    "sessionCreated":false,
+                    "workerCommandDispatched":false,
+                    "modelDispatched":false,
+                    "businessFunctionDispatched":false,
+                    "retryTriggered":false,
+                    "recoveryTriggered":false,
+                    "terminationTriggered":false,
+                    "reconciliationTriggered":false,
+                    "provisioningResourceChanged":false
+                  }
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "runtime", "task-completion-readiness",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, code);
+        assertEquals("GET", lastMethod);
+        assertTrue(lastPath.contains("/api/v1/open/runtime/task-completion-readiness?"));
+        assertTrue(lastPath.contains("taskId=task-existing"));
+        assertTrue(lastPath.contains("expectedPhysicalWorkerId=worker-durable"));
+        assertEquals(1, requestPaths.size());
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertTrue(output.contains("\"completionCandidate\" : true"));
+        assertTrue(output.contains("\"workerCommandDispatched\" : false"));
+        assertTrue(output.contains("\"reconciliationTriggered\" : false"));
+        assertFalse(output.contains("cas-runtime-secret"));
+        assertFalse(output.contains("\"prompt\""));
+        assertFalse(output.contains("\"response\""));
+        assertFalse(output.contains("\"workspace\""));
+    }
+
+    @Test
     void runtimeTaskTerminateCarriesExpectedWorkerAndConfirmWithOneRequest() {
         responseOverride = """
                 {"code":200,"data":{
@@ -5349,17 +5415,17 @@ class UpstreamCliTest {
     }
 
     @Test
-    void p1cProvenanceMatchesCanonicalManifestAndPublishedRelease() throws Exception {
+    void p1cProvenanceDeclaresSourceNewerThanPublishedRelease() throws Exception {
         CliProvenance provenance = CliProvenance.load();
         Path root = repositoryRoot();
         Path manifest = root.resolve("navigator-common/src/main/resources/authorization/route-manifest-v1.csv");
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.32", provenance.sourceVersion());
+        assertEquals("1.0.33", provenance.sourceVersion());
         assertEquals("1.0.32", provenance.publishedVersion());
-        assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
-        assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
+        assertEquals("SOURCE_NEWER_THAN_PUBLISHED", provenance.artifactDrift());
+        assertNotEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
                 .contains("<version>" + provenance.sourceVersion() + "</version>"));
         assertEquals(provenance.manifestEntryCount() + 1, manifestLines.size());

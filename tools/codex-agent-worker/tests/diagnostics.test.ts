@@ -28,3 +28,14 @@ test('missing Codex rollout is classified as a safe thread-not-found diagnostic'
   assert.equal(result.diagnostic_text, 'CODEX_THREAD_NOT_FOUND')
   assert.doesNotMatch(JSON.stringify(result), /019f65d8-5896-7391-95d6-196d2f721f3c/)
 })
+
+test('unsupported model diagnostics use a fixed code without exposing the model or provider text', () => {
+  const result = safeSdkError(new Error(
+    "The model 'gpt-5.6-sol' is not supported at /workspace/private with Bearer secret-token",
+  ))
+
+  assert.equal(result.error_code, 'CODEX_MODEL_UNSUPPORTED')
+  assert.equal(result.error_category, 'CONFIGURATION')
+  assert.equal(result.diagnostic_text, 'CODEX_MODEL_UNSUPPORTED')
+  assert.doesNotMatch(JSON.stringify(result), /gpt-5\.6-sol|workspace|secret-token|Bearer/i)
+})

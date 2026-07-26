@@ -468,6 +468,21 @@ public class CodexWorkerClient {
                 .timeout(Duration.ofSeconds(10));
     }
 
+    /**
+     * Reads content-free completion evidence and provider/process observations.
+     * The Worker endpoint does not return prompt, result content, command line,
+     * PID, workspace path, or raw event data.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getTaskCompletionReadiness(String taskId) {
+        return webClient.get()
+                .uri("/api/v1/tasks/{taskId}/completion-readiness", taskId)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .timeout(Duration.ofSeconds(10));
+    }
+
     @SuppressWarnings("unchecked")
     public Mono<Map<String, Object>> getTerminationReconciliationReadiness(
             String taskId, String originalOperationId) {

@@ -403,6 +403,7 @@ public class UpstreamCli {
             case "runtime audit" -> runtimeAudit(args);
             case "runtime binding-audit" -> runtimeBindingAudit(args);
             case "runtime task-audit" -> runtimeTaskAudit(args);
+            case "runtime task-completion-readiness" -> runtimeTaskCompletionReadiness(args);
             case "runtime termination-readiness" -> runtimeTerminationReadiness(args);
             case "runtime task-terminate" -> runtimeTaskTerminate(args);
             case "runtime task-reconcile" -> runtimeTaskReconcile(args);
@@ -736,7 +737,7 @@ public class UpstreamCli {
     }
 
     private int runtimeUsage() {
-        out.println("Usage: navi upstream runtime <token|audit|binding-audit|task-audit|termination-readiness|task-terminate|task-reconcile|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
+        out.println("Usage: navi upstream runtime <token|audit|binding-audit|task-audit|task-completion-readiness|termination-readiness|task-terminate|task-reconcile|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
         out.println("Runtime lane accepts only ClientApp runtime material (key/secret or access token) and rejects admin, control, and typed-management credentials.");
         out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
         out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
@@ -744,6 +745,7 @@ public class UpstreamCli {
         out.println("    STANDARD ask audit is task-id independent; Java SDK requests expose clientRequestId and parentClientRequestId correlation.");
         out.println("    Audit timestamps are RFC 3339 UTC instants; readiness reports serverTimezone, auditStorageTimezone, and taskIdDateTimezone.");
         out.println("  termination-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
+        out.println("  task-completion-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
         out.println("  task-terminate --task-id <id> --expected-physical-worker-id <id> --reason <code> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
         out.println("  task-reconcile --task-id <id> --expected-physical-worker-id <id> --expected-dispatch-count <n> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
         out.println("Audit uses ClientApp key/secret only, derives tenant/system/ClientApp on the server, issues no token, and creates no task/context/session or runtime dispatch.");
@@ -1400,6 +1402,24 @@ public class UpstreamCli {
                     upstreamUserId(args), taskId, expectedWorkerId);
         } catch (NavigatorApiException e) {
             throw runtimeStateAuditFailure(e, "RUNTIME_TERMINATION_READINESS_FAILED");
+        }
+        printJson(result);
+        return 0;
+    }
+
+    private int runtimeTaskCompletionReadiness(CliArguments args) throws Exception {
+        String taskId = requiredOption(args, "task-id", "task id");
+        String expectedWorkerId = requiredOption(
+                args, "expected-physical-worker-id", "expected physical worker id");
+        Map<String, Object> result;
+        try {
+            result = new BusinessAgentApi(runtimeAuditHttp()).runtimeTaskCompletionReadiness(
+                    clientAppKey(args),
+                    config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
+                    upstreamUserId(args), taskId, expectedWorkerId);
+        } catch (NavigatorApiException e) {
+            throw runtimeStateAuditFailure(
+                    e, "RUNTIME_TASK_COMPLETION_READINESS_FAILED");
         }
         printJson(result);
         return 0;

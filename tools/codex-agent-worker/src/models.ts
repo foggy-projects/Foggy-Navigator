@@ -206,6 +206,7 @@ export interface TaskEntry {
   processStartedAt?: string
   model?: string
   startedAt: number
+  lastProgressAt?: number
   completedAt?: number
   attention?: TaskAttention[]
   availableActions?: TaskAvailableAction[]

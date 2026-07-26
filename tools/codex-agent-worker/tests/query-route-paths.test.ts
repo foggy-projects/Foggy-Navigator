@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
+import path from 'node:path'
+import os from 'node:os'
 import express from 'express'
 import { config } from '../src/config.ts'
 import {
@@ -11,6 +13,7 @@ import {
 } from '../src/codex/sdk-wrapper.ts'
 import {
   CODEX_ULTRA_APP_SERVER_REQUIRED,
+  CODEX_WORKING_DIRECTORY_UNAVAILABLE,
   default as queryRouter,
   isPathWithinAllowedCwd,
   isUnsupportedCodexModelRequest,
@@ -182,6 +185,51 @@ test('query route rejects direct Mini requests before creating Worker task state
     }
     assert.equal(taskBroadcasts.size, taskCountBefore)
   } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve())
+    })
+  }
+})
+
+test('query route rejects a missing working directory before SSE, reservation, or task state', async () => {
+  clearCodexThreadReservationsForTests()
+  const missingDirectory = path.join(
+    os.tmpdir(),
+    `codex-worker-missing-cwd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  )
+  const app = express()
+  app.use(express.json())
+  app.use(queryRouter)
+  const server = app.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as AddressInfo
+  const broadcastCountBefore = taskBroadcasts.size
+  const taskCountBefore = taskRegistry.size
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'must fail before task allocation',
+        cwd: missingDirectory,
+        session_id: 'thread-missing-directory',
+      }),
+    })
+    const responseText = await response.text()
+
+    assert.equal(response.status, 409)
+    assert.match(response.headers.get('content-type') || '', /^application\/json/)
+    assert.deepEqual(JSON.parse(responseText), {
+      code: CODEX_WORKING_DIRECTORY_UNAVAILABLE,
+      error: CODEX_WORKING_DIRECTORY_UNAVAILABLE,
+    })
+    assert.doesNotMatch(responseText, new RegExp(missingDirectory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.equal(taskBroadcasts.size, broadcastCountBefore)
+    assert.equal(taskRegistry.size, taskCountBefore)
+    assert.equal(getCodexThreadReservations().has('thread-missing-directory'), false)
+  } finally {
+    clearCodexThreadReservationsForTests()
     await new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve())
     })

@@ -51,6 +51,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
             Map.entry("mvc:get:/api/v1/open/runtime-audits", false),
             Map.entry("mvc:get:/api/v1/open/runtime/binding-audit", false),
             Map.entry("mvc:get:/api/v1/open/runtime/task-audit", false),
+            Map.entry("mvc:get:/api/v1/open/runtime/task-completion-readiness", false),
             Map.entry("mvc:get:/api/v1/open/skills/{skillId}/files/slice", false),
             Map.entry("mvc:get:/api/v1/open/skills/{skillId}/files/tree", false)
     );
@@ -62,7 +63,8 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
     private static final Set<String> RUNTIME_LONG_TERM_READ_ONLY_AUDIT_ROUTES = Set.of(
             RUNTIME_SELF_AUDIT_ROUTE,
             "mvc:get:/api/v1/open/runtime/binding-audit",
-            "mvc:get:/api/v1/open/runtime/task-audit");
+            "mvc:get:/api/v1/open/runtime/task-audit",
+            "mvc:get:/api/v1/open/runtime/task-completion-readiness");
 
     private static final Map<String, String> WORKER_GATEWAY_ACTION_BY_ROUTE = Map.of(
             "mvc:get:/internal/worker-gateway/v1/business-functions", "gateway.function.list",
@@ -157,7 +159,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         byte[] sourceBytes = Files.readAllBytes(source);
 
         assertArrayEquals(sourceBytes, Files.readAllBytes(evidence));
-        assertEquals(462, Files.readAllLines(source).size());
+        assertEquals(463, Files.readAllLines(source).size());
         assertEquals(AuthorizationRouteCatalog.EXPECTED_ENTRY_COUNT, sourceRows().size() - 1);
         assertEquals(AuthorizationRouteCatalog.EXPECTED_SHA_256, sha256(sourceBytes));
     }

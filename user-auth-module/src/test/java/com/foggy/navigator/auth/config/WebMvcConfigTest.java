@@ -55,6 +55,7 @@ class WebMvcConfigTest {
                 "/api/v1/management/v1/**",
                 "/api/v1/open/runtime/binding-audit",
                 "/api/v1/open/runtime/task-audit",
+                "/api/v1/open/runtime/task-completion-readiness",
                 "/api/v1/open/runtime/termination-readiness",
                 "/api/v1/open/runtime/task-terminate",
                 "/api/v1/open/runtime/task-reconcile")).thenReturn(shadowRegistration);
@@ -71,6 +72,7 @@ class WebMvcConfigTest {
                 "/api/v1/management/v1/**",
                 "/api/v1/open/runtime/binding-audit",
                 "/api/v1/open/runtime/task-audit",
+                "/api/v1/open/runtime/task-completion-readiness",
                 "/api/v1/open/runtime/termination-readiness",
                 "/api/v1/open/runtime/task-terminate",
                 "/api/v1/open/runtime/task-reconcile");

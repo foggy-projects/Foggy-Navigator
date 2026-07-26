@@ -149,6 +149,23 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    public Map<String, Object> runtimeTaskCompletionReadiness(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId,
+            String expectedPhysicalWorkerId) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/runtime/task-completion-readiness");
+        appendQuery(path, "taskId", taskId);
+        appendQuery(path, "expectedPhysicalWorkerId", expectedPhysicalWorkerId);
+        return http.get(path.toString(), Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId
+        ), new TypeReference<>() {});
+    }
+
     public Map<String, Object> runtimeTaskTerminate(
             String appKey,
             String appSecret,

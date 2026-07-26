@@ -13,8 +13,12 @@ public class RuntimeAuditSideEffectsDTO {
     private Boolean taskCreated;
     private Boolean contextCreated;
     private Boolean sessionCreated;
+    private Boolean workerCommandDispatched;
     private Boolean modelDispatched;
     private Boolean businessFunctionDispatched;
+    private Boolean retryTriggered;
     private Boolean recoveryTriggered;
+    private Boolean terminationTriggered;
+    private Boolean reconciliationTriggered;
     private Boolean provisioningResourceChanged;
 }

@@ -10,6 +10,7 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
+import com.foggy.navigator.spi.task.RuntimeTaskCompletionReadinessProvider;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,8 @@ import java.util.*;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClosureProvider {
+public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClosureProvider,
+        RuntimeTaskCompletionReadinessProvider {
 
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
@@ -78,6 +80,20 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClos
     public boolean supports(String providerType) {
         return CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType)
                 || CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE.equals(providerType);
+    }
+
+    @Override
+    public boolean supportsCompletionReadiness(String providerType) {
+        return CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType);
+    }
+
+    @Override
+    public Observation inspectCompletionReadiness(
+            String taskId,
+            String expectedPhysicalWorkerId,
+            int expectedDispatchCount) {
+        return taskService.inspectRuntimeCompletionReadiness(
+                taskId, expectedPhysicalWorkerId, expectedDispatchCount);
     }
 
     @Override

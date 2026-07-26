@@ -31,6 +31,7 @@ import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialReso
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.business.agent.service.TerminalTaskBindingException;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.support.BusinessAgentSessionMessageVisibility;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
@@ -110,6 +111,8 @@ public class OpenApiController {
             "open api task submission returned no task id";
     private static final String BUSINESS_RUNTIME_BIND_FAILURE_REASON =
             "open api task token binding failed";
+    private static final String BUSINESS_RUNTIME_IMMEDIATE_TERMINAL_REASON =
+            "open api task returned terminal after submission";
     private static final String TOOL_SCOPE_SOURCE_RUNTIME_DEFAULT = "RUNTIME_DEFAULT";
     private static final String TOOL_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY = "REQUEST_EXPLICIT_EMPTY";
     private static final String TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST = "REQUEST_ALLOWLIST";
@@ -163,6 +166,7 @@ public class OpenApiController {
             "RUNTIME_TASK_REQUIRED",
             "RUNTIME_TASK_UPSTREAM_USER_REQUIRED",
             "RUNTIME_TASK_PROVIDER_UNSUPPORTED",
+            "RUNTIME_COMPLETION_READINESS_UNSUPPORTED",
             "RUNTIME_TASK_TERMINATION_FORBIDDEN",
             "RUNTIME_TASK_TERMINATION_BLOCKED",
             "RUNTIME_TASK_RECONCILE_FORBIDDEN",
@@ -216,6 +220,8 @@ public class OpenApiController {
     private final ObjectProvider<RuntimeRequestAuditService> runtimeRequestAuditService;
     private final ObjectProvider<RuntimeStateAuditService> runtimeStateAuditService;
     private final ObjectProvider<RuntimeTaskClosureService> runtimeTaskClosureService;
+    private final ObjectProvider<RuntimeTaskCompletionReadinessService>
+            runtimeTaskCompletionReadinessService;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
@@ -650,6 +656,33 @@ public class OpenApiController {
         }
     }
 
+    /**
+     * Strictly read-only completion evidence and provider/process observation
+     * for one existing runtime-owned task.
+     */
+    @GetMapping("/runtime/task-completion-readiness")
+    public RX<RuntimeTaskCompletionReadinessDTO> runtimeTaskCompletionReadiness(
+            @RequestParam String taskId,
+            @RequestParam String expectedPhysicalWorkerId,
+            HttpServletRequest request) {
+        RuntimeTaskCompletionReadinessService service =
+                runtimeTaskCompletionReadinessService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("RUNTIME_COMPLETION_READINESS_SERVICE_UNAVAILABLE");
+        }
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        try {
+            return RX.ok(service.inspect(
+                    runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
+                    runtimeUpstreamUserId(request), taskId, expectedPhysicalWorkerId));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(
+                    e, "RUNTIME_TASK_COMPLETION_READINESS_FAILED"));
+        }
+    }
+
     @PostMapping("/runtime/task-terminate")
     public RX<RuntimeTaskClosureDTO> runtimeTaskTerminate(
             @RequestBody RuntimeTaskTerminateForm form,
@@ -1008,9 +1041,16 @@ public class OpenApiController {
         if (!StringUtils.hasText(task.getContextId())) {
             task.setContextId(contextId);
         }
+        boolean terminalTaskObservedDuringBind = false;
         try {
             bindBusinessRuntimeTokenToWorkerTaskIfPossible(
                     tenantId, businessRuntimeToken, task, metadata);
+        } catch (TerminalTaskBindingException e) {
+            // The provider terminal event won the race with token binding.
+            // The lifecycle service committed the fail-closed revocation; keep
+            // returning the already-created task instead of hiding it behind a
+            // bind error.
+            terminalTaskObservedDuringBind = true;
         } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
             revokeBusinessRuntimeTokenAfterFailure(
                     tenantId,
@@ -1027,6 +1067,12 @@ public class OpenApiController {
                     BUSINESS_RUNTIME_BIND_FAILURE_REASON);
             requestAuditService.askFailed(askRequestAudit, "TASK_TOKEN_BIND_FAILED");
             throw e;
+        }
+        if (terminalTaskObservedDuringBind || isTerminalTask(task)) {
+            revokeBusinessRuntimeTokenAfterFailure(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_IMMEDIATE_TERMINAL_REASON);
         }
         try {
             requestAuditService.taskDispatchRecorded(
@@ -2322,6 +2368,16 @@ public class OpenApiController {
                     reason,
                     revocationFailure.getClass().getSimpleName());
         }
+    }
+
+    private boolean isTerminalTask(A2aTask task) {
+        if (task == null || task.getStatus() == null || task.getStatus().getState() == null) {
+            return false;
+        }
+        return switch (task.getStatus().getState()) {
+            case COMPLETED, FAILED, CANCELED -> true;
+            default -> false;
+        };
     }
 
     private String resolveTaskSessionId(A2aTask task) {

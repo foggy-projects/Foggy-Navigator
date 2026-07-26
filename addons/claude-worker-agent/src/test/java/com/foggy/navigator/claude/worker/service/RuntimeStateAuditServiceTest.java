@@ -43,6 +43,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -336,6 +337,44 @@ class RuntimeStateAuditServiceTest {
         verify(sessionTaskRepository, never()).save(any());
         verify(terminalStateRepository, never()).save(any());
         verify(taskTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void taskAuditUsesOnlyStableTaskErrorCodeWhenDiagnosticIsAbsent() {
+        LocalDateTime created = LocalDateTime.of(2026, 7, 26, 10, 0, 40);
+        LocalDateTime completed = LocalDateTime.of(2026, 7, 26, 10, 0, 41);
+        SessionTaskEntity task = task(created, completed);
+        task.setProviderTaskId(null);
+        task.setErrorMessage("CODEX_WORKING_DIRECTORY_UNAVAILABLE");
+        when(sessionTaskRepository.findByTaskId("task-existing")).thenReturn(Optional.of(task));
+        when(taskTokenRepository.findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token("REVOKED", created, completed)));
+
+        RuntimeTaskAuditDTO audit =
+                service.auditTask("runtime-key", "runtime-secret", "user-a", "task-existing");
+
+        assertTrue(audit.getTerminal());
+        assertEquals("FAILED", audit.getStatus());
+        assertEquals("CODEX_WORKING_DIRECTORY_UNAVAILABLE", audit.getSanitizedErrorCode());
+        assertEquals("REVOKED", audit.getTaskTokenStatus());
+        assertEquals(0, audit.getDispatchCount());
+    }
+
+    @Test
+    void taskAuditDoesNotPromoteFreeFormTaskErrorToSanitizedCode() {
+        LocalDateTime created = LocalDateTime.of(2026, 7, 26, 10, 1, 40);
+        SessionTaskEntity task = task(created, created.plusSeconds(1));
+        task.setErrorMessage("failed in /private/workspace with token-like-value");
+        when(sessionTaskRepository.findByTaskId("task-existing")).thenReturn(Optional.of(task));
+        when(taskTokenRepository.findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token("REVOKED", created, created.plusSeconds(1))));
+
+        RuntimeTaskAuditDTO audit =
+                service.auditTask("runtime-key", "runtime-secret", "user-a", "task-existing");
+
+        assertNull(audit.getSanitizedErrorCode());
     }
 
     @Test

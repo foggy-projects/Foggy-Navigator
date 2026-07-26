@@ -7,8 +7,20 @@ import {
   requestTaskCancellation,
 } from '../codex/sdk-wrapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
-import { toTaskLifecycleState, type WorkerEvent } from '../models.js'
-import { listCodexCliProcesses } from '../codex/processes.js'
+import {
+  completionReceiptStore,
+  type CompletionReceiptStore,
+} from '../persistence/completion-receipt.js'
+import {
+  isTaskExecutionActive,
+  isTaskTerminal,
+  toTaskLifecycleState,
+  type WorkerEvent,
+} from '../models.js'
+import {
+  canonicalizeCodexCliProcessStartedAt,
+  listCodexCliProcesses,
+} from '../codex/processes.js'
 import {
   TerminationOperationReceiptLedger,
   TerminationOperationValidationError,
@@ -21,6 +33,7 @@ const SSE_HEARTBEAT_INTERVAL_MS = 15_000
 export type TasksRouterDependencies = {
   terminationReplayLedger?: TerminationOperationReceiptLedger
   listProcesses?: typeof listCodexCliProcesses
+  completionReceiptStore?: CompletionReceiptStore
 }
 
 function startSseHeartbeat(res: Response): () => void {
@@ -71,6 +84,7 @@ export function createTasksRouter(dependencies: TasksRouterDependencies = {}): R
   const listProcesses = dependencies.listProcesses ?? listCodexCliProcesses
   const terminationReplayLedger = dependencies.terminationReplayLedger
     ?? new TerminationOperationReceiptLedger(config.terminationOperationLedgerDir)
+  const receipts = dependencies.completionReceiptStore ?? completionReceiptStore
 
 type ReconciliationProof = {
   originalOperation: NonNullable<WorkerEvent['termination_operation']>
@@ -290,6 +304,96 @@ router.get('/api/v1/tasks/:taskId/status', (req: Request, res: Response) => {
   }
 
   res.json(taskStatusPayload(entry))
+})
+
+/**
+ * GET /api/v1/tasks/:taskId/completion-readiness
+ *
+ * Content-free, read-only provider observation. This endpoint never reads the
+ * legacy event JSONL or the durable result object.
+ */
+router.get('/api/v1/tasks/:taskId/completion-readiness', async (req: Request, res: Response) => {
+  const taskId = getSingleParam(req.params.taskId)
+  const observedAt = new Date().toISOString()
+  const entry = getTaskStatus(taskId)
+
+  let receipt = null
+  try {
+    receipt = await receipts.inspect(taskId)
+  } catch {
+    res.status(503).json({
+      code: 'COMPLETION_RECEIPT_UNAVAILABLE',
+      error: 'COMPLETION_RECEIPT_UNAVAILABLE',
+    })
+    return
+  }
+
+  let processes
+  try {
+    processes = await listProcesses()
+  } catch {
+    processes = null
+  }
+
+  let providerProcessPresent: boolean | null = null
+  let providerProcessState: 'PRESENT' | 'ABSENT' | 'UNKNOWN' = 'UNKNOWN'
+  if (processes) {
+    if (entry?.pid !== undefined) {
+      const exact = processes.some(processInfo => (
+        processInfo.pid === entry.pid
+        && (!entry.processStartedAt
+          || canonicalizeCodexCliProcessStartedAt(processInfo.started_at) === entry.processStartedAt)
+      ))
+      providerProcessPresent = exact
+      providerProcessState = exact ? 'PRESENT' : 'ABSENT'
+    } else if (processes.length === 0) {
+      providerProcessPresent = false
+      providerProcessState = 'ABSENT'
+    }
+  }
+
+  const workerTaskState = entry ? toTaskLifecycleState(entry.status) : 'UNKNOWN'
+  const providerTaskTerminal = receipt
+    ? true
+    : entry
+      ? isTaskTerminal(entry.status)
+      : null
+  const providerTerminalStatus = receipt
+    ? receipt.terminal_status
+    : entry && isTaskTerminal(entry.status)
+      ? toTaskLifecycleState(entry.status)
+      : null
+
+  res.json({
+    task_id: taskId,
+    worker_id: config.navigatorWorkerId || null,
+    worker_observed_at: observedAt,
+    worker_task_known: Boolean(entry),
+    worker_task_state: workerTaskState,
+    provider_process_present: providerProcessPresent,
+    provider_process_state: providerProcessState,
+    provider_active_task_present: entry ? isTaskExecutionActive(entry.status) : null,
+    provider_task_terminal: providerTaskTerminal,
+    provider_terminal_status: providerTerminalStatus,
+    last_heartbeat_at: null,
+    last_progress_at: entry?.lastProgressAt
+      ? new Date(entry.lastProgressAt).toISOString()
+      : null,
+    process_exited_at: null,
+    final_output_present: receipt?.final_output_present ?? null,
+    final_output_durable: receipt?.final_output_durable ?? null,
+    final_output_digest: receipt?.final_output_digest ?? null,
+    final_output_recorded_at: receipt?.recorded_at ?? null,
+    structured_output_present: receipt?.structured_output_present ?? null,
+    structured_output_digest: receipt?.structured_output_digest ?? null,
+    completion_signal_present: receipt?.completion_signal_present ?? null,
+    completion_signal_source: receipt?.completion_signal_source ?? null,
+    completion_signal_recorded_at: receipt?.completion_signal_recorded_at ?? null,
+    result_recoverable: receipt?.result_recoverable ?? null,
+    completion_evidence_schema: receipt?.schema ?? null,
+    provider_task_id: receipt?.provider_task_id ?? taskId,
+    dispatch_count: receipt?.dispatch_count ?? null,
+  })
 })
 
 /**

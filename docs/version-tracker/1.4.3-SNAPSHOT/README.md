@@ -5,7 +5,7 @@ status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-24
+last_updated: 2026-07-25
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -49,6 +49,8 @@ last_updated: 2026-07-24
 - bug017_status: READY_FOR_SIGNOFF
 - runtime_binding_task_read_only_audit_spec: workitems/FEAT-001-runtime-binding-task-read-only-audit.md
 - runtime_binding_task_read_only_audit_status: READY_FOR_SIGNOFF
+- runtime_task_completion_readiness_spec: workitems/FEAT-003-runtime-task-completion-readiness.md
+- runtime_task_completion_readiness_status: BLOCKED
 - bug009_acceptance_status: rejected-pending-independent-resignoff
 - runtime9_freeze_status: CONSUMED_FAIL_CLOSED
 - runtime9_exact_run_id: `int001-bug009-20260722-r9-33154d77`
@@ -104,6 +106,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-014 Codex SDK Worker 受控中止身份、重试与退出收口](./workitems/BUG-014-codex-sdk-termination-identity-and-reconciliation.md) | 解耦终止身份与 Gateway credential，修复未确认重试和 CLI 已退出后的 `ABORTED` 收口，并完成 SDK Worker 发版部署 | READY_FOR_SIGNOFF；Worker 1.0.19、目标部署与现场恢复已完成，等待独立签核 |
 | [BUG-017 无 taskId runtime request audit](./workitems/BUG-017-runtime-request-audit-no-task-id.md) | ClientApp 自身 runtime-token/safe-ask correlation、短期脱敏阶段审计、无 taskId 查询与 CLI 1.0.25 发布 | READY_FOR_SIGNOFF；clean package、安装冒烟与全量测试已完成，等待独立签核 |
 | [FEAT-001 runtime binding/task read-only audit](./workitems/FEAT-001-runtime-binding-task-read-only-audit.md) | ClientApp runtime long-term credential 对 frozen binding 与既有 task durable 终态执行零 token、零 dispatch、零资源变更审计 | READY_FOR_SIGNOFF；CLI 1.0.26、server build、live zero-write audit 已完成，等待独立签核 |
+| [FEAT-003 runtime task completion readiness](./workitems/FEAT-003-runtime-task-completion-readiness.md) | 基于 durable task、真实 Worker/provider 进程和脱敏 completion evidence 区分运行中、注册残留与完成候选 | BLOCKED；3151 已升级至 Worker 1.0.25 / Codex SDK 0.145.0，8112 已部署 fast-terminal token/error 闭环，live stale-registration/process-absence、零副作用和缺失 cwd 快速终态失败证据通过；exact cwd 已按授权创建，但唯一允许的模型通道以 auth-class 错误终态失败，自然成功 receipt 及 clean provenance 尚未完成 |
 
 ## Scenario Sequence
 

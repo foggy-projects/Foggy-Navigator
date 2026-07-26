@@ -1349,7 +1349,7 @@ test('a non-terminal SDK stream exception remains PROCESS_UNVERIFIED and retains
     async runStreamed() {
       async function* events() {
         yield { type: 'thread.started', thread_id: 'thread-stream-unverified' }
-        throw new Error('provider stream connection lost')
+        throw new Error('request timed out at /workspace/private with Bearer secret-token')
       }
       return { events: events() }
     },
@@ -1382,6 +1382,11 @@ test('a non-terminal SDK stream exception remains PROCESS_UNVERIFIED and retains
     assert.equal(entry?.status, 'running')
     assert.equal(entry?.completedAt, undefined)
     assert.equal(entry?.attention?.at(-1)?.code, 'PROCESS_UNVERIFIED')
+    const error = taskBroadcasts.get(taskId)?.getEventsAfter(0)
+      .find(event => event.type === 'error')
+    assert.equal(error?.error_code, 'CODEX_TURN_TIMEOUT')
+    assert.equal(error?.diagnostic_text, 'CODEX_TURN_TIMEOUT')
+    assert.doesNotMatch(JSON.stringify(error), /workspace|secret-token|Bearer/i)
     assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
   } finally {
     taskBroadcasts.get(taskId)?.cleanup()
@@ -1444,7 +1449,10 @@ test('a top-level SDK error is diagnostic-only without explicit terminal evidenc
     async runStreamed() {
       async function* events() {
         yield { type: 'thread.started', thread_id: 'thread-top-level-sdk-error' }
-        yield { type: 'error', message: 'provider stderr /workspace/private Bearer secret-token' }
+        yield {
+          type: 'error',
+          message: "The model 'gpt-5.6-sol' is not supported at /workspace/private Bearer secret-token",
+        }
       }
       return { events: events() }
     },
@@ -1481,9 +1489,9 @@ test('a top-level SDK error is diagnostic-only without explicit terminal evidenc
     assert.equal(entry?.attention?.at(-1)?.code, 'PROCESS_UNVERIFIED')
     assert.equal(error?.terminal_observed, undefined)
     assert.equal(error?.terminal_status, undefined)
-    assert.equal(error?.error_code, 'CODEX_STREAM_UNCONFIRMED')
-    assert.equal(error?.diagnostic_text, 'CODEX_STREAM_UNCONFIRMED')
-    assert.doesNotMatch(JSON.stringify(error), /workspace|secret-token|stderr/i)
+    assert.equal(error?.error_code, 'CODEX_MODEL_UNSUPPORTED')
+    assert.equal(error?.diagnostic_text, 'CODEX_MODEL_UNSUPPORTED')
+    assert.doesNotMatch(JSON.stringify(error), /workspace|secret-token|Bearer|gpt-5\.6-sol/i)
     assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
   } finally {
     taskBroadcasts.get(taskId)?.cleanup()

@@ -42,6 +42,7 @@ import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
+import com.foggy.navigator.spi.task.RuntimeTaskCompletionReadinessProvider;
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.session.service.TerminationOperationService;
 import jakarta.persistence.EntityManager;
@@ -1370,6 +1371,96 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return new RuntimeTaskClosureProvider.TerminationReadiness(
                     false, false, false, false, false, false, "WORKER_UNREACHABLE");
         }
+    }
+
+    public RuntimeTaskCompletionReadinessProvider.Observation inspectRuntimeCompletionReadiness(
+            String taskId, String expectedPhysicalWorkerId, int expectedDispatchCount) {
+        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null) {
+            return unavailableCompletionObservation(
+                    false, "RUNTIME_TASK_NOT_FOUND");
+        }
+        if (!Objects.equals(entity.getWorkerId(), expectedPhysicalWorkerId)) {
+            return unavailableCompletionObservation(
+                    false, "EXPECTED_PHYSICAL_WORKER_MISMATCH");
+        }
+        if (!CODEX_PROVIDER_TYPE.equals(entity.getProviderType())
+                || CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            return unavailableCompletionObservation(
+                    null, "RUNTIME_COMPLETION_READINESS_UNSUPPORTED");
+        }
+        if (!hasNonBlank(entity.getWorkerTaskId())) {
+            return unavailableCompletionObservation(
+                    null, "WORKER_TASK_ID_UNAVAILABLE");
+        }
+        try {
+            Map<String, Object> observed = terminationClient(entity)
+                    .getTaskCompletionReadiness(entity.getWorkerTaskId())
+                    .block(Duration.ofSeconds(10));
+            if (observed == null) {
+                return unavailableCompletionObservation(
+                        false, "WORKER_COMPLETION_READINESS_EMPTY");
+            }
+            String responseWorkerId = stringValue(observed.get("worker_id"));
+            String responseTaskId = stringValue(observed.get("task_id"));
+            String providerTaskId = stringValue(observed.get("provider_task_id"));
+            Integer receiptDispatchCount = integerValue(observed.get("dispatch_count"));
+            boolean identityVerified = Objects.equals(expectedPhysicalWorkerId, responseWorkerId)
+                    && Objects.equals(entity.getWorkerTaskId(), responseTaskId)
+                    && Objects.equals(entity.getWorkerTaskId(), providerTaskId)
+                    && receiptDispatchCount != null
+                    && receiptDispatchCount == expectedDispatchCount;
+            return new RuntimeTaskCompletionReadinessProvider.Observation(
+                    true,
+                    stringValue(observed.get("worker_observed_at")),
+                    booleanObject(observed.get("worker_task_known")),
+                    stringValue(observed.get("worker_task_state")),
+                    booleanObject(observed.get("provider_process_present")),
+                    stringValue(observed.get("provider_process_state")),
+                    booleanObject(observed.get("provider_active_task_present")),
+                    booleanObject(observed.get("provider_task_terminal")),
+                    stringValue(observed.get("provider_terminal_status")),
+                    stringValue(observed.get("last_heartbeat_at")),
+                    stringValue(observed.get("last_progress_at")),
+                    stringValue(observed.get("process_exited_at")),
+                    booleanObject(observed.get("final_output_present")),
+                    booleanObject(observed.get("final_output_durable")),
+                    stringValue(observed.get("final_output_digest")),
+                    stringValue(observed.get("final_output_recorded_at")),
+                    booleanObject(observed.get("structured_output_present")),
+                    stringValue(observed.get("structured_output_digest")),
+                    booleanObject(observed.get("completion_signal_present")),
+                    stringValue(observed.get("completion_signal_source")),
+                    stringValue(observed.get("completion_signal_recorded_at")),
+                    booleanObject(observed.get("result_recoverable")),
+                    stringValue(observed.get("completion_evidence_schema")),
+                    providerTaskId,
+                    receiptDispatchCount,
+                    identityVerified,
+                    identityVerified ? null : "WORKER_COMPLETION_EVIDENCE_IDENTITY_MISMATCH");
+        } catch (RuntimeException error) {
+            WebClientResponseException responseError = findWorkerResponseError(error);
+            if (responseError != null && responseError.getStatusCode().value() == 404) {
+                return unavailableCompletionObservation(
+                        true, "WORKER_COMPLETION_READINESS_UNSUPPORTED");
+            }
+            if (responseError != null && responseError.getStatusCode().value() == 503) {
+                return unavailableCompletionObservation(
+                        true, "WORKER_COMPLETION_EVIDENCE_UNAVAILABLE");
+            }
+            return unavailableCompletionObservation(
+                    false, "WORKER_COMPLETION_READINESS_UNREACHABLE");
+        }
+    }
+
+    private RuntimeTaskCompletionReadinessProvider.Observation unavailableCompletionObservation(
+            Boolean workerReachable, String errorCode) {
+        return new RuntimeTaskCompletionReadinessProvider.Observation(
+                workerReachable, null, null, "UNKNOWN", null, "UNKNOWN",
+                null, null, null, null, null, null,
+                null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
+                false, errorCode);
     }
 
     public RuntimeTaskClosureProvider.TerminationResult terminateRuntimeTask(
@@ -3552,7 +3643,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private void publishStatusChange(CodexTaskEntity entity, String previousStatus) {
-        publishStatusChange(entity, previousStatus, terminalRecoverability(entity.getStatus()));
+        publishStatusChange(entity, previousStatus, terminalRecoverability(entity));
     }
 
     private void publishStatusChange(CodexTaskEntity entity, String previousStatus,
@@ -3596,8 +3687,16 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return value;
     }
 
-    private Boolean terminalRecoverability(String status) {
+    private Boolean terminalRecoverability(CodexTaskEntity entity) {
+        String status = entity != null ? entity.getStatus() : null;
         if ("FAILED".equals(status)) {
+            if ("CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(entity.getErrorMessage())) {
+                // The Worker rejected execution before a provider task/process
+                // existed. Resync cannot repair the missing delegated
+                // directory, so this is a definitive terminal dispatch
+                // rejection and its task-scoped capability must close.
+                return Boolean.FALSE;
+            }
             // FAILED is explicitly accepted by resyncTaskForProvider and can
             // return to RUNNING, so it is recoverable rather than definitive.
             return Boolean.TRUE;
@@ -4010,6 +4109,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (value == null) return null;
         String text = value.toString();
         return text.isBlank() ? null : text;
+    }
+
+    private Boolean booleanObject(Object value) {
+        return value instanceof Boolean bool ? bool : null;
     }
 
     private void requireUserInputPersistence() {

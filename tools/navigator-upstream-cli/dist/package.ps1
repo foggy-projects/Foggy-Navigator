@@ -144,6 +144,7 @@ $features = @(
     "runtime-audit-no-task-id",
     "runtime-binding-audit",
     "runtime-task-audit",
+    "runtime-task-completion-readiness",
     "runtime-audit-no-token-issuance",
     "runtime-task-terminal-state-audit",
     "runtime-audit-no-dispatch",

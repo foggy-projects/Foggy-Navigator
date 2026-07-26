@@ -1,6 +1,6 @@
 {
   "name": "codex-agent-worker",
-  "version": "1.0.21",
+  "version": "1.0.25",
   "description": "OpenAI Codex Agent Worker - TypeScript SSE service",
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "smoke:release": "node scripts/release-smoke.mjs"
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.144.1",
+    "@openai/codex-sdk": "0.145.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",

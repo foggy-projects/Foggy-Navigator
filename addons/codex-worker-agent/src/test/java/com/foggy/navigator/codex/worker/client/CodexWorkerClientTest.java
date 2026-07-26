@@ -259,6 +259,26 @@ class CodexWorkerClientTest {
     }
 
     @Test
+    void completionReadinessUsesReadOnlyTaskPathAndParsesContentFreeEvidence() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            Map<String, Object> response = client.getTaskCompletionReadiness("worker-task-9")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("GET", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/completion-readiness", server.path());
+            assertEquals("CODEX_COMPLETION_RECEIPT_V2",
+                    response.get("completion_evidence_schema"));
+            assertEquals("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    response.get("final_output_digest"));
+            assertFalse(response.containsKey("prompt"));
+            assertFalse(response.containsKey("response"));
+            assertFalse(response.containsKey("content"));
+        }
+    }
+
+    @Test
     void terminationInspectionUsesExactProviderTaskPathAndInstanceProof() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
@@ -634,6 +654,36 @@ class CodexWorkerClientTest {
                             + "\"thread_id\":\"thread-1\",\"turn_id\":\"turn-1\","
                             + "\"current_tokens\":81234,\"model_context_window\":270000,"
                             + "\"remaining_tokens\":188766,\"state\":\"known\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
+                if (exchange.getRequestURI().getPath().endsWith("/completion-readiness")) {
+                    byte[] response = ("{\"task_id\":\"worker-task-9\","
+                            + "\"worker_id\":\"worker-1\","
+                            + "\"worker_observed_at\":\"2026-07-25T01:02:03Z\","
+                            + "\"worker_task_known\":false,"
+                            + "\"worker_task_state\":\"UNKNOWN\","
+                            + "\"provider_process_present\":false,"
+                            + "\"provider_process_state\":\"ABSENT\","
+                            + "\"provider_active_task_present\":null,"
+                            + "\"provider_task_terminal\":true,"
+                            + "\"provider_terminal_status\":\"COMPLETED\","
+                            + "\"final_output_present\":true,"
+                            + "\"final_output_durable\":true,"
+                            + "\"final_output_digest\":\"sha256:"
+                            + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+                            + "\"final_output_recorded_at\":\"2026-07-25T01:02:02Z\","
+                            + "\"completion_signal_present\":true,"
+                            + "\"completion_signal_source\":\"PROVIDER_TERMINAL_EVENT\","
+                            + "\"completion_signal_recorded_at\":\"2026-07-25T01:02:02Z\","
+                            + "\"result_recoverable\":true,"
+                            + "\"completion_evidence_schema\":\"CODEX_COMPLETION_RECEIPT_V2\","
+                            + "\"provider_task_id\":\"worker-task-9\","
+                            + "\"dispatch_count\":1}")
                             .getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "application/json");
                     exchange.sendResponseHeaders(200, response.length);

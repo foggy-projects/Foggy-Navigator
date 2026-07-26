@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express'
+import { stat } from 'node:fs/promises'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import {
@@ -42,6 +43,15 @@ import {
 
 export { isPathWithinAllowedCwd }
 export { CODEX_ULTRA_APP_SERVER_REQUIRED }
+export const CODEX_WORKING_DIRECTORY_UNAVAILABLE = 'CODEX_WORKING_DIRECTORY_UNAVAILABLE'
+
+async function isExistingDirectory(candidate: string): Promise<boolean> {
+  try {
+    return (await stat(candidate)).isDirectory()
+  } catch {
+    return false
+  }
+}
 
 export function isUnsupportedCodexModelRequest(
   model: unknown,
@@ -144,11 +154,25 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     res.status(403).json({ error: `Working directory not allowed: ${cwd}` })
     return
   }
+  if (cwd && !await isExistingDirectory(cwd)) {
+    res.status(409).json({
+      code: CODEX_WORKING_DIRECTORY_UNAVAILABLE,
+      error: CODEX_WORKING_DIRECTORY_UNAVAILABLE,
+    })
+    return
+  }
 
   if (body.additional_directories) {
     for (const directory of body.additional_directories) {
       if (!isAllowedPath(directory)) {
         res.status(403).json({ error: `Additional directory not allowed: ${directory}` })
+        return
+      }
+      if (!await isExistingDirectory(directory)) {
+        res.status(409).json({
+          code: CODEX_WORKING_DIRECTORY_UNAVAILABLE,
+          error: CODEX_WORKING_DIRECTORY_UNAVAILABLE,
+        })
         return
       }
     }
