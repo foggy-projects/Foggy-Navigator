@@ -5,7 +5,7 @@ Date: 2026-07-26
 ## Outcome
 
 - Runtime-only `task-completion-readiness` server/API/SDK/CLI and Codex SDK
-  Worker evidence support are implemented locally.
+  Worker evidence support are implemented and clean released.
 - The exact host `Ubuntu-24.04` Worker on port 3151 was upgraded in place to
   Worker `1.0.25` with Codex SDK `0.145.0`. The current WSL instances
   `/home/sa/.codex-worker` and `/home/sa/.claude-worker` were not stopped,
@@ -26,16 +26,29 @@ Date: 2026-07-26
 ## Provenance
 
 - Source:
-  - commit: `429a8ab768e9731da1e8e51ed9c9e7ddde48262a`
+  - implementation/release commit:
+    `d5a9e97fb677cb77c22ee7101abef71e19891618`
+  - CLI provenance contract patch:
+    `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3`
   - branch: `main`
-  - worktree: dirty
+  - both commits pushed to `origin/main`
 - Running Navigator:
   - endpoint: local 8112
   - health on 2026-07-26: `UP`
-  - deployed from the current dirty source on 2026-07-26
-  - listener PID after the final restart: `132692`
+  - embedded commit: `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3`
+  - embedded git dirty: `false`
+  - listener PID after the final restart: `184140`
 - CLI:
-  - local source/package version: `1.0.33`
+  - official version: `1.0.34`
+  - build ID: `1.0.34+9a4bbd7a08a5`
+  - git dirty: `false`
+  - feature count: `73`
+  - `runtime-task-completion-readiness`: present
+  - Linux SHA-256:
+    `666d321e237a25457ea65f6aeb37edcbde9fbf48bc7c116a8f4b3258f47d7405`
+  - Windows SHA-256:
+    `69d176986586cd0ed1a77816965e9631e4f7fa5b2a1cc57c1ae714c1263c9055`
+  - independent remote downloads matched release metadata
 - Bound Codex SDK Worker:
   - distribution: host `Ubuntu-24.04`
   - installation: `/home/navigator/.codex-worker`
@@ -50,10 +63,13 @@ Date: 2026-07-26
     `b55fd8595e498845f974308010a3b7e4c5e9701e2b1f1353616d6267b811a4d8`
   - Windows SHA-256:
     `d5b34461ec5d321a2930ae474e6902b2adfc8e8e80384c5897f835011a91527d`
-- Local launcher JAR SHA-256:
-  `8b62689ca688c558564482fd489f08bb372f79130e678eca7e281c0578e5e73d`
+- Clean launcher JAR SHA-256:
+  `0a6a824f085b42e4bfd1649b96f254a3ad6da790033341e99b0eb6f544407611`
 
-These are dirty local artifacts and were not published.
+Worker 1.0.25 and CLI 1.0.34 were published from independent clean clones.
+CLI 1.0.33 was an intermediate release whose provenance test still expected
+published 1.0.32; it was superseded by 1.0.34 after the contract was corrected
+and all 153 CLI tests passed.
 
 ## Automated Validation
 
@@ -63,11 +79,11 @@ These are dirty local artifacts and were not published.
   - `npm run build`: passed.
   - full Worker 1.0.25 release smoke: passed.
 - Navigator completion-readiness and affected surfaces:
-  - authorization: 11 tests passed.
+  - independent clean clone authorization: 11 tests passed.
   - Web MVC authorization exclusion: 2 tests passed.
-  - completion service/controller: 63 tests passed.
-  - Codex provider/client: 174 tests passed.
-  - upstream CLI: 153 tests passed.
+  - Claude runtime/completion surface: 74 tests passed.
+  - Codex provider/client: 175 tests passed.
+  - upstream CLI 1.0.34 contract: 153 tests passed.
 - Additional fast-terminal correctness:
   - command:
     `mvn -pl addons/claude-worker-agent -am -Dtest=OpenApiControllerMessageMappingTest,RuntimeStateAuditServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`
@@ -82,7 +98,10 @@ These are dirty local artifacts and were not published.
     recoverability for other failed Codex tasks.
 - Packaging:
   - `mvn package -pl launcher -am -DskipTests`: passed, 14 reactor modules
-    successful.
+    successful from clean commit `9a4bbd7a`.
+  - Worker 1.0.25 full release smoke and package verification: passed.
+  - CLI 1.0.34 package, upload, remote installer smoke and independent
+    Linux/Windows digest checks: passed.
   - `git diff --check`: passed.
   - scoped sensitive-value scan: zero matches.
 
@@ -270,7 +289,4 @@ existing abort/cancel closure path. Its minimum safety contract is:
 1. The only model variant allowed by the bound model configuration reaches a
    provider/auth-class terminal failure, so a natural terminal-success ASK and
    V2 durable result/receipt have not been observed live.
-2. Server, CLI and Worker artifacts currently have dirty provenance and are not
-   publishable/signoff-ready.
-
 Final status: `BLOCKED`.

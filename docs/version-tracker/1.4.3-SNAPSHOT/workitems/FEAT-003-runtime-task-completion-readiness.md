@@ -206,7 +206,7 @@ Every successful or fail-closed readiness response must explicitly report:
 - [x] AC-7 every readiness response returns all fourteen audit side effects as `false`; interaction and before/after persistence checks prove no token issuance, task/resource creation, execution dispatch, retry/recovery, termination or reconciliation.
 - [x] AC-8 API、CLI、Worker response、logs and committed evidence contain no credential/profile/header、prompt、response、message body、raw event/result、workspace path、PID or process command.
 - [x] AC-9 unsupported provider/runtime returns stable `UNSUPPORTED/UNKNOWN` and never falls back to another Worker, provider, process or credential lane.
-- [ ] AC-10 Worker and Navigator artifacts have clean provenance; route manifest/auth tests, Worker tests, affected Maven tests, CLI package/help/feature manifest and launcher health all pass.
+- [x] AC-10 Worker and Navigator artifacts have clean provenance; route manifest/auth tests, Worker tests, affected Maven tests, CLI package/help/feature manifest and launcher health all pass.
 - [ ] AC-11 live smoke uses bounded new test-owned SIM ASK tasks: one naturally completes, one may have its exact owned Codex CLI terminated after an initial observation, and environment-invalid requests fail terminally before provider execution. No BusinessFunction or business/workspace content is used.
 - [ ] AC-12 live evidence proves natural completion is not confused with stale registration, forced process absence without authoritative result is not reported as completed, and readiness queries do not change task/token/registration/counter state.
 - [x] AC-13 Worker/CLI restart and termination records include only sanitized ownership, version, time and outcome; port alone is never accepted as process ownership.
@@ -304,7 +304,7 @@ This delivery does not implement mutation. A later independently approved work i
 
 - implementation_summary:
   - 新增 runtime-only `GET /api/v1/open/runtime/task-completion-readiness`、SDK 和
-    CLI 1.0.33 命令，聚合 durable facts、Worker/provider observed facts、
+    CLI 1.0.34 命令，聚合 durable facts、Worker/provider observed facts、
     content-free completion evidence 和 fail-closed assessment。
   - Codex SDK Worker 1.0.25（Codex SDK/CLI 0.145.0）在 provider terminal success
     路径先原子持久化可恢复
@@ -332,29 +332,37 @@ This delivery does not implement mutation. A later independently approved work i
   - `navigator-common`、`user-auth-module`: route catalog/manifest 和 runtime
     credential lane authorization。
   - `navigator-open-sdk`、`tools/navigator-upstream-cli`: API、CLI command/help/tests、
-    feature manifest 和 1.0.33 provenance。
+    feature manifest 和 1.0.34 provenance。
 - tests_and_results:
   - Codex SDK Worker: 247 tests，246 passed、1 Windows-only skipped、0 failed；
     typecheck/build passed。
   - immediate-terminal token revoke 与 sanitized error fallback 聚焦 Maven 测试：
     69 tests passed；terminal-marker/token-binding 竞态与确定性 cwd 拒绝语义补充测试：
     206 tests passed。
-  - authorization 11、WebMvc 2、completion service/controller 63、Codex provider/client
-    174、CLI 153 tests passed。
-  - Worker 1.0.25 full release smoke、CLI 1.0.33 和 launcher package passed；
-    launcher JAR SHA-256:
-    `8b62689ca688c558564482fd489f08bb372f79130e678eca7e281c0578e5e73d`；
-    `git diff --check` passed；scoped sensitive-value scan zero matches。
+  - clean clone focused reactor: authorization 11、WebMvc 2、Claude completion/runtime
+    74、Codex provider/client 175 tests passed；CLI 1.0.34 contract 153 tests passed。
+  - Worker 1.0.25 full release smoke、CLI 1.0.34 package/remote install smoke 和
+    14-module launcher package passed；clean launcher JAR SHA-256:
+    `0a6a824f085b42e4bfd1649b96f254a3ad6da790033341e99b0eb6f544407611`；
+    embedded commit `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3`、
+    `git.dirty=false`。
   - Worker 1.0.25 Linux artifact SHA-256:
     `b55fd8595e498845f974308010a3b7e4c5e9701e2b1f1353616d6267b811a4d8`。
+  - CLI 1.0.34 Linux/Windows artifact SHA-256:
+    `666d321e237a25457ea65f6aeb37edcbde9fbf48bc7c116a8f4b3258f47d7405` /
+    `69d176986586cd0ed1a77816965e9631e4f7fa5b2a1cc57c1ae714c1263c9055`；
+    independent remote downloads matched `latest.json`。
   - affected multi-module run 在 710 tests 后因既有
     `BusinessTaskScopedTokenLifecycleJpaTest` JPA slice 缺少
     `RuntimeRequestAuditService` 出现 9 errors；FEAT-003 未修改该测试/监听器，所有
     FEAT-003 聚焦 Java surface 均通过。
 - manual_or_experience_evidence:
-  - launcher 已运行本地实现，health `UP`，commit
-    `429a8ab768e9731da1e8e51ed9c9e7ddde48262a`，dirty build；2026-07-26
-    重新 package 并启动后 listener PID 为 `132692`。
+  - implementation commit
+    `d5a9e97fb677cb77c22ee7101abef71e19891618` 和 CLI provenance contract
+    patch `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3` 均已推送到 `origin/main`。
+  - 8112 已运行 clean launcher，health `UP`，embedded commit
+    `9a4bbd7a08a5398661d91bd45c7bfadd0c6581b3`、`git.dirty=false`；
+    2026-07-26 最终 listener PID 为 `184140`。
   - 3151 listener 经 Windows relay、`Ubuntu-24.04` listener PID cwd、安装目录
     `VERSION`、`.env` port 和 health 交叉确认属于
     `/home/navigator/.codex-worker`；未触碰当前 WSL 的
@@ -379,6 +387,10 @@ This delivery does not implement mutation. A later independently approved work i
     `FAILED`，固定错误码 `CODEX_WORKING_DIRECTORY_UNAVAILABLE`，durable
     `dispatchCount=0`、active registration absent、retry/recovery `0/0`。
     Worker 未创建 provider task/process；没有 BusinessFunction 调用。
+  - official Worker 1.0.25 和 CLI 1.0.34 已从 independent clean clone 发布；
+    Worker/CLI remote metadata 均为 `gitDirty=false`，archive digest 与独立下载一致。
+    CLI 1.0.33 是中间发布，因 provenance contract test 仍保留 1.0.32 预期而被
+    1.0.34 supersede；1.0.34 的 153 项 CLI contract tests 全部通过。
   - 对该已终态失败任务执行的 task-audit、completion-readiness 和
     termination-readiness 均为只读，十四项 query side effects 全部为 false。
     completion-readiness 返回 provider/evidence `UNKNOWN/null`、
@@ -403,13 +415,14 @@ This delivery does not implement mutation. A later independently approved work i
     未修改 Directory 或 binding；后续两次 ASK 均越过 cwd 校验并创建 provider task，
     但唯一允许的 `codex-luna:high` 通道以 `CODEX_AUTH_REQUIRED` 终态失败。
   - 2026-07-26 用户已授权多次新 ASK；未对任何旧任务执行 retry/resume/recovery。
-  - clean publish 未执行。
+  - clean publish 和 8112 clean deployment 已完成；该项不再构成偏差。
 - residual_risks:
   - 现场已能区分 registration residue 与底层 provider process absence，但尚无自然
     terminal success 的 V2 durable result/receipt live 样本；实际完成判定仍仅由自动化
     fixture 覆盖。当前阻断是绑定 modelConfig 唯一允许的 provider/model 通道未成功，
     不是 delegated cwd 缺失。
-  - server/CLI/Worker 制品来自 dirty worktree，不能作为发布制品。
+  - Worker、CLI 和 launcher clean provenance 已完成；当前剩余风险仅是 live
+    natural-success V2 result/receipt 未能通过现有 provider/auth lane 取得。
   - immediate/async fast-terminal token revoke 与 sanitized error fallback 已部署到
     8112，并由 `20260726-a7b8` 的 durable audit 证明；本项不再是现场差异。
   - 旧 test-owned tasks 中仍有非终态/待 reconcile 样本；本次没有对其执行
@@ -426,7 +439,7 @@ This delivery does not implement mutation. A later independently approved work i
   - 自然完成 V2 receipt live proof 未完成：exact delegated cwd 已按授权创建，但绑定
     modelConfig 唯一允许的 `codex-luna:high` provider 通道以 auth-class 错误终态失败。
     未刷新 credential、修改 modelConfig 或切换未授权 provider lane。
-  - independent signoff 未执行：AC-10/11/12 尚未满足。
+  - independent signoff 未执行：AC-11/12 尚未满足。
 - readiness: BLOCKED
 
 ## References
