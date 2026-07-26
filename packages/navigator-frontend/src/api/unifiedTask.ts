@@ -35,6 +35,7 @@ export type ForwardTargetMode = 'NEW_SESSION' | 'EXISTING_SESSION'
 export interface ForwardSessionForm {
   sourceSessionId: string
   sourceMessageId: string
+  sourceTaskId?: string
   targetMode?: ForwardTargetMode
   targetSessionId?: string
   workerId?: string
@@ -170,8 +171,23 @@ export async function createTaskUnified(form: {
 export async function forwardSessionUnified(
   form: ForwardSessionForm,
 ): Promise<ForwardSessionResult> {
-  const rx = (await client.post('/session-relations/forward', form)) as unknown as RX<ForwardSessionResult>
-  return rx.data
+  try {
+    const rx = (await client.post(
+      '/session-relations/forward',
+      form,
+      { suppressErrorMessage: true } as any,
+    )) as unknown as RX<ForwardSessionResult>
+    return rx.data
+  } catch (error: unknown) {
+    const responseData = (error as {
+      response?: { data?: { msg?: string; message?: string } }
+    })?.response?.data
+    const message = responseData?.msg
+      || responseData?.message
+      || (error instanceof Error ? error.message : '')
+      || '转发失败'
+    throw new Error(message)
+  }
 }
 
 export async function getIncomingForwardRelation(

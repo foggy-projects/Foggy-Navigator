@@ -7,6 +7,7 @@ public class SessionForwardCreateRequest {
 
     private String sourceSessionId;
     private String sourceMessageId;
+    private String sourceTaskId;
     private String targetMode;
     private String targetSessionId;
     private String workerId;

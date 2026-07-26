@@ -205,6 +205,7 @@ export function useClaudeWorker() {
   async function forwardSession(form: {
     sourceSessionId: string
     sourceMessageId: string
+    sourceTaskId?: string
     targetMode?: ForwardTargetMode
     targetSessionId?: string
     workerId?: string

@@ -2,6 +2,8 @@ package com.foggy.navigator.session.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.session.Message;
+import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
@@ -31,11 +33,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -65,9 +70,7 @@ public class SessionForwardService {
     ) {
         SessionEntity sourceSession = findOwnedSession(request.getSourceSessionId(), userId, tenantId,
                 "Source session not found: ");
-        SessionMessageEntity sourceMessage = sessionMessageRepository.findById(request.getSourceMessageId())
-                .filter(message -> sourceSession.getId().equals(message.getSessionId()))
-                .orElseThrow(() -> new IllegalArgumentException("Source message not found: " + request.getSourceMessageId()));
+        SessionMessageEntity sourceMessage = resolveSourceMessage(request, sourceSession, userId, tenantId);
 
         if (!"ASSISTANT".equalsIgnoreCase(sourceMessage.getRole())) {
             throw new IllegalArgumentException("Only assistant messages can be forwarded");
@@ -80,6 +83,90 @@ public class SessionForwardService {
             case "NEW_SESSION" -> forwardCreatingNewSession(request, userId, tenantId, sourceSession, sourceMessage, prompt);
             default -> throw new IllegalArgumentException("Unsupported targetMode: " + targetMode);
         };
+    }
+
+    private SessionMessageEntity resolveSourceMessage(
+            SessionForwardCreateRequest request,
+            SessionEntity sourceSession,
+            String userId,
+            String tenantId
+    ) {
+        String sourceMessageId = blankToNull(request.getSourceMessageId());
+        if (sourceMessageId != null) {
+            Optional<SessionMessageEntity> sourceMessage = sessionMessageRepository.findById(sourceMessageId);
+            if (sourceMessage.isPresent()) {
+                SessionMessageEntity message = sourceMessage.get();
+                if (!sourceSession.getId().equals(message.getSessionId())) {
+                    throw new IllegalArgumentException("Source message not found: " + sourceMessageId);
+                }
+                return message;
+            }
+        }
+
+        String sourceTaskId = blankToNull(request.getSourceTaskId());
+        if (sourceTaskId == null) {
+            throw new IllegalArgumentException("Source message not found: " + request.getSourceMessageId());
+        }
+        return resolveRecoveredTaskResult(sourceSession, sourceTaskId, userId, tenantId);
+    }
+
+    private SessionMessageEntity resolveRecoveredTaskResult(
+            SessionEntity sourceSession,
+            String sourceTaskId,
+            String userId,
+            String tenantId
+    ) {
+        SessionTaskEntity sourceTask = resourceAccessService.requireOwnedTask(sourceTaskId, userId, tenantId);
+        if (!sourceSession.getId().equals(blankToNull(sourceTask.getSessionId()))) {
+            throw new IllegalArgumentException("Source task does not belong to source session");
+        }
+        if (!"COMPLETED".equalsIgnoreCase(blankToNull(sourceTask.getStatus()))) {
+            throw new IllegalArgumentException("Source task is not completed");
+        }
+
+        String resultText = blankToNull(sourceTask.getResultText());
+        if (resultText == null) {
+            throw new IllegalArgumentException("Source task result is empty");
+        }
+
+        Optional<SessionMessageEntity> existingMessage = sessionMessageRepository
+                .findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
+                        sourceSession.getId(), sourceTaskId, "ASSISTANT")
+                .stream()
+                .filter(message -> resultText.equals(blankToNull(message.getContent())))
+                .findFirst();
+        if (existingMessage.isPresent()) {
+            return existingMessage.get();
+        }
+
+        String durableMessageId = recoveredTaskResultMessageId(sourceSession.getId(), sourceTaskId);
+        Message recoveredMessage = Message.builder()
+                .id(durableMessageId)
+                .sessionId(sourceSession.getId())
+                .taskId(sourceTaskId)
+                .role(MessageRole.ASSISTANT)
+                .content(resultText)
+                .metadata(Map.of(
+                        "type", "TEXT_COMPLETE",
+                        "taskId", sourceTaskId,
+                        "isResult", true,
+                        "recoveredFromTask", true,
+                        "durableRecovery", true
+                ))
+                .build();
+        String persistedMessageId = sessionManager.addMessage(sourceSession.getId(), recoveredMessage);
+        log.info("Materialized recovered task result for forwarding: sessionId={}, taskId={}, messageId={}",
+                sourceSession.getId(), sourceTaskId, persistedMessageId);
+
+        return sessionMessageRepository.findById(persistedMessageId)
+                .filter(message -> sourceSession.getId().equals(message.getSessionId()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "Recovered source message persistence failed: " + persistedMessageId));
+    }
+
+    private String recoveredTaskResultMessageId(String sessionId, String taskId) {
+        String source = "forward-task-result:" + sessionId + ":" + taskId;
+        return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     @Transactional(readOnly = true)

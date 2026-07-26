@@ -18,6 +18,7 @@ import { providerTypeLabel } from '@/utils/workerBackend'
 export type ForwardSourceContext = {
   sourceSessionId: string
   sourceMessageId: string
+  sourceTaskId?: string
   sourceContent: string
   sourceWorkerId?: string
   sourceDirectoryId?: string
@@ -50,6 +51,16 @@ export interface ForwardSessionDeps {
   milestoneStatusLabel: (status: string) => string
   formatTime: (dateStr: string) => string
   ALL_MODELS: SelectableModelOption[]
+}
+
+export function recoveredSourceTaskId(message: unknown): string | undefined {
+  if (!message || typeof message !== 'object') return undefined
+  const candidate = message as { taskId?: string; raw?: unknown }
+  if (!candidate.raw || typeof candidate.raw !== 'object') return undefined
+  const raw = candidate.raw as Record<string, unknown>
+  if (raw.recoveredFromTask !== true) return undefined
+  const taskId = typeof raw.taskId === 'string' ? raw.taskId.trim() : candidate.taskId?.trim()
+  return taskId || undefined
 }
 
 function defaultForwardForm() {
@@ -136,13 +147,23 @@ export function useForwardSession(deps: ForwardSessionDeps) {
   async function openForwardDialog(opts: {
     task: ClaudeTask
     messageId: string
+    sourceTaskId?: string
     sourceContent: string
     selectedWorkerId: string
     defaultModel: string
     defaultModelConfigId: string
     defaultPermissionMode: string
   }) {
-    const { task, messageId, sourceContent, selectedWorkerId: fallbackWorkerId, defaultModel, defaultModelConfigId, defaultPermissionMode } = opts
+    const {
+      task,
+      messageId,
+      sourceTaskId,
+      sourceContent,
+      selectedWorkerId: fallbackWorkerId,
+      defaultModel,
+      defaultModelConfigId,
+      defaultPermissionMode,
+    } = opts
     const sourceMilestoneId = workerState.conversationConfigs.value.get(task.sessionId)?.milestoneId || ''
     const initialWorkerId = task.workerId || fallbackWorkerId || ''
     const initialDirectoryId = task.directoryId || ''
@@ -150,6 +171,7 @@ export function useForwardSession(deps: ForwardSessionDeps) {
     forwardSource.value = {
       sourceSessionId: task.sessionId,
       sourceMessageId: messageId,
+      sourceTaskId,
       sourceContent,
       sourceWorkerId: task.workerId,
       sourceDirectoryId: task.directoryId,
@@ -208,6 +230,9 @@ export function useForwardSession(deps: ForwardSessionDeps) {
       const result = await workerState.forwardSession({
         sourceSessionId,
         sourceMessageId: forwardSource.value.sourceMessageId,
+        ...(forwardSource.value.sourceTaskId
+          ? { sourceTaskId: forwardSource.value.sourceTaskId }
+          : {}),
         targetMode,
         targetSessionId: targetMode === 'EXISTING_SESSION'
           ? forwardForm.value.targetSessionId

@@ -1,5 +1,6 @@
 package com.foggy.navigator.session.service;
 
+import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -379,6 +381,267 @@ class SessionForwardServiceTest {
         verify(sessionRelationRepository).save(relationCaptor.capture());
         assertEquals("session-child-a", relationCaptor.getValue().getSourceSessionId());
         assertEquals("session-child-b", relationCaptor.getValue().getTargetSessionId());
+    }
+
+    @Test
+    void forwardToNewSession_recoveredTaskResult_materializesDurableSourceMessage() {
+        SessionEntity sourceSession = new SessionEntity();
+        sourceSession.setId("session-source");
+        sourceSession.setUserId("user-1");
+
+        SessionTaskEntity sourceTask = new SessionTaskEntity();
+        sourceTask.setTaskId("task-source");
+        sourceTask.setSessionId("session-source");
+        sourceTask.setStatus("COMPLETED");
+        sourceTask.setResultText("任务最终结果");
+
+        SessionEntity createdSession = new SessionEntity();
+        createdSession.setId("session-target");
+        createdSession.setUserId("user-1");
+
+        DispatchTaskDTO createdTask = DispatchTaskDTO.builder()
+                .taskId("task-created")
+                .sessionId("session-target")
+                .workerId("worker-target")
+                .providerType("codex-worker")
+                .build();
+
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(resourceAccessService.requireOwnedTask("task-source", "user-1", "tenant-1"))
+                .thenReturn(sourceTask);
+        when(sessionMessageRepository.findById(any())).thenAnswer(invocation -> {
+            String messageId = invocation.getArgument(0);
+            if ("task-result-task-source".equals(messageId)) {
+                return Optional.empty();
+            }
+            SessionMessageEntity durableMessage = new SessionMessageEntity();
+            durableMessage.setId(messageId);
+            durableMessage.setSessionId("session-source");
+            durableMessage.setTaskId("task-source");
+            durableMessage.setRole("ASSISTANT");
+            durableMessage.setContent("任务最终结果");
+            return Optional.of(durableMessage);
+        });
+        when(sessionMessageRepository.findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
+                "session-source", "task-source", "ASSISTANT")).thenReturn(List.of());
+        when(sessionManager.addMessage(eq("session-source"), any())).thenAnswer(invocation -> {
+            Message message = invocation.getArgument(1);
+            return message.getId();
+        });
+        when(sessionManager.createSession(any())).thenReturn("session-target");
+        when(sessionRepository.findById("session-target")).thenReturn(Optional.of(createdSession));
+        when(agentSubmitPipeline.submit(any())).thenReturn(AgentTaskSubmitResult.of(null, createdTask));
+        when(sessionRelationRepository.save(any())).thenAnswer(invocation -> {
+            SessionRelationEntity relation = invocation.getArgument(0);
+            relation.setId(102L);
+            return relation;
+        });
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-source");
+        request.setSourceMessageId("task-result-task-source");
+        request.setSourceTaskId("task-source");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-target");
+        request.setPrompt("继续处理");
+
+        SessionForwardCreateResponse response = service.forwardToNewSession(request, "user-1", "tenant-1");
+
+        assertEquals("NEW_SESSION", response.getTargetMode());
+        assertEquals("session-target", response.getTargetSessionId());
+        assertTrue(response.getSourceMessageId().matches("[0-9a-f-]{36}"));
+        assertFalse(response.getSourceMessageId().startsWith("task-result-"));
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager).addMessage(eq("session-source"), messageCaptor.capture());
+        Message recoveredMessage = messageCaptor.getValue();
+        assertEquals(response.getSourceMessageId(), recoveredMessage.getId());
+        assertEquals("session-source", recoveredMessage.getSessionId());
+        assertEquals("task-source", recoveredMessage.getTaskId());
+        assertEquals("ASSISTANT", recoveredMessage.getRole().name());
+        assertEquals("任务最终结果", recoveredMessage.getContent());
+        assertEquals("TEXT_COMPLETE", recoveredMessage.getMetadata().get("type"));
+        assertEquals(true, recoveredMessage.getMetadata().get("recoveredFromTask"));
+
+        ArgumentCaptor<SessionRelationEntity> relationCaptor = ArgumentCaptor.forClass(SessionRelationEntity.class);
+        verify(sessionRelationRepository).save(relationCaptor.capture());
+        assertEquals(response.getSourceMessageId(), relationCaptor.getValue().getSourceMessageId());
+    }
+
+    @Test
+    void forwardToNewSession_recoveredTaskResult_reusesExistingDurableMessage() {
+        SessionEntity sourceSession = new SessionEntity();
+        sourceSession.setId("session-source");
+        sourceSession.setUserId("user-1");
+
+        SessionTaskEntity sourceTask = new SessionTaskEntity();
+        sourceTask.setTaskId("task-source");
+        sourceTask.setSessionId("session-source");
+        sourceTask.setStatus("COMPLETED");
+        sourceTask.setResultText("任务最终结果");
+
+        SessionMessageEntity existingMessage = new SessionMessageEntity();
+        existingMessage.setId("msg-durable");
+        existingMessage.setSessionId("session-source");
+        existingMessage.setTaskId("task-source");
+        existingMessage.setRole("ASSISTANT");
+        existingMessage.setContent("任务最终结果");
+
+        SessionEntity createdSession = new SessionEntity();
+        createdSession.setId("session-target");
+        createdSession.setUserId("user-1");
+
+        DispatchTaskDTO createdTask = DispatchTaskDTO.builder()
+                .taskId("task-created")
+                .sessionId("session-target")
+                .workerId("worker-target")
+                .providerType("codex-worker")
+                .build();
+
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(resourceAccessService.requireOwnedTask("task-source", "user-1", "tenant-1"))
+                .thenReturn(sourceTask);
+        when(sessionMessageRepository.findById("task-result-task-source")).thenReturn(Optional.empty());
+        when(sessionMessageRepository.findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
+                "session-source", "task-source", "ASSISTANT")).thenReturn(List.of(existingMessage));
+        when(sessionManager.createSession(any())).thenReturn("session-target");
+        when(sessionRepository.findById("session-target")).thenReturn(Optional.of(createdSession));
+        when(agentSubmitPipeline.submit(any())).thenReturn(AgentTaskSubmitResult.of(null, createdTask));
+        when(sessionRelationRepository.save(any())).thenAnswer(invocation -> {
+            SessionRelationEntity relation = invocation.getArgument(0);
+            relation.setId(103L);
+            return relation;
+        });
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-source");
+        request.setSourceMessageId("task-result-task-source");
+        request.setSourceTaskId("task-source");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-target");
+
+        SessionForwardCreateResponse response = service.forwardToNewSession(request, "user-1", "tenant-1");
+
+        assertEquals("msg-durable", response.getSourceMessageId());
+        verify(sessionManager, never()).addMessage(any(), any());
+    }
+
+    @Test
+    void forwardToNewSession_recoveredTaskResult_rejectsInvalidTaskFactsWithoutMutation() {
+        SessionEntity sourceSession = new SessionEntity();
+        sourceSession.setId("session-source");
+        sourceSession.setUserId("user-1");
+
+        SessionTaskEntity mismatchedTask = new SessionTaskEntity();
+        mismatchedTask.setTaskId("task-source");
+        mismatchedTask.setSessionId("session-other");
+        mismatchedTask.setStatus("COMPLETED");
+        mismatchedTask.setResultText("结果");
+
+        SessionTaskEntity runningTask = new SessionTaskEntity();
+        runningTask.setTaskId("task-source");
+        runningTask.setSessionId("session-source");
+        runningTask.setStatus("RUNNING");
+        runningTask.setResultText("结果");
+
+        SessionTaskEntity emptyResultTask = new SessionTaskEntity();
+        emptyResultTask.setTaskId("task-source");
+        emptyResultTask.setSessionId("session-source");
+        emptyResultTask.setStatus("COMPLETED");
+        emptyResultTask.setResultText(" ");
+
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(sessionMessageRepository.findById("task-result-task-source")).thenReturn(Optional.empty());
+        when(resourceAccessService.requireOwnedTask("task-source", "user-1", "tenant-1"))
+                .thenReturn(mismatchedTask, runningTask, emptyResultTask);
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-source");
+        request.setSourceMessageId("task-result-task-source");
+        request.setSourceTaskId("task-source");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-target");
+
+        assertEquals("Source task does not belong to source session",
+                assertThrows(IllegalArgumentException.class,
+                        () -> service.forwardToNewSession(request, "user-1", "tenant-1")).getMessage());
+        assertEquals("Source task is not completed",
+                assertThrows(IllegalArgumentException.class,
+                        () -> service.forwardToNewSession(request, "user-1", "tenant-1")).getMessage());
+        assertEquals("Source task result is empty",
+                assertThrows(IllegalArgumentException.class,
+                        () -> service.forwardToNewSession(request, "user-1", "tenant-1")).getMessage());
+
+        verify(sessionManager, never()).addMessage(any(), any());
+        verify(sessionManager, never()).createSession(any());
+        verify(agentSubmitPipeline, never()).submit(any());
+        verify(sessionRelationRepository, never()).save(any());
+    }
+
+    @Test
+    void forwardToNewSession_recoveredTaskResult_rejectsUnownedTaskWithoutMutation() {
+        SessionEntity sourceSession = new SessionEntity();
+        sourceSession.setId("session-source");
+        sourceSession.setUserId("user-1");
+
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(sessionMessageRepository.findById("task-result-task-secret")).thenReturn(Optional.empty());
+        when(resourceAccessService.requireOwnedTask("task-secret", "user-1", "tenant-1"))
+                .thenThrow(new SecurityException("Resource access denied"));
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-source");
+        request.setSourceMessageId("task-result-task-secret");
+        request.setSourceTaskId("task-secret");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-target");
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> service.forwardToNewSession(request, "user-1", "tenant-1"));
+
+        assertEquals("Resource access denied", error.getMessage());
+        verify(sessionManager, never()).addMessage(any(), any());
+        verify(sessionManager, never()).createSession(any());
+        verify(agentSubmitPipeline, never()).submit(any());
+        verify(sessionRelationRepository, never()).save(any());
+    }
+
+    @Test
+    void forwardToNewSession_existingMessageFromAnotherSession_doesNotFallbackToTask() {
+        SessionEntity sourceSession = new SessionEntity();
+        sourceSession.setId("session-source");
+        sourceSession.setUserId("user-1");
+
+        SessionMessageEntity otherSessionMessage = new SessionMessageEntity();
+        otherSessionMessage.setId("msg-other");
+        otherSessionMessage.setSessionId("session-other");
+        otherSessionMessage.setRole("ASSISTANT");
+        otherSessionMessage.setContent("其他会话结果");
+
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(sessionMessageRepository.findById("msg-other")).thenReturn(Optional.of(otherSessionMessage));
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-source");
+        request.setSourceMessageId("msg-other");
+        request.setSourceTaskId("task-source");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-target");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.forwardToNewSession(request, "user-1", "tenant-1"));
+
+        assertEquals("Source message not found: msg-other", error.getMessage());
+        verify(resourceAccessService, never()).requireOwnedTask(any(), any(), any());
+        verify(sessionManager, never()).addMessage(any(), any());
+        verify(sessionManager, never()).createSession(any());
+        verify(agentSubmitPipeline, never()).submit(any());
+        verify(sessionRelationRepository, never()).save(any());
     }
 
     @Test

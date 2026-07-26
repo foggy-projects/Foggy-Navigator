@@ -3112,7 +3112,7 @@ import CodexRuntimeManager from '@/components/worker/CodexRuntimeManager.vue'
 import TaskProviderBadge from '@/components/worker/TaskProviderBadge.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
-import { useForwardSession } from '@/composables/useForwardSession'
+import { recoveredSourceTaskId, useForwardSession } from '@/composables/useForwardSession'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
 import { useAttachments, compressImage, fileIcon, MAX_IMAGE_SIZE, toImagesJson } from '@/composables/useAttachments'
 import { useUserPreferences } from '@/composables/useUserPreferences'
@@ -6739,6 +6739,7 @@ async function handlePaneForward(paneId: string, message: ChatMessage | { id: st
   await openForwardDialog({
     task,
     messageId: message.id,
+    sourceTaskId: recoveredSourceTaskId(message),
     sourceContent,
     selectedWorkerId: selectedWorkerId.value || '',
     defaultModel: taskForm.value.model || '',

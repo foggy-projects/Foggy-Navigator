@@ -28,6 +28,9 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     Optional<SessionMessageEntity> findFirstByTaskIdOrderByCreatedAtDescIdDesc(String taskId);
 
+    List<SessionMessageEntity> findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
+            String sessionId, String taskId, String role);
+
     void deleteBySessionId(String sessionId);
 
     // ── Open API: cursor 分页查询 ──
