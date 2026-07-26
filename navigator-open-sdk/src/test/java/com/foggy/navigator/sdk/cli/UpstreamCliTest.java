@@ -1,5 +1,7 @@
 package com.foggy.navigator.sdk.cli;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -34,6 +36,22 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class UpstreamCliTest {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final List<String> RUNTIME_SIDE_EFFECT_FIELDS = List.of(
+            "accessTokenIssued",
+            "runtimeTokenIssued",
+            "taskTokenIssued",
+            "taskCreated",
+            "contextCreated",
+            "sessionCreated",
+            "workerCommandDispatched",
+            "modelDispatched",
+            "businessFunctionDispatched",
+            "retryTriggered",
+            "recoveryTriggered",
+            "terminationTriggered",
+            "reconciliationTriggered",
+            "provisioningResourceChanged");
     private static HttpServer server;
     private static int port;
     private static String lastPath;
@@ -194,9 +212,13 @@ class UpstreamCliTest {
                             "taskCreated":false,
                             "contextCreated":false,
                             "sessionCreated":false,
+                            "workerCommandDispatched":false,
                             "modelDispatched":false,
                             "businessFunctionDispatched":false,
+                            "retryTriggered":false,
                             "recoveryTriggered":false,
+                            "terminationTriggered":false,
+                            "reconciliationTriggered":false,
                             "provisioningResourceChanged":false
                           },
                           "taskId":"task-existing",
@@ -2443,7 +2465,7 @@ class UpstreamCliTest {
                 "--upstream-user-id", "upstream-request",
                 "--task-id", "task-existing",
                 "--json"}, env(
-                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+                "NAVI_CLIENT_APP_SECRET", "false"));
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
@@ -2464,7 +2486,9 @@ class UpstreamCliTest {
         assertTrue(output.contains("\"runtimeDispatched\" : true"));
         assertTrue(output.contains("\"taskModelDispatched\" : true"));
         assertTrue(output.contains("\"recoveryTriggered\" : false"));
-        assertFalse(output.contains("cas-runtime-secret"));
+        JsonNode root = assertDoesNotThrow(() -> OBJECT_MAPPER.readTree(output));
+        assertRuntimeSideEffectsRemainBoolean(root.path("auditSideEffects"));
+        assertEquals("", stderr.toString(StandardCharsets.UTF_8));
         assertFalse(output.contains("prompt"));
         assertFalse(output.contains("workspace"));
         assertFalse(output.contains("responseBody"));
@@ -2510,7 +2534,7 @@ class UpstreamCliTest {
                 "--task-id", "task-existing",
                 "--expected-physical-worker-id", "worker-durable",
                 "--json"}, env(
-                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+                "NAVI_CLIENT_APP_SECRET", "false"));
 
         assertEquals(0, code);
         assertEquals("GET", lastMethod);
@@ -2542,6 +2566,7 @@ class UpstreamCliTest {
                     "completionCandidate":true,
                     "recommendedAction":"COMPLETION_RECONCILIATION_AVAILABLE"
                   },
+                  "diagnostic":"cli-json-private-sentinel",
                   "auditSideEffects":{
                     "accessTokenIssued":false,
                     "runtimeTokenIssued":false,
@@ -2568,7 +2593,8 @@ class UpstreamCliTest {
                 "--task-id", "task-existing",
                 "--expected-physical-worker-id", "worker-durable",
                 "--json"}, env(
-                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+                "NAVI_CLIENT_APP_SECRET", "false",
+                "NAVI_LLM_API_KEY", "cli-json-private-sentinel"));
 
         assertEquals(0, code);
         assertEquals("GET", lastMethod);
@@ -2580,7 +2606,13 @@ class UpstreamCliTest {
         assertTrue(output.contains("\"completionCandidate\" : true"));
         assertTrue(output.contains("\"workerCommandDispatched\" : false"));
         assertTrue(output.contains("\"reconciliationTriggered\" : false"));
-        assertFalse(output.contains("cas-runtime-secret"));
+        JsonNode root = assertDoesNotThrow(() -> OBJECT_MAPPER.readTree(output));
+        assertRuntimeSideEffectsRemainBoolean(root.path("auditSideEffects"));
+        assertEquals("[REDACTED]", root.path("diagnostic").textValue());
+        String errorOutput = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals("", errorOutput);
+        assertFalse(output.contains("cli-json-private-sentinel"));
+        assertFalse(errorOutput.contains("cli-json-private-sentinel"));
         assertFalse(output.contains("\"prompt\""));
         assertFalse(output.contains("\"response\""));
         assertFalse(output.contains("\"workspace\""));
@@ -5422,8 +5454,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.34", provenance.sourceVersion());
-        assertEquals("1.0.34", provenance.publishedVersion());
+        assertEquals("1.0.35", provenance.sourceVersion());
+        assertEquals("1.0.35", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
@@ -5606,6 +5638,14 @@ class UpstreamCliTest {
 
     private static String sha256(Path file) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));
+    }
+
+    private static void assertRuntimeSideEffectsRemainBoolean(JsonNode sideEffects) {
+        assertTrue(sideEffects.isObject());
+        for (String field : RUNTIME_SIDE_EFFECT_FIELDS) {
+            assertTrue(sideEffects.has(field), "missing side-effect field " + field);
+            assertTrue(sideEffects.get(field).isBoolean(), "side-effect field is not boolean: " + field);
+        }
     }
 
     private int run(String[] args, Map<String, String> env, UpstreamCli.CommandRunner commandRunner) {

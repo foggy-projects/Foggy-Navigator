@@ -129,6 +129,7 @@ if ($Upload -and $gitDirty) {
     throw "Refusing to publish from a dirty git worktree."
 }
 $features = @(
+    "structured-json-redaction",
     "config-check",
     "auth-login",
     "runtime-token",

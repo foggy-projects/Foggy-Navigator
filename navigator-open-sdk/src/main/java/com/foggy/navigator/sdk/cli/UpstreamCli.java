@@ -1,6 +1,7 @@
 package com.foggy.navigator.sdk.cli;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -5716,8 +5717,8 @@ public class UpstreamCli {
     }
 
     private void printJson(Object value) throws Exception {
-        String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
-        out.println(redact(json));
+        JsonNode redacted = SecretMasker.redactJson(objectMapper, value, this::redact);
+        out.println(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(redacted));
     }
 
     private void printWorker(Worker worker) {
