@@ -161,12 +161,15 @@ open_questions: []
   - `mvn test -pl addons/claude-worker-agent -am`: affected 8-module reactor PASS, exit `0`; Navigator Common `120` tests (`3` skipped), Business Agent `704`, Claude Worker Agent `404`.
   - `mvn package -pl launcher -am -DskipTests`: 14-module reactor PASS, exit `0`.
   - CLI Linux/Windows clean package and local install/version smoke: PASS, exit `0`.
+  - official OBS upload script `--version 1.0.26`: five objects returned HTTP `200`; built-in remote Linux installer smoke PASS, exit `0`.
 - manual_or_experience_evidence:
   - final live window `2026-07-24T06:37:11Z..06:37:13Z`: both commands succeeded against the existing SIM-owned runtime profile and current 8112 server.
   - before/after checksums for 22 relevant durable tables were identical, including token/task/session/context/audit/authorization/binding/registration tables; `authorization_decision` count was unchanged.
   - frozen binding matched tenant/user/Agent/model/directory/Worker/3131/3151 registration and returned `activeTaskCount=0`.
   - existing task `20260723-d9ab` returned `terminal=true`, `FAILED`, `CODEX_WORKER_REMOTE_ERROR`, token `REVOKED`, no active registration, dispatch/retry/recovery `1/0/0`, physical worker `ddc45293`, variant `codex-luna:high`.
   - all ten side-effect assertions were `false` for both responses.
+  - official OBS `latest.json` now resolves `1.0.26`, buildId `1.0.26+d08e02018442.dirty`, full commit `d08e020184422ba814a4b733ebe21e5952bba23f`, and all five runtime-audit features.
+  - independently downloaded Linux/Windows archives matched local SHA-256 respectively `74b41bc1e5ed0e134c7b60de774fd4db86ecb9f1f4667549c8f7f201d1117877` and `ca0a6a34c19a96267f171a36dfed9ca3a492280acd0ae19ade448e9a47da9874`; public HEAD checks for `latest.json`, both installers and both archives all returned success.
 - deviations:
   - first live verification exposed one authorization-shadow audit write；the exact two audit routes were then excluded from shadow persistence, regression-tested, rebuilt, restarted and reverified with zero relevant-table changes.
   - durable agent-pool resolution can intentionally defer physical selection；binding audit accepts the directory-pinned physical Worker when no conflicting pool physical Worker exists and rejects an actual conflict.
