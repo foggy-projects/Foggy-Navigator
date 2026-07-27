@@ -176,6 +176,29 @@ class TerminationOperationServiceTest {
     }
 
     @Test
+    void markTargetAbsentClosesActiveCancellationWithoutClaimingProcessSignal() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+        TerminationOperationEntity operation = new TerminationOperationEntity();
+        operation.setOperationId("to-absent-1");
+        operation.setStatus("RUNNING");
+        operation.setDispatchState("UNCONFIRMED");
+        operation.setAttentionCode("TERMINATION_UNCONFIRMED");
+        operation.setFailureCode("TERMINATION_DISPATCH_UNCONFIRMED");
+        when(repository.findByTaskIdOrderByCreatedAtDescForUpdate("task-1"))
+                .thenReturn(List.of(operation));
+
+        service.markTargetAbsentForTask("task-1");
+
+        assertEquals("ABORTED", operation.getStatus());
+        assertEquals("OBSERVED", operation.getDispatchState());
+        assertEquals(null, operation.getAttentionCode());
+        assertEquals(null, operation.getFailureCode());
+        org.junit.jupiter.api.Assertions.assertNotNull(operation.getObservedAt());
+        verify(repository).save(operation);
+    }
+
+    @Test
     void expiredUnconfirmedOperationDoesNotBlockAnExactTaskRetry() {
         TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
         TerminationOperationService service = new TerminationOperationService(repository);

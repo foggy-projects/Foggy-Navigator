@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Field;
@@ -196,6 +198,92 @@ class TaskStateReconcilerTest {
         assertEquals(3, missMap.get("task-1"));
     }
 
+    @Test
+    void reconcileAll_cancelRequested_workerConfirmsAbsentThreeTimes_convergesUnregisteredTask()
+            throws Exception {
+        ConcurrentHashMap<String, Integer> missMap = getMissCountMap();
+        missMap.put("task-1", 2);
+        ConcurrentHashMap<String, Integer> absentMissMap = getAbsentMissCountMap();
+        absentMissMap.put("task-1", 2);
+
+        ClaudeWorkerEntity worker = buildWorker("w1");
+        when(workerRepository.findAll()).thenReturn(List.of(worker));
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.listCliProcesses())
+                .thenReturn(Mono.just(Map.of("processes", List.of())));
+
+        ClaudeTaskEntity task = buildTask("task-1", "w1", "CANCEL_REQUESTED");
+        task.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+        when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
+                .thenReturn(List.of(task));
+        when(workerClient.getTaskStatus("task-1"))
+                .thenReturn(Mono.error(workerNotFound()));
+        when(taskService.reconcileAbsentUntrackedCancellation("task-1")).thenReturn(true);
+
+        reconciler.reconcileAll();
+
+        verify(taskService).reconcileAbsentUntrackedCancellation("task-1");
+        verify(streamRelay).abortStream("task-1");
+        verify(taskService, never()).markLifecycleAttention("task-1", "PROCESS_UNVERIFIED");
+        assertFalse(missMap.containsKey("task-1"));
+        assertFalse(absentMissMap.containsKey("task-1"));
+    }
+
+    @Test
+    void reconcileAll_runningTask_worker404ThreeTimes_stillRetainsPendingEvidence() throws Exception {
+        ConcurrentHashMap<String, Integer> missMap = getMissCountMap();
+        missMap.put("task-1", 2);
+        ConcurrentHashMap<String, Integer> absentMissMap = getAbsentMissCountMap();
+        absentMissMap.put("task-1", 2);
+
+        ClaudeWorkerEntity worker = buildWorker("w1");
+        when(workerRepository.findAll()).thenReturn(List.of(worker));
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.listCliProcesses())
+                .thenReturn(Mono.just(Map.of("processes", List.of())));
+
+        ClaudeTaskEntity task = buildTask("task-1", "w1", "RUNNING");
+        task.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+        when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
+                .thenReturn(List.of(task));
+        when(taskRepository.findByTaskId("task-1")).thenReturn(Optional.of(task));
+        when(workerClient.getTaskStatus("task-1"))
+                .thenReturn(Mono.error(workerNotFound()));
+
+        reconciler.reconcileAll();
+
+        verify(taskService, never()).reconcileAbsentUntrackedCancellation(anyString());
+        verify(taskService).markLifecycleAttention("task-1", "PROCESS_UNVERIFIED");
+        verify(streamRelay, never()).abortStream(anyString());
+        assertEquals(3, missMap.get("task-1"));
+        assertEquals(3, absentMissMap.get("task-1"));
+    }
+
+    @Test
+    void reconcileAll_cancelRequested_transportFailure_resetsConfirmedAbsenceCount() throws Exception {
+        ConcurrentHashMap<String, Integer> absentMissMap = getAbsentMissCountMap();
+        absentMissMap.put("task-1", 2);
+
+        ClaudeWorkerEntity worker = buildWorker("w1");
+        when(workerRepository.findAll()).thenReturn(List.of(worker));
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.listCliProcesses())
+                .thenReturn(Mono.just(Map.of("processes", List.of())));
+
+        ClaudeTaskEntity task = buildTask("task-1", "w1", "CANCEL_REQUESTED");
+        when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
+                .thenReturn(List.of(task));
+        when(taskRepository.findByTaskId("task-1")).thenReturn(Optional.of(task));
+        when(workerClient.getTaskStatus("task-1"))
+                .thenReturn(Mono.error(new IllegalStateException("transport unavailable")));
+
+        reconciler.reconcileAll();
+
+        verify(taskService, never()).reconcileAbsentUntrackedCancellation(anyString());
+        verify(taskService).markLifecycleAttention("task-1", "PROCESS_UNVERIFIED");
+        assertFalse(absentMissMap.containsKey("task-1"));
+    }
+
     // ---- 象限 3: DB done + CLI alive → orphan ----
 
     @Test
@@ -321,6 +409,11 @@ class TaskStateReconcilerTest {
         return task;
     }
 
+    private WebClientResponseException workerNotFound() {
+        return WebClientResponseException.create(
+                404, "Not Found", HttpHeaders.EMPTY, new byte[0], null);
+    }
+
     @SuppressWarnings("unchecked")
     private ConcurrentHashMap<String, Instant> getOrphanMap() throws Exception {
         Field field = TaskStateReconciler.class.getDeclaredField("orphanFirstSeen");
@@ -331,6 +424,13 @@ class TaskStateReconcilerTest {
     @SuppressWarnings("unchecked")
     private ConcurrentHashMap<String, Integer> getMissCountMap() throws Exception {
         Field field = TaskStateReconciler.class.getDeclaredField("cliDeadMissCount");
+        field.setAccessible(true);
+        return (ConcurrentHashMap<String, Integer>) field.get(reconciler);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ConcurrentHashMap<String, Integer> getAbsentMissCountMap() throws Exception {
+        Field field = TaskStateReconciler.class.getDeclaredField("workerTaskAbsentMissCount");
         field.setAccessible(true);
         return (ConcurrentHashMap<String, Integer>) field.get(reconciler);
     }

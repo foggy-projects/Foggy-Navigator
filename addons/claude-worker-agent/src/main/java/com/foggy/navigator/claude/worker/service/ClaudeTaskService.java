@@ -2089,6 +2089,51 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     /**
+     * Closes a user-cancelled control-plane task after the reachable Worker
+     * repeatedly confirms that no corresponding task exists. The caller
+     * supplies the remote 404/process-list evidence; this transaction rechecks
+     * the durable zero-progress guard so a late Worker event cannot be
+     * overwritten by absence reconciliation.
+     */
+    @Transactional
+    public boolean reconcileAbsentUntrackedCancellation(String taskId) {
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+        if (!isAbsentUntrackedCancellationCandidate(entity)) {
+            return false;
+        }
+
+        String previousStatus = entity.getStatus();
+        entity.setStatus("ABORTED");
+        entity.setAbortRequested(false);
+        entity.setErrorMessage(null);
+        persistTask(entity);
+        if (terminationOperationService != null) {
+            terminationOperationService.markTargetAbsentForTask(taskId);
+        }
+        publishStatusChange(entity, previousStatus);
+        updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+        log.info("Reconciler closed cancellation for Worker-absent task with no durable provider progress: taskId={}",
+                taskId);
+        return true;
+    }
+
+    private boolean isAbsentUntrackedCancellationCandidate(ClaudeTaskEntity entity) {
+        if (entity == null || !"CANCEL_REQUESTED".equals(entity.getStatus())) {
+            return false;
+        }
+        return !StringUtils.hasText(entity.getWorkerTaskId())
+                && (entity.getLastAckedSeq() == null || entity.getLastAckedSeq() <= 0)
+                && entity.getLastAliveAt() == null
+                && !StringUtils.hasText(entity.getResultText())
+                && !StringUtils.hasText(entity.getCheckpoints())
+                && entity.getCostUsd() == null
+                && entity.getInputTokens() == null
+                && entity.getOutputTokens() == null
+                && entity.getDurationMs() == null
+                && entity.getNumTurns() == null;
+    }
+
+    /**
      * SSE 流断开时调用（未收到 result/error 事件，且重连已失败）。
      *
      * A disconnected stream does not identify why the CLI exited.  It is

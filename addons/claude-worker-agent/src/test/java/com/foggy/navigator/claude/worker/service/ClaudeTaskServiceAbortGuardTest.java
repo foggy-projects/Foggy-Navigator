@@ -207,6 +207,52 @@ class ClaudeTaskServiceAbortGuardTest {
     }
 
     @Test
+    void absentUntrackedCancellationConvergesOnlyExplicitCancellationWithoutProviderProgress() {
+        ClaudeTaskEntity entity = createRunningTask();
+        entity.setStatus("CANCEL_REQUESTED");
+        SessionEntity session = new SessionEntity();
+        session.setId(SESSION_ID);
+        session.setInteractionState("PROCESSING");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        TerminationOperationService terminationOperationService = installTerminationOperationService();
+
+        boolean converged = service.reconcileAbsentUntrackedCancellation(TASK_ID);
+
+        assertTrue(converged);
+        assertEquals("ABORTED", entity.getStatus());
+        assertEquals(false, entity.getAbortRequested());
+        assertEquals("AWAITING_REPLY", session.getInteractionState());
+        verify(terminationOperationService).markTargetAbsentForTask(TASK_ID);
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity sessionTask) ->
+                TASK_ID.equals(sessionTask.getTaskId())
+                        && "ABORTED".equals(sessionTask.getStatus())));
+        verify(publisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                TASK_ID.equals(event.getTaskId())
+                        && "CANCEL_REQUESTED".equals(event.getPreviousStatus())
+                        && "ABORTED".equals(event.getStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())));
+    }
+
+    @Test
+    void absentUntrackedCancellationRetainsTaskWhenProviderProgressExists() {
+        ClaudeTaskEntity entity = createRunningTask();
+        entity.setStatus("CANCEL_REQUESTED");
+        entity.setLastAckedSeq(1);
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        TerminationOperationService terminationOperationService = installTerminationOperationService();
+
+        boolean converged = service.reconcileAbsentUntrackedCancellation(TASK_ID);
+
+        org.junit.jupiter.api.Assertions.assertFalse(converged);
+        assertEquals("CANCEL_REQUESTED", entity.getStatus());
+        verify(taskRepository, never()).save(any());
+        verify(terminationOperationService, never()).markTargetAbsentForTask(anyString());
+        verify(publisher, never()).publishEvent(any(TaskStatusChangeEvent.class));
+    }
+
+    @Test
     void definitiveTerminalEventFallsBackToSessionTenantForLegacyTask() {
         ClaudeTaskEntity entity = createRunningTask();
         entity.setTenantId(null);

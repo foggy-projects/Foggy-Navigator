@@ -53,6 +53,12 @@ public class TaskStateReconciler {
      */
     private static final int NEW_TASK_GRACE_MINUTES = 2;
 
+    /**
+     * A reachable Worker must confirm the task is absent repeatedly before a
+     * zero-progress cancellation can be closed locally.
+     */
+    private static final int ABSENT_UNTRACKED_CANCEL_MISSES = 3;
+
     // -------------------------------------------------------------------------
     // 依赖
     // -------------------------------------------------------------------------
@@ -78,6 +84,12 @@ public class TaskStateReconciler {
      * key: taskId，value: 连续丢失次数
      */
     private final ConcurrentHashMap<String, Integer> cliDeadMissCount = new ConcurrentHashMap<>();
+
+    /**
+     * Consecutive reachable-Worker 404 observations for a task absent from the
+     * process list. Generic transport failures never increment this counter.
+     */
+    private final ConcurrentHashMap<String, Integer> workerTaskAbsentMissCount = new ConcurrentHashMap<>();
 
     // -------------------------------------------------------------------------
     // 主调度方法
@@ -164,6 +176,7 @@ public class TaskStateReconciler {
                 // 象限 1: DB 活跃 + CLI 存活 → 更新心跳时间，清除丢失计数
                 taskService.touchAlive(taskId);
                 cliDeadMissCount.remove(taskId);
+                workerTaskAbsentMissCount.remove(taskId);
                 // 同时清除该 pid 的孤儿记录（正常任务不是孤儿）
                 orphanFirstSeen.remove(workerId + ":" + pid);
                 log.debug("Reconciler: task={} alive (pid={}), touched lastAliveAt", taskId, pid);
@@ -206,6 +219,7 @@ public class TaskStateReconciler {
                 // restart, or a network failure.  Replay real Worker events
                 // when available; otherwise retain ownership with attention.
                 boolean replayStarted = false;
+                boolean workerConfirmedTaskAbsent = false;
                 try {
                     String workerLookupTaskId = taskService.resolveWorkerTaskLookupId(task);
                     Map<String, Object> taskStatus = workerService.createClient(worker)
@@ -223,12 +237,31 @@ public class TaskStateReconciler {
                         }
                     }
                 } catch (Exception e) {
+                    workerConfirmedTaskAbsent = isHttpNotFound(e);
                     log.debug("Reconciler: Worker status query failed for uncertain task {}: errorCode={}, errorType={}",
                             taskId, lifecycleDiagnosticCode(e), exceptionType(e));
                 }
 
                 if (!replayStarted) {
                     int misses = cliDeadMissCount.merge(taskId, 1, Integer::sum);
+                    int absentMisses;
+                    if (workerConfirmedTaskAbsent) {
+                        absentMisses = workerTaskAbsentMissCount.merge(taskId, 1, Integer::sum);
+                    } else {
+                        workerTaskAbsentMissCount.remove(taskId);
+                        absentMisses = 0;
+                    }
+                    if (workerConfirmedTaskAbsent
+                            && absentMisses >= ABSENT_UNTRACKED_CANCEL_MISSES
+                            && "CANCEL_REQUESTED".equals(task.getStatus())
+                            && taskService.reconcileAbsentUntrackedCancellation(taskId)) {
+                        streamRelay.abortStream(taskId);
+                        cliDeadMissCount.remove(taskId);
+                        workerTaskAbsentMissCount.remove(taskId);
+                        log.info("Reconciler: closed absent zero-progress cancellation after Worker 404 evidence: "
+                                + "task={}, absenceMiss={}", taskId, absentMisses);
+                        continue;
+                    }
                     taskService.markLifecycleAttention(taskId, "PROCESS_UNVERIFIED");
                     log.warn("Reconciler: retained task={} pending decision after missing-process observation (miss={})",
                             taskId, misses);
@@ -291,13 +324,18 @@ public class TaskStateReconciler {
 
     private void cleanStaleMissEntries() {
         // 删除 DB 中任务已不再活跃的丢失计数条目
-        cliDeadMissCount.keySet().removeIf(taskId -> {
+        Set<String> trackedTaskIds = new HashSet<>(cliDeadMissCount.keySet());
+        trackedTaskIds.addAll(workerTaskAbsentMissCount.keySet());
+        trackedTaskIds.forEach(taskId -> {
             Optional<ClaudeTaskEntity> opt = taskRepository.findByTaskId(taskId);
-            if (opt.isEmpty()) return true;
-            String status = opt.get().getStatus();
-            return !"RUNNING".equals(status)
-                    && !"AWAITING_PERMISSION".equals(status)
-                    && !"CANCEL_REQUESTED".equals(status);
+            String status = opt.map(ClaudeTaskEntity::getStatus).orElse(null);
+            boolean active = "RUNNING".equals(status)
+                    || "AWAITING_PERMISSION".equals(status)
+                    || "CANCEL_REQUESTED".equals(status);
+            if (!active) {
+                cliDeadMissCount.remove(taskId);
+                workerTaskAbsentMissCount.remove(taskId);
+            }
         });
     }
 
@@ -318,6 +356,16 @@ public class TaskStateReconciler {
             current = current.getCause();
         }
         return "CLAUDE_RECONCILIATION_UNCONFIRMED";
+    }
+
+    private static boolean isHttpNotFound(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof WebClientResponseException responseException) {
+                return responseException.getStatusCode().value() == 404;
+            }
+        }
+        return false;
     }
 
     private static String exceptionType(Throwable error) {

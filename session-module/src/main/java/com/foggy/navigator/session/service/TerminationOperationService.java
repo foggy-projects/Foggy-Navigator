@@ -215,6 +215,28 @@ public class TerminationOperationService {
                 });
     }
 
+    /**
+     * Closes the newest cancellation when the reachable runtime repeatedly
+     * confirms the target does not exist and the provider task has no durable
+     * progress. OBSERVED here records target absence, not a claimed process
+     * signal or provider terminal event.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markTargetAbsentForTask(String taskId) {
+        if (!hasText(taskId)) return;
+        repository.findByTaskIdOrderByCreatedAtDescForUpdate(taskId).stream()
+                .filter(entity -> !isTerminal(entity.getStatus()))
+                .findFirst()
+                .ifPresent(entity -> {
+                    entity.setStatus("ABORTED");
+                    entity.setDispatchState("OBSERVED");
+                    entity.setAttentionCode(null);
+                    entity.setFailureCode(null);
+                    entity.setObservedAt(LocalDateTime.now());
+                    repository.save(entity);
+                });
+    }
+
     @Transactional(readOnly = true)
     public List<TerminationOperationDTO> findOwned(String taskId, String ownerUserId, String tenantId) {
         List<TerminationOperationEntity> operations = hasText(tenantId)

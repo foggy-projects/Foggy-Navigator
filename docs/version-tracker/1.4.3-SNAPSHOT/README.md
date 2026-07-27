@@ -5,7 +5,7 @@ status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-27
+last_updated: 2026-07-28
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -57,6 +57,8 @@ last_updated: 2026-07-27
 - bug022_status: READY_FOR_SIGNOFF
 - chat_posix_file_link_resolution_spec: workitems/BUG-023-chat-posix-file-link-resolution.md
 - bug023_status: ACCEPTED
+- claude_never_registered_cancel_spec: workitems/BUG-029-claude-never-registered-cancel-convergence.md
+- bug029_status: READY_FOR_SIGNOFF
 - bug009_acceptance_status: rejected-pending-independent-resignoff
 - runtime9_freeze_status: CONSUMED_FAIL_CLOSED
 - runtime9_exact_run_id: `int001-bug009-20260722-r9-33154d77`
@@ -115,6 +117,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-021 Codex app-server Worker compact 协议收口](./workitems/BUG-021-app-server-compact-protocol.md) | 对齐 CLI 0.144.3 空 compact response 与 thread/item completion，恢复单实例池并发布 app-server Worker 0.3.24 | READY_FOR_SIGNOFF；现场恢复、failure-first 修复、完整 package/install/update/local-smoke、OBS 发布及远端逐字节复核均已完成 |
 | [BUG-022 Codex app-server Worker 失败锁存恢复启动](./workitems/BUG-022-app-server-force-recovery-start.md) | 为 `stop.failed` 提供显式、精确身份约束的 force-kill-and-start 恢复命令，并发布 app-server Worker 0.3.25 | READY_FOR_SIGNOFF；focused/full package、正式候选 update/start/stop、本机升级及 OBS 远端逐字节校验均已完成 |
 | [BUG-023 Chat POSIX 文件链接精确定位](./workitems/BUG-023-chat-posix-file-link-resolution.md) | 根内 POSIX/Windows 绝对 href 直接生成精确 File Browser deeplink，根外 fail closed；嵌套 Git 仓库搜索已修复并完成浏览器/API 回归 | ACCEPTED；[独立签收](./evidence/BUG-023-independent-signoff.md)通过，继续执行前端部署、Worker 升级与目标环境真实点击验收 |
+| [BUG-029 Claude 从未注册任务取消收口](./workitems/BUG-029-claude-never-registered-cancel-convergence.md) | Worker 停机窗口内未注册且取消派发未确认的零进度任务，在三次明确 404 后安全收口 | READY_FOR_SIGNOFF；Java-only，部署后等待最多三轮调解 |
 | [FEAT-001 runtime binding/task read-only audit](./workitems/FEAT-001-runtime-binding-task-read-only-audit.md) | ClientApp runtime long-term credential 对 frozen binding 与既有 task durable 终态执行零 token、零 dispatch、零资源变更审计 | READY_FOR_SIGNOFF；CLI 1.0.26、server build、live zero-write audit 已完成，等待独立签核 |
 | [FEAT-003 runtime task completion readiness](./workitems/FEAT-003-runtime-task-completion-readiness.md) | 基于 durable task、真实 Worker/provider 进程和脱敏 completion evidence 区分运行中、注册残留与完成候选 | READY_FOR_SIGNOFF；Worker 1.0.25、CLI 1.0.34 和 8112 launcher clean release/deploy 已完成，live stale-registration/process-absence、快速终态失败、自然完成 V2 durable receipt 与零副作用证据均通过 |
 
