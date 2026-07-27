@@ -4,11 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 NO_BUILD=false
+FORCE_KILL_AND_START=false
 UPDATE_TRANSACTION_NONCE=""
 LIFECYCLE_LOCK_NONCE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build) NO_BUILD=true; shift ;;
+    --force-kill-and-start) FORCE_KILL_AND_START=true; shift ;;
     --update-transaction-nonce) UPDATE_TRANSACTION_NONCE="${2:?missing transaction nonce}"; shift 2 ;;
     --update-transaction-nonce=*) UPDATE_TRANSACTION_NONCE="${1#*=}"; shift ;;
     --lifecycle-lock-nonce) LIFECYCLE_LOCK_NONCE="${2:?missing lifecycle lock nonce}"; shift 2 ;;
@@ -77,6 +79,60 @@ has_runtime_process_tree_evidence() {
     (( count != 0 )) && return 0
   fi
   return 1
+}
+print_force_recovery_command() {
+  printf 'Suggested recovery command (destructive; kills only the exact snapshotted Worker tree): cd %q && ./start.sh --force-kill-and-start\n' "$ROOT" >&2
+}
+remove_start_evidence_file() {
+  local evidence="$1"
+  if [[ -e "$evidence" || -L "$evidence" ]]; then rm -f -- "$evidence" || return 1; fi
+  [[ ! -e "$evidence" && ! -L "$evidence" ]]
+}
+force_recover_start_evidence() {
+  local recovery_pid="" kill_status verify_status
+  if [[ -n "$UPDATE_TRANSACTION_NONCE" || ( -n "$LIFECYCLE_LOCK_NONCE" && "$OWN_LIFECYCLE_LOCK" != true ) ]]; then
+    echo '--force-kill-and-start is only available for a standalone operator start' >&2
+    return 1
+  fi
+  if has_runtime_process_tree_evidence; then
+    echo "Unresolved app-server process-tree evidence exists at $RUNTIME_PROCESS_TREE_DIR; force start cannot clear runtime-owned evidence" >&2
+    return 1
+  fi
+  if [[ -e "$LIFECYCLE_FAILURE_FILE" ]]; then
+    echo "Unresolved runtime lifecycle evidence exists at $LIFECYCLE_FAILURE_FILE; force start cannot clear fallback lifecycle evidence" >&2
+    return 1
+  fi
+  if [[ -e "$LIFECYCLE_SNAPSHOT_FILE" ]]; then
+    if [[ -f "$PID_FILE" ]]; then
+      recovery_pid="$(tr -d '[:space:]' < "$PID_FILE")"
+      if [[ ! "$recovery_pid" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Invalid Worker PID evidence at $PID_FILE; refusing force recovery" >&2
+        return 1
+      fi
+      echo "Force recovery requested: killing exact snapshotted Worker tree rooted at PID $recovery_pid; active tasks may be interrupted" >&2
+      run_process_tree kill --pid "$recovery_pid" --entry "$ENTRY" --output "$LIFECYCLE_SNAPSHOT_FILE"
+    else
+      echo 'Force recovery requested: killing exact snapshotted Worker tree; active tasks may be interrupted' >&2
+      run_process_tree kill --entry "$ENTRY" --output "$LIFECYCLE_SNAPSHOT_FILE"
+    fi
+    kill_status=$PROCESS_TREE_STATUS
+    run_process_tree verify --entry "$ENTRY" --output "$LIFECYCLE_SNAPSHOT_FILE"
+    verify_status=$PROCESS_TREE_STATUS
+    if (( kill_status != 0 || verify_status != 0 )); then
+      echo "Force recovery could not prove zero Worker residue: kill=$kill_status verify=$verify_status. Evidence retained at $LIFECYCLE_SNAPSHOT_FILE" >&2
+      return 1
+    fi
+  elif [[ -f "$PID_FILE" ]]; then
+    echo "Worker PID evidence exists at $PID_FILE without an exact process-tree snapshot; refusing force kill" >&2
+    return 1
+  fi
+  for evidence in "$STOP_FILE" "$PID_FILE" "$SHUTDOWN_SUCCESS_FILE" "$SHUTDOWN_FAILURE_FILE" "$LIFECYCLE_SNAPSHOT_FILE" "$FAILED_STOP_FILE"; do
+    if ! remove_start_evidence_file "$evidence"; then
+      echo "Force recovery proved zero residue but could not clear lifecycle evidence at $evidence" >&2
+      return 1
+    fi
+  done
+  echo 'Force recovery proved zero Worker residue; starting a new Worker' >&2
 }
 write_state_lifecycle_failure() {
   local reason="$1"
@@ -232,8 +288,12 @@ elif [[ -n "$UPDATE_TRANSACTION_NONCE" ]]; then
   echo "The owner update transaction is missing at $UPDATE_TRANSACTION_FILE" >&2
   exit 1
 fi
+if [[ "$FORCE_KILL_AND_START" == true ]]; then
+  force_recover_start_evidence || exit 1
+fi
 if [[ -f "$FAILED_STOP_FILE" ]]; then
   echo "Previous failed stop is latched at $FAILED_STOP_FILE; verify no Worker descendants remain, then remove the latch explicitly" >&2
+  print_force_recovery_command
   exit 1
 fi
 if [[ -e "$LIFECYCLE_SNAPSHOT_FILE" && -f "$PID_FILE" ]]; then

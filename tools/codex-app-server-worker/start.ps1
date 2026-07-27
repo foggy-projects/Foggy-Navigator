@@ -1,5 +1,6 @@
 param(
     [switch]$NoBuild,
+    [switch]$ForceKillAndStart,
     [string]$UpdateTransactionNonce = '',
     [string]$LifecycleLockNonce = ''
 )
@@ -47,6 +48,16 @@ function Write-FailedStartLatch([string]$Reason) {
 function Write-StateLifecycleFailure([string]$Reason) {
     $Status = Invoke-LifecycleMarker @('write-once', '--path', $LifecycleFailureFile, '--reason', $Reason)
     if ($Status -ne 0) { throw "Failed to persist lifecycle failure marker at $LifecycleFailureFile" }
+}
+function Get-ForceRecoveryCommand {
+    $EscapedRoot = $Root.Replace("'", "''")
+    return "cd '$EscapedRoot'; .\start.ps1 -ForceKillAndStart"
+}
+function Remove-StartEvidenceFile([string]$Evidence) {
+    if (Test-Path -LiteralPath $Evidence) {
+        Remove-Item -LiteralPath $Evidence -Force
+    }
+    if (Test-Path -LiteralPath $Evidence) { throw "Could not clear lifecycle evidence at $Evidence" }
 }
 function Fail-WorkerStartup([string]$Message) {
     $PollStatus = Invoke-ProcessTree @('poll', '--pid', [string]$Process.Id, '--entry', $Entry, '--output', $LifecycleSnapshotFile)
@@ -132,8 +143,47 @@ if (Test-Path -LiteralPath $UpdateTransactionFile) {
 } elseif (-not [string]::IsNullOrWhiteSpace($UpdateTransactionNonce)) {
     throw "The owner update transaction is missing at $UpdateTransactionFile"
 }
+if ($ForceKillAndStart) {
+    if (-not $OwnLifecycleLock -or -not [string]::IsNullOrWhiteSpace($UpdateTransactionNonce)) {
+        throw '-ForceKillAndStart is only available for a standalone operator start'
+    }
+    $HasRuntimeProcessTreeEvidence = (Test-Path -LiteralPath $RuntimeProcessTreeDir) -and
+        ((-not (Test-Path -LiteralPath $RuntimeProcessTreeDir -PathType Container)) -or
+         $null -ne (Get-ChildItem -LiteralPath $RuntimeProcessTreeDir -Force | Select-Object -First 1))
+    if ($HasRuntimeProcessTreeEvidence) {
+        throw "Unresolved app-server process-tree evidence exists at $RuntimeProcessTreeDir; force start cannot clear runtime-owned evidence"
+    }
+    if (Test-Path -LiteralPath $LifecycleFailureFile) {
+        throw "Unresolved runtime lifecycle evidence exists at $LifecycleFailureFile; force start cannot clear fallback lifecycle evidence"
+    }
+    if (Test-Path -LiteralPath $LifecycleSnapshotFile) {
+        $RecoveryArguments = @('kill', '--entry', $Entry, '--output', $LifecycleSnapshotFile)
+        if (Test-Path -LiteralPath $PidFile -PathType Leaf) {
+            $RecoveryPid = (Get-Content -Raw -LiteralPath $PidFile).Trim()
+            if ($RecoveryPid -notmatch '^[1-9]\d*$') {
+                throw "Invalid Worker PID evidence at $PidFile; refusing force recovery"
+            }
+            [Console]::Error.WriteLine("Force recovery requested: killing exact snapshotted Worker tree rooted at PID $RecoveryPid; active tasks may be interrupted")
+            $RecoveryArguments = @('kill', '--pid', $RecoveryPid, '--entry', $Entry, '--output', $LifecycleSnapshotFile)
+        } else {
+            [Console]::Error.WriteLine('Force recovery requested: killing exact snapshotted Worker tree; active tasks may be interrupted')
+        }
+        $KillStatus = Invoke-ProcessTree $RecoveryArguments
+        $VerifyStatus = Invoke-ProcessTree @('verify', '--entry', $Entry, '--output', $LifecycleSnapshotFile)
+        if ($KillStatus -ne 0 -or $VerifyStatus -ne 0) {
+            throw "Force recovery could not prove zero Worker residue: kill=$KillStatus verify=$VerifyStatus. Evidence retained at $LifecycleSnapshotFile"
+        }
+    } elseif (Test-Path -LiteralPath $PidFile -PathType Leaf) {
+        throw "Worker PID evidence exists at $PidFile without an exact process-tree snapshot; refusing force kill"
+    }
+    foreach ($Evidence in @($StopFile, $PidFile, $ShutdownSuccessFile, $ShutdownFailureFile, $LifecycleSnapshotFile, $FailedStopFile)) {
+        Remove-StartEvidenceFile $Evidence
+    }
+    [Console]::Error.WriteLine('Force recovery proved zero Worker residue; starting a new Worker')
+}
 if (Test-Path -LiteralPath $FailedStopFile) {
-    throw "Previous failed stop is latched at $FailedStopFile; verify no Worker descendants remain, then remove the latch explicitly"
+    $SuggestedCommand = Get-ForceRecoveryCommand
+    throw "Previous failed stop is latched at $FailedStopFile; verify no Worker descendants remain, then remove the latch explicitly. Suggested recovery command (destructive; kills only the exact snapshotted Worker tree): $SuggestedCommand"
 }
 if ((Test-Path -LiteralPath $LifecycleSnapshotFile) -and (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
     $ExistingPid = (Get-Content -Raw -LiteralPath $PidFile).Trim()

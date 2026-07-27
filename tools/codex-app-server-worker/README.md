@@ -182,6 +182,13 @@ Existing `.env` bytes are preserved on update.
 - Linux background start/stop: `./start.sh` and `./stop.sh`. macOS lifecycle operations are not
   enabled: the runtime cannot obtain the exact argv and boot-scoped process creation identity
   required for lifecycle process-tree verification, so process identity commands fail closed.
+- When start is blocked by `stop.failed`, it prints an explicit recovery command. On Linux use
+  `./start.sh --force-kill-and-start`; on Windows use `./start.ps1 -ForceKillAndStart`. This is a
+  destructive operator action: it kills only processes whose PID, creation identity and command
+  still match the persisted Worker process-tree snapshot, verifies zero residue, clears the main
+  Worker lifecycle evidence and starts a replacement. It refuses a PID without an exact snapshot,
+  and it never clears unresolved update transactions, runtime process-tree evidence or
+  `lifecycle.failed` fallback evidence.
 - Stop writes a nonce-bound request in the local run directory so the Worker drains itself. A
   graceful stop is accepted only when the matching `shutdown.success` marker is present and the
   exact snapshotted Worker process tree has no verified descendants. Otherwise no Worker or task

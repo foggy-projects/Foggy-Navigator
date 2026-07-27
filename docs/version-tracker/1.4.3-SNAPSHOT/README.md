@@ -53,6 +53,8 @@ last_updated: 2026-07-27
 - runtime_task_completion_readiness_status: READY_FOR_SIGNOFF
 - app_server_compact_repair_spec: workitems/BUG-021-app-server-compact-protocol.md
 - bug021_status: READY_FOR_SIGNOFF
+- app_server_force_recovery_spec: workitems/BUG-022-app-server-force-recovery-start.md
+- bug022_status: ULTRA_EXECUTING
 - bug009_acceptance_status: rejected-pending-independent-resignoff
 - runtime9_freeze_status: CONSUMED_FAIL_CLOSED
 - runtime9_exact_run_id: `int001-bug009-20260722-r9-33154d77`
@@ -109,6 +111,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-017 无 taskId runtime request audit](./workitems/BUG-017-runtime-request-audit-no-task-id.md) | ClientApp 自身 runtime-token/safe-ask correlation、短期脱敏阶段审计、无 taskId 查询与 CLI 1.0.25 发布 | READY_FOR_SIGNOFF；clean package、安装冒烟与全量测试已完成，等待独立签核 |
 | [BUG-020 recovered task result 转发失败](./workitems/BUG-020-session-forward-recovered-task-result.md) | 将 completed task 恢复出的 synthetic result 核验并持久化为真实 assistant message 后转发 | READY_FOR_SIGNOFF；focused/backend reactor/frontend full baseline 已通过，待部署后 live smoke 与独立签核 |
 | [BUG-021 Codex app-server Worker compact 协议收口](./workitems/BUG-021-app-server-compact-protocol.md) | 对齐 CLI 0.144.3 空 compact response 与 thread/item completion，恢复单实例池并发布 app-server Worker 0.3.24 | READY_FOR_SIGNOFF；现场恢复、failure-first 修复、完整 package/install/update/local-smoke、OBS 发布及远端逐字节复核均已完成 |
+| [BUG-022 Codex app-server Worker 失败锁存恢复启动](./workitems/BUG-022-app-server-force-recovery-start.md) | 为 `stop.failed` 提供显式、精确身份约束的 force-kill-and-start 恢复命令，并发布 app-server Worker 0.3.25 | ULTRA_EXECUTING |
 | [FEAT-001 runtime binding/task read-only audit](./workitems/FEAT-001-runtime-binding-task-read-only-audit.md) | ClientApp runtime long-term credential 对 frozen binding 与既有 task durable 终态执行零 token、零 dispatch、零资源变更审计 | READY_FOR_SIGNOFF；CLI 1.0.26、server build、live zero-write audit 已完成，等待独立签核 |
 | [FEAT-003 runtime task completion readiness](./workitems/FEAT-003-runtime-task-completion-readiness.md) | 基于 durable task、真实 Worker/provider 进程和脱敏 completion evidence 区分运行中、注册残留与完成候选 | READY_FOR_SIGNOFF；Worker 1.0.25、CLI 1.0.34 和 8112 launcher clean release/deploy 已完成，live stale-registration/process-absence、快速终态失败、自然完成 V2 durable receipt 与零副作用证据均通过 |
 
