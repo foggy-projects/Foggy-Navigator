@@ -1432,11 +1432,15 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                     booleanObject(observed.get("completion_signal_present")),
                     stringValue(observed.get("completion_signal_source")),
                     stringValue(observed.get("completion_signal_recorded_at")),
+                    booleanObject(observed.get("completion_signal_present")),
+                    stringValue(observed.get("completion_signal_source")),
+                    stringValue(observed.get("completion_signal_recorded_at")),
                     booleanObject(observed.get("result_recoverable")),
                     stringValue(observed.get("completion_evidence_schema")),
                     providerTaskId,
                     receiptDispatchCount,
                     identityVerified,
+                    null,
                     identityVerified ? null : "WORKER_COMPLETION_EVIDENCE_IDENTITY_MISMATCH");
         } catch (RuntimeException error) {
             WebClientResponseException responseError = findWorkerResponseError(error);
@@ -1459,8 +1463,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 workerReachable, null, null, "UNKNOWN", null, "UNKNOWN",
                 null, null, null, null, null, null,
                 null, null, null, null, null, null,
-                null, null, null, null, null, null, null,
-                false, errorCode);
+                null, null, null, null, null, null,
+                null, null, null, null,
+                false, null, errorCode);
     }
 
     public RuntimeTaskClosureProvider.TerminationResult terminateRuntimeTask(

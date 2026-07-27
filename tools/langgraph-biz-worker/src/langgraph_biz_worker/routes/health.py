@@ -14,6 +14,7 @@ router = APIRouter(tags=["health"])
 
 # Active task tracking — imported by query route to register/unregister
 active_tasks: set[str] = set()
+active_task_metadata: dict[str, dict[str, object]] = {}
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -25,7 +26,11 @@ async def health() -> HealthResponse:
         version=__version__,
         active_tasks=len(active_tasks),
         worker_name=settings.worker_name,
-        capabilities=build_worker_capabilities(settings.max_agent_nesting_depth),
+        capabilities=build_worker_capabilities(
+            settings.max_agent_nesting_depth,
+            auth_required=bool(settings.worker_token),
+            identity_configured=bool(settings.navigator_worker_id),
+        ),
         status="ok" if ready else "degraded",
         ready=ready,
         mode=external.mode,

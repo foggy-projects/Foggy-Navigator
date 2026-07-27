@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from . import __version__
 from .config import settings
 from .external_mode import EXTERNAL_WORKER_UNREADY, resolve_external_mode
-from .routes import account_context, frame_interruption, frame_reports, health, query, resume, skills, standalone
+from .routes import account_context, completion_readiness, frame_interruption, frame_reports, health, query, resume, skills, standalone
 
 logger = logging.getLogger("langgraph_biz_worker")
 
@@ -106,6 +106,7 @@ async def enforce_external_readiness(request: Request, call_next):
 # Register routes
 app.include_router(health.router)
 app.include_router(query.router)
+app.include_router(completion_readiness.router)
 app.include_router(resume.router)
 app.include_router(frame_interruption.router)
 app.include_router(frame_reports.router)

@@ -1,5 +1,9 @@
 package com.foggy.navigator.langgraph.worker.service;
 
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticInput;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticSanitizer;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorRuntimePhase;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
@@ -16,6 +20,7 @@ import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
+import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
@@ -30,6 +35,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -555,8 +561,31 @@ class LanggraphTaskServiceTest {
                         && Integer.valueOf(2).equals(state.get("attemptNumber"))
                         && "idem-1".equals(state.get("idempotencyKey"))
                         && "bctx_20260527_ab_task".equals(state.get(ProviderStateCodec.FIELD_CONTEXT_ID))
-                        && "{\"key\":\"val\"}".equals(state.get("structuredOutput"));
+                        && "{\"key\":\"val\"}".equals(state.get("structuredOutput"))
+                        && state.get(LanggraphTaskService.COMPLETION_EVIDENCE_STATE_KEY) instanceof Map<?, ?> evidence
+                        && LanggraphTaskService.DURABLE_RESULT_SCHEMA.equals(evidence.get("schema"))
+                        && Boolean.TRUE.equals(evidence.get("finalOutputPresent"))
+                        && Boolean.TRUE.equals(evidence.get("finalOutputDurable"))
+                        && evidence.get("finalOutputDigest") instanceof String digest
+                        && digest.matches("sha256:[a-f0-9]{64}")
+                        && Boolean.TRUE.equals(evidence.get("structuredOutputPresent"))
+                        && evidence.get("structuredOutputDigest") instanceof String structuredDigest
+                        && structuredDigest.matches("sha256:[a-f0-9]{64}")
+                        && Boolean.TRUE.equals(evidence.get("resultRecoverable"));
             }));
+        }
+
+        @Test
+        void resolveDispatchCountUsesAttemptAndRecoveryMetadata() {
+            SessionTaskEntity projection = new SessionTaskEntity();
+            projection.setProviderTaskId("lgt_existing");
+            projection.setTaskStateJson("""
+                    {"attemptNumber":3,"recoveryCount":2}
+                    """);
+            when(sessionTaskRepository.findByTaskId("lgt_existing"))
+                    .thenReturn(Optional.of(projection));
+
+            assertEquals(5, service.resolveDispatchCount("lgt_existing"));
         }
 
         @Test
@@ -573,6 +602,44 @@ class LanggraphTaskServiceTest {
             assertEquals("FAILED", event.getStatus());
             assertEquals("connection timeout", event.getErrorMessage());
             assertEquals(Boolean.FALSE, event.getRecoverable());
+        }
+
+        @Test
+        void attachDiagnosticPersistsSafeIdentityBoundSnapshot() {
+            existingTask.setWorkerId(WORKER_ID);
+            existingTask.setTenantId(TENANT_ID);
+            ErrorDiagnosticService diagnosticService = mock(ErrorDiagnosticService.class);
+            ReflectionTestUtils.setField(service, "errorDiagnosticService", diagnosticService);
+            when(diagnosticService.createSnapshotSafely(
+                    any(ErrorEnvelope.class),
+                    any(ErrorDiagnosticInput.class),
+                    eq(SESSION_ID),
+                    eq(USER_ID),
+                    eq(TENANT_ID)
+            )).thenReturn("diagnostic://safe-ref");
+
+            ErrorEnvelope envelope = ErrorEnvelope.builder()
+                    .errorCode("LANGGRAPH_PROVIDER_TASK_FAILED")
+                    .message("Provider task failed")
+                    .category(ErrorDiagnosticSanitizer.classify("LANGGRAPH_PROVIDER_TASK_FAILED"))
+                    .runtimePhase(ErrorRuntimePhase.TURN_EXECUTION)
+                    .recoverable(false)
+                    .occurredAt(Instant.now())
+                    .build();
+            ErrorDiagnosticInput input = ErrorDiagnosticInput.builder()
+                    .providerStatus("FAILED")
+                    .build();
+
+            ErrorEnvelope attached = service.attachDiagnostic("lgt_existing", envelope, input);
+
+            assertSame(envelope, attached);
+            assertEquals("lgt_existing", attached.getTaskId());
+            assertEquals("langgraph-biz-worker", attached.getProviderType());
+            assertEquals("LANGGRAPH_BIZ", attached.getRuntimeType());
+            assertEquals("diagnostic://safe-ref", attached.getDiagnosticRef());
+            assertEquals(WORKER_ID, input.getWorkerLabel());
+            verify(diagnosticService).createSnapshotSafely(
+                    same(envelope), same(input), eq(SESSION_ID), eq(USER_ID), eq(TENANT_ID));
         }
 
         @Test

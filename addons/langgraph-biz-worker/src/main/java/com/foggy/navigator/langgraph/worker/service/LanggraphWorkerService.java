@@ -240,16 +240,46 @@ public class LanggraphWorkerService {
         worker.setWorkerId(identity.getWorkerId());
         worker.setName("BizWorker " + identity.getWorkerId());
         worker.setBaseUrl(identity.getBaseUrl().trim());
-        // BizWorkerIdentity stores only a credential hash. It authenticates
-        // inbound Worker -> Gateway calls and must never be sent as an
-        // outbound Bearer secret. Internal-dev keeps its existing no-auth
-        // Worker client behavior until a dedicated outbound credential exists.
-        worker.setAuthToken("");
-        worker.setAuthMode("IDENTITY");
+        // BizWorkerIdentity remains authoritative for the endpoint. Its stored
+        // credential hash authenticates Worker -> Gateway calls and must never
+        // be sent back to the Worker. A same-id legacy registration may supply
+        // only the dedicated Server -> Worker bearer when its endpoint matches
+        // the governed identity exactly; it can never replace the route.
+        String endpointAuthToken = identityEndpointAuthToken(identity);
+        worker.setAuthToken(endpointAuthToken);
+        worker.setAuthMode(StringUtils.hasText(endpointAuthToken) ? "BEARER" : "IDENTITY");
         worker.setStatus("ONLINE");
         worker.setWorkerVersion(identity.getVersion());
         worker.setProviderExt(identityProviderExt(identity));
         return worker;
+    }
+
+    private String identityEndpointAuthToken(BizWorkerIdentityEntity identity) {
+        if (workerRepository == null || identity == null || !StringUtils.hasText(identity.getWorkerId())) {
+            return "";
+        }
+        return workerRepository.findByWorkerId(identity.getWorkerId().trim())
+                .filter(legacy -> sameEndpoint(identity.getBaseUrl(), legacy.getBaseUrl()))
+                .map(LanggraphWorkerEntity::getAuthToken)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .orElse("");
+    }
+
+    private boolean sameEndpoint(String governedBaseUrl, String registeredBaseUrl) {
+        if (!StringUtils.hasText(governedBaseUrl) || !StringUtils.hasText(registeredBaseUrl)) {
+            return false;
+        }
+        return stripTrailingSlashes(governedBaseUrl.trim())
+                .equals(stripTrailingSlashes(registeredBaseUrl.trim()));
+    }
+
+    private String stripTrailingSlashes(String value) {
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == '/') {
+            end--;
+        }
+        return value.substring(0, end);
     }
 
     private String mergeProviderExtCapabilities(

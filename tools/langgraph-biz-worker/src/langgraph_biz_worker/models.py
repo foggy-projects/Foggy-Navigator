@@ -45,6 +45,11 @@ class QueryRequest(BaseModel):
 
     # Tracking IDs forwarded by Java side
     task_id: str | None = Field(None, alias="taskId")
+    dispatch_count: int = Field(
+        1,
+        ge=1,
+        validation_alias=AliasChoices("dispatchCount", "dispatch_count"),
+    )
     user_id: str | None = Field(None, alias="userId")
     tenant_id: str | None = Field(None, alias="tenantId")
     task_deadline_at: str | None = Field(
@@ -102,6 +107,12 @@ class QueryEvent(BaseModel):
     task_id: str = ""
     session_id: str | None = None
     error: str | None = None
+    error_code: str | None = None
+    error_category: str | None = None
+    recoverable: bool | None = None
+    llm_retry_allowed: bool | None = None
+    requires_upstream_action: bool | None = None
+    suggested_action: str | None = None
     model: str | None = None
 
     # Skill frame tracking (Phase 2+)
@@ -361,6 +372,7 @@ class WorkerCapabilities(BaseModel):
     """Online Worker capability declaration exposed to Java/SDK clients."""
 
     agent_delegation: AgentDelegationCapabilities
+    completion_readiness: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------

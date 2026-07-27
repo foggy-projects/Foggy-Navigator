@@ -24,6 +24,11 @@ async def test_health_returns_200(client, monkeypatch):
     assert data["capabilities"]["agent_delegation"]["nested_agent_delegation_allowed"] is False
     assert data["capabilities"]["agent_delegation"]["child_agent_inherits_parent_tools"] is False
     assert data["capabilities"]["agent_delegation"]["tools"]["spawn_agent"]["tool_name"] == "invoke_business_agent"
+    completion_readiness = data["capabilities"]["completion_readiness"]
+    assert completion_readiness["supported"] is True
+    assert completion_readiness["schema"] == "LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1"
+    assert completion_readiness["content_free"] is True
+    assert completion_readiness["route"] == "/api/v1/tasks/{taskId}/completion-readiness"
     assert data["status"] == "ok"
     assert data["ready"] is True
     assert data["mode"] == "internal-dev"

@@ -2,6 +2,11 @@ package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorCategory;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticInput;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticSanitizer;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorRuntimePhase;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
@@ -21,9 +26,11 @@ import reactor.core.Disposable;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
+import java.time.Instant;
 
 /**
  * SSE relay: consumes Python Worker SSE stream and publishes AgentMessage events
@@ -95,12 +102,14 @@ public class LanggraphStreamRelay {
                     event.getUserId(),
                     event.getTenantId(),
                     maxTurns,
-                    attachments
+                    attachments,
+                    taskService.resolveDispatchCount(taskId)
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))
               .doOnError(e -> handleStreamError(e, taskId, sessionId))
               .doOnComplete(() -> handleStreamComplete(taskId, sessionId))
               .onErrorResume(e -> {
-                  log.warn("SSE stream error for task {}", taskId, e);
+                  log.warn("SSE stream terminated after error handling: taskId={}, failureType={}",
+                          taskId, e.getClass().getSimpleName());
                   return reactor.core.publisher.Mono.empty();
               })
               .subscribe();
@@ -108,12 +117,15 @@ public class LanggraphStreamRelay {
             activeStreams.put(taskId, subscription);
 
         } catch (Exception e) {
-            log.error("Failed to start langgraph stream relay: taskId={}", taskId, e);
+            log.error("Failed to start langgraph stream relay: taskId={}, failureType={}",
+                    taskId, e.getClass().getSimpleName());
+            ErrorEnvelope diagnostic = attachDiagnostic(taskId,
+                    throwableErrorEnvelope(e, taskId, ErrorRuntimePhase.TASK_ACCEPTANCE,
+                            "LANGGRAPH_WORKER_DISPATCH_FAILED"),
+                    throwableDiagnosticInput(e));
             taskService.failTask(taskId, e.getMessage());
-            publishMessage(sessionId, MessageType.ERROR,
-                    Map.of("content", "Failed to connect to LangGraph worker: " + e.getMessage(),
-                            "taskId", taskId,
-                            "status", "FAILED"));
+            Map<String, Object> payload = terminalErrorPayload(taskId, diagnostic);
+            publishMessage(sessionId, MessageType.ERROR, payload);
         }
     }
 
@@ -278,17 +290,18 @@ public class LanggraphStreamRelay {
                         taskService.recordTaskInterruptionProjection(taskId, reason, error);
                     }
                     Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("content", error);
                     payload.put("taskId", taskId);
                     payload.put("status", "FAILED");
                     putTextIfPresent(payload, "reason", reason);
-                    putTextIfPresent(payload, "errorCode", node, "error_code");
-                    putTextIfPresent(payload, "errorCategory", node, "error_category");
-                    putBooleanIfPresent(payload, "recoverable", node, "recoverable");
+                    putTextIfPresent(payload, "providerErrorCode", node, "error_code");
+                    putTextIfPresent(payload, "providerErrorCategory", node, "error_category");
                     putBooleanIfPresent(payload, "llmRetryAllowed", node, "llm_retry_allowed");
                     putBooleanIfPresent(payload, "requiresUpstreamAction", node, "requires_upstream_action");
                     putTextIfPresent(payload, "suggestedAction", node, "suggested_action");
                     copyExecutionReportFields(payload, node);
+                    ErrorEnvelope diagnostic = attachDiagnostic(taskId,
+                            workerErrorEnvelope(node, taskId), workerDiagnosticInput(node));
+                    applyDiagnosticPayload(payload, diagnostic);
                     publishMessage(sessionId, MessageType.ERROR, payload, messageId);
                     taskService.failTask(taskId, error);
                 }
@@ -461,15 +474,124 @@ public class LanggraphStreamRelay {
 
     private void handleStreamError(Throwable error, String taskId, String sessionId) {
         String message = streamErrorMessage(error);
-        log.warn("SSE stream error for langgraph task {}: {}", taskId, message);
+        log.warn("SSE stream error for langgraph task: taskId={}, failureType={}",
+                taskId, error != null ? error.getClass().getSimpleName() : "UnknownError");
         activeStreams.remove(taskId);
         String reason = streamInterruptionReason(error);
         taskService.recordTaskInterruption(taskId, reason, message);
+        String stableCode = isTimeout(error)
+                ? "LANGGRAPH_WORKER_STREAM_TIMEOUT"
+                : "LANGGRAPH_WORKER_STREAM_ERROR";
+        ErrorEnvelope diagnostic = attachDiagnostic(taskId,
+                throwableErrorEnvelope(error, taskId, ErrorRuntimePhase.EVENT_STREAM, stableCode),
+                throwableDiagnosticInput(error));
         taskService.failTask(taskId, "Stream error: " + message);
-        publishMessage(sessionId, MessageType.ERROR,
-                Map.of("content", "Stream connection lost: " + message,
-                        "taskId", taskId,
-                        "status", "FAILED"));
+        publishMessage(sessionId, MessageType.ERROR, terminalErrorPayload(taskId, diagnostic));
+    }
+
+    private ErrorEnvelope attachDiagnostic(String taskId,
+                                           ErrorEnvelope envelope,
+                                           ErrorDiagnosticInput input) {
+        ErrorEnvelope attached = taskService.attachDiagnostic(taskId, envelope, input);
+        return attached != null ? attached : envelope;
+    }
+
+    private ErrorEnvelope workerErrorEnvelope(JsonNode node, String taskId) {
+        String code = stableErrorCode(node.path("error_code").asText(null),
+                "LANGGRAPH_PROVIDER_TASK_FAILED");
+        String rawMessage = node.path("error").asText(node.path("content").asText(null));
+        String message = safeFailureMessage(rawMessage, code);
+        return ErrorEnvelope.builder()
+                .errorCode(code)
+                .message(message)
+                .category(parseCategory(node.path("error_category").asText(null), code))
+                .runtimePhase(ErrorRuntimePhase.TURN_EXECUTION)
+                .recoverable(node.has("recoverable") && node.get("recoverable").isBoolean()
+                        ? node.get("recoverable").booleanValue() : Boolean.FALSE)
+                .occurredAt(Instant.now())
+                .taskId(taskId)
+                .build();
+    }
+
+    private ErrorDiagnosticInput workerDiagnosticInput(JsonNode node) {
+        return ErrorDiagnosticInput.builder()
+                .diagnosticText(node.path("error").asText(node.path("content").asText(null)))
+                .providerStatus("FAILED")
+                .build();
+    }
+
+    private ErrorEnvelope throwableErrorEnvelope(Throwable error,
+                                                 String taskId,
+                                                 ErrorRuntimePhase phase,
+                                                 String fallbackCode) {
+        String code = stableErrorCode(null, fallbackCode);
+        String rawMessage = error != null ? error.getMessage() : null;
+        return ErrorEnvelope.builder()
+                .errorCode(code)
+                .message(safeFailureMessage(rawMessage, code))
+                .category(ErrorDiagnosticSanitizer.classify(code))
+                .runtimePhase(phase)
+                .recoverable(Boolean.FALSE)
+                .occurredAt(Instant.now())
+                .taskId(taskId)
+                .build();
+    }
+
+    private ErrorDiagnosticInput throwableDiagnosticInput(Throwable error) {
+        return ErrorDiagnosticInput.builder()
+                .exceptionType(error != null ? error.getClass().getName() : null)
+                .diagnosticText(error != null ? error.getMessage() : null)
+                .providerStatus("FAILED")
+                .build();
+    }
+
+    private Map<String, Object> terminalErrorPayload(String taskId, ErrorEnvelope diagnostic) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("taskId", taskId);
+        payload.put("status", "FAILED");
+        applyDiagnosticPayload(payload, diagnostic);
+        return payload;
+    }
+
+    private void applyDiagnosticPayload(Map<String, Object> payload, ErrorEnvelope diagnostic) {
+        if (diagnostic == null) return;
+        payload.put("content", diagnostic.getMessage());
+        payload.put("errorCode", diagnostic.getErrorCode());
+        if (diagnostic.getCategory() != null) {
+            payload.put("errorCategory", diagnostic.getCategory().name());
+        }
+        if (diagnostic.getRuntimePhase() != null) {
+            payload.put("runtimePhase", diagnostic.getRuntimePhase().name());
+        }
+        if (diagnostic.getRecoverable() != null) {
+            payload.put("recoverable", diagnostic.getRecoverable());
+        }
+        putTextIfPresent(payload, "diagnosticRef", diagnostic.getDiagnosticRef());
+        putTextIfPresent(payload, "providerType", diagnostic.getProviderType());
+        putTextIfPresent(payload, "runtimeType", diagnostic.getRuntimeType());
+    }
+
+    private String stableErrorCode(String candidate, String fallback) {
+        String normalized = candidate != null ? candidate.trim().toUpperCase(Locale.ROOT) : "";
+        return normalized.matches("[A-Z][A-Z0-9_]{1,159}") ? normalized : fallback;
+    }
+
+    private ErrorCategory parseCategory(String candidate, String stableCode) {
+        if (StringUtils.hasText(candidate)) {
+            try {
+                return ErrorCategory.valueOf(candidate.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                // Provider-specific categories remain in providerErrorCategory.
+            }
+        }
+        return ErrorDiagnosticSanitizer.classify(stableCode);
+    }
+
+    private String safeFailureMessage(String rawMessage, String stableCode) {
+        String sanitized = ErrorDiagnosticSanitizer.sanitize(rawMessage);
+        return StringUtils.hasText(sanitized)
+                ? sanitized
+                : "LangGraph 执行失败（" + stableCode + "）。";
     }
 
     private String streamErrorMessage(Throwable error) {

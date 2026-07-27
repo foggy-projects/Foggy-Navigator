@@ -15,13 +15,16 @@ import org.springframework.util.StringUtils;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class RuntimeTaskCompletionReadinessService {
 
-    private static final String V2_SCHEMA = "CODEX_COMPLETION_RECEIPT_V2";
-    private static final String PROVIDER_TERMINAL_SOURCE = "PROVIDER_TERMINAL_EVENT";
+    private static final String CODEX_V2_SCHEMA = "CODEX_COMPLETION_RECEIPT_V2";
+    private static final String LANGGRAPH_V1_SCHEMA = "LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1";
+    private static final Set<String> SUPPORTED_SCHEMAS = Set.of(CODEX_V2_SCHEMA, LANGGRAPH_V1_SCHEMA);
+    private static final Set<String> TERMINAL_STATUSES = Set.of("COMPLETED", "FAILED", "CANCELLED", "ABORTED");
     private static final String SHA256_DIGEST = "sha256:[a-f0-9]{64}";
 
     private final RuntimeStateAuditService stateAuditService;
@@ -71,6 +74,10 @@ public class RuntimeTaskCompletionReadinessService {
                         .finalOutputRecordedAt(parseTime(observed.finalOutputRecordedAt()))
                         .structuredOutputPresent(observed.structuredOutputPresent())
                         .structuredOutputDigest(observed.structuredOutputDigest())
+                        .terminalSignalPresent(observed.terminalSignalPresent())
+                        .terminalSignalSource(observed.terminalSignalSource())
+                        .terminalSignalRecordedAt(parseTime(observed.terminalSignalRecordedAt()))
+                        .terminalErrorCode(observed.terminalErrorCode())
                         .completionSignalPresent(observed.completionSignalPresent())
                         .completionSignalSource(observed.completionSignalSource())
                         .completionSignalRecordedAt(parseTime(observed.completionSignalRecordedAt()))
@@ -108,20 +115,26 @@ public class RuntimeTaskCompletionReadinessService {
                 && observed.finalOutputDigest().matches(SHA256_DIGEST);
         boolean dispatchMatches = observed.receiptDispatchCount() != null
                 && observed.receiptDispatchCount() == owned.dispatchCount();
-        boolean authoritative = Boolean.TRUE.equals(observed.identityVerified())
-                && V2_SCHEMA.equals(observed.evidenceSchema())
+        boolean terminalAuthoritative = Boolean.TRUE.equals(observed.identityVerified())
+                && SUPPORTED_SCHEMAS.contains(observed.evidenceSchema())
                 && dispatchMatches
                 && Boolean.TRUE.equals(observed.providerTaskTerminal())
+                && TERMINAL_STATUSES.contains(observed.providerTerminalStatus())
+                && Boolean.TRUE.equals(observed.terminalSignalPresent())
+                && terminalSignalMatchesProviderProfile(observed)
+                && parseTime(observed.terminalSignalRecordedAt()) != null
+                && !StringUtils.hasText(observed.sanitizedErrorCode());
+        boolean completionAuthoritative = terminalAuthoritative
                 && "COMPLETED".equals(observed.providerTerminalStatus())
                 && Boolean.TRUE.equals(observed.completionSignalPresent())
-                && PROVIDER_TERMINAL_SOURCE.equals(observed.completionSignalSource())
+                && completionSignalMatchesProviderProfile(observed)
                 && parseTime(observed.completionSignalRecordedAt()) != null
                 && Boolean.TRUE.equals(observed.finalOutputPresent())
                 && Boolean.TRUE.equals(observed.finalOutputDurable())
                 && digestValid
                 && Boolean.TRUE.equals(observed.resultRecoverable());
-        boolean completionCandidate = authoritative;
-        boolean completionReconciliationSupported = !owned.terminal() && authoritative;
+        boolean completionCandidate = completionAuthoritative;
+        boolean completionReconciliationSupported = !owned.terminal() && completionAuthoritative;
         boolean terminationReconciliationSupported = !owned.terminal()
                 && Boolean.TRUE.equals(observed.workerReachable())
                 && Boolean.TRUE.equals(processAbsent);
@@ -151,12 +164,13 @@ public class RuntimeTaskCompletionReadinessService {
                     : "PROVIDER_STATE_UNKNOWN";
         }
 
-        String source = providerSource(observed, authoritative);
+        String source = providerSource(observed, terminalAuthoritative, completionAuthoritative);
         return RuntimeCompletionReconciliationAssessmentDTO.builder()
                 .staleRegistrationSuspected(staleRegistration)
                 .workerProcessAbsent(processAbsent)
                 .completionCandidate(completionCandidate)
-                .completionEvidenceAuthoritative(authoritative)
+                .terminalEvidenceAuthoritative(terminalAuthoritative)
+                .completionEvidenceAuthoritative(completionAuthoritative)
                 .completionReconciliationSupported(completionReconciliationSupported)
                 .terminationReconciliationSupported(terminationReconciliationSupported)
                 .reconcileRequired(reconcileRequired)
@@ -164,15 +178,43 @@ public class RuntimeTaskCompletionReadinessService {
                 .recommendedAction(recommendedAction)
                 .assessmentReason(reason)
                 .assessmentSource(source)
+                .providerObservationErrorCode(observed.sanitizedErrorCode())
                 .assessedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
     }
 
+    private boolean terminalSignalMatchesProviderProfile(
+            RuntimeTaskCompletionReadinessProvider.Observation observed) {
+        if (CODEX_V2_SCHEMA.equals(observed.evidenceSchema())) {
+            return "PROVIDER_TERMINAL_EVENT".equals(observed.terminalSignalSource());
+        }
+        if (LANGGRAPH_V1_SCHEMA.equals(observed.evidenceSchema())) {
+            String expected = "COMPLETED".equals(observed.providerTerminalStatus())
+                    ? "LANGGRAPH_BIZ_RESULT_EVENT"
+                    : "LANGGRAPH_BIZ_ERROR_EVENT";
+            return expected.equals(observed.terminalSignalSource());
+        }
+        return false;
+    }
+
+    private boolean completionSignalMatchesProviderProfile(
+            RuntimeTaskCompletionReadinessProvider.Observation observed) {
+        if (CODEX_V2_SCHEMA.equals(observed.evidenceSchema())) {
+            return "PROVIDER_TERMINAL_EVENT".equals(observed.completionSignalSource());
+        }
+        return LANGGRAPH_V1_SCHEMA.equals(observed.evidenceSchema())
+                && "LANGGRAPH_BIZ_RESULT_EVENT".equals(observed.completionSignalSource());
+    }
+
     private String providerSource(
             RuntimeTaskCompletionReadinessProvider.Observation observed,
-            boolean authoritative) {
-        if (authoritative) {
+            boolean terminalAuthoritative,
+            boolean completionAuthoritative) {
+        if (completionAuthoritative && CODEX_V2_SCHEMA.equals(observed.evidenceSchema())) {
             return "DURABLE_TASK+CODEX_COMPLETION_RECEIPT_V2+WORKER_PROCESS_SNAPSHOT";
+        }
+        if (terminalAuthoritative) {
+            return "DURABLE_TASK+" + observed.evidenceSchema() + "+WORKER_READ_ONLY_OBSERVATION";
         }
         if (Boolean.TRUE.equals(observed.workerReachable())) {
             return "DURABLE_TASK+WORKER_READ_ONLY_OBSERVATION";
@@ -188,8 +230,9 @@ public class RuntimeTaskCompletionReadinessService {
                 null, null, null, "UNKNOWN", null, "UNKNOWN",
                 null, null, null, null, null, null,
                 null, null, null, null, null, null,
-                null, null, null, null, null, null, null,
-                false, "RUNTIME_COMPLETION_READINESS_UNSUPPORTED");
+                null, null, null, null, null, null,
+                null, null, null, null,
+                false, null, "RUNTIME_COMPLETION_READINESS_UNSUPPORTED");
     }
 
     private void requireExpectedWorker(

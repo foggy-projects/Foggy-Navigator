@@ -2,6 +2,8 @@ package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticInput;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
@@ -23,15 +25,18 @@ import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalReposito
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
 import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
+import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.lang.Nullable;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -45,6 +50,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.HexFormat;
+import java.util.TreeMap;
 
 /**
  * LangGraph task lifecycle management exposed through the lookup and command SPI ports.
@@ -56,6 +68,8 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
 
     public static final String PROVIDER_TYPE = "langgraph-biz-worker";
     public static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
+    static final String COMPLETION_EVIDENCE_STATE_KEY = "completionEvidence";
+    static final String DURABLE_RESULT_SCHEMA = "NAVIGATOR_LANGGRAPH_DURABLE_RESULT_V1";
     private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
             TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -73,6 +87,10 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     private final SessionTaskRepository sessionTaskRepository;
     private final SessionEntityRepository sessionEntityRepository;
     private final SessionMessageRepository sessionMessageRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private ErrorDiagnosticService errorDiagnosticService;
 
     @Value("${foggy.navigator.langgraph.worker.include-recent-conversation:false}")
     private boolean includeRecentConversation;
@@ -406,10 +424,47 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             entity.setInterruptionReason(null);
             entity.setInterruptionMessage(null);
             entity.setRecoverable(false);
-            persistTask(entity);
+            persistTask(entity, buildCompletionEvidence(resultText, structuredOutput));
             publishStatusChange(entity, previousStatus);
             log.info("Task completed: taskId={}", taskId);
         });
+    }
+
+    public int resolveDispatchCount(String taskId) {
+        SessionTaskEntity task = sessionTaskRepository.findByTaskId(taskId).orElse(null);
+        if (task == null || !StringUtils.hasText(task.getProviderTaskId())) {
+            return 1;
+        }
+        Map<String, Object> state = ProviderStateCodec.parseObject(task.getTaskStateJson());
+        int attemptNumber = positiveInteger(state.get("attemptNumber")) != null
+                ? positiveInteger(state.get("attemptNumber")) : 1;
+        int recoveryCount = positiveInteger(state.get("recoveryCount")) != null
+                ? positiveInteger(state.get("recoveryCount")) : 0;
+        if (recoveryCount == 0 && (StringUtils.hasText(stringValue(state.get("recoveryCorrelationKey")))
+                || StringUtils.hasText(stringValue(state.get("recoveryOfTaskId"))))) {
+            recoveryCount = 1;
+        }
+        return 1 + Math.max(0, attemptNumber - 1) + recoveryCount;
+    }
+
+    /**
+     * Persists the allowlisted diagnostic snapshot before the terminal message
+     * is emitted, then returns the same safe envelope with its opaque reference.
+     */
+    public ErrorEnvelope attachDiagnostic(String taskId,
+                                          ErrorEnvelope envelope,
+                                          ErrorDiagnosticInput input) {
+        if (errorDiagnosticService == null || envelope == null) return envelope;
+        LanggraphTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null) return envelope;
+        envelope.setTaskId(entity.getTaskId());
+        envelope.setProviderType(PROVIDER_TYPE);
+        envelope.setRuntimeType("LANGGRAPH_BIZ");
+        if (input != null) input.setWorkerLabel(entity.getWorkerId());
+        String diagnosticRef = errorDiagnosticService.createSnapshotSafely(
+                envelope, input, entity.getSessionId(), entity.getUserId(), entity.getTenantId());
+        envelope.setDiagnosticRef(diagnosticRef);
+        return envelope;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -424,7 +479,8 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             entity.setRecoverable(false);
             persistTask(entity);
             publishStatusChange(entity, previousStatus);
-            log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
+            log.warn("Task failed: taskId={}, failureType={}", taskId,
+                    StringUtils.hasText(errorMessage) ? "PROVIDER_REPORTED" : "UNSPECIFIED");
         });
     }
 
@@ -489,8 +545,12 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     }
 
     private void persistTask(LanggraphTaskEntity entity) {
+        persistTask(entity, null);
+    }
+
+    private void persistTask(LanggraphTaskEntity entity, Map<String, Object> completionEvidence) {
         LanggraphTaskEntity saved = taskRepository.save(entity);
-        syncSessionTask(saved);
+        syncSessionTask(saved, completionEvidence);
         syncSessionProjection(saved);
     }
 
@@ -536,7 +596,9 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         return context;
     }
 
-    private void syncSessionTask(LanggraphTaskEntity entity) {
+    private void syncSessionTask(
+            LanggraphTaskEntity entity,
+            Map<String, Object> completionEvidence) {
         if (entity.getSessionId() == null || entity.getSessionId().isBlank()) {
             return;
         }
@@ -562,7 +624,8 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         sessionTask.setSource("PLATFORM");
         sessionTask.setCreatedAt(entity.getCreatedAt());
         sessionTask.setUpdatedAt(entity.getUpdatedAt());
-        sessionTask.setTaskStateJson(buildTaskStateJson(entity, sessionTask.getTaskStateJson()));
+        sessionTask.setTaskStateJson(buildTaskStateJson(
+                entity, sessionTask.getTaskStateJson(), completionEvidence));
         sessionTaskRepository.save(sessionTask);
     }
 
@@ -607,7 +670,10 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         });
     }
 
-    private String buildTaskStateJson(LanggraphTaskEntity entity, String existingJson) {
+    private String buildTaskStateJson(
+            LanggraphTaskEntity entity,
+            String existingJson,
+            Map<String, Object> completionEvidence) {
         Map<String, Object> state = new LinkedHashMap<>();
         putIfNotBlank(state, ProviderStateCodec.FIELD_CONTEXT_ID, entity.getContextId());
         putIfNotBlank(state, ProviderStateCodec.FIELD_STRUCTURED_OUTPUT, entity.getStructuredOutput());
@@ -618,7 +684,67 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         if (entity.getRecoverable() != null) {
             state.put("recoverable", entity.getRecoverable());
         }
+        if (completionEvidence != null && !completionEvidence.isEmpty()) {
+            state.put(COMPLETION_EVIDENCE_STATE_KEY, completionEvidence);
+        }
         return ProviderStateCodec.mergeTaskValues(existingJson, PROVIDER_TYPE, state);
+    }
+
+    private Map<String, Object> buildCompletionEvidence(
+            String resultText,
+            String structuredOutput) {
+        String recordedAt = OffsetDateTime.now(ZoneOffset.UTC).toString();
+        boolean finalOutputPresent = resultText != null && !resultText.isEmpty();
+        Map<String, Object> evidence = new LinkedHashMap<>();
+        evidence.put("schema", DURABLE_RESULT_SCHEMA);
+        evidence.put("finalOutputPresent", finalOutputPresent);
+        evidence.put("finalOutputDurable", finalOutputPresent);
+        evidence.put("finalOutputDigest", finalOutputPresent ? sha256(resultText) : null);
+        evidence.put("finalOutputRecordedAt", finalOutputPresent ? recordedAt : null);
+        boolean structuredOutputPresent = StringUtils.hasText(structuredOutput);
+        evidence.put("structuredOutputPresent", structuredOutputPresent);
+        evidence.put("structuredOutputDigest",
+                structuredOutputPresent ? canonicalJsonDigest(structuredOutput) : null);
+        evidence.put("resultRecoverable", finalOutputPresent);
+        return evidence;
+    }
+
+    private String canonicalJsonDigest(String json) {
+        try {
+            return sha256(OBJECT_MAPPER.writeValueAsString(canonicalJsonValue(OBJECT_MAPPER.readTree(json))));
+        } catch (Exception error) {
+            log.warn("Structured output digest unavailable: errorType={}",
+                    error.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private Object canonicalJsonValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isObject()) {
+            Map<String, Object> result = new TreeMap<>();
+            node.fields().forEachRemaining(entry ->
+                    result.put(entry.getKey(), canonicalJsonValue(entry.getValue())));
+            return result;
+        }
+        if (node.isArray()) {
+            List<Object> result = new ArrayList<>();
+            node.forEach(value -> result.add(canonicalJsonValue(value)));
+            return result;
+        }
+        return OBJECT_MAPPER.convertValue(node, Object.class);
+    }
+
+    private String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            return "sha256:" + HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 is unavailable", error);
+        }
     }
 
     private String resolveAgentId(CreateLanggraphTaskForm form) {
@@ -809,6 +935,10 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             }
         }
         return null;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? null : value.toString();
     }
 
     @SuppressWarnings("unchecked")

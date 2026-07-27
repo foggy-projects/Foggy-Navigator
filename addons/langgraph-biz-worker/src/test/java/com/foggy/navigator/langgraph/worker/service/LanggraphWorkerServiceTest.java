@@ -28,7 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -164,7 +163,31 @@ class LanggraphWorkerServiceTest {
         assertEquals("http://127.0.0.1:3161", resolved.getBaseUrl());
         assertEquals("", resolved.getAuthToken());
         assertEquals("IDENTITY", resolved.getAuthMode());
-        verify(workerRepository, never()).findByWorkerId("biz_worker_01");
+        verify(workerRepository).findByWorkerId("biz_worker_01");
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityUsesDedicatedEndpointBearerOnlyForExactRoute() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        LanggraphWorkerEntity endpointRegistration = worker("biz_worker_01", "ONLINE");
+        endpointRegistration.setBaseUrl("http://127.0.0.1:3161/");
+        endpointRegistration.setAuthToken("endpoint-bearer");
+        when(workerRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(endpointRegistration));
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setBaseUrl("http://127.0.0.1:3161");
+        identity.setTokenHash("sha256-digest-not-a-bearer-secret");
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        LanggraphWorkerEntity resolved = serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01");
+
+        assertEquals("http://127.0.0.1:3161", resolved.getBaseUrl());
+        assertEquals("endpoint-bearer", resolved.getAuthToken());
+        assertEquals("BEARER", resolved.getAuthMode());
     }
 
     @Test
@@ -185,7 +208,7 @@ class LanggraphWorkerServiceTest {
 
         assertEquals("http://127.0.0.1:3161", resolved.getBaseUrl());
         assertEquals("IDENTITY", resolved.getAuthMode());
-        verify(workerRepository, never()).findByWorkerId("biz_worker_01");
+        verify(workerRepository).findByWorkerId("biz_worker_01");
     }
 
     @Test

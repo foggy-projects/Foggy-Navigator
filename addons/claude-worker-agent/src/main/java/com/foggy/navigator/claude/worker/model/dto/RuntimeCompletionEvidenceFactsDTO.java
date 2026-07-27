@@ -15,6 +15,10 @@ public class RuntimeCompletionEvidenceFactsDTO {
     private OffsetDateTime finalOutputRecordedAt;
     private Boolean structuredOutputPresent;
     private String structuredOutputDigest;
+    private Boolean terminalSignalPresent;
+    private String terminalSignalSource;
+    private OffsetDateTime terminalSignalRecordedAt;
+    private String terminalErrorCode;
     private Boolean completionSignalPresent;
     private String completionSignalSource;
     private OffsetDateTime completionSignalRecordedAt;

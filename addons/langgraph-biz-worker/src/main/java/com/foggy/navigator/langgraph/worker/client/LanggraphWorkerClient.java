@@ -94,6 +94,19 @@ public class LanggraphWorkerClient {
                 .doOnError(e -> log.warn("Context allocation failed for langgraph worker {}: {}", workerId, e.getMessage()));
     }
 
+    /**
+     * Read content-free terminal/completion evidence for one exact Worker task.
+     */
+    public Mono<Map<String, Object>> getTaskCompletionReadiness(String taskId) {
+        return webClient.get()
+                .uri("/api/v1/tasks/{taskId}/completion-readiness", taskId)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(e -> log.warn(
+                        "Completion readiness read failed for langgraph worker {}: {}",
+                        workerId, e.getClass().getSimpleName()));
+    }
+
     public Mono<Map<String, Object>> getFrameReport(
             String reportRef,
             String taskId,
@@ -166,6 +179,29 @@ public class LanggraphWorkerClient {
             Integer maxTurns,
             List<Map<String, Object>> attachments
     ) {
+        return streamQuery(
+                prompt, skillName, context, runtimeContext, model, modelConfigId,
+                llmConfig, visionLlmConfig, taskId, sessionId, userId, tenantId,
+                maxTurns, attachments, 1);
+    }
+
+    public Flux<ServerSentEvent<String>> streamQuery(
+            String prompt,
+            String skillName,
+            Map<String, Object> context,
+            Map<String, Object> runtimeContext,
+            String model,
+            String modelConfigId,
+            Map<String, Object> llmConfig,
+            Map<String, Object> visionLlmConfig,
+            String taskId,
+            String sessionId,
+            String userId,
+            String tenantId,
+            Integer maxTurns,
+            List<Map<String, Object>> attachments,
+            int dispatchCount
+    ) {
         Map<String, Object> body = new HashMap<>();
         body.put("prompt", prompt);
         if (skillName != null && !skillName.isBlank()) body.put("skill_name", skillName.trim());
@@ -176,6 +212,7 @@ public class LanggraphWorkerClient {
         if (llmConfig != null && !llmConfig.isEmpty()) body.put("llm_config", llmConfig);
         if (visionLlmConfig != null && !visionLlmConfig.isEmpty()) body.put("vision_llm_config", visionLlmConfig);
         if (taskId != null) body.put("taskId", taskId);
+        body.put("dispatch_count", Math.max(1, dispatchCount));
         if (sessionId != null) body.put("session_id", sessionId);
         if (userId != null) body.put("userId", userId);
         if (tenantId != null) body.put("tenantId", tenantId);

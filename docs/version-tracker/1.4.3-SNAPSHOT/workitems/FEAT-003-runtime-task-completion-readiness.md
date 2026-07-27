@@ -10,6 +10,8 @@ assurance_level: elevated
 approved_by: project-owner-user-confirmed
 approved_at: 2026-07-25
 approval_addendum_at: 2026-07-26
+langgraph_extension_approved_at: 2026-07-27
+clean_release_alignment_approved_at: 2026-07-27
 open_questions: []
 ---
 
@@ -33,6 +35,28 @@ open_questions: []
   - readiness 不执行 terminate、reconcile、retry、recovery、redispatch、finalize 或任何资源变更。
 - success_is_sufficient_when: focused/affected tests、Worker durable evidence fixtures、clean server/CLI/Worker artifacts、现场进程归属检查、必要数量的新 SIM test-owned ASK、查询前后零副作用证据和敏感信息扫描均通过。
 
+## Approved LangGraph Extension (2026-07-27)
+
+- approval_context: TMS 的真实主路径继续使用 exact `langgraph-biz-worker`，不切换为 Codex SDK Worker 规避 capability 缺口。
+- target_outcome: 为 LangGraph Biz Worker 补齐 provider-specific authoritative terminal/completion evidence，使 runtime completion-readiness 能区分可信 `FAILED/CANCELLED` 终态与带 durable result 的可信 `COMPLETED`，并保留底层 Worker observation error code。
+- critical_outcomes:
+  - LangGraph 使用独立 `LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1`，不得伪装或复用 `CODEX_COMPLETION_RECEIPT_V2`。
+  - `terminalEvidenceAuthoritative` 与 `completionEvidenceAuthoritative` 分离：可信 `FAILED/CANCELLED` 可前者为 `true`、后者必须为 `false`；只有可信 `COMPLETED` 且 durable result digest 匹配时后者才为 `true`。
+  - Python Worker route 只读取 content-free receipt metadata，并沿用 Worker Bearer 鉴权；不得读取 prompt、response、legacy content-bearing event、workspace 或结果正文。
+  - Navigator 在正常终态持久化路径计算并保存 result digest metadata；readiness 不重新读取正文计算 digest。
+  - LangGraph `FAILED` 必须投影稳定、脱敏 ErrorDiagnostic code；terminal task 的 `TASK_ALREADY_TERMINAL` 不得再覆盖并丢失底层 provider observation code。
+- success_is_sufficient_when: Worker route/auth/receipt tests、LangGraph addon provider/client/error projection tests、共享 readiness assessment tests 和 affected-module tests 通过；exact Worker provenance/health/route/auth 能力完成无 ASK 预检。本实施阶段不创建 TMS ASK。
+
+## Approved Clean Release and TMS Alignment (2026-07-27)
+
+- approval_context: owner 已批准阶段 1–3：回填脱敏现场证据、让 TMS helper/BFF 严格识别 Codex 与 LangGraph 两种 authoritative profile，并形成不夹带无关改动的 clean commit/build provenance。
+- scope_boundary: 本阶段允许修改 Navigator 当前仓库和 sibling TMS validator/test/work item；不部署、不重启、不修改 provisioning/runtime binding，也不再创建 ASK。
+- exact_profiles:
+  - Codex: `completionSignalSource=PROVIDER_TERMINAL_EVENT` 且 `assessmentSource=DURABLE_TASK+CODEX_COMPLETION_RECEIPT_V2+WORKER_PROCESS_SNAPSHOT`。
+  - LangGraph: `completionSignalSource=LANGGRAPH_BIZ_RESULT_EVENT` 且 `assessmentSource=DURABLE_TASK+LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1+WORKER_READ_ONLY_OBSERVATION`。
+- fail_closed_rule: TMS 必须校验 signal/source 成对匹配，并投影 `terminalEvidenceAuthoritative`、terminal signal facts 和 `providerObservationErrorCode`；跨 profile 拼接、未知 profile 或缺失权威字段均不得成为 authoritative completion。
+- clean_release_rule: clean commit/artifact 只包含本 work item 的 LangGraph/readiness 变更和必要文档，不得夹带现有前端、Claude file route 或其他用户改动。
+
 ## Scope
 
 - in_scope:
@@ -40,6 +64,9 @@ open_questions: []
   - Navigator durable task facts 与 Worker/provider observed facts 的分层聚合。
   - 复用 Codex SDK Worker 现有 task status/process inventory，增加只读取 content-free receipt 的 completion evidence audit。
   - Codex SDK Worker 为新任务持久化 content-free、fsync completion receipt，并确保被 receipt 引用的 final result 先 durable；digest 在正常完成链已经持有结果时生成，不由 readiness 重新读取正文计算。
+  - LangGraph Biz Worker 为新终态写入 content-free、fsync provider receipt；Navigator LangGraph 正常终态持久化路径同步保存 result/structured-output digest metadata，并在 readiness 中与 Worker receipt 做 exact task/Worker/provider/dispatch/status/digest 关联。
+  - LangGraph Worker authenticated content-free completion-readiness route、health capability declaration 和 Server provider implementation。
+  - provider-neutral authoritative terminal evidence、底层 provider observation error code 保留和 LangGraph FAILED stable ErrorDiagnostic projection。
   - completion candidate、authoritativeness、recoverability、reconciliation support 和 recommended action 的 fail-closed assessment。
   - route authorization catalog、CLI feature manifest/help、自动化回归、clean package、部署和 runtime-only live smoke。
   - 对归属当前 Foggy Navigator 工作区且绑定目标 Physical Worker 的 Worker 进行必要升级/重启；在确认进程 command line、workspace 和 task identity 后，可终止其残留 Codex CLI。
@@ -52,6 +79,8 @@ open_questions: []
   - `navigator-open-sdk`
   - `user-auth-module`
   - `tools/codex-agent-worker`
+  - `addons/langgraph-biz-worker`
+  - `tools/langgraph-biz-worker`
   - `tools/navigator-upstream-cli`
   - `launcher` packaging/runtime
 - external_dependencies: 本机 Navigator 8112、MySQL durable state、Physical Worker `ddc45293` 对应的 Codex SDK Worker、SIM gitignored runtime profile。
@@ -62,7 +91,8 @@ open_questions: []
   - completion reconciliation mutation、自动 finalize 或把非终态任务写为 `COMPLETED`。
   - 修改现有 terminate/reconcile 的 `ABORTED/CANCELLED` 语义。
   - retry、resume、recovery、redispatch 或重新调用既有任务的模型。
-  - Claude、Gemini、Codex app-server 或 LangGraph provider 的完成证据实现；本交付中显式返回 `UNSUPPORTED/UNKNOWN`。
+  - Claude、Gemini 或 Codex app-server provider 的完成证据实现；本交付中继续显式返回 `UNSUPPORTED/UNKNOWN`。
+  - 本实施阶段创建 TMS ASK、修改 TMS binding/provisioning 或用 Codex/SIM binding 替代 TMS 的 LangGraph binding；TMS clean ASK 仅在本侧 gate 满足后由后续明确授权执行。
   - TMS、真实业务数据、BusinessFunction、prompt/response/message body、workspace 文件或原始 Worker HTTP body 的读取或输出。
   - typed-management、system-admin、control、platform authority、Worker Gateway external 或 production enablement。
 - do_not_touch:
@@ -89,6 +119,12 @@ open_questions: []
 | 允许重启 exact owned Worker、终止 exact owned Codex CLI | owner 已明确允许放弃旧观察对象并改用新 ASK | 操作前必须用 command line、workspace、Worker/task identity 确认归属；端口不构成证明 |
 | live smoke 使用新 SIM ASK | 避免依赖历史假死任务形成不可重复验收 | 可按 2026-07-26 用户授权执行必要数量的 test-owned ASK；无 BusinessFunction、不得读取业务/workspace 内容 |
 | completion mutation 后续独立立项 | readiness 必须保持绝对只读 | 当前交付只报告 `COMPLETION_RECONCILIATION_AVAILABLE`，不执行 |
+| TMS 继续使用 LangGraph Biz Worker | 这是 TMS 的真实主运行路径 | 不通过切换 Codex SDK Worker 掩盖 LangGraph capability 缺口 |
+| LangGraph receipt 使用独立 V1 schema | provider evidence 语义与 Codex SDK 生命周期不同 | schema 固定为 `LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1`；禁止标记为 Codex receipt |
+| terminal authority 与 completion authority 分离 | `FAILED/CANCELLED` 可被权威证明，但不是成功完成 | 新增 additive `terminalEvidenceAuthoritative`；保留既有 `completionEvidenceAuthoritative` 严格成功语义 |
+| Worker receipt 与 Navigator durable result metadata 联合验证 | Worker 可证明 provider terminal event，Navigator 可证明已持久化可恢复结果 | digest 在正常终态路径计算；readiness 只读取 metadata，不读取结果正文 |
+| 保留底层 observation error code | terminal branch 的 `TASK_ALREADY_TERMINAL` 只表达 recommended-action 原因 | additive `providerObservationErrorCode` 独立返回，稳定且脱敏 |
+| LangGraph FAILED 创建 ErrorDiagnostic | durable task 不能只保留自由文本或 null code | 使用现有 ErrorDiagnostic schema/retention/redaction，不新增 credential/content 字段 |
 
 ## Public Response Contract
 
@@ -147,6 +183,7 @@ No response, log or evidence artifact may contain prompt, response, message cont
 - `workerProcessAbsent`
 - `completionCandidate`
 - `completionEvidenceAuthoritative`
+- `terminalEvidenceAuthoritative`
 - `completionReconciliationSupported`
 - `terminationReconciliationSupported`
 - `reconcileRequired`
@@ -154,6 +191,7 @@ No response, log or evidence artifact may contain prompt, response, message cont
 - `recommendedAction`
 - `assessmentReason`
 - `assessmentSource`
+- `providerObservationErrorCode`
 - `assessedAt`
 
 `recommendedAction` is restricted to:
@@ -194,6 +232,9 @@ Every successful or fail-closed readiness response must explicitly report:
 6. `completionEvidenceAuthoritative=true` requires an identity-bound durable receipt/result pair or equivalent Navigator durable evidence; readiness must not read raw result content to establish it.
 7. `completionReconciliationSupported=true` additionally requires `resultRecoverable=true`, exact task/Worker/provider/dispatch binding and no conflicting terminal evidence.
 8. Readiness never performs reconciliation, even when `recommendedAction=COMPLETION_RECONCILIATION_AVAILABLE`.
+9. `terminalEvidenceAuthoritative=true` requires exact identity/dispatch binding, a supported provider receipt schema, a provider terminal event and a stable terminal status; it does not imply successful completion.
+10. LangGraph `completionEvidenceAuthoritative=true` additionally requires terminal `COMPLETED`, completion signal, matching Worker/Navigator result digest metadata, durable Navigator result persistence and recoverability.
+11. `assessmentReason` may remain `TASK_ALREADY_TERMINAL`, but `providerObservationErrorCode` must preserve the safe underlying unsupported/unreachable/identity/evidence observation code when one exists.
 
 ## Acceptance Criteria
 
@@ -211,6 +252,18 @@ Every successful or fail-closed readiness response must explicitly report:
 - [x] AC-12 live evidence proves natural completion is not confused with stale registration, forced process absence without authoritative result is not reported as completed, and readiness queries do not change task/token/registration/counter state.
 - [x] AC-13 Worker/CLI restart and termination records include only sanitized ownership, version, time and outcome; port alone is never accepted as process ownership.
 - [x] AC-14 no terminate/reconcile/retry/recovery/finalize operation is invoked against historical task `20260725-6a2e`.
+- [x] AC-15 LangGraph Worker exposes an authenticated content-free `GET /api/v1/tasks/{taskId}/completion-readiness` route and advertises its exact route/schema/auth capability through health metadata.
+- [x] AC-16 `LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1` is atomically persisted with file/directory durability and safe permissions; it contains only identity、dispatch、terminal、time、presence and digest metadata, never model or workspace content.
+- [x] AC-17 LangGraph normal terminal handling records terminal receipt metadata for `COMPLETED/FAILED/CANCELLED`; conflicting/corrupt/mismatched evidence fails closed and cannot become authoritative.
+- [x] AC-18 LangGraph `COMPLETED` stores Navigator result/structured-output digest metadata during the existing durable completion transaction and readiness proves exact Worker receipt/Navigator metadata equality without reading result正文。
+- [x] AC-19 runtime readiness supports exact providerType `langgraph-biz-worker`; exact identity、provider task、dispatch count、terminal status/schema and digest mismatch remain non-authoritative with a stable observation code.
+- [x] AC-20 response additively exposes `terminalEvidenceAuthoritative` and `providerObservationErrorCode`; `FAILED/CANCELLED` never set completion candidate or completion authority, while a fully matched durable `COMPLETED` may set both completion values true.
+- [x] AC-21 LangGraph failure paths persist a stable ErrorDiagnostic code before/with terminal projection; raw provider error text is only accepted through the existing bounded sanitizer and is not used as the stable code.
+- [x] AC-22 terminal assessment keeps `TASK_ALREADY_TERMINAL` action semantics while preserving the underlying safe provider observation code in its dedicated field.
+- [x] AC-23 focused Worker、LangGraph addon、shared readiness and affected-module tests pass; exact Worker route/auth/health/provenance are verified without creating a TMS ASK or changing task/Agent/runtime binding.
+- [x] AC-24 经 owner 后续明确授权的一次新 TMS LangGraph ASK 已自然完成；两次稳定 readiness 快照证明 durable `COMPLETED`、Worker/provider terminal `COMPLETED`、合法 SHA-256、可恢复结果、V1 identity-bound authority 和十四项 side effects 全部为 false，且证据不含 task ID、正文、路径、PID 或命令行。
+- [x] AC-25 TMS helper/BFF 对 Codex 与 LangGraph exact profile 均通过正向测试，并对跨 profile、未知 profile、缺失 terminal authority/terminal signal 的响应 fail closed。
+- [x] AC-26 Navigator 和 TMS 分别形成 scoped clean commit；Navigator clean Server/Worker artifacts 记录 `gitDirty=false` provenance 与 SHA-256，但本阶段不部署或重启。
 
 ## Contract / Data / Security Constraints
 
@@ -220,7 +273,8 @@ Every successful or fail-closed readiness response must explicitly report:
   - V2 computes the digest while the final result is already present in the normal completion path, persists the result durably, then persists a content-free completion receipt;
   - receipt binds task ID, Physical Worker, provider task/attempt where available, dispatch count, terminal status/source, evidence version, recorded time and result digest;
   - later conflicting terminal evidence invalidates authoritative assessment.
-- data and migration: readiness itself performs no persistence. Prefer no Navigator schema change; if implementation discovers that authoritative result recoverability cannot be represented without a new durable Navigator receipt, set `NEEDS_REPLAN` rather than silently adding a migration.
+  - LangGraph V1 receipt proves provider terminal event metadata; Navigator provider-scoped task state proves its own durable result metadata, and the Server requires their exact digest/status/identity match for completion authority.
+- data and migration: readiness itself performs no persistence. The LangGraph extension may add provider-scoped keys to existing `SessionTask.taskStateJson`; no new table/column or historical backfill is approved. If that is insufficient, set `NEEDS_REPLAN` rather than silently adding a migration.
 - compatibility and rollback: API/CLI/Worker changes are additive. Rollback may make new evidence unavailable but must not reinterpret V1 evidence as authoritative or change existing task terminal state.
 - permissions and secrets: runtime caller uses only ClientApp runtime key/secret; Navigator-to-Worker reads use the existing exact Worker credential/identity path; no admin/control/platform/management credential.
 
@@ -234,6 +288,10 @@ Every successful or fail-closed readiness response must explicitly report:
 | AC-7/8 | must-pass | critical | interaction verification, persistence before/after, output/log/secret scan | existing audit side-effect tests | all fourteen false and zero-write proof |
 | AC-10 | must-pass | major | Worker `test/typecheck/build`, affected Maven tests, CLI package, launcher clean package/start | current module build scripts | provenance, hashes, health and feature manifest |
 | AC-11/12/13/14 | must-pass | critical | bounded live SIM smoke and exact process ownership verification | existing runtime profile and Worker binding | sanitized task IDs, times, enums, digests, counters and operation record |
+| AC-15/16/17 | must-pass | critical | Python route/auth/receipt store unit and integration tests | Codex content-free receipt safety principles, not its schema | route/auth/capability fixtures; atomicity/permissions/conflict results |
+| AC-18/19/20/22 | must-pass | critical | LangGraph provider/client plus shared readiness service tests | existing RuntimeTaskCompletionReadiness SPI/service | exact match/mismatch/FAILED/COMPLETED/terminal override matrices |
+| AC-21 | must-pass | critical | failure-first ErrorDiagnostic projection tests | existing ErrorDiagnostic persistence/sanitizer | stable code and no raw-content leakage assertions |
+| AC-23 | must-pass | major | Worker pytest/ruff, affected Maven modules, exact owned Worker no-ASK readiness preflight | existing clean Codex/API/CLI evidence where unchanged | exact commands/results and sanitized health/route/provenance record |
 
 ## Validation Budget and Evidence Sufficiency
 
@@ -241,25 +299,26 @@ Every successful or fail-closed readiness response must explicitly report:
 - lightweight_validation:
   - focused Java tests, route/auth contract tests, CLI parsing/output tests and sensitive-output scans;
   - `npm test`, `npm run typecheck`, `npm run build` in `tools/codex-agent-worker`;
+  - focused `pytest`/`ruff` in `tools/langgraph-biz-worker` and focused LangGraph/readiness Maven tests;
   - expected duration per run `<5m`.
 - medium_validation:
   - affected Maven modules with dependencies;
   - `mvn clean package -pl launcher -am -DskipTests`;
   - `bash tools/navigator-upstream-cli/dist/package.sh`;
-  - Worker/launcher deploy, health/provenance and bounded live SIM ASK scenarios;
+  - Worker/launcher deploy、health/provenance and authenticated no-ASK route/readiness preflight；
   - expected duration per run `5-30m`.
 - expensive_validation: none planned.
 - large_authority_or_replay_policy: prohibited-unless-user-approved
 - full_chain_recommendation_trigger: none; this delivery does not require synthetic authority, production, TMS or full historical replay.
 - estimated_full_chain_wall_clock: not-estimated
 - full_chain_prerequisites: none
-- user_approval_status: targeted live SIM ASK and owned Worker/CLI operations approved; large full-chain not approved
+- user_approval_status: LangGraph implementation、一次新 TMS clean ASK、TMS provider-aware alignment 和 scoped clean commit/artifact 已批准；部署、重启、provisioning/runtime binding 变更和无关 full-chain 未批准
 - decision_if_not_approved: not applicable to the approved bounded live smoke; unrelated full-chain remains omitted
 - expensive_validation_trigger: if focused/affected evidence cannot prove durable result-before-receipt ordering or zero-side-effect behavior, set `NEEDS_REPLAN` before expanding validation.
 - maximum_expensive_attempts: 0 without new approval
 - reusable_evidence: FEAT-001 auth/read-only audit and FEAT-002 process/Worker identity foundations, only where affected code and artifact identity have not changed.
-- stop_when_evidence_is_sufficient: all must-pass checks succeed, clean artifact provenance is fixed, live scenarios satisfy AC-11/12, all side effects are false and sensitive scan is clean.
-- validation_not_required: frontend/Playwright, TMS, BusinessFunction, production/Gateway external, other provider implementations, completion reconciliation mutation or full root reactor.
+- stop_when_evidence_is_sufficient: LangGraph AC-15..23 and unchanged prior must-pass evidence succeed, exact Worker route/auth/health/provenance gate is green, all readiness side effects remain false and sensitive scan is clean.
+- validation_not_required: frontend/Playwright、当前阶段 TMS ASK、BusinessFunction mutation、production/Gateway external、其他 provider、completion reconciliation mutation or full root reactor.
 
 ## Waiver Policy
 
@@ -295,12 +354,13 @@ This delivery does not implement mutation. A later independently approved work i
 - 在 scope 内自主决定具体文件、类和实现结构，不把本合同扩展成多 provider 或 completion mutation。
 - 进程停止/重启前必须确认 command line、workspace、Worker/task identity；只处理当前 Foggy Navigator 所属实例。
 - 如需新增 Navigator schema、改变 V1/V2 authority 规则、扩大 credential/Provider/production 边界或执行历史任务 mutation，设置 `NEEDS_REPLAN` 并停止扩展。
+- LangGraph 扩展只允许 provider-scoped `taskStateJson` metadata；如必须新增表/列、读取正文进行 audit-time digest 或把 LangGraph receipt 伪装成 Codex schema，设置 `NEEDS_REPLAN`。
 - 运行与改动面匹配的验证并记录精确命令、结果、证据路径和未运行原因。
-- live smoke 只使用 gitignored runtime profile 和必要数量的新 test-owned SIM ASK；不得对旧任务 retry/resume/recovery，不得输出凭据、prompt、response 或业务内容。
+- 当前 LangGraph 实施阶段不创建 TMS ASK；只允许 exact Worker health、route/auth 和既有 task readiness 的只读预检。后续 clean TMS ASK 必须在 AC-23 gate 后单独执行。
 - 达到 evidence sufficiency 后停止，不运行未批准的大型 authority/replay/full-chain。
 - 完成后填写 `Implementation Result`，并将状态改为 `READY_FOR_SIGNOFF`；不得自行设置 `ACCEPTED`。
 
-## Implementation Result
+## Codex Baseline Implementation Result (2026-07-26)
 
 - implementation_summary:
   - 新增 runtime-only `GET /api/v1/open/runtime/task-completion-readiness`、SDK 和
@@ -449,6 +509,131 @@ This delivery does not implement mutation. A later independently approved work i
 - omitted_validation_and_reason:
   - independent signoff 未执行：implementation evidence 已满足 AC-11/12，等待独立
     `foggy-delivery-signoff`。
+- readiness: READY_FOR_SIGNOFF
+
+## LangGraph Extension Implementation Result (2026-07-27)
+
+- implementation_summary:
+  - LangGraph Biz Worker 0.2.1 新增受 Bearer 鉴权保护、content-free 的
+    `/api/v1/tasks/{taskId}/completion-readiness`，health 明确声明 route、schema、
+    auth、identity 和 content-free capability。
+  - 新增 `LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1` 原子 receipt store；目录/文件分别使用
+    `0700/0600`，写入使用 flush/fsync/atomic replace，冲突、损坏、身份或 dispatch
+    不匹配均 fail closed。
+  - Worker 在 terminal SSE 前持久化 receipt；receipt 持久化失败使用稳定
+    `LANGGRAPH_COMPLETION_RECEIPT_PERSISTENCE_FAILED`，且不得在无 receipt 时继续投影
+    provider terminal event。
+  - Server 新增 exact `langgraph-biz-worker` readiness provider，联合校验 task、
+    Physical Worker、provider task、dispatch、terminal status、schema 和 digest；
+    `terminalEvidenceAuthoritative` 与成功 completion authority 分离。
+  - LangGraph 正常终态路径持久化 content-free result/structured-output digest metadata；
+    failure path 在 terminal projection 前写入稳定 ErrorDiagnostic。terminal task 仍保留
+    `TASK_ALREADY_TERMINAL` action 语义，同时通过 `providerObservationErrorCode` 暴露安全的
+    底层 observation code。
+  - Server 到 Worker 的 endpoint Bearer 与 Biz provider credential 使用独立 lane；
+    legacy endpoint registration 仅在 same-worker/same-endpoint 时提供专用 Bearer，不能
+    替换 governed Biz identity 或路由。
+- changed_paths:
+  - `tools/langgraph-biz-worker`: completion receipt store、readiness route、health
+    capability、terminal dispatch metadata、stable persistence failure、0.2.1 version 和测试。
+  - `addons/langgraph-biz-worker`: Worker client/health DTO、exact endpoint auth、terminal
+    relay/ErrorDiagnostic、durable digest metadata、readiness provider 和测试。
+  - `navigator-spi`: provider-neutral terminal signal、terminal error 和 observation fields。
+  - `addons/claude-worker-agent`: additive response DTO、terminal/completion assessment 和
+    provider observation error preservation。
+  - `addons/codex-worker-agent`: 将既有 Codex completed-only receipt 映射为 additive
+    terminal signal，保持原 Codex authority 语义。
+  - 本 canonical work item：contract、acceptance、validation、deployment 和 residual risk。
+- tests_and_results:
+  - `PYTHONPATH=src .venv/bin/python -m pytest -q tests`：796 passed、0 failed。
+  - `.venv/bin/ruff check src tests/test_completion_readiness.py tests/test_health.py tests/test_query.py`：PASS。
+  - `mvn -q -pl addons/langgraph-biz-worker test`：181 tests、0 failures/errors/skips。
+  - `mvn -q -pl addons/claude-worker-agent test`：426 tests、0 failures/errors/skips。
+  - `mvn -q -pl addons/codex-worker-agent test`：489 tests、0 failures/errors/skips。
+  - 聚焦 LangGraph client/provider/relay/task/service 测试通过；`mvn package -pl launcher
+    -am -DskipTests` 通过，授权重启后的 8112 health 为 `UP`。
+  - `git diff --check` 通过，仅有既有/受影响文件 line-ending 提示，无 whitespace error。
+  - 较早的 affected reactor `-am test` 在进入目标模块前，因既有
+    `BusinessTaskScopedTokenLifecycleJpaTest` JPA slice 缺少
+    `RuntimeRequestAuditService` 出现 9 个 Spring context errors；本扩展未修改该 fixture，
+    三个受影响 addon 的独立全量测试均通过。
+- manual_or_experience_evidence:
+  - 启动前以 listener command/cwd 交叉验证 8112 Server 和 3061 exact Worker 均属于当前
+    Foggy Navigator 工作区；端口未被单独当作归属证据。
+  - 经后续明确授权，exact platform Biz identity credential 已轮换；Server→Worker
+    endpoint Bearer 使用独立 credential lane，same-worker endpoint registration 与
+    governed identity 地址对齐；未修改 task、Agent、Directory、modelConfig、grant 或
+    runtime binding。
+  - exact dirty canary Worker 0.2.0 已部署并健康，health 广告 readiness supported、auth required、
+    identity configured 和 content-free；未鉴权 route 被拒绝，鉴权的未知 task 返回安全
+    content-free observation。
+  - 新 Server 部署后，对既有目标 task 的只读 readiness 返回 Worker reachable、
+    `workerTaskKnown=false`、`providerObservationErrorCode=WORKER_TASK_NOT_FOUND`、
+    `assessmentSource=DURABLE_TASK+WORKER_READ_ONLY_OBSERVATION`。这证明底层 observation
+    code 不再被 `TASK_ALREADY_TERMINAL` 覆盖，同时历史 task 不会被回扫或伪造 receipt。
+  - 同一 readiness 返回 `terminalEvidenceAuthoritative=false`、
+    `completionEvidenceAuthoritative=false`，两键均存在且为 boolean；十四项
+    `auditSideEffects` 全部为 false。未创建 TMS ASK，未执行任何 task mutation。
+  - secure handoff 目录/文件权限为 `0700/0600` 且被 Git ignore；三个核心关联字段均为
+    非空 string。文件含批准的辅助授权元数据，不满足最初“仅三个字段”的严格 schema，
+    按用户明确的 schema-violation override 继续，未读取或输出任何标识值。
+- deviations:
+  - 本轮在用户后续“全部授权”后执行了 exact Worker credential/endpoint registration
+    配置、Worker 部署和 Server 重启；这些动作超出最初只读诊断边界，但未改变 task 或
+    runtime binding，并在执行前完成 exact ownership 校验。
+  - 经 owner 后续明确授权，TMS clean ASK 已执行并自然完成；未对该任务执行 retry、
+    resume、recovery、redispatch、terminate、reconcile 或 finalize。
+- residual_risks:
+  - 当前 LangGraph Worker credential 仅注入正在运行的进程，未写入 tracked file 或
+    本地明文 profile。当前进程保持运行时 clean ASK gate 为绿色；若 Worker 重启，必须先
+    通过安全 secret store/profile 重新注入两条独立 credential lane。
+  - 当前实际运行的 Server/Worker 仍是先前 dirty canary；本阶段形成的 clean Server 和
+    Worker 0.2.1 artifacts 尚未部署。部署、重启和持久化 credential 修复需要单独授权。
+  - 历史目标 task 在旧 Worker 生命周期中没有 V1 receipt，按合同永久保持非 authoritative；
+    这不阻塞新 clean ASK 生成新的 authoritative evidence。
+- reused_evidence: Codex baseline API/CLI/zero-side-effect/read-only credential evidence remains valid where shared code and artifact identity are unchanged.
+- omitted_validation_and_reason: no frontend/Playwright、BusinessFunction、task mutation、production/Gateway external or completion reconciliation validation was required.
+- readiness: READY_FOR_SIGNOFF
+
+## Clean Release and TMS Alignment Result (2026-07-27)
+
+- implementation_summary:
+  - Server authoritative assessment 已从“schema/source 各自允许集合”收紧为 exact profile：
+    Codex V2 只接受 `PROVIDER_TERMINAL_EVENT`，LangGraph V1 completed 只接受
+    `LANGGRAPH_BIZ_RESULT_EVENT`，LangGraph V1 failed/cancelled 只接受
+    `LANGGRAPH_BIZ_ERROR_EVENT`。
+  - Worker receipt reader 新增 schema/status/signal/digest/error-code coherence 校验；被篡改的
+    cross-provider signal、非法 digest 或非稳定错误码全部作为 invalid receipt fail closed。
+  - TMS helper/BFF 严格接受 Codex 与 LangGraph 两个成对 profile，投影 terminal signal、
+    `terminalEvidenceAuthoritative` 和 `providerObservationErrorCode`，并拒绝跨 profile 拼接。
+  - LangGraph Biz Worker clean release version 提升为 `0.2.1`，与已运行的 dirty canary
+    `0.2.0` 明确区分。
+- sanitized_live_evidence:
+  - 一次新 TMS LangGraph ASK 自然进入 durable `COMPLETED`；task token revoked、active
+    registration absent、dispatch/retry/recovery 为 `1/0/0`。
+  - 两份稳定 readiness 快照均显示 Worker reachable/task known、provider terminal
+    `COMPLETED`、final output present/durable、合法 SHA-256、result recoverable、
+    terminal/completion authority 为 true。
+  - completion/terminal signal 均为 `LANGGRAPH_BIZ_RESULT_EVENT`，assessment source 为
+    `DURABLE_TASK+LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1+WORKER_READ_ONLY_OBSERVATION`；
+    十四项 audit side effects 全部为 false。
+  - 本记录不保存 task ID、upstream user ID、Physical Worker ID、prompt/response、原始
+    HTTP body、workspace path、PID 或进程命令。
+- validation:
+  - TMS Node helper self-test：PASS；Node smoke：2/2；BFF focused：39/39；BFF affected：
+    257/257。
+  - Navigator Worker pytest：796/796；ruff：PASS；Claude/LangGraph/Codex addon：
+    426/181/489，全部零失败/错误。
+  - Navigator affected reactor 测试的依赖阶段复现既有
+    `BusinessTaskScopedTokenLifecycleJpaTest` 缺少 `RuntimeRequestAuditService` fixture
+    bean，导致 9 个 context errors；本 work item 未修改该模块，`-DskipTests` 完整依赖
+    install 和三个目标 addon 全量测试均通过。
+- release_boundary:
+  - scoped clean commits 与 clean artifacts 已形成并记录 SHA-256；未 push、未上传、未部署、
+    未重启，也未修改 provisioning/runtime binding。
+  - 下一步需要单独授权后，才可持久化两条独立 Worker credential lane、部署 clean
+    Server/Worker 0.2.1，并执行一次 post-deploy read-only smoke；无需再创建 ASK 即可先对
+    clean provenance、health、route/auth 和既有新任务做只读核验。
 - readiness: READY_FOR_SIGNOFF
 
 ## References

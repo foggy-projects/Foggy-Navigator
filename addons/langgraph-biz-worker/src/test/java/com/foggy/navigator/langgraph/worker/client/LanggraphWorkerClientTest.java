@@ -41,6 +41,23 @@ class LanggraphWorkerClientTest {
             assertEquals("invoke_business_agent",
                     health.getCapabilities().getAgentDelegation().getTools().get("spawn_agent").getToolName());
             assertFalse(health.getCapabilities().getAgentDelegation().getTools().get("send_input").getSupported());
+            assertTrue(health.getCapabilities().getCompletionReadiness().getSupported());
+            assertEquals("LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1",
+                    health.getCapabilities().getCompletionReadiness().getSchema());
+        }
+    }
+
+    @Test
+    void getTaskCompletionReadiness_readsContentFreeMetadataRoute() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            LanggraphWorkerClient client = new LanggraphWorkerClient("worker-1", server.baseUrl(), "token");
+
+            Map<String, Object> readiness = client.getTaskCompletionReadiness("task-1")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("/api/v1/tasks/task-1/completion-readiness", server.path());
+            assertEquals(Boolean.TRUE, readiness.get("worker_task_known"));
+            assertEquals("LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1", readiness.get("evidence_schema"));
         }
     }
 
@@ -86,6 +103,7 @@ class LanggraphWorkerClientTest {
             assertEquals("tms.navigator.agent", body.get("skill_name"));
             assertEquals(8, body.get("max_turns"));
             assertEquals(attachments, body.get("attachments"));
+            assertEquals(1, body.get("dispatch_count"));
             @SuppressWarnings("unchecked")
             Map<String, Object> llmConfig = (Map<String, Object>) body.get("llm_config");
             assertEquals("http://mock-llm", llmConfig.get("base_url"));
@@ -246,6 +264,18 @@ class LanggraphWorkerClientTest {
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
+            server.createContext("/api/v1/tasks/", exchange -> {
+                capture.path.set(exchange.getRequestURI().getPath());
+                capture.body.set("");
+                byte[] response = ("{"
+                        + "\"worker_task_known\":true,"
+                        + "\"evidence_schema\":\"LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1\"}"
+                        ).getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
             server.createContext("/health", exchange -> {
                 capture.path.set(exchange.getRequestURI().getPath());
                 capture.body.set("");
@@ -268,7 +298,12 @@ class LanggraphWorkerClientTest {
                         + "\"tools\":{"
                         + "\"spawn_agent\":{\"supported\":true,\"tool_name\":\"invoke_business_agent\",\"mode\":\"open_child_agent_and_sync_wait\"},"
                         + "\"send_input\":{\"supported\":false,\"tool_name\":null,\"mode\":\"not_supported\"}"
-                        + "}}}}"
+                        + "}},"
+                        + "\"completion_readiness\":{"
+                        + "\"supported\":true,"
+                        + "\"route\":\"/api/v1/tasks/{taskId}/completion-readiness\","
+                        + "\"schema\":\"LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1\","
+                        + "\"content_free\":true}}}"
                         ).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, response.length);

@@ -9,7 +9,12 @@ from ..models import (
 )
 
 
-def build_worker_capabilities(max_agent_nesting_depth: int) -> WorkerCapabilities:
+def build_worker_capabilities(
+    max_agent_nesting_depth: int,
+    *,
+    auth_required: bool = False,
+    identity_configured: bool = False,
+) -> WorkerCapabilities:
     """Build the online capability contract exposed by ``GET /health``."""
     return WorkerCapabilities(
         agent_delegation=AgentDelegationCapabilities(
@@ -47,5 +52,14 @@ def build_worker_capabilities(max_agent_nesting_depth: int) -> WorkerCapabilitie
                     mode="parent_resumes_recoverable_child_frame",
                 ),
             },
-        )
+        ),
+        completion_readiness={
+            "supported": True,
+            "route": "/api/v1/tasks/{taskId}/completion-readiness",
+            "schema": "LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1",
+            "content_free": True,
+            "terminal_statuses": ["COMPLETED", "FAILED", "CANCELLED"],
+            "auth_required": auth_required,
+            "identity_configured": identity_configured,
+        },
     )

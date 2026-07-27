@@ -11,6 +11,7 @@ public class RuntimeCompletionReconciliationAssessmentDTO {
     private Boolean staleRegistrationSuspected;
     private Boolean workerProcessAbsent;
     private Boolean completionCandidate;
+    private Boolean terminalEvidenceAuthoritative;
     private Boolean completionEvidenceAuthoritative;
     private Boolean completionReconciliationSupported;
     private Boolean terminationReconciliationSupported;
@@ -19,5 +20,6 @@ public class RuntimeCompletionReconciliationAssessmentDTO {
     private String recommendedAction;
     private String assessmentReason;
     private String assessmentSource;
+    private String providerObservationErrorCode;
     private OffsetDateTime assessedAt;
 }

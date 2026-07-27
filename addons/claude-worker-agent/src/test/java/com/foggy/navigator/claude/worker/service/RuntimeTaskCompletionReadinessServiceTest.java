@@ -52,6 +52,7 @@ class RuntimeTaskCompletionReadinessServiceTest {
                 "key", "secret", "user-a", "task-a", "worker-a");
 
         assertTrue(result.getReconciliationAssessment().getCompletionCandidate());
+        assertTrue(result.getReconciliationAssessment().getTerminalEvidenceAuthoritative());
         assertTrue(result.getReconciliationAssessment().getCompletionEvidenceAuthoritative());
         assertTrue(result.getReconciliationAssessment().getCompletionReconciliationSupported());
         assertEquals("COMPLETION_RECONCILIATION_AVAILABLE",
@@ -79,6 +80,7 @@ class RuntimeTaskCompletionReadinessServiceTest {
         assertTrue(result.getReconciliationAssessment().getWorkerProcessAbsent());
         assertTrue(result.getReconciliationAssessment().getStaleRegistrationSuspected());
         assertFalse(result.getReconciliationAssessment().getCompletionCandidate());
+        assertFalse(result.getReconciliationAssessment().getTerminalEvidenceAuthoritative());
         assertFalse(result.getReconciliationAssessment().getCompletionEvidenceAuthoritative());
         assertEquals("TERMINATE_AND_RECONCILE",
                 result.getReconciliationAssessment().getRecommendedAction());
@@ -108,7 +110,98 @@ class RuntimeTaskCompletionReadinessServiceTest {
                 result.getReconciliationAssessment().getRecommendedAction());
         assertEquals("WORKER_COMPLETION_READINESS_UNREACHABLE",
                 result.getReconciliationAssessment().getAssessmentReason());
+        assertEquals("WORKER_COMPLETION_READINESS_UNREACHABLE",
+                result.getReconciliationAssessment().getProviderObservationErrorCode());
         assertAllSideEffectsFalse(result.getAuditSideEffects());
+    }
+
+    @Test
+    void failedLanggraphReceiptCanBeAuthoritativeTerminalEvidenceWithoutClaimingCompletion() {
+        arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "FAILED");
+        when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
+        when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
+                .thenReturn(observation(
+                        true, true, "FAILED", null, "UNKNOWN",
+                        false, true, "FAILED",
+                        false, false, null, false, null,
+                        false, null, false,
+                        "LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1", "task-a", true, null));
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertTrue(result.getReconciliationAssessment().getTerminalEvidenceAuthoritative());
+        assertFalse(result.getReconciliationAssessment().getCompletionEvidenceAuthoritative());
+        assertFalse(result.getReconciliationAssessment().getCompletionCandidate());
+        assertEquals("NO_ACTION_ALREADY_TERMINAL",
+                result.getReconciliationAssessment().getRecommendedAction());
+        assertEquals("DURABLE_TASK+LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1+WORKER_READ_ONLY_OBSERVATION",
+                result.getReconciliationAssessment().getAssessmentSource());
+        assertNull(result.getReconciliationAssessment().getProviderObservationErrorCode());
+        assertEquals("LANGGRAPH_PROVIDER_TASK_FAILED",
+                result.getCompletionEvidenceFacts().getTerminalErrorCode());
+    }
+
+    @Test
+    void completedLanggraphReceiptUsesItsExactAuthoritativeProfile() {
+        arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "COMPLETED");
+        when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
+        when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
+                .thenReturn(observation(
+                        true, true, "COMPLETED", null, "UNKNOWN",
+                        false, true, "COMPLETED",
+                        true, true, DIGEST, false, null,
+                        true, "LANGGRAPH_BIZ_RESULT_EVENT", true,
+                        "LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1", "task-a", true, null));
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertTrue(result.getReconciliationAssessment().getTerminalEvidenceAuthoritative());
+        assertTrue(result.getReconciliationAssessment().getCompletionEvidenceAuthoritative());
+        assertEquals("DURABLE_TASK+LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1+WORKER_READ_ONLY_OBSERVATION",
+                result.getReconciliationAssessment().getAssessmentSource());
+    }
+
+    @Test
+    void crossProviderCompletionSignalCannotBecomeAuthoritative() {
+        arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "COMPLETED");
+        when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
+        when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
+                .thenReturn(observation(
+                        true, true, "COMPLETED", null, "UNKNOWN",
+                        false, true, "COMPLETED",
+                        true, true, DIGEST, false, null,
+                        true, "PROVIDER_TERMINAL_EVENT", true,
+                        "LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1", "task-a", true, null));
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertTrue(result.getReconciliationAssessment().getTerminalEvidenceAuthoritative());
+        assertFalse(result.getReconciliationAssessment().getCompletionEvidenceAuthoritative());
+        assertFalse(result.getReconciliationAssessment().getCompletionCandidate());
+    }
+
+    @Test
+    void terminalTaskKeepsUnderlyingProviderObservationCodeSeparately() {
+        arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "FAILED");
+        when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
+        when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
+                .thenReturn(observation(
+                        false, null, "UNKNOWN", null, "UNKNOWN",
+                        null, null, null,
+                        null, null, null, null, null,
+                        null, null, null,
+                        null, null, false, "WORKER_COMPLETION_READINESS_UNREACHABLE"));
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertEquals("TASK_ALREADY_TERMINAL",
+                result.getReconciliationAssessment().getAssessmentReason());
+        assertEquals("WORKER_COMPLETION_READINESS_UNREACHABLE",
+                result.getReconciliationAssessment().getProviderObservationErrorCode());
     }
 
     @Test
@@ -128,14 +221,24 @@ class RuntimeTaskCompletionReadinessServiceTest {
 
     private void arrangeOwnedTask(
             String providerType, boolean terminal, int dispatchCount, boolean registrationPresent) {
+        arrangeOwnedTask(providerType, terminal, dispatchCount, registrationPresent,
+                terminal ? "COMPLETED" : "RUNNING");
+    }
+
+    private void arrangeOwnedTask(
+            String providerType,
+            boolean terminal,
+            int dispatchCount,
+            boolean registrationPresent,
+            String status) {
         when(stateAuditService.requireOwnedTask("key", "secret", "user-a", "task-a"))
                 .thenReturn(new RuntimeStateAuditService.OwnedRuntimeTask(
                         "task-a", "user-a", "tenant-a", providerType, "worker-a",
-                        terminal ? "COMPLETED" : "RUNNING", terminal, dispatchCount));
+                        status, terminal, dispatchCount));
         RuntimeTaskFactsDTO facts = RuntimeTaskFactsDTO.builder()
                 .taskId("task-a")
                 .terminal(terminal)
-                .status(terminal ? "COMPLETED" : "RUNNING")
+                .status(status)
                 .sanitizedErrorCode(null)
                 .taskTokenStatus(terminal ? "REVOKED" : "ACTIVE")
                 .activeTaskRegistrationPresent(registrationPresent)
@@ -182,6 +285,15 @@ class RuntimeTaskCompletionReadinessServiceTest {
             String errorCode) {
         String recordedAt = Boolean.TRUE.equals(completionSignalPresent)
                 ? "2026-07-25T12:00:00Z" : null;
+        boolean terminalSignalPresent = Boolean.TRUE.equals(providerTaskTerminal);
+        String terminalSignalSource = terminalSignalPresent
+                ? ("LANGGRAPH_BIZ_COMPLETION_RECEIPT_V1".equals(evidenceSchema)
+                ? ("COMPLETED".equals(providerTerminalStatus)
+                ? "LANGGRAPH_BIZ_RESULT_EVENT" : "LANGGRAPH_BIZ_ERROR_EVENT")
+                : "PROVIDER_TERMINAL_EVENT")
+                : null;
+        String terminalSignalRecordedAt = terminalSignalPresent
+                ? "2026-07-25T12:00:00Z" : null;
         return new RuntimeTaskCompletionReadinessProvider.Observation(
                 workerReachable,
                 "2026-07-25T12:01:00Z",
@@ -201,6 +313,9 @@ class RuntimeTaskCompletionReadinessServiceTest {
                 recordedAt,
                 structuredOutputPresent,
                 structuredOutputDigest,
+                terminalSignalPresent,
+                terminalSignalSource,
+                terminalSignalRecordedAt,
                 completionSignalPresent,
                 completionSignalSource,
                 recordedAt,
@@ -209,6 +324,8 @@ class RuntimeTaskCompletionReadinessServiceTest {
                 providerTaskId,
                 evidenceSchema == null ? null : 1,
                 identityVerified,
+                "FAILED".equals(providerTerminalStatus)
+                        ? "LANGGRAPH_PROVIDER_TASK_FAILED" : null,
                 errorCode);
     }
 

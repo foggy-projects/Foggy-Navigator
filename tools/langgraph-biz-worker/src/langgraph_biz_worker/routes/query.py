@@ -15,11 +15,13 @@ from ..auth import verify_token
 from ..config import settings
 from ..graphs.root_graph import RootState, enqueue_pending_user_input_for_context, root_graph
 from ..models import QueryEvent, QueryRequest
+from ..runtime.completion_receipt import CompletionReceiptStore, stable_error_code
 from ..runtime.context_memory import context_execution_lock
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_layout import generate_standard_context_id, require_standard_context_id
 from ..runtime.fsscript_bridge import extract_fsscript_script, get_fsscript_bridge
-from .health import active_tasks
+from .completion_readiness import receipt_store
+from .health import active_task_metadata, active_tasks
 
 import time
 
@@ -74,6 +76,10 @@ async def _event_generator(
 ) -> AsyncGenerator[dict, None]:
     """Run the root graph and yield SSE events."""
     active_tasks.add(task_id)
+    active_task_metadata[task_id] = {
+        "dispatch_count": request.dispatch_count,
+        "worker_id": settings.navigator_worker_id or None,
+    }
     context_id: str | None = None
     context_lock = None
     context_lock_acquired = False
@@ -84,6 +90,8 @@ async def _event_generator(
         nonlocal next_event_id
         event.event_id = next_event_id
         next_event_id += 1
+        if event.type in {"result", "error"}:
+            _record_terminal_receipt(task_id, request, event)
         return {
             "event": "message",
             "data": event.model_dump_json(),
@@ -198,10 +206,16 @@ async def _event_generator(
 
     except Exception as exc:
         logger.exception("Error processing query %s", task_id)
+        error_code = (
+            "LANGGRAPH_WORKER_EXECUTION_TIMEOUT"
+            if isinstance(exc, TimeoutError)
+            else stable_error_code(str(exc))
+        )
         error_event = QueryEvent(
             type="error",
             task_id=task_id,
             error=str(exc),
+            error_code=error_code,
         )
         if context_id is not None:
             error_event = _event_with_context_id(error_event, context_id)
@@ -210,6 +224,45 @@ async def _event_generator(
         if context_lock_acquired and context_lock is not None:
             context_lock.release()
         active_tasks.discard(task_id)
+        active_task_metadata.pop(task_id, None)
+
+
+def _record_terminal_receipt(
+    task_id: str,
+    request: QueryRequest,
+    terminal_event: QueryEvent,
+) -> None:
+    """Persist content-free authority before the terminal SSE is observable."""
+    if not settings.navigator_worker_id:
+        return
+    try:
+        store: CompletionReceiptStore = receipt_store()
+        if terminal_event.type == "result":
+            store.record_terminal(
+                task_id=task_id,
+                worker_id=settings.navigator_worker_id,
+                dispatch_count=request.dispatch_count,
+                terminal_status="COMPLETED",
+                final_output=terminal_event.content,
+                structured_output=terminal_event.structured_output,
+            )
+        else:
+            store.record_terminal(
+                task_id=task_id,
+                worker_id=settings.navigator_worker_id,
+                dispatch_count=request.dispatch_count,
+                terminal_status="FAILED",
+                terminal_error_code=stable_error_code(terminal_event.error_code),
+            )
+    except Exception as receipt_error:
+        logger.error(
+            "Completion receipt persistence failed for task %s: %s",
+            task_id,
+            type(receipt_error).__name__,
+        )
+        raise RuntimeError(
+            "LANGGRAPH_COMPLETION_RECEIPT_PERSISTENCE_FAILED"
+        ) from receipt_error
 
 
 @router.post("/query")

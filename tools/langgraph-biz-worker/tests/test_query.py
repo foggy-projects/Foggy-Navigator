@@ -120,6 +120,14 @@ def test_query_request_accepts_max_turns_aliases():
     assert snake.max_turns == 10
 
 
+def test_query_request_accepts_dispatch_count_aliases():
+    camel = QueryRequest.model_validate({"prompt": "test", "dispatchCount": 2})
+    snake = QueryRequest.model_validate({"prompt": "test", "dispatch_count": 3})
+
+    assert camel.dispatch_count == 2
+    assert snake.dispatch_count == 3
+
+
 def test_query_request_accepts_allowed_tools_aliases():
     camel = QueryRequest.model_validate({
         "prompt": "test",

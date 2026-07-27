@@ -177,7 +177,9 @@ class BusinessAgentLanggraphLaunchE2ETest {
             token.setIssuedAt(LocalDateTime.now());
             token.setExpiresAt(LocalDateTime.now().plusMinutes(30));
             return null;
-        }).when(tokenPolicyService).initializeNewToken(any(BusinessTaskScopedTokenEntity.class));
+        }).when(tokenPolicyService).initializeNewToken(
+                any(BusinessTaskScopedTokenEntity.class),
+                any(BusinessTaskScopedTokenPolicyService.FunctionScopeRequest.class));
         BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
                 new BusinessTaskScopedTokenLifecycleService(
                         tokenRepository, terminalStateRepository, tokenPolicyService, tokenRuntimeStore);

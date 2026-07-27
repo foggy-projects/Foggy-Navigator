@@ -34,6 +34,9 @@ public interface RuntimeTaskCompletionReadinessProvider {
             String finalOutputRecordedAt,
             Boolean structuredOutputPresent,
             String structuredOutputDigest,
+            Boolean terminalSignalPresent,
+            String terminalSignalSource,
+            String terminalSignalRecordedAt,
             Boolean completionSignalPresent,
             String completionSignalSource,
             String completionSignalRecordedAt,
@@ -42,6 +45,7 @@ public interface RuntimeTaskCompletionReadinessProvider {
             String providerTaskId,
             Integer receiptDispatchCount,
             Boolean identityVerified,
+            String terminalErrorCode,
             String sanitizedErrorCode) {
     }
 }

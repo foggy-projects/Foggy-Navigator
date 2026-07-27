@@ -1,6 +1,8 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorDiagnosticInput;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
@@ -46,6 +48,17 @@ class LanggraphStreamRelayTest {
                 new ObjectMapper(),
                 llmModelManager
         );
+        when(taskService.attachDiagnostic(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(ErrorEnvelope.class),
+                org.mockito.ArgumentMatchers.any(ErrorDiagnosticInput.class)
+        )).thenAnswer(invocation -> {
+            ErrorEnvelope envelope = invocation.getArgument(1);
+            envelope.setDiagnosticRef("diagnostic://safe-ref");
+            envelope.setProviderType("langgraph-biz-worker");
+            envelope.setRuntimeType("LANGGRAPH_BIZ");
+            return envelope;
+        });
     }
 
     @Test
@@ -454,14 +467,31 @@ class LanggraphStreamRelayTest {
         assertEquals(error, payload.get("content"));
         assertEquals("FAILED", payload.get("status"));
         assertEquals("storage_permission_denied", payload.get("reason"));
-        assertEquals("storage_permission_denied", payload.get("errorCode"));
-        assertEquals("STORAGE_PERMISSION", payload.get("errorCategory"));
+        assertEquals("STORAGE_PERMISSION_DENIED", payload.get("errorCode"));
+        assertEquals("AUTHORIZATION", payload.get("errorCategory"));
+        assertEquals("storage_permission_denied", payload.get("providerErrorCode"));
+        assertEquals("STORAGE_PERMISSION", payload.get("providerErrorCategory"));
+        assertEquals("TURN_EXECUTION", payload.get("runtimePhase"));
+        assertEquals("diagnostic://safe-ref", payload.get("diagnosticRef"));
+        assertEquals("langgraph-biz-worker", payload.get("providerType"));
+        assertEquals("LANGGRAPH_BIZ", payload.get("runtimeType"));
         assertEquals(true, payload.get("recoverable"));
         assertEquals(false, payload.get("llmRetryAllowed"));
         assertEquals(true, payload.get("requiresUpstreamAction"));
         assertEquals(
                 "repair_workspace_permissions_or_write_via_navigator_directory_worker",
                 payload.get("suggestedAction")
+        );
+
+        verify(taskService).attachDiagnostic(
+                org.mockito.ArgumentMatchers.eq(taskId),
+                org.mockito.ArgumentMatchers.argThat(envelope ->
+                        "STORAGE_PERMISSION_DENIED".equals(envelope.getErrorCode())
+                                && envelope.getRecoverable()
+                                && envelope.getRuntimePhase() != null),
+                org.mockito.ArgumentMatchers.argThat(input ->
+                        "FAILED".equals(input.getProviderStatus())
+                                && error.equals(input.getDiagnosticText()))
         );
     }
 

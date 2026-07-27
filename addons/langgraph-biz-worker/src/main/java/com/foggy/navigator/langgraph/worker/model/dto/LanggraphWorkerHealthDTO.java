@@ -47,6 +47,25 @@ public class LanggraphWorkerHealthDTO {
 
         @JsonProperty("agent_delegation")
         private AgentDelegationCapabilitiesDTO agentDelegation;
+
+        @JsonProperty("completion_readiness")
+        private CompletionReadinessCapabilitiesDTO completionReadiness;
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class CompletionReadinessCapabilitiesDTO {
+        private Boolean supported;
+        private String route;
+        private String schema;
+        @JsonProperty("content_free")
+        private Boolean contentFree;
+        @JsonProperty("terminal_statuses")
+        private List<String> terminalStatuses;
+        @JsonProperty("auth_required")
+        private Boolean authRequired;
+        @JsonProperty("identity_configured")
+        private Boolean identityConfigured;
     }
 
     @Data
