@@ -16,6 +16,7 @@ Foggy Navigator 是基于 LangChain4j 的个人 AI Agent 编排中枢。本文�
 - 当前工作区：`/home/sa/workspace/Foggy-Navigator`。
 - 当前同级上游：`/home/sa/workspace/tms-x3`、`/home/sa/workspace/foggy-world-sim`、`/home/sa/workspace/foggy-data-mcp`。
 - 默认只修改当前 Navigator 仓库。需要 TMS、SIM 或 Foggy Data MCP 配合时，优先给出 issue、handoff 或配置步骤；除非用户明确授权，不修改同级仓库。
+- 当前目录处于 `main` 分支时，除非用户明确许可，不得通过 `git switch`、`git checkout` 等方式切换到其他分支开展工作。需要新分支开发时，应在新目录独立 clone 仓库，并在该 clone 中创建或检出目标分支，保持当前 `main` 工作目录不变。
 - 保留现有 dirty worktree。不得回滚、覆盖、格式化或夹带与当前任务无关的用户改动。
 - 停止、重启、升级或发布 Worker 前，必须通过进程命令行和工作区路径确认归属；不得仅凭端口操作。
 - 不得把明文 API key、admin key、credential secret 或本地密钥写入 tracked files。上游本地配置使用各项目 `.navigator/upstream.env` 等本机文件。
