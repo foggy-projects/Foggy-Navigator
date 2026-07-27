@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-021
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: standard
@@ -74,7 +74,7 @@ open_questions: []
 - [x] AC-4: 重新核验后的 `/home/sa/.codex-app-server-worker` 被单独重启，health 的 version/Worker ID/listener/cwd 与目标一致，进程环境中的 `CODEX_HOME` 精确为隔离目录；3053 SDK Worker 未被操作。
 - [x] AC-5: `npm test`、schema verification、typecheck、clean build、`npm run package:release`、archive/forbidden-file/integrity 检查全部通过。
 - [x] AC-6: `0.3.24` 候选完成隔离 fresh install、update dry-run、依赖安装、启动和 `/health`；documented `local-smoke` 以非生产证据模式通过或明确记录唯一外部环境阻断。
-- [ ] AC-7: 从 clean、pushed commit 发布 OBS；远端 `latest.json` 为 `codex-app-server-worker 0.3.24`，archive bytes/SHA-256、checksum、installers 和 release evidence 与本地候选一致；提供下载链接和升级命令。
+- [x] AC-7: 从 clean、pushed commit 发布 OBS；远端 `latest.json` 为 `codex-app-server-worker 0.3.24`，archive bytes/SHA-256、checksum、installers 和 release evidence 与本地候选一致；提供下载链接和升级命令。
 
 ## Contract / Data / Security Constraints
 
@@ -175,12 +175,30 @@ open_questions: []
   - 目标安装重启后 listener 为 `3071`，cwd 为 `/home/sa/.codex-app-server-worker`，Worker ID `36508966`，instance ID `codex-store-5ea69ced-19e1-4c85-bb68-f8854a81d455`，CLI `0.144.3`，显式 `CODEX_HOME=/home/sa/.codex-app-server-worker/codex-home`；health ready，pool busy/queued 均为 `0`，`retained_context_maintenance=0`。
   - 3053 listener 始终属于既有 PID `791278`，未停止、重启或升级。
   - 隔离候选监听 `13072`，version `0.3.24`、CLI `0.144.3`、独立 CODEX_HOME、pool/retained 均为 `0`；documented `local-smoke` 标记 `NON_PRODUCTION_SMOKE` 且 gate `PASS`，terminal `2/2`、success `100%`、affinity/privacy leakage `0`。候选随后由自身 `stop.sh` 正常停止且无端口残留。
-- release_evidence: 待 clean pushed release commit 后执行最终 `package:release -- --upload` 和远端字节复核；AC-7 尚未完成。
+- release_evidence:
+  - release commit: `ac020f1517de1f73db4aaeeac99aa098d2983546`，发布前 `HEAD == origin/main` 且工作树 clean；manifest `gitDirty=false`。
+  - version: `codex-app-server-worker 0.3.24`。
+  - archive: `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/0.3.24/codex-app-server-worker-0.3.24.zip`。
+  - checksum: `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/0.3.24/codex-app-server-worker-0.3.24.zip.sha256`。
+  - latest: `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json`。
+  - SHA-256: `8ea9e080d484f82bdd16b71280b90709632a733c868af211c5b043916978fd74`；bytes `2449271`。
+  - remote verification: 重新下载 latest/archive/checksum/Linux installer/Windows installer；archive 实算 SHA、checksum 文件、manifest SHA 三者一致，archive bytes 与 manifest 一致，五个远端文件均与本地发布输出逐字节一致。
+  - target upgrade command:
+    ```bash
+    curl -fL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/0.3.24/codex-app-server-worker-0.3.24.zip \
+      -o /tmp/codex-app-server-worker-0.3.24.zip
+    echo '8ea9e080d484f82bdd16b71280b90709632a733c868af211c5b043916978fd74  /tmp/codex-app-server-worker-0.3.24.zip' \
+      | sha256sum -c -
+    CODEX_HOME=/home/sa/.codex-app-server-worker/codex-home \
+      /home/sa/.codex-app-server-worker/update.sh \
+      --package /tmp/codex-app-server-worker-0.3.24.zip \
+      --install-dir /home/sa/.codex-app-server-worker
+    ```
 - deviations: none
 - residual_risks: `thread/compacted` 已 deprecated，因此实现和回归同时覆盖当前 `ContextCompaction` item；未执行用户明确排除的 production soak 或真实付费模型查询。已泄露的平台 Bearer token 仍需环境 owner 轮换。
 - reused_evidence: CLI `0.144.3` generated schema；相同源码/lockfile 下重复 gate 的 schema digest。
 - omitted_validation_and_reason: 未执行 Windows native launch，由跨平台 operation/package tests 覆盖；未执行 Java/frontend/SDK Worker tests，均不在变更面。
-- readiness: release upload and remote verification pending
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
