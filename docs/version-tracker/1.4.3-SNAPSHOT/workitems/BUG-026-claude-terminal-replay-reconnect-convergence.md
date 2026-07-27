@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-026
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: standard
@@ -86,8 +86,8 @@ open_questions: []
 - [x] AC-5: 连续 transport interruption 最多发布一次 recovery-pending STATE_SYNC，
   不重复发布 ERROR。
 - [x] AC-6: Python focused/full tests、Java addon focused tests 和 scoped diff check 通过。
-- [ ] AC-7: 仅本任务和此前 Claude updater 的已批准文件提交并推送 main，不夹带现有无关改动。
-- [ ] AC-8: Claude Worker `0.1.11` 从 clean commit 构建发布，OBS 远端摘要与本地一致。
+- [x] AC-7: 仅本任务和此前 Claude updater 的已批准文件提交并推送 main，不夹带现有无关改动。
+- [x] AC-8: Claude Worker `0.1.11` 从 clean commit 构建发布，OBS 远端摘要与本地一致。
 
 ## Contract / Data / Security Constraints
 
@@ -202,15 +202,22 @@ open_questions: []
   - PASS: Claude Worker 全量 `546 passed, 11 skipped`。
   - PASS: Claude addon 全量 `424 tests`。
   - PASS: scoped `git diff --check`。
+  - PASS: implementation commit `f0eb9b77` 与此前两个已批准 Claude commits
+    已推送 `origin/main`，staged path audit 未包含工作树中的其他改动。
+  - PASS: 从 `f0eb9b77` 的 `git archive` 隔离构建并发布 `0.1.11`；OBS
+    `latest.json`、三平台 archive 和安装器均反向下载并逐字节比对通过。
+  - PASS: 远端 SHA-256：
+    Linux/macOS `0debc79c73c9fb510066efbd231e2132806ad88f7cf28758966126eec29bd9ec`，
+    Windows `86b1b36be68cbdd653f7f79c218face9b64af3219fc57944f9fc6b12bcb6715f`。
 - manual_or_experience_evidence: 现场日志证明原任务先收到 ResultMessage 和一次
   subscribe 200，随后才出现多个 subscribe 404；修复测试精确覆盖该终态竞态。
 - deviations: none
-- residual_risks: 尚待 main push、clean-commit `0.1.11` 构建和 OBS 远端回读；
-  用户仍需自行更新 Java 与 Worker 并执行短任务 smoke。
+- residual_risks: 用户仍需自行更新 Java 与 Worker，并以一条短任务验证终态后不再
+  出现重复 transport 404；本轮未改变或重启运行实例。
 - reused_evidence: 既有 Claude terminal evidence/status persistence tests 与 Codex
   terminal-after-error 收敛模式。
 - omitted_validation_and_reason: 未重启或升级运行中的 Worker/Java，按用户约定由其后续更新。
-- readiness: ULTRA_EXECUTING
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
