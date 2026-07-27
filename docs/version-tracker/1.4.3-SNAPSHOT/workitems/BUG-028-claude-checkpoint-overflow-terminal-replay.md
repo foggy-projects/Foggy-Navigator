@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-028
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -86,7 +86,7 @@ open_questions: []
 - [x] AC-5: 现场任务和统一 `session_tasks` 投影进入终态，会话不再保持
   `interaction_state=PROCESSING`；终止操作留下真实 observed/converged 证据。
 - [x] AC-6: Claude addon affected tests 和 migration focused tests 实际通过。
-- [ ] AC-7: 只提交本 work item、实体、迁移及回归测试，推送 `origin/main`。
+- [x] AC-7: 只提交本 work item、实体、迁移及回归测试，推送 `origin/main`。
 
 ## Contract / Data / Security Constraints
 
@@ -200,7 +200,8 @@ open_questions: []
     -Dsurefire.failIfNoSpecifiedTests=false test`，13 tests，0 failure/error。
   - dependency-aligned addon:
     `mvn -pl addons/claude-worker-agent -am -DskipTests install` 成功；
-    随后 `mvn -pl addons/claude-worker-agent test`，423 tests，0 failure/error。
+    随后 `mvn -pl addons/claude-worker-agent test` 在初始基线为 423 tests，rebase
+    最新 `origin/main` 后为 427 tests，均为 0 failure/error。
   - affected reactor:
     `mvn test -pl addons/claude-worker-agent -am` 第二次运行中
     `navigator-common`、`navigator-spi`、`agent-framework`、`user-auth-module`、
@@ -219,6 +220,8 @@ open_questions: []
     `COMPLETED/OBSERVED`，`attention_code` 与 `failure_code` 均清空。
   - 后端日志确认消费 Worker `result` 事件后调用 `Task completed`；未执行任何任务、
     会话或 termination 状态修正 SQL。
+  - 实现提交 `d4e6146c` 已 fast-forward 推送至 `origin/main`；提交只包含本 work item
+    列出的实体、迁移、测试和交付文档。
 - deviations:
   - 计划的单条 `mvn test -pl addons/claude-worker-agent -am` 无法全绿，原因是当前
     `main` 的独立 business-agent 测试夹具缺少依赖 Bean；改用当前源码依赖快照安装后
@@ -237,7 +240,7 @@ open_questions: []
 - omitted_validation_and_reason:
   - 未运行 Worker Python tests/发布：Worker 协议和 Python 代码未变更。
   - 未运行前端、9443、Codex/Gemini/LangGraph 验证：均在 non-goal。
-- readiness: ULTRA_EXECUTING（AC-7 commit/push 待完成）
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
