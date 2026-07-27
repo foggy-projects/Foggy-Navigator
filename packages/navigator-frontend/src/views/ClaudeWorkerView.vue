@@ -5906,27 +5906,17 @@ async function handleLinkClick(paneId: string, payload: { href: string; text: st
   const dirId = task?.directoryId || selectedDirectoryId.value
   const wkId = task?.workerId || selectedWorkerId.value
 
-  if (!dirId) {
-    ElMessage.warning('当前未选择工作目录，无法定位文件')
-    return
-  }
-
   // 查找目录的根路径
-  const dir = workerState.directories.value.find(d => d.directoryId === dirId)
-  const dirRootPath = dir?.path
-  if (!dirRootPath) {
-    ElMessage.warning('无法获取工作目录路径')
-    return
-  }
+  const dir = dirId ? workerState.directories.value.find(d => d.directoryId === dirId) : undefined
 
   try {
     const resolution = await resolveChatLinkTarget({
       href: payload.href,
       text: payload.text,
       origin: window.location.origin,
-      directoryId: dirId,
+      directoryId: dirId || '',
       workerId: wkId,
-      directoryRoot: dirRootPath,
+      directoryRoot: dir?.path || '',
       searchFiles,
     })
 

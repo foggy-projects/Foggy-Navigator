@@ -7,6 +7,7 @@ const origin = 'http://dev-kvm-jdk17.foggysource.com'
 const directoryId = 'dir-1'
 const workerId = 'worker-1'
 const directoryRoot = 'D:/foggy-projects/Foggy-Navigator-wt-qd-win11-dev'
+const posixDirectoryRoot = '/home/sa/workspace/foggy-data-mcp'
 
 function makeSearchResponse(relativePaths: string[]): FileSearchResponse {
   return {
@@ -86,6 +87,189 @@ describe('resolveChatLinkTarget', () => {
     expect(result).toEqual({
       kind: 'open',
       url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2Fversion-tracker%2F1.0.0-SNAPSHOT%2F12-acceptance-signoff.md`,
+    })
+  })
+
+  it('opens a POSIX absolute workspace path without basename search', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: '/home/sa/workspace/foggy-data-mcp/foggy-data-mcp-bridge/docs/9.5.2/prototype/runtime-console-prototype.html',
+      text: 'runtime-console-prototype.html',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=foggy-data-mcp-bridge%2Fdocs%2F9.5.2%2Fprototype%2Fruntime-console-prototype.html`,
+    })
+  })
+
+  it('preserves encoded POSIX paths and trailing line numbers without search', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: '/home/sa/workspace/foggy-data-mcp/docs/%E8%BF%90%E8%A1%8C%E6%97%B6/runtime-console-prototype.html:42',
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2F%E8%BF%90%E8%A1%8C%E6%97%B6%2Fruntime-console-prototype.html&line=42`,
+    })
+  })
+
+  it.each([
+    ['hash', 'a%23b.md', 'a%23b.md'],
+    ['question mark', 'a%3Fb.md', 'a%3Fb.md'],
+  ])('preserves encoded %s characters in POSIX filenames', async (_label, encodedName, encodedParam) => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: `${posixDirectoryRoot}/docs/${encodedName}`,
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2F${encodedParam}`,
+    })
+  })
+
+  it('opens POSIX file URIs without dropping the root slash', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: 'file:///home/sa/workspace/foggy-data-mcp/docs/runtime-console-prototype.html',
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2Fruntime-console-prototype.html`,
+    })
+  })
+
+  it('keeps Windows file URIs compatible with workspace resolution', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: 'file:///D:/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/docs/README.md',
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2FREADME.md`,
+    })
+  })
+
+  it('opens the POSIX workspace root without search', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: `${posixDirectoryRoot}/`,
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}`,
+    })
+  })
+
+  it('rejects POSIX absolute paths outside the workspace without basename fallback', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: '/home/sa/workspace/other-project/runtime-console-prototype.html',
+      text: 'runtime-console-prototype.html',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'warn',
+      message: '该链接不在当前工作目录下，无法自动定位',
+    })
+  })
+
+  it('keeps POSIX containment case-sensitive', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: '/home/sa/Workspace/foggy-data-mcp/runtime-console-prototype.html',
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'warn',
+      message: '该链接不在当前工作目录下，无法自动定位',
+    })
+  })
+
+  it('rejects absolute paths that escape the workspace through parent segments', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: '/home/sa/workspace/foggy-data-mcp/../other-project/runtime-console-prototype.html',
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot: posixDirectoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'warn',
+      message: '该链接不在当前工作目录下，无法自动定位',
     })
   })
 
@@ -205,6 +389,26 @@ describe('resolveChatLinkTarget', () => {
       directoryId,
       workerId,
       directoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: 'https://example.com/docs',
+    })
+  })
+
+  it('preserves external http links without a selected workspace', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: 'https://example.com/docs',
+      text: 'external',
+      origin,
+      directoryId: '',
+      workerId: null,
+      directoryRoot: '',
       searchFiles,
     })
 
