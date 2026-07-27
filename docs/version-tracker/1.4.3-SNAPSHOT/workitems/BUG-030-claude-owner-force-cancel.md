@@ -212,12 +212,19 @@ open_questions: []
   - 变更前只读核验目标任务已有 1142 ACK/checkpoint、Worker 持久状态为
     `ACTIVE_TASK_EXECUTION / PROCESS_UNVERIFIED`、精确 CLI 已不存在；普通 cancel
     因目标 Worker 未配置 stable Navigator Worker ID 返回 503。
+  - Claude Worker `0.1.13` 已发布到 `obs://obs-fe55/claude-worker/0.1.13/`，
+    `latest.json` 已指向三平台 `0.1.13` 制品；公网清单、安装脚本和三个制品均返回
+    HTTP 200，远端包内 `VERSION` 为 `0.1.13`。
+  - 发布后逐字节 SHA-256：
+    Linux/macOS `ec4a1f3fec56f3a0ad798ed8f95c5be1136656caf99d5ef68196492727cf66d0`，
+    Windows `c1bbf0830ba22ea88e8998a5e66d23efdadd289ef2a321da2ab6997978940edb`。
   - 未对目标任务改库、未重启 `/home/sa/.claude-worker`，也未运行真实 destructive
     E2E；按本 spec waiver 延后至部署后的 disposable owned task 验收。
 - deviations: none
 - residual_risks:
-  - 部署时必须同时更新 Java/前端与 Claude Worker `0.1.13`，并为目标安装配置正确的
-    `AGENT_WORKER_NAVIGATOR_WORKER_ID`；否则 signed termination 继续 fail closed。
+  - Claude Worker `0.1.13` 已发布但尚未安装到目标 runtime；部署时仍须更新 Java/前端，
+    并为目标安装配置正确的 `AGENT_WORKER_NAVIGATOR_WORKER_ID`，否则 signed
+    termination 继续 fail closed。
   - 强制中止不会回滚已完成的工具、文件或外部系统副作用，且可能丢失末尾模型输出。
   - 部署环境真实 process kill 尚未执行；自动化已覆盖精确 PID 被杀、无关 PID 保留、
     无 PID 持久任务收口和错误路径不伪造终态。
