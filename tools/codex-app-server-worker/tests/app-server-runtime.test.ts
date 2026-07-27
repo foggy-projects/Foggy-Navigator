@@ -41,6 +41,7 @@ class FakeProcess extends EventEmitter {
       | 'running-after-start' | 'progress-before-complete' | 'noise-before-stall' | 'interactive-request' | 'unknown-server-request'
       | 'server-resolved-request' | 'unexpected-image-generation',
     private readonly apiKeyLoginBehavior?: 'error' | 'invalid',
+    private readonly compactBehavior: 'thread-compacted' | 'context-item' | 'stall' = 'thread-compacted',
   ) {
     super()
     this.stdin.on('data', chunk => {
@@ -218,31 +219,54 @@ class FakeProcess extends EventEmitter {
       }
     }
     if (message.method === 'thread/compact/start') {
-      this.send({ id: message.id, result: { turn: { id: 'compact-turn-1', status: 'inProgress' } } })
-      this.send({
-        method: 'thread/tokenUsage/updated',
-        params: {
-          threadId: this.threadId,
-          turnId: 'other-turn',
-          tokenUsage: { last: { totalTokens: 999 }, modelContextWindow: 1_000 },
+      if (this.compactBehavior === 'stall') {
+        this.send({ id: message.id, result: {} })
+        return
+      }
+      const compactTurnId = this.compactBehavior === 'context-item' ? 'compact-turn-2' : 'compact-turn-1'
+      const compactCompletion = this.compactBehavior === 'context-item'
+        ? {
+            method: 'item/completed',
+            params: {
+              threadId: this.threadId,
+              turnId: compactTurnId,
+              completedAtMs: Date.now(),
+              item: { id: 'compact-item-1', type: 'contextCompaction' },
+            },
+          }
+        : {
+            method: 'thread/compacted',
+            params: { threadId: this.threadId, turnId: compactTurnId },
+          }
+      this.stdout.write([
+        { id: message.id, result: {} },
+        {
+          method: 'thread/compacted',
+          params: { threadId: 'other-thread', turnId: 'other-thread-turn' },
         },
-      })
-      this.send({
-        method: 'turn/completed',
-        params: { threadId: this.threadId, turn: { id: 'other-turn', status: 'completed' } },
-      })
-      this.send({
-        method: 'thread/tokenUsage/updated',
-        params: {
-          threadId: this.threadId,
-          turnId: 'compact-turn-1',
-          tokenUsage: { last: { totalTokens: 12_345 }, modelContextWindow: 270_000 },
+        {
+          method: 'turn/completed',
+          params: { threadId: this.threadId, turn: { id: 'ordinary-turn', status: 'completed' } },
         },
-      })
-      this.send({
-        method: 'turn/completed',
-        params: { threadId: this.threadId, turn: { id: 'compact-turn-1', status: 'completed' } },
-      })
+        {
+          method: 'item/completed',
+          params: {
+            threadId: this.threadId,
+            turnId: 'ordinary-turn',
+            completedAtMs: Date.now(),
+            item: { id: 'message-item-1', type: 'agentMessage', text: 'not a compaction' },
+          },
+        },
+        {
+          method: 'thread/tokenUsage/updated',
+          params: {
+            threadId: this.threadId,
+            turnId: compactTurnId,
+            tokenUsage: { last: { totalTokens: 12_345 }, modelContextWindow: 270_000 },
+          },
+        },
+        compactCompletion,
+      ].map(event => JSON.stringify(event)).join('\n') + '\n')
     }
     if (message.id === 'server-input-1' && (message.result || message.error)) {
       this.send({
@@ -1487,14 +1511,86 @@ test('manual thread compaction correlates its own terminal turn and usage notifi
   assert.equal(result.turn.id, 'compact-turn-1')
   assert.equal(result.turn.status, 'completed')
   assert.equal(notifications.some(notification => notification.params?.turnId === 'other-turn'), false)
+  assert.equal(notifications.some(notification => notification.method === 'turn/completed'), false)
   assert.equal(notifications.some(notification => (
     notification.method === 'thread/tokenUsage/updated'
+      && notification.params?.turnId === 'compact-turn-1'
+  )), true)
+  assert.equal(notifications.some(notification => (
+    notification.method === 'thread/compacted'
       && notification.params?.turnId === 'compact-turn-1'
   )), true)
   assert.deepEqual(received.filter(message => message.method === 'thread/compact/start').map(message => message.params), [
     { threadId: 'thread-compact' },
   ])
   await instance.close()
+})
+
+test('manual thread compaction accepts a completed ContextCompaction item', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, undefined, undefined, 'context-item')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+  })
+  const notifications: JsonMessage[] = []
+  const result = await instance.compactThread({
+    threadId: 'thread-compact-item',
+    model: 'gpt-5.6-sol',
+    cwd: '/tmp',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    codexConfig: {},
+    signal: new AbortController().signal,
+    onNotification: notification => notifications.push(notification),
+  })
+
+  assert.equal(result.threadId, 'thread-compact-item')
+  assert.equal(result.turn.id, 'compact-turn-2')
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(notifications.some(notification => (
+    notification.method === 'item/completed'
+      && notification.params?.turnId === 'compact-turn-2'
+      && notification.params?.item?.type === 'contextCompaction'
+  )), true)
+  assert.equal(notifications.some(notification => notification.method === 'turn/completed'), false)
+  await instance.close()
+})
+
+test('aborted compaction without a correlated completion remains fail closed', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, undefined, undefined, 'stall')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+  })
+  const controller = new AbortController()
+  const running = instance.compactThread({
+    threadId: 'thread-compact-stall',
+    model: 'gpt-5.6-sol',
+    cwd: '/tmp',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    codexConfig: {},
+    signal: controller.signal,
+    interruptTimeoutMs: 20,
+    onNotification: () => undefined,
+  })
+  for (let index = 0; index < 50 && !received.some(message => message.method === 'thread/compact/start'); index++) {
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+  controller.abort()
+
+  await assert.rejects(running, error => (
+    error instanceof AppServerRuntimeError
+      && error.code === 'APP_SERVER_COMPACT_ABORT_UNCONFIRMED'
+      && error.turnMayHaveStarted
+  ))
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
+  assert.equal(instance.requiresAttention(), true)
+  assert.equal(process.killed, false)
+  await instance.forceTerminateForAuthorizedOperation(100)
+  assert.equal(process.killed, true)
 })
 
 test('independent package pins the CLI and has no Codex SDK dependency', () => {

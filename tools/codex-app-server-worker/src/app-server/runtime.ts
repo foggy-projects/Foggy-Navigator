@@ -1040,8 +1040,8 @@ export class AppServerRuntimeInstance {
   ): Promise<AppServerTurnResult> {
     let turnId: string | undefined
     let requestIssued = false
-    let notificationsReady = false
     let interruptSent = false
+    let compactCompleted = false
     let abortTimer: NodeJS.Timeout | undefined
     const terminal = deferred<Record<string, unknown>>()
     void terminal.promise.catch(() => undefined)
@@ -1052,27 +1052,43 @@ export class AppServerRuntimeInstance {
         || readString(asRecord(notification.params.turn)?.id)
       return notificationTurnId === turnId
     }
-    const dispatch = (notification: AppServerNotification): void => {
+    const dispatchMatching = (notification: AppServerNotification): void => {
       if (!isMatching(notification)) return
       options.onNotification(notification)
-      if (notification.method === 'turn/completed') {
-        context.providerTerminalObserved = true
-        this.observedProviderTerminals.set(context.id, { threadId: options.threadId, turnId })
-        terminal.resolve(asRecord(notification.params?.turn) || {})
+    }
+    const observeCompactCompletion = (completion: CompactCompletion): void => {
+      if (compactCompleted) return
+      turnId = completion.turnId
+      context.turnId = completion.turnId
+      context.providerTerminalObserved = true
+      this.observedProviderTerminals.set(context.id, {
+        threadId: options.threadId,
+        turnId: completion.turnId,
+      })
+      compactCompleted = true
+      for (const notification of pending.splice(0)) dispatchMatching(notification)
+      terminal.resolve(completion.turn)
+    }
+    const bufferAndCorrelate = (notification: AppServerNotification): void => {
+      if (notification.params?.threadId !== options.threadId) return
+      if (pending.length >= MAX_PENDING_TURN_NOTIFICATIONS) {
+        throw new Error('Codex app-server emitted too many notifications before compact completion correlation')
       }
+      pending.push(notification)
+      const completion = readCompactCompletion(notification, options.threadId)
+      if (completion) observeCompactCompletion(completion)
     }
     context.onNotification = notification => {
-      if (requestIssued && !notificationsReady) {
-        if (pending.length >= MAX_PENDING_TURN_NOTIFICATIONS) {
-          throw new Error('Codex app-server emitted too many notifications before compact turn correlation')
-        }
-        pending.push(notification)
+      if (!requestIssued) return
+      if (!compactCompleted) {
+        bufferAndCorrelate(notification)
         return
       }
-      dispatch(notification)
+      dispatchMatching(notification)
     }
     context.onFatal = error => terminal.reject(error)
     const abort = (): void => {
+      if (compactCompleted) return
       if (!requestIssued) {
         terminal.reject(new AppServerRuntimeError('Codex app-server compaction aborted before start', {
           executionCommitted: false,
@@ -1091,7 +1107,7 @@ export class AppServerRuntimeInstance {
       if (!abortTimer) {
         abortTimer = setTimeout(() => {
           const error = new AppServerRuntimeError(
-            'Codex app-server did not report a terminal compact turn after turn/interrupt',
+            'Codex app-server did not report compact completion after abort',
             {
               executionCommitted: true,
               turnMayHaveStarted: true,
@@ -1121,18 +1137,13 @@ export class AppServerRuntimeInstance {
       throwIfAborted(options.signal, options.threadId)
       requestIssued = true
       context.turnRequestIssued = true
-      const response = await Promise.race([
+      await Promise.race([
         this.client.request('thread/compact/start', { threadId: options.threadId }),
         terminal.promise.then(
           () => new Promise<Record<string, unknown>>(() => undefined),
           error => Promise.reject(error),
         ),
       ])
-      turnId = readString(asRecord(response.turn)?.id)
-      if (!turnId) throw new Error('Codex app-server did not return a compact turn id')
-      context.turnId = turnId
-      notificationsReady = true
-      for (const notification of pending.splice(0)) dispatch(notification)
       if (options.signal.aborted) abort()
       const turn = await terminal.promise
       await this.client.request('thread/unsubscribe', { threadId: options.threadId }, {
@@ -1177,6 +1188,27 @@ function isDisabledImageGenerationNotification(
   if (codexConfig['features.image_generation'] !== false) return false
   if (notification.method !== 'item/started' && notification.method !== 'item/completed') return false
   return asRecord(notification.params?.item)?.type === 'imageGeneration'
+}
+
+interface CompactCompletion {
+  turnId: string
+  turn: Record<string, unknown>
+}
+
+function readCompactCompletion(
+  notification: AppServerNotification,
+  threadId: string,
+): CompactCompletion | undefined {
+  const params = notification.params || {}
+  if (params.threadId !== threadId) return undefined
+  if (notification.method === 'thread/compacted') {
+    const turnId = readString(params.turnId)
+    return turnId ? { turnId, turn: { id: turnId, status: 'completed' } } : undefined
+  }
+  if (notification.method !== 'item/completed') return undefined
+  if (asRecord(params.item)?.type !== 'contextCompaction') return undefined
+  const turnId = readString(params.turnId)
+  return turnId ? { turnId, turn: { id: turnId, status: 'completed' } } : undefined
 }
 
 function isMeaningfulTurnProgress(
