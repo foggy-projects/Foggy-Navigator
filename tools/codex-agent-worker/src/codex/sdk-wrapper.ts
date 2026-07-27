@@ -49,6 +49,7 @@ import { normalizeCodexReasoningEffort, type CodexReasoningEffort } from './reas
 import { pathApiFor } from '../path-guards.js'
 
 const moduleRequire = createRequire(import.meta.url)
+const NAVIGATOR_GATEWAY_MODEL_PROVIDER = 'navigator_gateway'
 
 export type CodexRunOptions = {
   codexHomeKey?: string
@@ -77,6 +78,57 @@ export type RunQueryDependencies = {
   cancellationPollIntervalMs?: number
   prepareResumeToolsModelCatalog?: typeof prepareResumeToolsModelCatalog
   completionReceiptStore?: CompletionReceiptStore
+}
+
+export function configureCustomGatewayProvider(
+  codexConfig: Record<string, unknown>,
+  baseUrl: string | undefined,
+): void {
+  if (!baseUrl) return
+
+  const configuredProviders = codexConfig.model_providers
+  const modelProviders = configuredProviders
+    && typeof configuredProviders === 'object'
+    && !Array.isArray(configuredProviders)
+    ? configuredProviders as Record<string, unknown>
+    : {}
+
+  codexConfig.model_provider = NAVIGATOR_GATEWAY_MODEL_PROVIDER
+  codexConfig.model_providers = {
+    ...modelProviders,
+    [NAVIGATOR_GATEWAY_MODEL_PROVIDER]: {
+      name: 'Navigator Gateway',
+      base_url: baseUrl,
+      env_key: 'CODEX_API_KEY',
+      wire_api: 'responses',
+      requires_openai_auth: false,
+    },
+  }
+}
+
+export function buildCodexConfig(
+  envVars: Record<string, string> | undefined,
+  requestedConfig: Record<string, unknown> | undefined,
+  baseUrl: string | undefined,
+): Record<string, unknown> {
+  const codexConfig: Record<string, unknown> = {
+    tool_output_token_limit: 10000,
+  }
+  if (envVars) {
+    const codexConfigKeys = ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']
+    for (const key of codexConfigKeys) {
+      const val = envVars[key]
+      if (val != null && val !== '') {
+        const num = Number(val)
+        codexConfig[key] = Number.isNaN(num) ? val : num
+      }
+    }
+  }
+  if (requestedConfig) {
+    Object.assign(codexConfig, requestedConfig)
+  }
+  configureCustomGatewayProvider(codexConfig, baseUrl)
+  return codexConfig
 }
 
 /**
@@ -1506,32 +1558,12 @@ export async function runQuery(
     if (effectiveApiKey) {
       codexOptions.apiKey = effectiveApiKey
     }
-    if (effectiveBaseUrl) {
-      codexOptions.baseUrl = effectiveBaseUrl
-    }
     console.log(
       `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${effectiveReasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(scopedCodexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
     )
 
-    // Codex CLI 配置项默认值 + envVars 覆盖
-    const codexConfigDefaults: Record<string, number> = {
-      tool_output_token_limit: 10000,
-      model_auto_compact_token_limit: 140000,
-    }
-    const codexConfig: Record<string, unknown> = { ...codexConfigDefaults }
-    if (envVars) {
-      const codexConfigKeys = ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']
-      for (const key of codexConfigKeys) {
-        const val = envVars[key]
-        if (val != null && val !== '') {
-          const num = Number(val)
-          codexConfig[key] = Number.isNaN(num) ? val : num
-        }
-      }
-    }
-    if (runOptions.codexConfig) {
-      Object.assign(codexConfig, runOptions.codexConfig)
-    }
+    // Codex CLI defaults, explicit overrides, and custom gateway routing.
+    const codexConfig = buildCodexConfig(envVars, runOptions.codexConfig, effectiveBaseUrl)
     // The model suffix is the most specific request-level choice and must win over generic config.
     // Use the SDK's public config channel because SDK 0.144.1 types do not yet list max.
     applyResolvedReasoningEffort(codexConfig, effectiveReasoningLevel)

@@ -11,6 +11,7 @@ import {
   assertNavigatorBusinessMcpCredentialIsolation,
   asCollabToolCallItem,
   buildCodexInput,
+  buildCodexConfig,
   buildCodexProcessEnv,
   buildCodexTaskEnv,
   CODEX_ULTRA_APP_SERVER_REQUIRED,
@@ -109,6 +110,52 @@ test('applyResolvedReasoningEffort lets explicit model suffix override generic c
   assert.deepEqual(codexConfig, {
     model_reasoning_effort: 'max',
     tool_output_token_limit: 10000,
+  })
+})
+
+test('buildCodexConfig leaves automatic compaction at the model default unless explicitly overridden', () => {
+  const defaults = buildCodexConfig(undefined, undefined, undefined)
+  assert.equal(defaults.model_auto_compact_token_limit, undefined)
+  assert.equal(defaults.tool_output_token_limit, 10000)
+
+  const overridden = buildCodexConfig(
+    { model_auto_compact_token_limit: '175000' },
+    undefined,
+    undefined,
+  )
+  assert.equal(overridden.model_auto_compact_token_limit, 175000)
+})
+
+test('buildCodexConfig declares a request base URL as a custom Responses provider', () => {
+  const codexConfig = buildCodexConfig(
+    undefined,
+    {
+      model_provider: 'openai',
+      model_providers: {
+        retained_provider: {
+          name: 'Retained Provider',
+          base_url: 'https://retained.example.com/v1',
+          wire_api: 'responses',
+        },
+      },
+    },
+    'https://gateway.example.com/v1',
+  )
+
+  assert.equal(codexConfig.model_provider, 'navigator_gateway')
+  assert.deepEqual(codexConfig.model_providers, {
+    retained_provider: {
+      name: 'Retained Provider',
+      base_url: 'https://retained.example.com/v1',
+      wire_api: 'responses',
+    },
+    navigator_gateway: {
+      name: 'Navigator Gateway',
+      base_url: 'https://gateway.example.com/v1',
+      env_key: 'CODEX_API_KEY',
+      wire_api: 'responses',
+      requires_openai_auth: false,
+    },
   })
 })
 
@@ -951,12 +998,26 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
       runOptions,
       dependencies
     )
+    await runQuery(
+      'task-shell-custom-gateway',
+      'run pwd through gateway',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      'sk-test',
+      'https://gateway.example.com/v1',
+      undefined,
+      runOptions,
+      dependencies
+    )
 
     const firstEvents = taskBroadcasts.get('task-shell-first')?.getEventsAfter(0) ?? []
     const resumeEvents = taskBroadcasts.get('task-shell-resume')?.getEventsAfter(0) ?? []
     assert.equal(firstEvents.some(event => event.type === 'tool_use' && event.tool === 'command_execution'), true)
     assert.equal(resumeEvents.some(event => event.type === 'tool_use' && event.tool === 'command_execution'), true)
-    assert.deepEqual(resumedThreadOptions, startedThreadOptions)
+    assert.deepEqual(resumedThreadOptions[0], startedThreadOptions[0])
     assert.equal(createdOptions[0]?.config?.model_catalog_json, undefined)
     assert.equal(typeof createdOptions[1]?.config?.model_catalog_json, 'string')
     assert.equal(createdOptions[0]?.env?.CODEX_HOME, appConfig.codexHome)
@@ -967,12 +1028,20 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
     assert.equal(compatibilityCatalogs[0]?.models[0]?.marker, 'preserve-model-metadata')
     assert.equal(createdOptions[0]?.config?.developer_instructions, 'keep the current developer instructions')
     assert.equal(createdOptions[1]?.config?.developer_instructions, 'keep the current developer instructions')
+    assert.equal(createdOptions[2]?.baseUrl, undefined)
+    assert.equal(createdOptions[2]?.config?.model_provider, 'navigator_gateway')
+    assert.equal(
+      createdOptions[2]?.config?.model_providers?.navigator_gateway?.base_url,
+      'https://gateway.example.com/v1',
+    )
     await assert.rejects(fs.access(createdOptions[1]?.config?.model_catalog_json), { code: 'ENOENT' })
   } finally {
     taskBroadcasts.delete('task-shell-first')
     taskBroadcasts.delete('task-shell-resume')
     taskRegistry.delete('task-shell-first')
     taskRegistry.delete('task-shell-resume')
+    taskBroadcasts.delete('task-shell-custom-gateway')
+    taskRegistry.delete('task-shell-custom-gateway')
   }
 })
 
