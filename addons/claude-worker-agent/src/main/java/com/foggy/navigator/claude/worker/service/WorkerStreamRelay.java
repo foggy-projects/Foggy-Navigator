@@ -26,6 +26,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -92,6 +94,12 @@ public class WorkerStreamRelay {
 
     /** 每个任务的重连互斥锁，防止 doOnComplete/doOnError/Reconciler 并发触发多次重连 */
     private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
+
+    /** 每个任务最多一个延迟恢复，终态或显式 abort 时取消。 */
+    private final ConcurrentHashMap<String, Disposable> scheduledRecoveries = new ConcurrentHashMap<>();
+
+    /** transport interruption 只向会话发布一次 pending 提示，恢复或终态后清除。 */
+    private final ConcurrentHashMap<String, Boolean> recoveryNotified = new ConcurrentHashMap<>();
 
     private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
 
@@ -172,7 +180,7 @@ public class WorkerStreamRelay {
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
 
-            activeStreams.put(taskId, subscription);
+            registerActiveStream(taskId, subscription);
 
             // 发布跨 Agent 任务开始事件
             eventPublisher.publishEvent(TaskStartedEvent.builder()
@@ -187,13 +195,8 @@ public class WorkerStreamRelay {
             log.error("Failed to start stream relay: taskId={}, errorCode={}, errorType={}", taskId,
                     remoteDiagnosticCode(e), exceptionType(e));
             taskService.markLifecycleAttention(taskId, STREAM_CONNECT_UNCONFIRMED);
-            publishMessage(sessionId, MessageType.ERROR,
-                    Map.of("content", "Worker stream connection is unconfirmed; task remains pending.",
-                            "taskId", taskId,
-                            "attentionStatus", STREAM_CONNECT_UNCONFIRMED));
-            if (!attemptReconnect(taskId, sessionId, workerId, 0)) {
-                log.info("Initial Worker stream recovery deferred to Reconciler: taskId={}", taskId);
-            }
+            publishRecoveryPending(sessionId, taskId, STREAM_CONNECT_UNCONFIRMED);
+            scheduleRecovery(taskId, sessionId, workerId, 0);
         }
     }
 
@@ -211,10 +214,15 @@ public class WorkerStreamRelay {
      * 不会发布 SESSION_START 或 TaskStartedEvent（任务已经在进行中）。
      */
     public void reconnectTask(String taskId, String sessionId, String workerId) {
-        if (activeStreams.containsKey(taskId)) {
+        reconnectTask(taskId, sessionId, workerId, 0);
+    }
+
+    private void reconnectTask(String taskId, String sessionId, String workerId, int reconnectAttempt) {
+        if (hasActiveStream(taskId)) {
             log.debug("reconnectTask: task {} already has active stream, skipping", taskId);
             return;
         }
+        activeStreams.remove(taskId);
 
         // 互斥锁：防止 doOnComplete/doOnError/Reconciler/启动重连 并发触发多次重连
         AtomicBoolean guard = reconnecting.computeIfAbsent(taskId, k -> new AtomicBoolean(false));
@@ -226,19 +234,21 @@ public class WorkerStreamRelay {
         log.info("Reconnecting stream: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
 
         try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-            ClaudeWorkerClient client = workerService.createClient(worker);
             ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
             if (entity == null) {
                 log.warn("reconnectTask: task {} not found in repository", taskId);
+                clearStreamTracking(taskId);
                 return;
             }
             if (!isRecoverableTaskStatus(entity.getStatus())) {
                 log.info("reconnectTask: task {} is not recoverable (status={}), skipping",
                         taskId, entity.getStatus());
+                clearStreamTracking(taskId);
                 return;
             }
 
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+            ClaudeWorkerClient client = workerService.createClient(worker);
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(entity.getClaudeSessionId());
 
@@ -251,29 +261,21 @@ public class WorkerStreamRelay {
             int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
             String subscribeTaskId = resolveWorkerTaskLookupId(entity);
             if (isClosedAndAligned(client, subscribeTaskId, ackSeq, taskId, "reconnectTask")) {
-                lastAckedSeq.remove(taskId);
+                clearStreamTracking(taskId);
                 return;
             }
             log.info("reconnectTask ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
-                    detectedModel, detectedClaudeSessionId, 0);
+                    detectedModel, detectedClaudeSessionId, reconnectAttempt);
 
-            activeStreams.put(taskId, subscription);
-
-            // Reset interactionState to PROCESSING — the previous SSE disconnect
-            // may have left it as AWAITING_REPLY via handleStreamDisconnect path.
-            conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
-
-            // Push a STATE_SYNC so the frontend knows the task stream is reconnected
-            publishMessage(sessionId, MessageType.STATE_SYNC,
-                    Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));
+            registerActiveStream(taskId, subscription);
 
         } catch (Exception e) {
             log.warn("Failed to reconnect task {}: errorCode={}, errorType={}", taskId,
                     remoteDiagnosticCode(e), exceptionType(e));
-            // Don't fail the task — Reconciler will handle it if CLI is truly dead.
+            scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
         } finally {
             guard.set(false);
         }
@@ -367,6 +369,13 @@ public class WorkerStreamRelay {
                         log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                         WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
                         log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
+                        if (recoveryNotified.remove(taskId) != null) {
+                            conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
+                            publishMessage(sessionId, MessageType.STATE_SYNC,
+                                    Map.of("content", "Task stream reconnected",
+                                            "subtype", "reconnected",
+                                            "taskId", taskId));
+                        }
                         // An ESN identifies a replayable Worker event. Its ACK may only
                         // advance after the corresponding message has been durably stored.
                         // The old counter protocol follows the same local ordering: do
@@ -433,21 +442,12 @@ public class WorkerStreamRelay {
                         String status = taskOpt.get().getStatus();
                         if (TERMINAL_STATES.contains(status)) {
                             log.info("Task {} already in terminal state ({}), skipping reconnect", taskId, status);
-                            lastAckedSeq.remove(taskId);
+                            clearStreamTracking(taskId);
                             return;
                         }
                     }
 
-                    // Infinite reconnect with capped exponential backoff (Rule 2: never auto-fail)
-                    boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                    if (reconnected) {
-                        return;
-                    }
-
-                    // Reconnect failed — defer to Reconciler for lifecycle management.
-                    // Do NOT call handleStreamDisconnect here; Reconciler will detect CLI state.
-                    log.info("SSE reconnect attempt failed for task {} — Reconciler will manage lifecycle", taskId);
-                    // Keep lastAckedSeq for future reconnect by Reconciler
+                    scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
                 })
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}, errorCode={}, errorType={}", taskId,
@@ -460,6 +460,13 @@ public class WorkerStreamRelay {
                         return;
                     }
 
+                    if (isLocalTerminalTask(taskId)) {
+                        log.info("Ignoring Worker stream error after terminal task: taskId={}, type={}",
+                                taskId, exceptionType(e));
+                        clearStreamTracking(taskId);
+                        return;
+                    }
+
                     if (e instanceof DurableWorkerEventPersistenceException) {
                         // The Worker event itself was not durably recorded,
                         // so do not write lifecycle/UI side effects that
@@ -467,10 +474,7 @@ public class WorkerStreamRelay {
                         // it replays the same ESN and leaves the cursor at
                         // its prior acknowledged value.
                         log.warn("Worker event persistence failed; retaining replay cursor: taskId={}", taskId);
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                        if (!reconnected) {
-                            log.info("SSE replay recovery deferred for task {} after persistence failure", taskId);
-                        }
+                        scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
                         return;
                     }
 
@@ -479,112 +483,108 @@ public class WorkerStreamRelay {
                     // accepted. Keep the task pending and retain its replay
                     // cursor instead of fabricating FAILED.
                     taskService.markLifecycleAttention(taskId, STREAM_TRANSPORT_UNCONFIRMED);
-                    publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", safeTransportDiagnostic(e),
-                                    "taskId", taskId,
-                                    "attentionStatus", STREAM_TRANSPORT_UNCONFIRMED));
+                    publishRecoveryPending(sessionId, taskId, STREAM_TRANSPORT_UNCONFIRMED);
 
-                    // Retry every transport failure with capped backoff.  If
-                    // recovery cannot start, the Reconciler retains the task
-                    // pending and later replays any Worker terminal evidence.
-                    boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                    if (reconnected) {
-                        return;
-                    }
-
-                    // Reconnect failed — defer to Reconciler for lifecycle management.
-                    log.info("SSE reconnect attempt failed for task {} after error — Reconciler will manage lifecycle", taskId);
-                    // Keep lastAckedSeq for future reconnect by Reconciler
+                    scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
                 })
                 .subscribe(ignored -> { }, error -> { });
     }
 
     /**
-     * 尝试通过 Worker subscribe 端点重连，带指数退避。
-     * 仅当任务仍可消费 Worker 证据时尝试。
-     *
-     * @param currentAttempt 当前重连次数（0-based），下次将传 currentAttempt+1
-     * @return true 如果重连成功启动
+     * Schedule a non-blocking, per-task deduplicated recovery.  The scheduled
+     * callback re-reads the durable task state so a terminal transition that
+     * commits during backoff cancels the reconnect before any Worker request.
      */
-    private boolean attemptReconnect(String taskId, String sessionId, String workerId, int currentAttempt) {
-        // 互斥锁：防止并发重连
-        AtomicBoolean guard = reconnecting.computeIfAbsent(taskId, k -> new AtomicBoolean(false));
-        if (!guard.compareAndSet(false, true)) {
-            log.debug("attemptReconnect: task {} reconnection already in progress, skipping", taskId);
+    private void scheduleRecovery(String taskId, String sessionId, String workerId, int currentAttempt) {
+        if (isLocalTerminalTask(taskId)) {
+            clearStreamTracking(taskId);
+            return;
+        }
+
+        int nextAttempt = currentAttempt + 1;
+        long delayMs = Math.min(
+                (long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS,
+                MAX_RECONNECT_BACKOFF_MS);
+        AtomicReference<Disposable> scheduledRef = new AtomicReference<>();
+        Disposable scheduled = Schedulers.boundedElastic().schedule(() -> {
+            scheduledRecoveries.remove(taskId, scheduledRef.get());
+            ClaudeTaskEntity task;
+            try {
+                task = taskRepository.findByTaskId(taskId).orElse(null);
+            } catch (Exception repositoryError) {
+                log.warn("Cannot inspect Claude task before scheduled recovery: taskId={}, type={}",
+                        taskId, exceptionType(repositoryError));
+                scheduleRecovery(taskId, sessionId, workerId, nextAttempt);
+                return;
+            }
+            if (task == null || TERMINAL_STATES.contains(task.getStatus())) {
+                clearStreamTracking(taskId);
+                return;
+            }
+            reconnectTask(taskId, task.getSessionId(), task.getWorkerId(), nextAttempt);
+        }, delayMs, TimeUnit.MILLISECONDS);
+        scheduledRef.set(scheduled);
+
+        Disposable previous = scheduledRecoveries.putIfAbsent(taskId, scheduled);
+        if (previous != null && !scheduled.isDisposed()) {
+            scheduled.dispose();
+            return;
+        }
+        log.info("Scheduled Claude stream recovery in {}ms: taskId={}, attempt={}",
+                delayMs, taskId, nextAttempt);
+    }
+
+    private void registerActiveStream(String taskId, Disposable subscription) {
+        if (subscription == null || subscription.isDisposed()) {
+            return;
+        }
+        cancelScheduledRecovery(taskId);
+        Disposable previous = activeStreams.put(taskId, subscription);
+        if (previous != null && previous != subscription && !previous.isDisposed()) {
+            previous.dispose();
+        }
+    }
+
+    private void publishRecoveryPending(String sessionId, String taskId, String attentionStatus) {
+        if (recoveryNotified.putIfAbsent(taskId, Boolean.TRUE) == null) {
+            publishMessage(sessionId, MessageType.STATE_SYNC,
+                    Map.of("content", "Claude Worker stream recovery is pending.",
+                            "subtype", "reconnect_pending",
+                            "reconnectable", true,
+                            "taskId", taskId,
+                            "attentionStatus", attentionStatus));
+        }
+    }
+
+    private boolean isLocalTerminalTask(String taskId) {
+        try {
+            return taskRepository.findByTaskId(taskId)
+                    .map(ClaudeTaskEntity::getStatus)
+                    .map(TERMINAL_STATES::contains)
+                    .orElse(false);
+        } catch (Exception repositoryError) {
+            log.warn("Cannot inspect Claude task terminal state: taskId={}, type={}",
+                    taskId, exceptionType(repositoryError));
             return false;
         }
-        try {
-            // Check if the task is still active in DB
-            var taskOpt = taskRepository.findByTaskId(taskId);
-            if (taskOpt.isEmpty()) return false;
-            String status = taskOpt.get().getStatus();
-            if (!isRecoverableTaskStatus(status)) {
-                return false;
-            }
+    }
 
-            int nextAttempt = currentAttempt + 1;
-            long delayMs = Math.min((long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS, MAX_RECONNECT_BACKOFF_MS);
-            log.info("Attempting SSE reconnection (attempt {}) for task {} (status={}), backoff={}ms",
-                    nextAttempt, taskId, status, delayMs);
+    private void clearStreamTracking(String taskId) {
+        Disposable subscription = activeStreams.remove(taskId);
+        if (subscription != null && !subscription.isDisposed()) {
+            subscription.dispose();
+        }
+        cancelScheduledRecovery(taskId);
+        lastAckedSeq.remove(taskId);
+        reconnecting.remove(taskId);
+        recoveryNotified.remove(taskId);
+        workerTaskIdMap.remove(taskId);
+    }
 
-            Thread.sleep(delayMs);
-
-            // Re-check task status after sleep — task may have completed during the backoff delay
-            // (e.g. a "result" event arrived on a concurrent stream while we were sleeping)
-            var freshTaskOpt = taskRepository.findByTaskId(taskId);
-            if (freshTaskOpt.isPresent()) {
-                String freshStatus = freshTaskOpt.get().getStatus();
-                if (!isRecoverableTaskStatus(freshStatus)) {
-                    log.info("Task {} status changed to {} during reconnect backoff, aborting reconnect", taskId, freshStatus);
-                    return false;
-                }
-            }
-
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-            ClaudeWorkerClient client = workerService.createClient(worker);
-
-            AtomicReference<String> detectedModel = new AtomicReference<>();
-            ClaudeTaskEntity entity = freshTaskOpt.orElse(null);
-            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(
-                    entity != null ? entity.getClaudeSessionId() : null);
-
-            // 用 lastAckedSeq（ESN）计算 ack_seq
-            AtomicInteger seqTracker = lastAckedSeq.get(taskId);
-            int memoryAckSeq = seqTracker != null ? seqTracker.get() : 0;
-            int persistedAckSeq = entity != null && entity.getLastAckedSeq() != null ? entity.getLastAckedSeq() : 0;
-            int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
-            String subscribeTaskId = resolveWorkerTaskLookupId(entity != null ? entity : taskOpt.get());
-            if (isClosedAndAligned(client, subscribeTaskId, ackSeq, taskId, "attemptReconnect")) {
-                lastAckedSeq.remove(taskId);
-                return false;
-            }
-            log.info("attemptReconnect ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
-
-            Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
-                    detectedModel, detectedClaudeSessionId, nextAttempt);
-
-            activeStreams.put(taskId, subscription);
-
-            // Reset interactionState to PROCESSING
-            conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
-
-            publishMessage(sessionId, MessageType.STATE_SYNC,
-                    Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));
-
-            log.info("SSE reconnection successful for task {} (attempt {})", taskId, nextAttempt);
-            return true;
-
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            log.warn("SSE reconnection interrupted for task {}", taskId);
-            return false;
-        } catch (Exception e) {
-            log.warn("SSE reconnection failed for task {} (attempt {}): errorCode={}, errorType={}",
-                    taskId, currentAttempt + 1, remoteDiagnosticCode(e), exceptionType(e));
-            return false;
-        } finally {
-            guard.set(false);
+    private void cancelScheduledRecovery(String taskId) {
+        Disposable scheduled = scheduledRecoveries.remove(taskId);
+        if (scheduled != null && !scheduled.isDisposed()) {
+            scheduled.dispose();
         }
     }
 
@@ -695,13 +695,8 @@ public class WorkerStreamRelay {
      * 中止任务的流
      */
     public void abortStream(String taskId) {
-        reconnecting.remove(taskId);
-        Disposable subscription = activeStreams.remove(taskId);
-        workerTaskIdMap.remove(taskId);
-        if (subscription != null && !subscription.isDisposed()) {
-            subscription.dispose();
-            log.info("Stream aborted: taskId={}", taskId);
-        }
+        clearStreamTracking(taskId);
+        log.info("Stream tracking cleared: taskId={}", taskId);
     }
 
     /**
@@ -777,15 +772,7 @@ public class WorkerStreamRelay {
                         event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
                         event.getNumTurns(), resolvedModel, event.getSeq());
 
-                // 主动 dispose SSE 订阅
-                Disposable completedSub = activeStreams.remove(taskId);
-                if (completedSub != null && !completedSub.isDisposed()) {
-                    completedSub.dispose();
-                    log.info("Disposed SSE subscription after task completion: taskId={}", taskId);
-                }
-                reconnecting.remove(taskId);
-                workerTaskIdMap.remove(taskId);
-                lastAckedSeq.remove(taskId);
+                clearStreamTracking(taskId);
 
                 autoScanCheckpoints(taskId, event.getSessionId());
 
@@ -869,14 +856,7 @@ public class WorkerStreamRelay {
                                 errorClaudeSessionId, stableError, event.getSeq());
                     }
 
-                    Disposable terminalSub = activeStreams.remove(taskId);
-                    if (terminalSub != null && !terminalSub.isDisposed()) {
-                        terminalSub.dispose();
-                        log.info("Disposed SSE subscription after observed {}: taskId={}", terminalStatus, taskId);
-                    }
-                    reconnecting.remove(taskId);
-                    workerTaskIdMap.remove(taskId);
-                    lastAckedSeq.remove(taskId);
+                    clearStreamTracking(taskId);
 
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
@@ -915,18 +895,6 @@ public class WorkerStreamRelay {
     public boolean hasActiveStream(String taskId) {
         Disposable d = activeStreams.get(taskId);
         return d != null && !d.isDisposed();
-    }
-
-    /**
-     * User-visible transport diagnostics must not include raw Worker bodies,
-     * endpoint details, exception messages, or credential-adjacent content.
-     */
-    private String safeTransportDiagnostic(Throwable e) {
-        if (e instanceof WebClientResponseException wce) {
-            int status = wce.getStatusCode().value();
-            return "Worker stream transport is unconfirmed (HTTP " + status + "); task remains pending.";
-        }
-        return "Worker stream transport is unconfirmed; task remains pending.";
     }
 
     /**

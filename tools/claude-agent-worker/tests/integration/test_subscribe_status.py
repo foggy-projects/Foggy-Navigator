@@ -16,7 +16,7 @@ from httpx import AsyncClient
 from agent_worker.claude.sdk_wrapper import EventBroadcast, task_registry
 from agent_worker.persistence.jsonl_store import JsonlEventStore
 
-from .conftest import collect_sse_events
+from .conftest import collect_sse_events, parse_sse_body
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +83,71 @@ class TestSubscribe:
     async def test_subscribe_nonexistent_returns_404(self, client: AsyncClient):
         resp = await client.get("/api/v1/tasks/no-such/subscribe")
         assert resp.status_code == 404
+
+    async def test_subscribe_replays_terminal_events_from_persistence(
+        self, client: AsyncClient, tmp_path,
+    ):
+        """A released registry entry remains replayable from the durable ESN."""
+        store = JsonlEventStore(tmp_path)
+        store.append("worker-terminal", {
+            "seq": 1,
+            "type": "assistant_text",
+            "task_id": "worker-terminal",
+            "content": "ready",
+        })
+        store.append("worker-terminal", {
+            "seq": 2,
+            "type": "result",
+            "task_id": "worker-terminal",
+            "content": "done",
+            "terminal_observed": True,
+            "terminal_status": "COMPLETED",
+            "terminal_source": "PROVIDER_TERMINAL_EVENT",
+        })
+        store.mark_closed("worker-terminal")
+
+        with patch(
+            "agent_worker.persistence.factory.get_event_store",
+            return_value=store,
+        ):
+            resp = await client.get(
+                "/api/v1/tasks/worker-terminal/subscribe",
+                params={"ack_seq": 1},
+            )
+
+        assert resp.status_code == 200
+        events = parse_sse_body(resp.text)
+        assert [event["seq"] for event in events] == [2]
+        assert events[0]["terminal_status"] == "COMPLETED"
+
+    async def test_subscribe_resolves_persisted_foggy_task_alias(
+        self, client: AsyncClient, tmp_path,
+    ):
+        """A Navigator task ID can replay a released Worker's durable events."""
+        store = JsonlEventStore(tmp_path)
+        store.append("worker-aliased", {
+            "seq": 1,
+            "type": "result",
+            "task_id": "worker-aliased",
+            "terminal_observed": True,
+            "terminal_status": "COMPLETED",
+            "terminal_source": "PROVIDER_TERMINAL_EVENT",
+        })
+        store.mark_closed("worker-aliased")
+        store.register_alias("foggy-aliased", "worker-aliased")
+
+        with patch(
+            "agent_worker.persistence.factory.get_event_store",
+            return_value=store,
+        ):
+            resp = await client.get(
+                "/api/v1/tasks/foggy-aliased/subscribe",
+                params={"ack_seq": 0},
+            )
+
+        assert resp.status_code == 200
+        events = parse_sse_body(resp.text)
+        assert [event["task_id"] for event in events] == ["worker-aliased"]
 
     async def test_subscribe_by_foggy_task_id(
         self, client: AsyncClient, make_broadcast,

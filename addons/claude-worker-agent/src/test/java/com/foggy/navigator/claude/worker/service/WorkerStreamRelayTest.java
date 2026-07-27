@@ -22,6 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.mockito.ArgumentCaptor;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.lang.reflect.Method;
@@ -32,6 +33,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -43,6 +46,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -164,6 +168,82 @@ class WorkerStreamRelayTest {
         verify(taskService).markLifecycleAttention("local-task-1", "STREAM_TRANSPORT_UNCONFIRMED");
         verify(taskService, never()).failTask(anyString(), any(), any(), any());
         assertEquals(0, relay.getLastAckedSeq("local-task-1").get());
+    }
+
+    @Test
+    void postTerminalSubscriptionErrorIsIgnoredAndClearsReplayTracking() throws Exception {
+        ClaudeTaskEntity entity = new ClaudeTaskEntity();
+        entity.setTaskId("local-task-1");
+        entity.setStatus("COMPLETED");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        WebClientResponseException error = WebClientResponseException.create(
+                HttpStatus.NOT_FOUND.value(), "not found", HttpHeaders.EMPTY, null, null);
+
+        invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
+
+        verify(taskService, never()).markLifecycleAttention(anyString(), anyString());
+        verifyNoInteractions(eventPublisher);
+        assertNull(relay.getLastAckedSeq("local-task-1"));
+    }
+
+    @Test
+    void repeatedTransportErrorsPublishOnePendingNoticeAndScheduleOneRecovery() throws Exception {
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
+        WebClientResponseException error = WebClientResponseException.create(
+                HttpStatus.NOT_FOUND.value(), "not found", HttpHeaders.EMPTY, null, null);
+
+        invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
+        invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
+
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, times(1)).publishEvent(published.capture());
+        AgentMessage message = assertInstanceOf(AgentMessage.class, published.getValue());
+        assertEquals(MessageType.STATE_SYNC, message.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("reconnect_pending", payload.get("subtype"));
+        assertEquals(Boolean.TRUE, payload.get("reconnectable"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Disposable> scheduled = (Map<String, Disposable>)
+                org.springframework.test.util.ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        assertEquals(1, scheduled.size());
+        assertTrue(scheduled.containsKey("local-task-1"));
+    }
+
+    @Test
+    void terminalObservationCancelsPreviouslyScheduledRecovery() throws Exception {
+        WebClientResponseException error = WebClientResponseException.create(
+                HttpStatus.NOT_FOUND.value(), "not found", HttpHeaders.EMPTY, null, null);
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
+        invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Disposable> scheduled = (Map<String, Disposable>)
+                org.springframework.test.util.ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        Disposable recovery = scheduled.get("local-task-1");
+
+        ClaudeTaskEntity completed = new ClaudeTaskEntity();
+        completed.setTaskId("local-task-1");
+        completed.setStatus("COMPLETED");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(completed));
+        invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
+
+        assertTrue(scheduled.isEmpty());
+        assertTrue(recovery.isDisposed());
+    }
+
+    @Test
+    void reconnectTaskDoesNotContactWorkerForLocalTerminalTask() {
+        ClaudeTaskEntity completed = new ClaudeTaskEntity();
+        completed.setTaskId("local-task-1");
+        completed.setStatus("COMPLETED");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(completed));
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verifyNoInteractions(workerService);
+        assertNull(relay.getLastAckedSeq("local-task-1"));
     }
 
     @Test
@@ -517,7 +597,6 @@ class WorkerStreamRelayTest {
 
     private void invokeSubscribeSseFlux(Flux<ServerSentEvent<String>> flux, String taskId, String sessionId,
                                         String workerId) throws Exception {
-        clearInvocations(eventPublisher, taskService);
         Method method = WorkerStreamRelay.class.getDeclaredMethod(
                 "subscribeSseFlux",
                 Flux.class,

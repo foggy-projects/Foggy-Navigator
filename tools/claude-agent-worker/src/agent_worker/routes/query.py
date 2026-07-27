@@ -669,11 +669,53 @@ async def subscribe_to_task(
         ``replay_from``: **deprecated** — old index-based replay parameter.
             Kept for backward compatibility with older Java backends.
     """
+    # Backward compatibility: old Java sends replay_from (index), new Java sends ack_seq.
+    effective_ack_seq = ack_seq
+    if replay_from is not None and ack_seq == 0:
+        effective_ack_seq = replay_from
+
     resolved = _resolve_task_entry(task_id)
     if resolved is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task '{task_id}' not found in registry (CLI may have exited)",
+        # Match the Codex SDK Worker recovery contract: registry cleanup must
+        # not make already-durable terminal evidence unreachable.  Load all
+        # events first so an ACK at or beyond latest still produces a valid,
+        # empty SSE 200 rather than being confused with a genuinely unknown
+        # task.
+        from ..persistence.factory import get_event_store
+
+        store = get_event_store()
+        resolved_persistence_id = (
+            store.resolve_alias(task_id)
+            if hasattr(store, "resolve_alias")
+            else task_id
+        )
+        persisted_events = await asyncio.to_thread(
+            store.load_events,
+            resolved_persistence_id,
+            0,
+        )
+        if not persisted_events:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task '{task_id}' has no replayable events",
+            )
+
+        async def _persisted_replay_generator() -> AsyncGenerator[dict, None]:
+            for event in persisted_events:
+                if event.get("seq", 0) > effective_ack_seq:
+                    yield {"event": "message", "data": json.dumps(event)}
+
+        logger.info(
+            "Subscribe durable replay: task=%s resolved=%s ack_seq=%d total_events=%d",
+            task_id,
+            resolved_persistence_id,
+            effective_ack_seq,
+            len(persisted_events),
+        )
+        return EventSourceResponse(
+            _persisted_replay_generator(),
+            media_type="text/event-stream",
+            ping=30,
         )
 
     real_task_id, entry = resolved
@@ -683,11 +725,6 @@ async def subscribe_to_task(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Task '{task_id}' has no broadcast (non-interactive mode or already cleaned up)",
         )
-
-    # Backward compatibility: old Java sends replay_from (index), new Java sends ack_seq
-    effective_ack_seq = ack_seq
-    if replay_from is not None and ack_seq == 0:
-        effective_ack_seq = replay_from
 
     # Mark task as reconnected — exits grace period loop in run_query
     entry["connected"] = True
