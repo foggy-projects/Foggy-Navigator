@@ -500,8 +500,9 @@ export async function resyncTask(
 
 export async function abortTask(
   taskId: string,
+  force = false,
 ): Promise<ClaudeTask | null> {
-  await cancelTaskUnified(taskId)
+  await cancelTaskUnified(taskId, { force })
   return getTaskUnified(taskId)
 }
 

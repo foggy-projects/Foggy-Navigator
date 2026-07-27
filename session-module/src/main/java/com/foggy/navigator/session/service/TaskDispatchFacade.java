@@ -300,7 +300,14 @@ public class TaskDispatchFacade {
      * 取消任务。
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
-        operationRouter().cancelTask(taskId, agentId, context);
+        cancelTask(taskId, agentId, context, false);
+    }
+
+    /**
+     * Cancels a task through its authorized provider projection.
+     */
+    public void cancelTask(String taskId, String agentId, AgentResolveContext context, boolean force) {
+        operationRouter().cancelTask(taskId, agentId, context, force);
     }
 
     // ── 任务操作（路由到 command provider） ──

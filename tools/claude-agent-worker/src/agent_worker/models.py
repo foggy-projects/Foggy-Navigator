@@ -120,6 +120,9 @@ class HealthResponse(BaseModel):
     active_tasks: int
     claude_cli_available: bool
     worker_name: str
+    termination_auth_configured: bool = False
+    termination_worker_id_configured: bool = False
+    termination_ready: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +160,12 @@ class AbortResponse(BaseModel):
     attention: list[dict[str, Any]] = Field(default_factory=list, description="Recoverable lifecycle attention entries")
     available_actions: list[str] = Field(default_factory=list, description="Supported next lifecycle actions")
     lifecycle_state: str = Field("CANCEL_REQUESTED", description="Stable non-terminal lifecycle state")
+    terminal_observed: bool = Field(
+        False,
+        description="True when the response carries trusted terminal evidence for this operation",
+    )
+    terminal_status: str | None = Field(None, description="Trusted terminal task status")
+    terminal_source: str | None = Field(None, description="Trusted terminal evidence source")
     termination_operation: dict[str, Any] | None = Field(
         None,
         description="Safe summary of a signed termination operation; never includes capability or signature",

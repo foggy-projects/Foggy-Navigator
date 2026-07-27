@@ -21,6 +21,9 @@ class TestHealthEndpoint:
         assert "version" in body
         assert "active_tasks" in body
         assert "claude_cli_available" in body
+        assert "termination_auth_configured" in body
+        assert "termination_worker_id_configured" in body
+        assert "termination_ready" in body
 
     async def test_active_tasks_initially_zero(self, client: AsyncClient):
         resp = await client.get("/health")

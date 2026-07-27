@@ -278,6 +278,26 @@ public class ClaudeWorkerClient {
                         workerId, taskId, remoteErrorCode(e), exceptionType(e)));
     }
 
+    /**
+     * Force-cancel an owned task through the Worker's task-bound process
+     * resolver. The caller never supplies a PID.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> forceAbortTask(
+            String taskId, TerminationOperationCapability capability) {
+        requireCapability(capability);
+        return webClient.post()
+                .uri("/api/v1/query/{taskId}/force-abort", taskId)
+                .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn(
+                        "Force abort task failed for worker {}, task {}: errorCode={}, errorType={}",
+                        workerId, taskId, remoteErrorCode(e), exceptionType(e)));
+    }
+
     /** @deprecated Remote termination without an audited capability is rejected. */
     @Deprecated
     public Mono<Map<String, Object>> abortTask(String taskId) {

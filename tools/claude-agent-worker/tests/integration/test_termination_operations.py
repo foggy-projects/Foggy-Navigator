@@ -15,6 +15,8 @@ from agent_worker.claude.sdk_wrapper import EventBroadcast, task_registry
 from agent_worker.claude.process_detection import _tracked_pids
 from agent_worker.config import settings
 from agent_worker.models import CliProcessInfo
+from agent_worker.persistence.jsonl_store import JsonlEventStore
+from agent_worker.persistence import factory as persistence_factory
 from agent_worker.termination import TerminationOperationReceiptLedger
 
 from .conftest import termination_headers
@@ -26,6 +28,138 @@ PROCESS_IDENTITY = f"claude-cli:4242:{PROCESS_STARTED_AT}"
 
 @pytest.mark.asyncio
 class TestTerminationOperations:
+    async def test_owner_force_cancel_closes_persistent_task_without_bound_cli(
+        self,
+        client: AsyncClient,
+        tmp_path: Path,
+    ):
+        store = JsonlEventStore(tmp_path / "owner-force-events")
+        original_store = persistence_factory._store
+        persistence_factory._store = store
+        store.append("worker-task-stale", {
+            "seq": 1,
+            "type": "assistant_text",
+            "task_id": "worker-task-stale",
+            "content": "prior output",
+        })
+        store.register_alias("foggy-owner-task", "worker-task-stale")
+
+        try:
+            with (
+                patch.object(settings, "worker_token", "test-worker-secret"),
+                patch("agent_worker.routes.processes._find_sdk_cli_pids", return_value=set()),
+            ):
+                response = await client.post(
+                    "/api/v1/query/foggy-owner-task/force-abort",
+                    headers=termination_headers(
+                        "foggy-owner-task",
+                        kind="OWNER_FORCE_CANCEL",
+                        operation_id="op-owner-force-persistent",
+                    ),
+                )
+        finally:
+            persistence_factory._store = original_store
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ABORTED"
+        assert response.json()["terminal_observed"] is True
+        assert response.json()["terminal_status"] == "ABORTED"
+        assert response.json()["terminal_source"] == "OWNER_FORCE_CANCEL"
+        assert response.json()["observed_exit"] is False
+        assert response.json()["termination_operation"]["operation_id"] == "op-owner-force-persistent"
+        events = store.load_events("worker-task-stale")
+        terminal = events[-1]
+        assert terminal["seq"] == 2
+        assert terminal["terminal_source"] == "OWNER_FORCE_CANCEL"
+        assert terminal["termination_operation"]["kind"] == "OWNER_FORCE_CANCEL"
+        assert store.is_closed("worker-task-stale")
+
+    async def test_owner_force_cancel_kills_only_exact_task_bound_cli(
+        self,
+        client: AsyncClient,
+        tmp_path: Path,
+    ):
+        store = JsonlEventStore(tmp_path / "owner-force-live-events")
+        original_store = persistence_factory._store
+        persistence_factory._store = store
+        running = asyncio.ensure_future(asyncio.sleep(999))
+        broadcast = EventBroadcast(task_id="worker-live", event_store=store)
+        task_registry["worker-live"] = {
+            "asyncio_task": running,
+            "broadcast": broadcast,
+            "foggy_task_id": "foggy-live",
+            "execution_state": "ACTIVE_TASK_EXECUTION",
+            "terminal_observed": False,
+        }
+        store.register_alias("foggy-live", "worker-live")
+        target = CliProcessInfo(
+            pid=4242,
+            started_at=PROCESS_STARTED_AT,
+            foggy_task_id="foggy-live",
+            is_orphan=False,
+        )
+        unrelated = CliProcessInfo(
+            pid=4343,
+            started_at=PROCESS_STARTED_AT,
+            foggy_task_id="another-task",
+            is_orphan=False,
+        )
+        kill_calls: list[tuple[int, int]] = []
+
+        try:
+            with (
+                patch.object(settings, "worker_token", "test-worker-secret"),
+                patch(
+                    "agent_worker.routes.processes._find_sdk_cli_pids",
+                    side_effect=[{4242, 4343}, {4343}],
+                ),
+                patch(
+                    "agent_worker.routes.processes._get_process_details",
+                    return_value=[target, unrelated],
+                ),
+                patch("os.kill", side_effect=lambda pid, sig: kill_calls.append((pid, sig))),
+            ):
+                response = await client.post(
+                    "/api/v1/query/foggy-live/force-abort",
+                    headers=termination_headers(
+                        "foggy-live",
+                        kind="OWNER_FORCE_CANCEL",
+                        operation_id="op-owner-force-live",
+                    ),
+                )
+        finally:
+            persistence_factory._store = original_store
+
+        assert response.status_code == 200
+        assert response.json()["observed_exit"] is True
+        assert [pid for pid, _signal in kill_calls] == [4242]
+        assert running.cancelled()
+        assert task_registry["worker-live"]["terminal_status"] == "ABORTED"
+        assert task_registry["worker-live"]["terminal_source"] == "OWNER_FORCE_CANCEL"
+        assert store.is_closed("worker-live")
+
+    async def test_owner_force_cancel_rejects_non_owner_capability_shape(
+        self,
+        client: AsyncClient,
+    ):
+        kill_calls: list[tuple[int, int]] = []
+        with (
+            patch.object(settings, "worker_token", "test-worker-secret"),
+            patch("agent_worker.routes.processes._find_sdk_cli_pids", return_value={4242}),
+            patch("os.kill", side_effect=lambda pid, sig: kill_calls.append((pid, sig))),
+        ):
+            response = await client.post(
+                "/api/v1/query/foggy-owner-task/force-abort",
+                headers=termination_headers(
+                    "foggy-owner-task",
+                    kind="OWNER_FORCE_CANCEL",
+                    actor_type="ADMIN",
+                ),
+            )
+
+        assert response.status_code == 403
+        assert kill_calls == []
+
     async def test_process_list_response_excludes_raw_command_line(self, client: AsyncClient):
         raw_command = "claude --print --api-key worker-secret --prompt private-customer-request"
         target = CliProcessInfo(

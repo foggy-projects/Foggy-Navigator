@@ -451,6 +451,15 @@ def verify_termination_capability(
             _reject(status.HTTP_403_FORBIDDEN, "Manual PID kill requires an authorization decision")
         if not capability.expected_process_identity:
             _reject(status.HTTP_400_BAD_REQUEST, "Termination operation expected_process_identity is required")
+    elif capability.kind == "OWNER_FORCE_CANCEL":
+        if capability.origin != "UPSTREAM_USER":
+            _reject(status.HTTP_403_FORBIDDEN, "Owner force cancellation requires a user origin")
+        if capability.actor_type != "TASK_OWNER_FORCE_CANCEL":
+            _reject(status.HTTP_403_FORBIDDEN, "Owner force cancellation requires task-owner authorization")
+        if not capability.authorization_decision_id:
+            _reject(status.HTTP_403_FORBIDDEN, "Owner force cancellation requires an authorization decision")
+        if capability.expected_pid is not None or capability.expected_process_identity is not None:
+            _reject(status.HTTP_400_BAD_REQUEST, "Owner force cancellation must resolve process identity at the Worker")
 
     try:
         ledger_directory = _termination_operation_ledger_directory()

@@ -21,10 +21,15 @@ async def health() -> HealthResponse:
     from ..claude.sdk_wrapper import task_registry
     from .. import __version__
 
+    termination_auth_configured = bool(settings.worker_token)
+    termination_worker_id_configured = bool(settings.navigator_worker_id)
     return HealthResponse(
         hostname=platform.node(),
         version=__version__,
         active_tasks=len(task_registry),
         claude_cli_available=shutil.which("claude") is not None,
         worker_name=settings.worker_name,
+        termination_auth_configured=termination_auth_configured,
+        termination_worker_id_configured=termination_worker_id_configured,
+        termination_ready=termination_auth_configured and termination_worker_id_configured,
     )

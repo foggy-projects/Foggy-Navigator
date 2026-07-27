@@ -287,6 +287,7 @@ public class TerminationOperationService {
         }
         if (!"REMOTE_CANCEL".equals(command.kind())
                 && !"MANUAL_PID_KILL".equals(command.kind())
+                && !"OWNER_FORCE_CANCEL".equals(command.kind())
                 && !"STALE_TURN_INTERRUPT".equals(command.kind())
                 && !"RECONCILE_CANCEL".equals(command.kind())) {
             throw new IllegalArgumentException("TERMINATION_OPERATION_KIND_INVALID");
@@ -304,6 +305,16 @@ public class TerminationOperationService {
                 || !("TENANT_ADMIN_MANUAL".equals(command.actorType())
                 || "UPSTREAM_ADMIN_MANUAL".equals(command.actorType())))) {
             throw new IllegalArgumentException("TERMINATION_MANUAL_PID_AUTHORIZATION_REQUIRED");
+        }
+        if ("OWNER_FORCE_CANCEL".equals(command.kind())
+                && (!"UPSTREAM_USER".equals(command.origin())
+                || !"TASK_OWNER_FORCE_CANCEL".equals(command.actorType())
+                || !hasText(command.providerTaskId())
+                || command.expectedPid() != null
+                || command.expectedProcessIdentity() != null
+                || !isServerIssuedAuthorizationDecision(
+                        command.authorizationDecisionId(), command.actorType()))) {
+            throw new IllegalArgumentException("TERMINATION_OWNER_FORCE_AUTHORIZATION_REQUIRED");
         }
         if ("STALE_TURN_INTERRUPT".equals(command.kind())
                 && (!("UPSTREAM_USER".equals(command.origin()))

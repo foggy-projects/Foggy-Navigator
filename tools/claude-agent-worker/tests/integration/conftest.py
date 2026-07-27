@@ -54,6 +54,7 @@ def termination_headers(
     signature_secret: str | None = None,
     expires_in_seconds: int = 60,
     worker_id: str | None = TEST_NAVIGATOR_WORKER_ID,
+    actor_type: str | None = None,
 ) -> dict[str, str]:
     """Build the cross-worker signed termination headers for HTTP tests."""
 
@@ -68,7 +69,13 @@ def termination_headers(
         "kind": kind,
         "origin": origin,
         "actor_id": "test-actor",
-        "actor_type": "USER" if kind == "REMOTE_CANCEL" else "ADMIN",
+        "actor_type": actor_type or (
+            "USER"
+            if kind == "REMOTE_CANCEL"
+            else "TASK_OWNER_FORCE_CANCEL"
+            if kind == "OWNER_FORCE_CANCEL"
+            else "ADMIN"
+        ),
         "authorization_decision_id": authorization_decision_id,
         "reason_code": "TEST_EXPLICIT_TERMINATION",
         "correlation_id": f"corr-{uuid.uuid4()}",

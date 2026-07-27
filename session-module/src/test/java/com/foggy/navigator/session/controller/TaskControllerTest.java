@@ -6,6 +6,7 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.NativeSubtaskSnapshotResponseDTO;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
+import com.foggy.navigator.session.model.form.TaskCancelForm;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.session.service.NativeSubtaskQueryService;
@@ -192,7 +193,8 @@ class TaskControllerTest {
         RX<String> result = controller.cancelTask("task-1", null);
 
         assertNotNull(result.getData());
-        verify(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+        verify(taskDispatchFacade).cancelTask(
+                eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
     }
 
     @Test
@@ -205,10 +207,53 @@ class TaskControllerTest {
         when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(dto));
 
-        controller.cancelTask("task-1", Map.of("agentId", "agent-attacker"));
+        TaskCancelForm form = new TaskCancelForm();
+        controller.cancelTask("task-1", form);
 
         verify(taskDispatchFacade).cancelTask(
-                eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class));
+                eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class), eq(false));
+    }
+
+    @Test
+    void cancelTask_propagatesOwnerForceIntentWithoutClientRoutingData() {
+        DispatchTaskDTO dto = DispatchTaskDTO.builder()
+                .taskId("task-1")
+                .agentId("agent-owner")
+                .providerType("claude-worker")
+                .status("CANCEL_REQUESTED")
+                .build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(dto));
+        TaskCancelForm form = new TaskCancelForm();
+        form.setForce(true);
+
+        RX<String> result = controller.cancelTask("task-1", form);
+
+        assertEquals("Force cancellation completed", result.getData());
+        verify(taskDispatchFacade).cancelTask(
+                eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class), eq(true));
+    }
+
+    @Test
+    void cancelTask_rejectsUnsupportedForceWithoutExposingProviderDetail() {
+        DispatchTaskDTO dto = DispatchTaskDTO.builder()
+                .taskId("task-1")
+                .agentId("agent-owner")
+                .providerType("codex-worker")
+                .status("CANCEL_REQUESTED")
+                .build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(dto));
+        doThrow(new UnsupportedOperationException("internal provider detail"))
+                .when(taskDispatchFacade).cancelTask(
+                        eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class), eq(true));
+        TaskCancelForm form = new TaskCancelForm();
+        form.setForce(true);
+
+        RX<String> result = controller.cancelTask("task-1", form);
+
+        assertNull(result.getData());
+        assertEquals("TERMINATION_REQUEST_NOT_SUPPORTED", result.getMsg());
     }
 
     @Test
@@ -222,7 +267,7 @@ class TaskControllerTest {
                 .thenReturn(Optional.of(dto));
         doThrow(new IllegalStateException("TERMINATION_OPERATION_WORKER_UNCONFIGURED"))
                 .when(taskDispatchFacade).cancelTask(
-                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
 
         RX<String> result = controller.cancelTask("task-1", null);
 
@@ -242,7 +287,8 @@ class TaskControllerTest {
                 .thenReturn(Optional.of(running))
                 .thenReturn(Optional.of(aborted));
         doThrow(new org.springframework.dao.PessimisticLockingFailureException("Deadlock"))
-                .when(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+                .when(taskDispatchFacade).cancelTask(
+                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
 
         RX<String> result = controller.cancelTask("task-1", null);
 
@@ -258,7 +304,8 @@ class TaskControllerTest {
         when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(running));
         doThrow(new org.springframework.dao.PessimisticLockingFailureException("Deadlock"))
-                .when(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+                .when(taskDispatchFacade).cancelTask(
+                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
 
         RX<String> result = controller.cancelTask("task-1", null);
 

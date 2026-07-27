@@ -6,6 +6,7 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.NativeSubtaskSnapshotResponseDTO;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
+import com.foggy.navigator.session.model.form.TaskCancelForm;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.session.service.NativeSubtaskQueryService;
@@ -146,7 +147,7 @@ public class TaskController {
 
     @PostMapping("/{taskId}/cancel")
     public RX<String> cancelTask(@PathVariable String taskId,
-                                  @RequestBody(required = false) Map<String, String> body) {
+                                  @RequestBody(required = false) TaskCancelForm form) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext context = AgentResolveContext.builder()
@@ -170,8 +171,12 @@ public class TaskController {
         try {
             // The authorized task projection is the only routing authority;
             // a request-body agentId must never redirect cancellation.
-            taskDispatchFacade.cancelTask(taskId, task.getAgentId(), context);
-            return RX.ok("Cancellation request accepted");
+            boolean force = form != null && form.isForceRequested();
+            taskDispatchFacade.cancelTask(taskId, task.getAgentId(), context, force);
+            return RX.ok(force ? "Force cancellation completed" : "Cancellation request accepted");
+        } catch (UnsupportedOperationException | IllegalArgumentException e) {
+            log.warn("cancelTask: unsupported or invalid request for task {}", taskId);
+            return RX.failA("TERMINATION_REQUEST_NOT_SUPPORTED");
         } catch (IllegalStateException e) {
             String safeCode = safeTerminationErrorCode(e.getMessage());
             log.warn("cancelTask: termination request failed for task {}: code={}", taskId, safeCode);

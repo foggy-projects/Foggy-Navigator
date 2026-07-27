@@ -31,12 +31,24 @@ describe('claudeWorker abortTask', () => {
 
     const result = await abortTask('task-1')
 
-    expect(mockUnifiedTaskApi.cancelTaskUnified).toHaveBeenCalledWith('task-1')
+    expect(mockUnifiedTaskApi.cancelTaskUnified).toHaveBeenCalledWith('task-1', { force: false })
     expect(mockUnifiedTaskApi.getTaskUnified).toHaveBeenCalledWith('task-1')
     expect(result).toMatchObject({
       taskId: 'task-1',
       status: 'CANCEL_REQUESTED',
       errorMessage: 'TERMINATION_UNCONFIRMED',
     })
+  })
+
+  it('forwards the explicit owner-force intent', async () => {
+    mockUnifiedTaskApi.cancelTaskUnified.mockResolvedValue(undefined)
+    mockUnifiedTaskApi.getTaskUnified.mockResolvedValue({
+      taskId: 'task-1',
+      status: 'ABORTED',
+    })
+
+    await abortTask('task-1', true)
+
+    expect(mockUnifiedTaskApi.cancelTaskUnified).toHaveBeenCalledWith('task-1', { force: true })
   })
 })

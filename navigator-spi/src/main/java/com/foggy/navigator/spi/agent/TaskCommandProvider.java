@@ -46,6 +46,17 @@ public interface TaskCommandProvider extends TaskProviderPort {
         throw new UnsupportedOperationException("cancel not supported by " + getProviderType());
     }
 
+    /**
+     * Directly cancel a provider task, optionally using the provider's
+     * task-owner force-cancel contract.
+     */
+    default void cancelTaskDirect(String taskId, String userId, boolean force) {
+        if (force) {
+            throw new UnsupportedOperationException("force cancel not supported by " + getProviderType());
+        }
+        cancelTaskDirect(taskId, userId);
+    }
+
     /** Delete a provider task. */
     default void deleteTask(String userId, String taskId) {
         throw new UnsupportedOperationException("delete not supported by " + getProviderType());

@@ -1163,6 +1163,132 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     /**
+     * Executes a user-confirmed force cancellation for the task owner. The
+     * Worker resolves any PID from the signed task binding; no PID supplied by
+     * the browser or Java control plane is trusted.
+     */
+    public void forceCancelOwnedTask(String taskId, String userId) {
+        OwnerForceReservation reservation = reserveOwnerForceCancel(taskId, userId);
+        try {
+            terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(reservation.workerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            TerminationOperationCapability capability = TerminationOperationCapability.issue(
+                    reservation.operation(), client.terminationSigningSecret());
+            Map<String, Object> result = client.forceAbortTask(reservation.taskId(), capability)
+                    .block(Duration.ofSeconds(10));
+            if (!ownerForceTerminalObserved(reservation, result)) {
+                throw new TerminationDispatchUnconfirmedException("TERMINATION_OWNER_FORCE_RECEIPT_INVALID");
+            }
+            recordOwnerForceTerminal(reservation);
+            log.warn("Claude owner force cancellation observed: taskId={}, operationId={}",
+                    reservation.taskId(), reservation.operation().getOperationId());
+        } catch (Exception error) {
+            if (isDefinitiveTerminationRejection(error)) {
+                terminationOperationService.markRejected(
+                        reservation.operation().getOperationId(), terminationRejectionCode(error));
+                markCancellationAttention(reservation.taskId(), "TERMINATION_OWNER_FORCE_REJECTED");
+                throw new IllegalStateException("TERMINATION_OWNER_FORCE_REJECTED", error);
+            }
+            terminationOperationService.markUnconfirmed(
+                    reservation.operation().getOperationId(), terminationFailureCode(error));
+            markCancellationAttention(reservation.taskId(), "TERMINATION_OWNER_FORCE_UNCONFIRMED");
+            throw new IllegalStateException("TERMINATION_OWNER_FORCE_UNCONFIRMED", error);
+        }
+    }
+
+    private OwnerForceReservation reserveOwnerForceCancel(String taskId, String userId) {
+        return inTerminationTransaction(() -> {
+            ClaudeTaskEntity task = taskRepository.findByTaskIdForUpdate(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            if (!userId.equals(task.getUserId())) {
+                throw new IllegalArgumentException("Task not found: " + taskId);
+            }
+            if (TERMINAL_STATES.contains(task.getStatus())) {
+                throw new IllegalStateException("TERMINATION_TASK_ALREADY_TERMINAL");
+            }
+            if (!"CANCEL_REQUESTED".equals(task.getStatus())) {
+                throw new IllegalStateException("TERMINATION_OWNER_FORCE_NOT_PENDING");
+            }
+            if (terminationOperationService == null) {
+                markCancellationAttention(task, "TERMINATION_AUDIT_UNAVAILABLE");
+                throw new IllegalStateException("TERMINATION_AUDIT_UNAVAILABLE");
+            }
+
+            terminationOperationService.supersedeActiveOperationsForTask(
+                    taskId, "TERMINATION_OPERATION_SUPERSEDED_BY_OWNER_FORCE");
+            String actorType = "TASK_OWNER_FORCE_CANCEL";
+            String authorizationDecisionId = "authz-v1:" + actorType.toLowerCase(Locale.ROOT)
+                    + ":" + UUID.randomUUID();
+            TerminationOperationEntity operation = terminationOperationService.accept(
+                    new TerminationOperationService.CreateCommand(
+                            task.getTaskId(), task.getTaskId(), task.getSessionId(), task.getUserId(),
+                            task.getTenantId(), AGENT_ID, task.getWorkerId(),
+                            "OWNER_FORCE_CANCEL", "UPSTREAM_USER", task.getUserId(), actorType,
+                            authorizationDecisionId, "USER_FORCE_CANCEL",
+                            "owner-force-cancel:" + UUID.randomUUID(),
+                            null, null, 300));
+            task.setAbortRequested(false);
+            task.setErrorMessage(null);
+            persistTask(task);
+            return new OwnerForceReservation(
+                    task.getTaskId(), task.getWorkerId(), task.getUserId(), operation);
+        });
+    }
+
+    private boolean ownerForceTerminalObserved(OwnerForceReservation reservation,
+                                               Map<String, Object> result) {
+        if (reservation == null || result == null
+                || !hasValue(result.get("task_id"), reservation.taskId())
+                || !hasValue(result.get("status"), "ABORTED")
+                || !booleanTrue(result.get("terminal_observed"))
+                || !hasValue(result.get("terminal_status"), "ABORTED")
+                || !hasValue(result.get("terminal_source"), "OWNER_FORCE_CANCEL")) {
+            return false;
+        }
+        Object operationValue = result.get("termination_operation");
+        if (!(operationValue instanceof Map<?, ?> operation)) return false;
+        return hasValue(operation.get("operation_id"), reservation.operation().getOperationId())
+                && hasValue(operation.get("task_id"), reservation.taskId())
+                && hasValue(operation.get("worker_id"), reservation.workerId())
+                && hasValue(operation.get("kind"), "OWNER_FORCE_CANCEL")
+                && hasValue(operation.get("origin"), "UPSTREAM_USER")
+                && hasValue(operation.get("actor_id"), reservation.ownerUserId())
+                && hasValue(operation.get("actor_type"), "TASK_OWNER_FORCE_CANCEL")
+                && hasValue(operation.get("status"), "OBSERVED_TERMINAL")
+                && hasText(operation.get("observed_at"));
+    }
+
+    private void recordOwnerForceTerminal(OwnerForceReservation reservation) {
+        inTerminationTransaction(() -> {
+            ClaudeTaskEntity task = taskRepository.findByTaskIdForUpdate(reservation.taskId())
+                    .orElseThrow(() -> new IllegalStateException("TERMINATION_TASK_UNAVAILABLE"));
+            if (!reservation.ownerUserId().equals(task.getUserId())) {
+                throw new IllegalStateException("TERMINATION_TASK_ACCESS_DENIED");
+            }
+            String previousStatus = task.getStatus();
+            if (!TERMINAL_STATES.contains(previousStatus)) {
+                task.setStatus("ABORTED");
+                task.setAbortRequested(false);
+                task.setErrorMessage(null);
+                LocalDateTime now = LocalDateTime.now();
+                task.setLastAliveAt(now);
+                task.setLastOutputAt(now);
+                persistTask(task);
+                publishStatusChange(task, previousStatus);
+                updateSessionInteractionState(task.getSessionId(), "AWAITING_REPLY");
+            }
+            terminationOperationService.markObservedTerminal(
+                    reservation.operation().getOperationId(), "ABORTED");
+            return null;
+        });
+    }
+
+    private record OwnerForceReservation(String taskId, String workerId, String ownerUserId,
+                                         TerminationOperationEntity operation) {
+    }
+
+    /**
      * Creates the durable, signed authorization for a human PID action.  A
      * successful signal dispatch is deliberately not an ABORTED transition;
      * callers must report the Worker observation through
@@ -3205,6 +3331,15 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             throw new IllegalArgumentException("Task not found or access denied: " + taskId);
         }
         abortTask(taskId);
+    }
+
+    @Override
+    public void cancelTaskDirect(String taskId, String userId, boolean force) {
+        if (!force) {
+            cancelTaskDirect(taskId, userId);
+            return;
+        }
+        forceCancelOwnedTask(taskId, userId);
     }
 
     @Override

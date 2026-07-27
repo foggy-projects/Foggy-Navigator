@@ -3081,7 +3081,7 @@
 <script setup lang="ts">
 import { h, ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Loading, WarningFilled } from '@element-plus/icons-vue'
 import { DEFAULT_TASK_PAGE_SIZE, useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
@@ -7214,6 +7214,8 @@ function terminationInspectionMessage(inspection: TerminationInspection, prompt:
 }
 
 async function confirmAndAbortTask(task: ClaudeTask): Promise<ClaudeTask | null> {
+  const isClaudeRetry = task.status === 'CANCEL_REQUESTED'
+    && task.providerType === 'claude-worker'
   const isAppServerRetry = task.status === 'CANCEL_REQUESTED'
     && task.providerType === 'codex-app-server-worker'
   const isSdkRetry = task.status === 'CANCEL_REQUESTED'
@@ -7237,6 +7239,31 @@ async function confirmAndAbortTask(task: ClaudeTask): Promise<ClaudeTask | null>
       throw error
     }
     return await getTaskUnified(task.taskId) as ClaudeTask | null
+  }
+  if (isClaudeRetry) {
+    const force = ref(false)
+    await ElMessageBox.confirm(
+      h('div', { style: { lineHeight: '1.7' } }, [
+        h('div', '该任务的普通中止仍未得到 Worker 终态确认。'),
+        h(ElCheckbox, {
+          modelValue: force.value,
+          'onUpdate:modelValue': (value: boolean | string | number) => {
+            force.value = value === true
+          },
+          style: { marginTop: '12px' },
+        }, () => '强制中止'),
+        h('div', {
+          style: { marginTop: '6px', color: 'var(--el-color-danger)', fontSize: '12px' },
+        }, '强制中止只作用于当前任务绑定的 Claude CLI；Worker 会按 taskId 解析并校验进程身份。'),
+      ]),
+      '确认再次中止',
+      {
+        type: 'warning',
+        confirmButtonText: '再次中止',
+        cancelButtonText: '取消',
+      },
+    )
+    return workerState.abortTask(task.taskId, force.value)
   }
   if (!isAppServerRetry) {
     await ElMessageBox.confirm('确认中止该任务？', '提示', {
@@ -7344,6 +7371,14 @@ function terminationCodeExplanation(code?: string): string {
       'Worker 返回的中止确认不完整，任务仍保持待确认状态。',
     TERMINATION_UNCONFIRMED:
       '上一次中止结果尚未得到 Worker 的可信确认。',
+    TERMINATION_OWNER_FORCE_NOT_PENDING:
+      '只有普通中止仍待确认的 Claude 任务才能强制中止。',
+    TERMINATION_OWNER_FORCE_REJECTED:
+      'Worker 拒绝了任务绑定或所有者强制中止能力，未修改任务终态。',
+    TERMINATION_OWNER_FORCE_UNCONFIRMED:
+      '强制中止结果尚未获得 Worker 的可信终态回执，任务继续保持待确认。',
+    TERMINATION_REQUEST_NOT_SUPPORTED:
+      '当前任务类型不支持任务所有者强制中止。',
   } as Record<string, string>)[code || '']
     || '上一次中止操作尚未完成或未获得可信确认。'
 }

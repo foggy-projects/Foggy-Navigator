@@ -1824,6 +1824,28 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void cancelTask_routesOwnerForceOnlyThroughAuthorizedProviderProjection() {
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-claude-force-1")
+                .agentId("agent-claude-owner")
+                .providerType("claude-worker")
+                .status("CANCEL_REQUESTED")
+                .build();
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.getTaskByIdAndUser("task-claude-force-1", "user-1"))
+                .thenReturn(Optional.of(task));
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        facade.cancelTask("task-claude-force-1", "attacker-route", context, true);
+
+        verify(taskQueryProvider).cancelTaskDirect("task-claude-force-1", "user-1", true);
+        verify(agentResolver, never()).resolveAgent(anyString(), any());
+    }
+
+    @Test
     void cancelTask_routesViaProviderWhenUnifiedTaskHasLogicalAgentId() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         SessionTaskEntity task = sessionTask(

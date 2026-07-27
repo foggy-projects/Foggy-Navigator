@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import platform
+import signal
 import shutil
 import subprocess
 import uuid
@@ -46,6 +47,7 @@ _TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "ABORTED"})
 _VERIFIED_TERMINAL_SOURCES = frozenset({
     "PROVIDER_TERMINAL_EVENT",
     "VERIFIED_MANAGED_PROCESS_EXIT",
+    "OWNER_FORCE_CANCEL",
 })
 
 
@@ -93,6 +95,11 @@ def _load_persisted_terminal_evidence(
             "terminal_status": terminal_status,
             "terminal_source": terminal_source,
             "event_seq": event.get("seq"),
+            "termination_operation": (
+                event.get("termination_operation")
+                if isinstance(event.get("termination_operation"), dict)
+                else None
+            ),
         }
 
     return None
@@ -639,6 +646,263 @@ async def abort_query(
     )
 
 
+def _owner_force_process_targets(task_id: str) -> tuple[list[Any], dict | None]:
+    """Resolve only Claude CLI processes bound to this exact Foggy task."""
+
+    from .processes import (
+        _enrich_processes,
+        _find_sdk_cli_pids,
+        _get_process_details,
+        _resolve_pid_task_binding,
+    )
+
+    processes = _get_process_details(_find_sdk_cli_pids())
+    _enrich_processes(processes)
+    targets = [process for process in processes if process.foggy_task_id == task_id]
+    bound_entry: dict | None = None
+    for target in targets:
+        candidate = _resolve_pid_task_binding(
+            pid=target.pid,
+            target=target,
+            capability_task_id=task_id,
+        )
+        if candidate is not None:
+            if bound_entry is not None and bound_entry is not candidate:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Task-bound CLI processes resolve to conflicting active tasks",
+                )
+            bound_entry = candidate
+    return targets, bound_entry
+
+
+async def _wait_for_force_killed_pids(target_pids: set[int]) -> set[int]:
+    """Wait briefly for the exact signalled CLI PIDs to leave detection."""
+
+    from .processes import _find_sdk_cli_pids
+
+    remaining = set(target_pids)
+    for _ in range(40):
+        if not remaining:
+            break
+        await asyncio.sleep(0.05)
+        remaining.intersection_update(_find_sdk_cli_pids())
+    return remaining
+
+
+async def _persist_owner_force_terminal(
+    *,
+    task_id: str,
+    persistence_task_id: str,
+    entry: dict | None,
+    event: dict[str, Any],
+    operation_id: str,
+) -> int:
+    """Publish, durably persist, close, and re-read the forced terminal event."""
+
+    from ..persistence.factory import get_event_store
+
+    broadcast: EventBroadcast | None = entry.get("broadcast") if entry is not None else None
+    if broadcast is not None and not broadcast.closed:
+        await broadcast.put(event)
+        await broadcast.put(None)
+
+    store = get_event_store()
+    events = store.load_events(persistence_task_id)
+    matching = next(
+        (
+            item for item in reversed(events)
+            if item.get("terminal_observed") is True
+            and item.get("terminal_status") == "ABORTED"
+            and item.get("terminal_source") == "OWNER_FORCE_CANCEL"
+            and isinstance(item.get("termination_operation"), dict)
+            and item["termination_operation"].get("operation_id") == operation_id
+        ),
+        None,
+    )
+    if matching is None:
+        persisted_event = dict(event)
+        persisted_event["seq"] = store.get_latest_seq(persistence_task_id) + 1
+        store.append(persistence_task_id, persisted_event)
+        matching = persisted_event
+    store.mark_closed(persistence_task_id)
+
+    verified = next(
+        (
+            item for item in reversed(store.load_events(persistence_task_id))
+            if item.get("terminal_observed") is True
+            and item.get("terminal_status") == "ABORTED"
+            and item.get("terminal_source") == "OWNER_FORCE_CANCEL"
+            and isinstance(item.get("termination_operation"), dict)
+            and item["termination_operation"].get("operation_id") == operation_id
+        ),
+        None,
+    )
+    if verified is None or not store.is_closed(persistence_task_id):
+        logger.error(
+            "Owner force terminal persistence unconfirmed: task=%s operation_id=%s",
+            task_id,
+            operation_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Owner force terminal persistence is unavailable",
+        )
+    return int(verified.get("seq") or 0)
+
+
+@router.post("/query/{task_id}/force-abort", response_model=AbortResponse)
+async def force_abort_query(
+    task_id: str,
+    operation: str | None = Header(None, alias=OPERATION_HEADER),
+    signature: str | None = Header(None, alias=SIGNATURE_HEADER),
+) -> AbortResponse:
+    """Force-close an owned task and kill only its exactly bound CLI process."""
+
+    capability = verify_termination_capability(
+        encoded_operation=operation,
+        encoded_signature=signature,
+        expected_kind="OWNER_FORCE_CANCEL",
+        route_task_id=task_id,
+    )
+
+    from ..persistence.factory import get_event_store
+
+    store = get_event_store()
+    persistence_task_id = (
+        store.resolve_alias(task_id)
+        if hasattr(store, "resolve_alias")
+        else task_id
+    )
+    entry_result = _resolve_task_entry(task_id)
+    resolved_id = entry_result[0] if entry_result is not None else persistence_task_id
+    entry = entry_result[1] if entry_result is not None else None
+    targets, process_entry = _owner_force_process_targets(task_id)
+    if entry is None and process_entry is not None:
+        entry = process_entry
+        resolved_id = next(
+            (
+                registered_id
+                for registered_id, candidate in task_registry.items()
+                if candidate is entry
+            ),
+            persistence_task_id,
+        )
+
+    durable_task_exists = (
+        store.get_latest_seq(persistence_task_id) > 0
+        or store.is_closed(persistence_task_id)
+    )
+    if entry is None and not targets and not durable_task_exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' is not registered and has no durable event history",
+        )
+
+    target_pids = {int(target.pid) for target in targets}
+    signal_value = signal.SIGKILL if os.name != "nt" else signal.SIGTERM
+    for pid in sorted(target_pids):
+        try:
+            os.kill(pid, signal_value)
+        except ProcessLookupError:
+            continue
+        except OSError as exc:
+            logger.warning(
+                "Owner force signal failed: task=%s operation_id=%s pid=%d error_type=%s",
+                task_id,
+                capability.operation_id,
+                pid,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Task-bound CLI force signal failed",
+            ) from exc
+
+    if entry is not None:
+        entry["cancel_requested"] = True
+        for task_key in ("producer_task", "asyncio_task"):
+            execution_task = entry.get(task_key)
+            if execution_task is not None and not execution_task.done():
+                execution_task.cancel()
+
+    remaining = await _wait_for_force_killed_pids(target_pids)
+    if remaining:
+        logger.warning(
+            "Owner force exit unconfirmed: task=%s operation_id=%s remaining_count=%d",
+            task_id,
+            capability.operation_id,
+            len(remaining),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task-bound CLI exit remains unconfirmed",
+        )
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+    operation_summary = capability.public_summary(
+        operation_status="OBSERVED_TERMINAL",
+        observed_exit=bool(target_pids),
+        result=(
+            "FORCE_KILL_EXIT_VERIFIED"
+            if target_pids
+            else "TASK_CLOSED_WITH_NO_BOUND_CLI_PROCESS"
+        ),
+        observed_at=observed_at,
+    )
+    if entry is not None:
+        entry["terminal_observed"] = True
+        entry["terminal_status"] = "ABORTED"
+        entry["terminal_lifecycle_state"] = "ABORTED"
+        entry["terminal_source"] = "OWNER_FORCE_CANCEL"
+        entry["execution_state"] = "TERMINAL_OBSERVED"
+        entry["attention_state"] = None
+        entry["termination_operation"] = operation_summary
+        entry["lifecycle_evidence"] = {
+            "source": "OWNER_FORCE_CANCEL",
+            "operation_id": capability.operation_id,
+            "observed_at": observed_at,
+            "killed_pid_count": len(target_pids),
+        }
+
+    terminal_event = event_mapper.map_error(
+        task_id=resolved_id,
+        error="CLAUDE_OWNER_FORCE_CANCELLED",
+        session_id=entry.get("session_id") if entry is not None else None,
+        terminal_observed=True,
+        terminal_status="ABORTED",
+        terminal_source="OWNER_FORCE_CANCEL",
+    )
+    terminal_event["lifecycle_state"] = "ABORTED"
+    terminal_event["termination_operation"] = operation_summary
+    event_seq = await _persist_owner_force_terminal(
+        task_id=task_id,
+        persistence_task_id=persistence_task_id,
+        entry=entry,
+        event=terminal_event,
+        operation_id=capability.operation_id,
+    )
+
+    logger.warning(
+        "Owner force cancellation completed: task=%s operation_id=%s killed_pid_count=%d event_seq=%d",
+        task_id,
+        capability.operation_id,
+        len(target_pids),
+        event_seq,
+    )
+    return AbortResponse(
+        task_id=task_id,
+        status="ABORTED",
+        operation_id=capability.operation_id,
+        observed_exit=bool(target_pids),
+        lifecycle_state="ABORTED",
+        terminal_observed=True,
+        terminal_status="ABORTED",
+        terminal_source="OWNER_FORCE_CANCEL",
+        termination_operation=operation_summary,
+    )
+
+
 def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
     """Resolve a task by worker task_id or foggy_task_id."""
     entry = task_registry.get(task_id)
@@ -905,7 +1169,7 @@ async def get_task_status(task_id: str):
                 "attention_status": None,
                 "available_actions": [],
                 "lifecycle_state": terminal_status,
-                "termination_operation": None,
+                "termination_operation": terminal_evidence.get("termination_operation"),
                 "cancel_requested": False,
                 "terminal_observed": True,
                 "terminal_status": terminal_status,

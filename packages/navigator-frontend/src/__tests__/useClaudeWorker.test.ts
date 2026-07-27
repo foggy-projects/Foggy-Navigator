@@ -343,12 +343,26 @@ describe('useClaudeWorker', () => {
 
       const refreshed = await abortTask('t-1')
 
+      expect(mockUnifiedTaskApi.cancelTaskUnified).toHaveBeenCalledWith('t-1', { force: false })
       expect(mockUnifiedTaskApi.getTaskUnified).toHaveBeenCalledWith('t-1')
       expect(refreshed.status).toBe('CANCEL_REQUESTED')
       expect(tasks.value[0]).toMatchObject({
         status: 'CANCEL_REQUESTED',
         errorMessage: 'TERMINATION_UNCONFIRMED',
       })
+    })
+
+    it('sends force only when explicitly requested', async () => {
+      mockUnifiedTaskApi.cancelTaskUnified.mockResolvedValue(undefined)
+      mockUnifiedTaskApi.getTaskUnified.mockResolvedValue(
+        makeTask({ taskId: 't-force', status: 'ABORTED' }),
+      )
+
+      const { abortTask } = useClaudeWorker()
+      await abortTask('t-force', true)
+
+      expect(mockUnifiedTaskApi.cancelTaskUnified)
+        .toHaveBeenCalledWith('t-force', { force: true })
     })
   })
 

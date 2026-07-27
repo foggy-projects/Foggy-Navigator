@@ -524,6 +524,91 @@ class ClaudeTaskServiceAbortGuardTest {
         }
     }
 
+    @Nested
+    class OwnerForceCancelTests {
+
+        @Test
+        void ownerForceCancelRequiresOwnershipBeforeCreatingOperation() {
+            ClaudeTaskEntity entity = createRunningTask();
+            entity.setStatus("CANCEL_REQUESTED");
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+            TerminationOperationService terminationOperationService = installTerminationOperationService();
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.cancelTaskDirect(TASK_ID, "different-user", true));
+
+            assertEquals("Task not found: " + TASK_ID, error.getMessage());
+            verifyNoInteractions(terminationOperationService);
+            verifyNoInteractions(workerService);
+        }
+
+        @Test
+        void ownerForceCancelRecordsOnlyCorrelatedWorkerTerminalReceipt() {
+            ClaudeTaskEntity entity = createRunningTask();
+            entity.setStatus("CANCEL_REQUESTED");
+            entity.setErrorMessage("TERMINATION_OPERATION_PENDING");
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+            when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(createWorkerEntity());
+
+            TerminationOperationService terminationOperationService = installTerminationOperationService();
+            TerminationOperationService.CreateCommand[] accepted =
+                    new TerminationOperationService.CreateCommand[1];
+            when(terminationOperationService.accept(any())).thenAnswer(invocation -> {
+                accepted[0] = invocation.getArgument(0);
+                return operationFor(accepted[0], "to-owner-force");
+            });
+            var client = mock(com.foggy.navigator.claude.worker.client.ClaudeWorkerClient.class);
+            when(workerService.createClient(any())).thenReturn(client);
+            when(client.terminationSigningSecret()).thenReturn("worker-token");
+            when(client.forceAbortTask(eq(TASK_ID), any())).thenReturn(reactor.core.publisher.Mono.just(
+                    ownerForceReceipt("to-owner-force", TASK_ID, WORKER_ID, USER_ID)));
+
+            service.cancelTaskDirect(TASK_ID, USER_ID, true);
+
+            assertEquals("ABORTED", entity.getStatus());
+            assertEquals(null, entity.getErrorMessage());
+            assertEquals("OWNER_FORCE_CANCEL", accepted[0].kind());
+            assertEquals(TASK_ID, accepted[0].providerTaskId());
+            assertEquals("TASK_OWNER_FORCE_CANCEL", accepted[0].actorType());
+            assertTrue(accepted[0].authorizationDecisionId()
+                    .startsWith("authz-v1:task_owner_force_cancel:"));
+            verify(terminationOperationService).supersedeActiveOperationsForTask(
+                    TASK_ID, "TERMINATION_OPERATION_SUPERSEDED_BY_OWNER_FORCE");
+            verify(terminationOperationService).markDispatchStarted("to-owner-force");
+            verify(terminationOperationService).markObservedTerminal("to-owner-force", "ABORTED");
+        }
+
+        @Test
+        void ownerForceCancelKeepsPendingWhenWorkerReceiptIsUnavailable() {
+            ClaudeTaskEntity entity = createRunningTask();
+            entity.setStatus("CANCEL_REQUESTED");
+            when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+            when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+            when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(createWorkerEntity());
+
+            TerminationOperationService terminationOperationService = installTerminationOperationService();
+            when(terminationOperationService.accept(any())).thenAnswer(invocation ->
+                    operationFor(invocation.getArgument(0), "to-owner-unconfirmed"));
+            var client = mock(com.foggy.navigator.claude.worker.client.ClaudeWorkerClient.class);
+            when(workerService.createClient(any())).thenReturn(client);
+            when(client.terminationSigningSecret()).thenReturn("worker-token");
+            when(client.forceAbortTask(eq(TASK_ID), any()))
+                    .thenReturn(reactor.core.publisher.Mono.error(
+                            new IllegalStateException("sensitive remote detail")));
+
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> service.cancelTaskDirect(TASK_ID, USER_ID, true));
+
+            assertEquals("TERMINATION_OWNER_FORCE_UNCONFIRMED", error.getMessage());
+            assertEquals("CANCEL_REQUESTED", entity.getStatus());
+            assertEquals("TERMINATION_OWNER_FORCE_UNCONFIRMED", entity.getErrorMessage());
+            verify(terminationOperationService).markUnconfirmed(
+                    eq("to-owner-unconfirmed"), anyString());
+            verify(terminationOperationService, never()).markObservedTerminal(anyString(), anyString());
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -595,5 +680,25 @@ class ClaudeTaskServiceAbortGuardTest {
                 "status", "OBSERVED_EXIT",
                 "observed_exit", true,
                 "observed_at", "2026-07-16T03:40:13.655Z");
+    }
+
+    private Map<String, Object> ownerForceReceipt(
+            String operationId, String taskId, String workerId, String ownerUserId) {
+        return Map.of(
+                "task_id", taskId,
+                "status", "ABORTED",
+                "terminal_observed", true,
+                "terminal_status", "ABORTED",
+                "terminal_source", "OWNER_FORCE_CANCEL",
+                "termination_operation", Map.of(
+                        "operation_id", operationId,
+                        "task_id", taskId,
+                        "worker_id", workerId,
+                        "kind", "OWNER_FORCE_CANCEL",
+                        "origin", "UPSTREAM_USER",
+                        "actor_id", ownerUserId,
+                        "actor_type", "TASK_OWNER_FORCE_CANCEL",
+                        "status", "OBSERVED_TERMINAL",
+                        "observed_at", "2026-07-28T09:00:00Z"));
     }
 }

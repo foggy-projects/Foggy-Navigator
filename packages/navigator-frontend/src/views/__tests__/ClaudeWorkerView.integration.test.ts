@@ -1897,4 +1897,61 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       wrapper.unmount()
     })
   })
+
+  describe('BUG-030 Claude owner force cancellation', () => {
+    it('keeps force unchecked by default on the second cancellation', async () => {
+      const pendingTask: ClaudeTask = {
+        ...mockCompletedTask,
+        taskId: 'task-claude-pending',
+        providerType: 'claude-worker',
+        status: 'CANCEL_REQUESTED',
+      }
+      const refreshedTask: ClaudeTask = { ...pendingTask, status: 'CANCEL_REQUESTED' }
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+      vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(refreshedTask)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const result = await (wrapper.vm as any).confirmAndAbortTask(pendingTask)
+
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.anything(),
+        '确认再次中止',
+        expect.objectContaining({ confirmButtonText: '再次中止' }),
+      )
+      expect(unifiedTaskApi.cancelTaskUnified)
+        .toHaveBeenCalledWith(pendingTask.taskId, { force: false })
+      expect(result.status).toBe('CANCEL_REQUESTED')
+      wrapper.unmount()
+    })
+
+    it('sends task-scoped force only after the checkbox is selected', async () => {
+      const pendingTask: ClaudeTask = {
+        ...mockCompletedTask,
+        taskId: 'task-claude-force',
+        providerType: 'claude-worker',
+        status: 'CANCEL_REQUESTED',
+      }
+      const refreshedTask: ClaudeTask = { ...pendingTask, status: 'ABORTED' }
+      vi.mocked(ElMessageBox.confirm).mockImplementationOnce(async (message: any) => {
+        const checkbox = message.children.find(
+          (child: any) => typeof child?.props?.['onUpdate:modelValue'] === 'function',
+        )
+        expect(checkbox).toBeTruthy()
+        expect(checkbox.props.modelValue).toBe(false)
+        checkbox.props['onUpdate:modelValue'](true)
+        return 'confirm' as any
+      })
+      vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(refreshedTask)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const result = await (wrapper.vm as any).confirmAndAbortTask(pendingTask)
+
+      expect(unifiedTaskApi.cancelTaskUnified)
+        .toHaveBeenCalledWith(pendingTask.taskId, { force: true })
+      expect(result.status).toBe('ABORTED')
+      wrapper.unmount()
+    })
+  })
 })

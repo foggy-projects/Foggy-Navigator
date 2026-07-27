@@ -101,7 +101,7 @@ final class TaskOperationRouter {
      * 已知 providerType 的任务优先走 Provider 取消。
      * 统一任务投影中的 agentId 保存真实 logical agent，不能用它来判断是否需要 A2A。
      */
-    void cancelTask(String taskId, String agentId, AgentResolveContext context) {
+    void cancelTask(String taskId, String agentId, AgentResolveContext context, boolean force) {
         DispatchTaskDTO task = getTask(taskId, context).orElse(null);
         if (task != null && task.getStatus() != null && TERMINAL_STATES.contains(task.getStatus())) {
             log.info("cancelTask: task {} already in terminal state ({}), returning no-op",
@@ -114,8 +114,13 @@ final class TaskOperationRouter {
         String providerType = task != null ? task.getProviderType() : null;
 
         if (providerType != null && !providerType.isBlank()) {
-            cancelTaskViaProvider(taskId, context.getUserId(), providerType);
+            cancelTaskViaProvider(taskId, context.getUserId(), providerType, force);
             return;
+        }
+
+        if (force) {
+            throw new UnsupportedOperationException(
+                    "force cancel not supported by the A2A route for task " + taskId);
         }
 
         if (effectiveAgentId == null || effectiveAgentId.isBlank()) {
@@ -353,7 +358,8 @@ final class TaskOperationRouter {
         return taskQueryProviderRegistry.findCommandProviderByType(providerType);
     }
 
-    private void cancelTaskViaProvider(String taskId, String userId, @Nullable String providerType) {
+    private void cancelTaskViaProvider(String taskId, String userId, @Nullable String providerType,
+                                       boolean force) {
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("Cannot cancel task " + taskId + ": userId is required for provider route");
         }
@@ -361,9 +367,13 @@ final class TaskOperationRouter {
                 ? findTaskCommandProviderByType(providerType)
                         .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType))
                 : findProviderForTask(taskId);
-        provider.cancelTaskDirect(taskId, userId);
-        log.info("Cancellation request accepted via provider route: taskId={}, providerType={}",
-                taskId, provider.getProviderType());
+        if (force) {
+            provider.cancelTaskDirect(taskId, userId, true);
+        } else {
+            provider.cancelTaskDirect(taskId, userId);
+        }
+        log.info("Cancellation request accepted via provider route: taskId={}, providerType={}, force={}",
+                taskId, provider.getProviderType(), force);
     }
 
     private boolean isProviderTaskAlreadyMissing(IllegalArgumentException exception, String taskId) {

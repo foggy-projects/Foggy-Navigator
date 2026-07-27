@@ -231,9 +231,9 @@ export function useClaudeWorker() {
     return respondToTaskUnified(taskId, form)
   }
 
-  async function abortTask(taskId: string) {
+  async function abortTask(taskId: string, force = false) {
     // 使用统一任务 API（/api/v1/tasks/{taskId}/cancel）
-    await cancelTaskUnified(taskId)
+    await cancelTaskUnified(taskId, { force })
     // The cancel response acknowledges a request, not a terminal Worker
     // observation. Refresh the authoritative projection instead of inventing
     // ABORTED locally.

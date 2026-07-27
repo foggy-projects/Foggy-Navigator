@@ -113,6 +113,48 @@ class TerminationOperationServiceTest {
     }
 
     @Test
+    void acceptsOwnerForceCancelWithServerIssuedOwnerAuthorization() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+        when(repository.saveAndFlush(any(TerminationOperationEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        TerminationOperationEntity operation = service.accept(ownerForceCommand(
+                "UPSTREAM_USER", "TASK_OWNER_FORCE_CANCEL",
+                "authz-v1:task_owner_force_cancel:decision-42", null, null));
+
+        assertEquals("OWNER_FORCE_CANCEL", operation.getKind());
+        assertEquals("task-1", operation.getProviderTaskId());
+        assertEquals("UPSTREAM_USER", operation.getOrigin());
+        assertEquals("TASK_OWNER_FORCE_CANCEL", operation.getActorType());
+    }
+
+    @Test
+    void rejectsOwnerForceCancelOutsideItsTaskOwnerShape() {
+        TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
+        TerminationOperationService service = new TerminationOperationService(repository);
+
+        IllegalArgumentException wrongOrigin = assertThrows(IllegalArgumentException.class,
+                () -> service.accept(ownerForceCommand(
+                        "ADMIN_MANUAL", "TASK_OWNER_FORCE_CANCEL",
+                        "authz-v1:task_owner_force_cancel:decision-42", null, null)));
+        IllegalArgumentException wrongActor = assertThrows(IllegalArgumentException.class,
+                () -> service.accept(ownerForceCommand(
+                        "UPSTREAM_USER", "ADMIN",
+                        "authz-v1:admin:decision-42", null, null)));
+        IllegalArgumentException pidShape = assertThrows(IllegalArgumentException.class,
+                () -> service.accept(ownerForceCommand(
+                        "UPSTREAM_USER", "TASK_OWNER_FORCE_CANCEL",
+                        "authz-v1:task_owner_force_cancel:decision-42", 321,
+                        "claude-cli:321:2026-07-28T00:00:00Z")));
+
+        assertEquals("TERMINATION_OWNER_FORCE_AUTHORIZATION_REQUIRED", wrongOrigin.getMessage());
+        assertEquals("TERMINATION_OWNER_FORCE_AUTHORIZATION_REQUIRED", wrongActor.getMessage());
+        assertEquals("TERMINATION_OWNER_FORCE_AUTHORIZATION_REQUIRED", pidShape.getMessage());
+        verifyNoInteractions(repository);
+    }
+
+    @Test
     void acceptsRuntimeReconcileAndFindsLatestExactKind() {
         TerminationOperationRepository repository = mock(TerminationOperationRepository.class);
         TerminationOperationService service = new TerminationOperationService(repository);
@@ -314,6 +356,29 @@ class TerminationOperationServiceTest {
                 authorizationDecisionId,
                 "STALE_TURN_CLEANUP",
                 "stale-turn-cleanup:correlation-1",
+                expectedPid,
+                expectedProcessIdentity,
+                300);
+    }
+
+    private static TerminationOperationService.CreateCommand ownerForceCommand(
+            String origin, String actorType, String authorizationDecisionId,
+            Integer expectedPid, String expectedProcessIdentity) {
+        return new TerminationOperationService.CreateCommand(
+                "task-1",
+                "task-1",
+                "session-1",
+                "user-1",
+                "tenant-1",
+                "claude-worker",
+                "worker-1",
+                "OWNER_FORCE_CANCEL",
+                origin,
+                "user-1",
+                actorType,
+                authorizationDecisionId,
+                "USER_FORCE_CANCEL",
+                "owner-force-cancel:correlation-1",
                 expectedPid,
                 expectedProcessIdentity,
                 300);

@@ -219,8 +219,11 @@ export async function listTasksUnified(sessionId?: string): Promise<DispatchTask
 /**
  * Cancel a task.
  */
-export async function cancelTaskUnified(taskId: string, agentId?: string): Promise<void> {
-  await client.post(`/tasks/${taskId}/cancel`, agentId ? { agentId } : {})
+export async function cancelTaskUnified(
+  taskId: string,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  await client.post(`/tasks/${taskId}/cancel`, { force: options.force === true })
 }
 
 /**
