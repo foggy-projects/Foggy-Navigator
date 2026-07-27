@@ -336,6 +336,8 @@ async def read_file_raw(
 
 
 _MAX_SEARCH_RESULTS = 200
+_MAX_SEARCHABLE_FILES = 10000
+_MAX_NESTED_GIT_REPOS = 200
 
 # Default exclude patterns applied to all projects
 _DEFAULT_EXCLUDES: list[str] = [
@@ -404,14 +406,70 @@ def _skip_dirs_from_patterns(patterns: list[str]) -> set[str]:
     return dirs
 
 
+def _is_excluded_relative_path(relative_path: str, patterns: list[str]) -> bool:
+    """Match project-relative paths against existing search exclude semantics."""
+    normalized_path = relative_path.replace("\\", "/").strip("/")
+    if not normalized_path:
+        return False
+
+    segments = normalized_path.split("/")
+    for raw_pattern in patterns:
+        pattern = raw_pattern.replace("\\", "/").strip()
+        if not pattern:
+            continue
+        while pattern.startswith("./"):
+            pattern = pattern[2:]
+        pattern = pattern.lstrip("/")
+        directory_pattern = pattern.endswith("/")
+        pattern = pattern.rstrip("/")
+        if not pattern:
+            continue
+
+        if "/" not in pattern:
+            if any(fnmatch.fnmatch(segment, pattern) for segment in segments):
+                return True
+            continue
+
+        if normalized_path == pattern or normalized_path.startswith(pattern + "/"):
+            return True
+        if not directory_pattern and fnmatch.fnmatch(normalized_path, pattern):
+            return True
+
+    return False
+
+
+def _is_resolved_within_base(path: str, base_dir: str) -> bool:
+    normalized_path = os.path.normcase(os.path.realpath(path))
+    normalized_base = os.path.normcase(os.path.realpath(base_dir))
+    return normalized_path == normalized_base or normalized_path.startswith(normalized_base + os.sep)
+
+
+def _prune_walk_dirs(base_dir: str, root: str, dirs: list[str], excludes: list[str]) -> None:
+    """Prevent walks from entering links, excluded paths, or resolved paths outside the root."""
+    kept: list[str] = []
+    for dirname in dirs:
+        candidate = os.path.join(root, dirname)
+        if dirname.startswith(".") or _is_link_path(candidate):
+            continue
+        try:
+            relative_path = os.path.relpath(candidate, base_dir).replace("\\", "/")
+        except ValueError:
+            continue
+        if _is_excluded_relative_path(relative_path, excludes):
+            continue
+        if not _is_resolved_within_base(candidate, base_dir):
+            continue
+        kept.append(dirname)
+    dirs[:] = kept
+
+
 def _walk_searchable_files(base_dir: str, excludes: list[str]) -> list[str]:
     """Enumerate searchable files via ``os.walk`` while applying exclude rules."""
     all_files: list[str] = []
-    skip_dirs = _skip_dirs_from_patterns(excludes)
     for root, dirs, files in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+        _prune_walk_dirs(base_dir, root, dirs, excludes)
         for fname in files:
-            if _should_skip_file(fname, excludes):
+            if _should_skip_file(fname, excludes) or _is_link_path(os.path.join(root, fname)):
                 continue
             try:
                 rel = os.path.relpath(os.path.join(root, fname), base_dir).replace("\\", "/")
@@ -420,20 +478,88 @@ def _walk_searchable_files(base_dir: str, excludes: list[str]) -> list[str]:
                 # resolve to a different mount (\\.\nul) causing relpath to
                 # raise ValueError.  Skip these entries silently.
                 continue
+            if _is_excluded_relative_path(rel, excludes):
+                continue
             all_files.append(rel)
-            if len(all_files) >= 10000:
+            if len(all_files) >= _MAX_SEARCHABLE_FILES:
                 return all_files
     return all_files
 
 
+def _find_nested_git_roots(base_dir: str, excludes: list[str]) -> list[str]:
+    """Find nested Git worktrees without crossing links, excludes, or allowed path boundaries."""
+    nested_roots: list[str] = []
+    normalized_base = os.path.normcase(os.path.realpath(base_dir))
+
+    for root, dirs, files in os.walk(base_dir):
+        if not _is_resolved_within_base(root, base_dir):
+            dirs[:] = []
+            continue
+
+        is_git_root = ".git" in dirs or ".git" in files
+        _prune_walk_dirs(base_dir, root, dirs, excludes)
+        normalized_root = os.path.normcase(os.path.realpath(root))
+        if normalized_root != normalized_base and is_git_root:
+            try:
+                validated_root = validate_path(root)
+            except HTTPException:
+                dirs[:] = []
+                continue
+            if not _is_resolved_within_base(validated_root, base_dir):
+                dirs[:] = []
+                continue
+            nested_roots.append(validated_root)
+            if len(nested_roots) >= _MAX_NESTED_GIT_REPOS:
+                break
+
+    return nested_roots
+
+
+def _append_git_paths(
+    target: list[str],
+    seen: set[str],
+    output: str,
+    prefix: str = "",
+    excludes: list[str] | None = None,
+) -> None:
+    normalized_prefix = prefix.replace("\\", "/").strip("/")
+    for line in output.splitlines():
+        path = line.replace("\\", "/").strip("/")
+        if not path:
+            continue
+        relative_path = f"{normalized_prefix}/{path}" if normalized_prefix else path
+        if excludes and _is_excluded_relative_path(relative_path, excludes):
+            continue
+        if relative_path in seen:
+            continue
+        seen.add(relative_path)
+        target.append(relative_path)
+        if len(target) >= _MAX_SEARCHABLE_FILES:
+            return
+
+
 async def _collect_searchable_files(base_dir: str, excludes: list[str]) -> list[str]:
-    """Enumerate searchable files, preferring git-backed discovery when available."""
+    """Enumerate searchable files from the root and any visible nested Git worktrees."""
     git_args = ["ls-files", "--cached", "--others", "--exclude-standard", "--"]
     git_args.extend(_build_pathspec_excludes(excludes))
     rc, output = await run_git(base_dir, *git_args)
-    if rc == 0:
-        return [line for line in output.splitlines() if line]
-    return _walk_searchable_files(base_dir, excludes)
+    if rc != 0:
+        return _walk_searchable_files(base_dir, excludes)
+
+    all_files: list[str] = []
+    seen: set[str] = set()
+    _append_git_paths(all_files, seen, output, excludes=excludes)
+
+    for nested_root in _find_nested_git_roots(base_dir, excludes):
+        if len(all_files) >= _MAX_SEARCHABLE_FILES:
+            break
+        nested_rc, nested_output = await run_git(nested_root, *git_args)
+        if nested_rc != 0:
+            continue
+        prefix = os.path.relpath(nested_root, base_dir).replace("\\", "/")
+        _append_git_paths(all_files, seen, nested_output, prefix, excludes)
+
+    return all_files
 
 
 def _matches_file_pattern(rel_path: str, file_pattern: str | None) -> bool:
@@ -456,11 +582,11 @@ def _search_content_in_files(
     for rel_path in relative_paths:
         if not _matches_file_pattern(rel_path, file_pattern):
             continue
-        abs_path = os.path.join(base_dir, rel_path.replace("/", os.sep))
         try:
+            abs_path = _safe_subpath(base_dir, rel_path.replace("/", os.sep))
             with open(abs_path, "rb") as fh:
                 raw = fh.read()
-        except OSError:
+        except (HTTPException, OSError):
             continue
 
         if _is_binary(raw):
@@ -518,7 +644,6 @@ async def search_files(
         )
 
     excludes = _get_exclude_patterns(resolved)
-    skip_dirs = _skip_dirs_from_patterns(excludes)
 
     # ------------------------------------------------------------------
     # Collect file paths (git ls-files or os.walk fallback)
@@ -530,7 +655,7 @@ async def search_files(
     # ------------------------------------------------------------------
     all_dirs: list[str] = []
     for root, dirs, _files in os.walk(resolved):
-        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
+        _prune_walk_dirs(resolved, root, dirs, excludes)
         for d in dirs:
             try:
                 rel = os.path.relpath(os.path.join(root, d), resolved).replace("\\", "/")
@@ -575,7 +700,10 @@ async def search_files(
             break
         name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
         if q_lower in name.lower():
-            abs_path = os.path.join(resolved, rel_path.replace("/", os.sep))
+            try:
+                abs_path = _safe_subpath(resolved, rel_path.replace("/", os.sep))
+            except HTTPException:
+                continue
             size = 0
             modified = ""
             try:

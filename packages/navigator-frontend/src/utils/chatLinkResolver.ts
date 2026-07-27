@@ -2,6 +2,7 @@ import type { FileSearchResponse, FileSearchResult } from '@/api/fileBrowser'
 import { parseFileReference } from '@/utils/fileReference'
 
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/
+const POSIX_ABSOLUTE_PATH_RE = /^\//
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/
 const LEADING_RELATIVE_SEGMENTS_RE = /^(?:\.\/|\/)+/
 const LEADING_PARENT_SEGMENTS_RE = /^(?:\.\.\/)+/
@@ -34,6 +35,14 @@ export async function resolveChatLinkTarget(options: ResolveChatLinkOptions): Pr
 
   if (isHttpUrl(options.href)) {
     return { kind: 'open', url: options.href }
+  }
+
+  if (!options.directoryId) {
+    return { kind: 'warn', message: '当前未选择工作目录，无法定位文件' }
+  }
+
+  if (!options.directoryRoot) {
+    return { kind: 'warn', message: '无法获取工作目录路径' }
   }
 
   const rawCandidate = pickWorkspaceCandidate(options.href, options.text)
@@ -85,7 +94,8 @@ export async function resolveChatLinkTarget(options: ResolveChatLinkOptions): Pr
 export function normalizeLinkHref(href: string): string {
   if (!href) return ''
   let value = href.trim()
-  value = value.replace(/^file:\/\/\//i, '')
+  value = value.replace(/^file:\/\/\/(?=[A-Za-z]:[\\/])/i, '')
+  value = value.replace(/^file:\/\//i, '')
   value = value.replace(/\\/g, '/')
   try {
     value = decodeURIComponent(value)
@@ -97,33 +107,38 @@ export function normalizeLinkHref(href: string): string {
 }
 
 export function isLocalFilePath(path: string): boolean {
-  return WINDOWS_ABSOLUTE_PATH_RE.test(path)
+  return WINDOWS_ABSOLUTE_PATH_RE.test(path) || POSIX_ABSOLUTE_PATH_RE.test(path)
 }
 
 function resolveAbsoluteWorkspacePath(
   fileReference: ReturnType<typeof parseFileReference>,
   options: Pick<ResolveChatLinkOptions, 'origin' | 'directoryId' | 'workerId' | 'directoryRoot'>,
 ): ChatLinkResolution {
-  const normalizedHref = normalizeComparablePath(fileReference.path)
-  const normalizedRoot = normalizeComparablePath(options.directoryRoot)
+  const normalizedHref = normalizeAbsolutePath(fileReference.path)
+  const normalizedRoot = normalizeAbsolutePath(options.directoryRoot)
 
-  if (normalizedHref === normalizedRoot) {
+  if (!normalizedHref || !normalizedRoot) {
+    return { kind: 'warn', message: '无法获取工作目录路径' }
+  }
+
+  if (normalizedHref.kind !== normalizedRoot.kind) {
+    return { kind: 'warn', message: '该链接不在当前工作目录下，无法自动定位' }
+  }
+
+  if (normalizedHref.comparable === normalizedRoot.comparable) {
     return {
       kind: 'open',
       url: buildFileBrowserUrl(options.origin, options.directoryId, options.workerId),
     }
   }
 
-  const rootPrefix = normalizedRoot + '/'
-  if (!normalizedHref.startsWith(rootPrefix)) {
+  const rootPrefix = normalizedRoot.path.endsWith('/') ? normalizedRoot.path : normalizedRoot.path + '/'
+  const comparableRootPrefix = normalizedRoot.kind === 'windows' ? rootPrefix.toLowerCase() : rootPrefix
+  if (!normalizedHref.comparable.startsWith(comparableRootPrefix)) {
     return { kind: 'warn', message: '该链接不在当前工作目录下，无法自动定位' }
   }
 
-  const relativePath = fileReference.path
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '')
-    .slice(normalizedRoot.length)
-    .replace(/^\/+/, '')
+  const relativePath = normalizedHref.path.slice(rootPrefix.length)
 
   if (!relativePath) {
     return {
@@ -159,7 +174,8 @@ function pickWorkspaceCandidate(href: string, text?: string): string {
 }
 
 function normalizeWorkspaceCandidate(value: string): string {
-  const normalized = normalizeLinkHref(value).replace(/[?#].*$/, '').replace(/\/+$/, '')
+  const rawPath = value.trim().replace(/[?#].*$/, '')
+  const normalized = normalizeLinkHref(rawPath).replace(/\/+$/, '')
   return normalized.trim()
 }
 
@@ -178,7 +194,6 @@ function looksLikeWorkspaceFileCandidate(value: string): boolean {
 function normalizeRelativeSearchTarget(value: string): string {
   return value
     .replace(/\\/g, '/')
-    .replace(/[?#].*$/, '')
     .replace(LEADING_RELATIVE_SEGMENTS_RE, '')
     .replace(LEADING_PARENT_SEGMENTS_RE, '')
     .replace(/\/+/g, '/')
@@ -235,8 +250,45 @@ function normalizeRelativePath(path: string): string {
     .toLowerCase()
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+interface NormalizedAbsolutePath {
+  kind: 'windows' | 'posix'
+  path: string
+  comparable: string
+}
+
+function normalizeAbsolutePath(path: string): NormalizedAbsolutePath | null {
+  const normalizedSeparators = path.replace(/\\/g, '/')
+  const kind = WINDOWS_ABSOLUTE_PATH_RE.test(normalizedSeparators)
+    ? 'windows'
+    : POSIX_ABSOLUTE_PATH_RE.test(normalizedSeparators)
+      ? 'posix'
+      : null
+
+  if (!kind) return null
+
+  const prefix = kind === 'windows' ? normalizedSeparators.slice(0, 2) : ''
+  const remainder = kind === 'windows' ? normalizedSeparators.slice(2) : normalizedSeparators
+  const segments: string[] = []
+
+  for (const segment of remainder.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length === 0) return null
+      segments.pop()
+      continue
+    }
+    segments.push(segment)
+  }
+
+  const normalizedPath = kind === 'windows'
+    ? `${prefix}/${segments.join('/')}`
+    : `/${segments.join('/')}`
+
+  return {
+    kind,
+    path: normalizedPath,
+    comparable: kind === 'windows' ? normalizedPath.toLowerCase() : normalizedPath,
+  }
 }
 
 function getBasename(path: string): string {

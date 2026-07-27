@@ -473,6 +473,149 @@ class TestGetExcludePatterns:
 
 
 # ---------------------------------------------------------------------------
+# searchable file discovery
+# ---------------------------------------------------------------------------
+
+class TestSearchableFileDiscovery:
+    """Git-backed search must include files owned by nested repositories."""
+
+    @pytest.mark.asyncio
+    async def test_search_finds_untracked_file_in_nested_git_repository(self, tmp_path, monkeypatch):
+        nested_repo = tmp_path / "foggy-data-mcp-bridge"
+        target = nested_repo / "docs" / "9.5.2" / "prototype" / "runtime-console-prototype.html"
+        (nested_repo / ".git").mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        target.write_text("prototype", encoding="utf-8")
+        (tmp_path / "README.md").write_text("root", encoding="utf-8")
+
+        async def fake_run_git(cwd: str, *args: str) -> tuple[int, str]:
+            assert args[:4] == ("ls-files", "--cached", "--others", "--exclude-standard")
+            if Path(cwd) == tmp_path:
+                return 0, "README.md"
+            if Path(cwd) == nested_repo:
+                return 0, "docs/9.5.2/prototype/runtime-console-prototype.html"
+            raise AssertionError(f"unexpected git cwd: {cwd}")
+
+        monkeypatch.setattr(files_routes, "validate_path", lambda path: path)
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes.search_files(
+            path=str(tmp_path),
+            query="runtime-console-prototype.html",
+            max_results=80,
+        )
+
+        assert result.total == 1
+        assert result.results[0].relative_path == (
+            "foggy-data-mcp-bridge/docs/9.5.2/prototype/runtime-console-prototype.html"
+        )
+
+    @pytest.mark.asyncio
+    async def test_foggy_ignore_can_exclude_nested_git_repository(self, tmp_path, monkeypatch):
+        nested_repo = tmp_path / "ignored-repo"
+        (nested_repo / ".git").mkdir(parents=True)
+        (nested_repo / "hidden.txt").write_text("hidden", encoding="utf-8")
+        (tmp_path / ".foggy-ignore").write_text("ignored-repo/\n", encoding="utf-8")
+
+        calls: list[Path] = []
+
+        async def fake_run_git(cwd: str, *_args: str) -> tuple[int, str]:
+            calls.append(Path(cwd))
+            return 0, ""
+
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes._collect_searchable_files(
+            str(tmp_path),
+            _get_exclude_patterns(str(tmp_path)),
+        )
+
+        assert result == []
+        assert calls == [tmp_path]
+
+    @pytest.mark.asyncio
+    async def test_nested_path_foggy_ignore_excludes_repository(self, tmp_path, monkeypatch):
+        nested_repo = tmp_path / "groups" / "private-repo"
+        (nested_repo / ".git").mkdir(parents=True)
+        (nested_repo / "hidden.txt").write_text("hidden", encoding="utf-8")
+        (tmp_path / ".foggy-ignore").write_text("groups/private-repo/\n", encoding="utf-8")
+
+        calls: list[Path] = []
+
+        async def fake_run_git(cwd: str, *_args: str) -> tuple[int, str]:
+            calls.append(Path(cwd))
+            return 0, ""
+
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes._collect_searchable_files(
+            str(tmp_path),
+            _get_exclude_patterns(str(tmp_path)),
+        )
+
+        assert result == []
+        assert calls == [tmp_path]
+
+    @pytest.mark.asyncio
+    async def test_nested_file_foggy_ignore_uses_project_relative_path(self, tmp_path, monkeypatch):
+        nested_repo = tmp_path / "groups" / "private-repo"
+        (nested_repo / ".git").mkdir(parents=True)
+        (nested_repo / "docs").mkdir()
+        (nested_repo / "docs" / "secret.md").write_text("secret", encoding="utf-8")
+        (nested_repo / "docs" / "visible.md").write_text("visible", encoding="utf-8")
+        (tmp_path / ".foggy-ignore").write_text(
+            "groups/private-repo/docs/secret.md\n",
+            encoding="utf-8",
+        )
+
+        async def fake_run_git(cwd: str, *_args: str) -> tuple[int, str]:
+            if Path(cwd) == tmp_path:
+                return 0, ""
+            if Path(cwd) == nested_repo:
+                return 0, "docs/secret.md\ndocs/visible.md"
+            raise AssertionError(f"unexpected git cwd: {cwd}")
+
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes._collect_searchable_files(
+            str(tmp_path),
+            _get_exclude_patterns(str(tmp_path)),
+        )
+
+        assert result == ["groups/private-repo/docs/visible.md"]
+
+    @pytest.mark.asyncio
+    async def test_nested_git_discovery_prunes_junction_like_directories(self, tmp_path, monkeypatch):
+        nested_repo = tmp_path / "junction-repo"
+        (nested_repo / ".git").mkdir(parents=True)
+        (nested_repo / "outside.txt").write_text("outside", encoding="utf-8")
+
+        calls: list[Path] = []
+
+        async def fake_run_git(cwd: str, *_args: str) -> tuple[int, str]:
+            calls.append(Path(cwd))
+            if Path(cwd) == tmp_path:
+                return 0, ""
+            raise AssertionError(f"junction-like path must not be searched: {cwd}")
+
+        original_is_link_path = files_routes._is_link_path
+        monkeypatch.setattr(
+            files_routes,
+            "_is_link_path",
+            lambda path: Path(path) == nested_repo or original_is_link_path(path),
+        )
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes._collect_searchable_files(
+            str(tmp_path),
+            _get_exclude_patterns(str(tmp_path)),
+        )
+
+        assert result == []
+        assert calls == [tmp_path]
+
+
+# ---------------------------------------------------------------------------
 # _parse_git_grep_output
 # ---------------------------------------------------------------------------
 
