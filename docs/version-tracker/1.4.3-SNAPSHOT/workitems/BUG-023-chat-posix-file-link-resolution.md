@@ -192,11 +192,26 @@ open_questions: []
   - Playwright 浏览器 smoke 使用精确 deeplink，按 `foggy-data-mcp-bridge/docs/9.5.2/prototype` 五级 listing 展开，只请求一次完整 content path，并成功渲染 `Runtime Console Prototype` HTML 预览。脱敏脚本和截图位于 git ignored 的 `temp/test-artifacts/BUG-023/`。
 - deviations: none
 - residual_risks:
-  - `dev-kvm-jdk17-2.foggysource.com` 的现有目录记录可能绑定另一用户级或旧版本 Worker；本轮按 ownership 约束未重启该实例。完整绝对 href 已不依赖 search，但旧 Worker 上 basename-only 搜索仍需随该 Worker 后续发布/升级获得嵌套仓库修复。
+  - `dev-kvm-jdk17-2.foggysource.com` 的现有目录记录可能绑定另一用户级或旧版本 Worker；本轮按 ownership 约束未重启该实例。完整绝对 href 已不依赖 search；嵌套仓库搜索修复已发布为 Worker `0.1.12`，目标实例仍需由用户升级后生效。
   - 用户要求保留现有 SUPER_ADMIN token 并在手工验收后再处理轮换；本轮未把 token 写入代码、文档、测试或持久证据，目标域带认证的最终点击验收留给用户。
 - reused_evidence: 既有 Windows、relative、basename、ambiguity、Navigator deeplink 和 external URL resolver tests 全部继续通过。
-- omitted_validation_and_reason: 未运行 Maven 测试，因为没有 Java/API contract 变更；未发布或升级远端/用户级 Worker，因为不属于本轮授权的当前仓库实例。
+- omitted_validation_and_reason: 未运行 Maven 测试，因为没有 Java/API contract 变更；初始实现验收阶段未发布或升级远端/用户级 Worker，后续 OBS 发布见下方记录，目标实例升级仍由用户执行。
 - readiness: ACCEPTED
+
+## Release Follow-up
+
+- BUG-023 功能提交已选择性整合到最新 `main`，形成提交 `26ad9064`；Worker
+  版本提交为 `c764160f`，未包含无关且无法编译的
+  `a7167320`。
+- 从已推送且 clean 的 `c764160f` 隔离构建并发布 Claude Worker `0.1.12`：
+  - Linux/macOS SHA-256：
+    `c7b619e576f02497fda7de5cd027311c74cd95b13d750d537882df36c7ba0072`；
+  - Windows SHA-256：
+    `2b9155a9ea74ea5538d4329aad5e72539ab48237d2e15562d5f3e4ff94551c29`。
+- OBS `latest.json` 已指向 `0.1.12`；三平台归档、`latest.json`、
+  `install.sh` 和 `install.ps1` 均通过 HTTP 200、远端重新下载和本地逐字节比对。
+- 隔离 Linux bootstrap smoke 从公开 installer 安装成功，`VERSION` 与 Python
+  import 均报告 `0.1.12`；未停止、升级或改写 `/home/sa/.claude-worker`。
 
 ## Acceptance Status
 
@@ -206,7 +221,7 @@ open_questions: []
 - signed_off_at: 2026-07-27
 - acceptance_record: `docs/version-tracker/1.4.3-SNAPSHOT/evidence/BUG-023-independent-signoff.md`
 - blocking_items: none
-- follow_up_required: yes；继续执行选择性提交、前端部署、Worker 升级和目标环境真实点击验收。
+- follow_up_required: yes；继续执行前端部署、目标 Worker 升级和目标环境真实点击验收。
 
 ## References
 
