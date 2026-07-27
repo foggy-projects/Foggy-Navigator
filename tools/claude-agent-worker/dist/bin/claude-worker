@@ -71,6 +71,16 @@ cmd_logs() {
     fi
 }
 
+cmd_upgrade_sdk() {
+    local update_script="$INSTALL_DIR/update-sdk.sh"
+    if [ ! -f "$update_script" ]; then
+        echo -e "${RED}update-sdk.sh not found at $INSTALL_DIR${NC}"
+        echo -e "${YELLOW}Upgrade the Worker package first to install SDK-only update support.${NC}"
+        return 1
+    fi
+    bash "$update_script" "$@"
+}
+
 cmd_upgrade() {
     CURRENT_VERSION="$VERSION"
 
@@ -254,6 +264,7 @@ cmd_help() {
     echo "  status             Show worker status and health"
     echo "  version            Show installed version"
     echo "  logs               Tail worker log output"
+    echo "  upgrade-sdk [...]  Upgrade claude-agent-sdk and bundled Claude Code"
     echo "  upgrade [archive]  Upgrade from OBS/GitHub or local .tar.gz/.zip"
     echo "  help               Show this help message"
     echo ""
@@ -273,6 +284,7 @@ case "${1:-help}" in
     status)  cmd_status;;
     version|-v|--version) cmd_version;;
     logs)    cmd_logs;;
+    upgrade-sdk) shift; cmd_upgrade_sdk "$@";;
     upgrade) shift; cmd_upgrade "$@";;
     help|--help|-h) cmd_help;;
     *)

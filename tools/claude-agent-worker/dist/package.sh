@@ -154,7 +154,7 @@ build_for_os() {
     cp "$WORKER_DIR/SETUP.md"         "$STAGE_DIR/"
 
     # --- Copy start/stop scripts -----------------------------------------
-    for f in start.ps1 stop.ps1 start.sh stop.sh start-mac.sh; do
+    for f in start.ps1 stop.ps1 start.sh stop.sh start-mac.sh update-sdk.sh; do
         if [ -f "$WORKER_DIR/$f" ]; then
             cp "$WORKER_DIR/$f" "$STAGE_DIR/"
         fi
@@ -167,6 +167,9 @@ build_for_os() {
     mkdir -p "$STAGE_DIR/bin"
     cp "$SCRIPT_DIR/bin/claude-worker"     "$STAGE_DIR/bin/"
     cp "$SCRIPT_DIR/bin/claude-worker.ps1" "$STAGE_DIR/bin/"
+    if [ "$OS_TAG" != "windows" ]; then
+        sed -i 's/\r$//' "$STAGE_DIR/bin/claude-worker"
+    fi
 
     # --- Copy bundled docs (install skill, etc.) --------------------------
     if [ -d "$SCRIPT_DIR/docs" ]; then
@@ -183,7 +186,7 @@ build_for_os() {
 
     # --- Make scripts executable ------------------------------------------
     chmod +x "$STAGE_DIR/install.sh" "$STAGE_DIR/bin/claude-worker" 2>/dev/null || true
-    chmod +x "$STAGE_DIR/start.sh" "$STAGE_DIR/stop.sh" "$STAGE_DIR/start-mac.sh" 2>/dev/null || true
+    chmod +x "$STAGE_DIR/start.sh" "$STAGE_DIR/stop.sh" "$STAGE_DIR/start-mac.sh" "$STAGE_DIR/update-sdk.sh" 2>/dev/null || true
 
     # --- Create archive ---------------------------------------------------
     local OUTPUT_DIR="$WORKER_DIR/dist/output"

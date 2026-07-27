@@ -108,7 +108,8 @@ foreach ($f in @(
     "uninstall-scheduled-task.ps1",
     "start.sh",
     "start-mac.sh",
-    "stop.sh"
+    "stop.sh",
+    "update-sdk.sh"
 )) {
     $srcFile = Join-Path $ScriptDir $f
     if (Test-Path $srcFile) {

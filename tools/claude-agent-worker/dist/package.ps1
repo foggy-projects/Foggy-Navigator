@@ -142,7 +142,8 @@ function Build-ForOS {
         "uninstall-scheduled-task.ps1",
         "start.sh",
         "stop.sh",
-        "start-mac.sh"
+        "start-mac.sh",
+        "update-sdk.sh"
     )) {
         $srcFile = Join-Path $WorkerDir $f
         if (Test-Path $srcFile) {

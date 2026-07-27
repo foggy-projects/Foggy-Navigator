@@ -141,13 +141,14 @@ cp    "$SCRIPT_DIR/SETUP.md"       "$INSTALL_DIR/"
 cp    "$SCRIPT_DIR/VERSION"        "$INSTALL_DIR/"
 
 # Start/stop scripts
-for f in start.sh start-mac.sh stop.sh start.ps1 stop.ps1; do
+for f in start.sh start-mac.sh stop.sh start.ps1 stop.ps1 update-sdk.sh; do
     if [ -f "$SCRIPT_DIR/$f" ]; then
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
 done
 chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/start-mac.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/update-sdk.sh" 2>/dev/null || true
 
 # CLI wrapper
 mkdir -p "$INSTALL_DIR/bin"
