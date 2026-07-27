@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-022
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: standard
@@ -50,12 +50,12 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: 普通启动遇到 `stop.failed` 时，错误输出包含当前平台可直接复制的显式强制恢复命令和破坏性说明。
-- [ ] AC-2: 显式强制恢复对精确快照进程树执行 KILL，验证零残留后清理主 Worker 生命周期证据并启动；仅有无快照 PID 时 fail closed。
-- [ ] AC-3: update transaction、runtime process-tree 或 lifecycle failure 证据存在时，即使传入强制参数也不得启动或清理这些证据。
-- [ ] AC-4: Linux/Windows 脚本契约、回归测试、schema、typecheck、build 和 release package gates 全部实际通过。
-- [ ] AC-5: 0.3.25 从 clean、pushed commit 发布到 app-server Worker OBS prefix，`latest.json`、archive、checksum、installers 和 release evidence 远端校验通过；SDK Worker 不发布。
-- [ ] AC-6: `/home/sa/.codex-app-server-worker` 升级到 0.3.25 后在配置端口 3071 稳定 `ready=true`，PID cwd、版本和 Worker identity 与目标一致。
+- [x] AC-1: 普通启动遇到 `stop.failed` 时，错误输出包含当前平台可直接复制的显式强制恢复命令和破坏性说明。
+- [x] AC-2: 显式强制恢复对精确快照进程树执行 KILL，验证零残留后清理主 Worker 生命周期证据并启动；仅有无快照 PID 时 fail closed。
+- [x] AC-3: update transaction、runtime process-tree 或 lifecycle failure 证据存在时，即使传入强制参数也不得启动或清理这些证据。
+- [x] AC-4: Linux/Windows 脚本契约、回归测试、schema、typecheck、build 和 release package gates 全部实际通过。
+- [x] AC-5: 0.3.25 从 clean、pushed commit 发布到 app-server Worker OBS prefix，`latest.json`、archive、checksum、installers 和 release evidence 远端校验通过；SDK Worker 不发布。
+- [x] AC-6: `/home/sa/.codex-app-server-worker` 升级到 0.3.25 后在配置端口 3071 稳定 `ready=true`，PID cwd、版本和 Worker identity 与目标一致。
 
 ## Contract / Data / Security Constraints
 
@@ -128,15 +128,16 @@ open_questions: []
 
 ## Implementation Result
 
-- implementation_summary:
-- changed_paths:
-- tests_and_results:
-- manual_or_experience_evidence:
+- implementation_summary: Linux/Windows 启动脚本新增显式 force recovery 参数；普通 `stop.failed` 阻断输出可复制命令。强制恢复只处理精确快照绑定的主 Worker 进程树，验证零残留后清理主生命周期证据并启动，其他未解析证据继续 fail closed。app-server Worker 0.3.25 已发布并完成本机升级。
+- changed_paths: `tools/codex-app-server-worker/start.sh`、`start.ps1`、`README.md`、`tests/force-recovery-start.test.ts`、版本元数据，以及本 work item/版本索引。
+- tests_and_results: `bash -n start.sh stop.sh update.sh install.sh release/remote-install.sh` 通过；`npm run typecheck` 通过；focused lifecycle/process-tree suite 25 tests、24 pass、1 Windows skip、0 fail；clean/pushed `npm run package:release` 347 tests、346 pass、1 Windows skip、0 fail，schema digest `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f`，typecheck/build/package 通过；正式 archive 的 installed-candidate `update.sh --dry-run` 同样 347 tests、346 pass、1 skip、0 fail。
+- manual_or_experience_evidence: 正式候选安装在隔离端口 13073 完成 start/health/stop smoke，版本 0.3.25、CLI 0.144.3、active/queued 均为 0；本机 `/home/sa/.codex-app-server-worker` 原地升级后 PID `1527412`、cwd 为目标安装目录、监听 `0.0.0.0:3071`、`ready=true`、Worker ID `36508966`、runtime `codex-app-server-primary` revision 5、instance `codex-store-5ea69ced-19e1-4c85-bb68-f8854a81d455`，无残留 update/lifecycle/stop.failed 证据。
 - deviations: none
-- residual_risks: none
-- reused_evidence:
-- omitted_validation_and_reason:
-- readiness:
+- residual_risks: 当前 Linux 环境无 `pwsh`，Windows 脚本未做本机动态启动；参数、提示和安全分支由静态跨平台契约测试覆盖，Windows installer 与正式 archive 已通过发布器和远端逐字节校验。
+- reused_evidence: 保留并复核既有本机 `.env`、state、Worker identity 和 instance identity；未复用旧 archive/package gate 作为正式发布证据。
+- omitted_validation_and_reason: 未运行 production canary/soak 或付费模型任务；本次仅改 lifecycle CLI 和诊断，不改 runtime task/protocol 行为，按批准验证预算不要求。
+- release_evidence: commit `38961bad85aacd7e905dc065c9f8a3d7bd14aea1` clean 且已推送；OBS archive SHA-256 `a8db28e653512a93be912459d22b2278e9147501250e59a4b5ca62aee70f2585`、bytes `2466151`；远端 `latest.json`、archive、sidecar、Linux/Windows installer 均回读一致；SDK Worker 未发布。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
