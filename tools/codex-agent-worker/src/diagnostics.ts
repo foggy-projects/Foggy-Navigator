@@ -51,6 +51,7 @@ export function classifyErrorCode(code: string): ErrorCategory {
   if (/(?:RATE_LIMIT|QUOTA|TOO_MANY)/.test(code)) return 'RATE_LIMIT'
   if (/(?:TIMEOUT|TIMED_OUT)/.test(code)) return 'TIMEOUT'
   if (/(?:CANCEL|ABORT)/.test(code)) return 'CANCELLED'
+  if (/(?:STREAM_UNCONFIRMED)/.test(code)) return 'RUNTIME'
   if (/(?:NETWORK|UNREACHABLE|DISCONNECT|STREAM)/.test(code)) return 'NETWORK'
   return code ? 'RUNTIME' : 'UNKNOWN'
 }
@@ -74,6 +75,9 @@ function stableSdkErrorCode(text: string): string {
   if (/unauthoriz|authentication|login|required|credential|bearer|api[_-]?key|token|secret|password|\b401\b/.test(normalized)) return 'CODEX_AUTH_REQUIRED'
   if (/forbidden|permission denied|\b403\b/.test(normalized)) return 'CODEX_PERMISSION_DENIED'
   if (/abort|cancel/.test(normalized)) return 'CODEX_TURN_CANCELLED'
+  if (/stream (?:closed|disconnected) before (?:response\.)?completed/.test(normalized)) {
+    return 'CODEX_STREAM_UNCONFIRMED'
+  }
   if (/network|connect|socket|dns|stream/.test(normalized)) return 'CODEX_WORKER_NETWORK_ERROR'
   return 'CODEX_WORKER_REMOTE_ERROR'
 }

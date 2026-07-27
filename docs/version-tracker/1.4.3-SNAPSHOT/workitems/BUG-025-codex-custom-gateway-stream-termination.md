@@ -15,14 +15,16 @@ approved_at: 2026-07-27
 
 - 保持 Codex CLI 本地压缩路径，不恢复 `/responses/compact`。
 - 自定义 Responses provider 请求失败时，在 Worker 本地日志记录不含凭据、query 或 fragment 的网关 endpoint，能够精确定位需修复的网关实例。
-- 不改变任务认证、模型选择、压缩阈值、重试策略或错误对外安全摘要。
+- 不改变任务认证、模型选择、压缩阈值或重试策略。
+- 将没有 `response.completed` 的 provider stream 归类为待核验流错误，不再误报为 Worker 网络故障。
 
 ## Confirmed Diagnosis
 
 - Worker `1.0.26` 已把自定义 base URL 声明为 `navigator_gateway`，Codex CLI 不再调用 `/responses/compact`。
-- 失败会话 `019fa21a-1843-7692-a937-3a61dfe6dcb9` 随后的普通 `/responses` SSE 在约 32 秒后关闭，缺少 `response.completed`，最终映射为 `CODEX_WORKER_NETWORK_ERROR`。
-- Codex CLI 默认 stream idle timeout 为 300 秒且已执行 stream retry，因此提高 Worker/CLI idle timeout 不能修复该 32 秒主动断流。
-- 当前可登录的 `dev-kvm-jdk17` 只承载 recorder；它指向的远端 CPA 配置主机不在当前管理范围，不能用已停用且没有 provider 账号的本地 CPA 替换。
+- 失败会话 `019fa21a-1843-7692-a937-3a61dfe6dcb9` 的本地压缩请求约为 728 KB。网关每次均返回 HTTP 200，并在 1–5 秒内明确发送 SSE `error`，而非发生连接超时。
+- 结构化且不记录正文的诊断确认上游错误为 `invalid_prompt`；消息长度和 SHA-256 精确对应 `Request blocked.`。Codex CLI 重试六次后仅上报 `stream closed before response.completed`，丢失了原始 provider 错误码。
+- CPA `7.2.80` 升级至 `7.2.102`、开启 15 秒 keepalive，以及 nginx 的关闭 buffering、7200 秒 timeout 均不能改变结果，排除 Worker/CPA/nginx 网络超时。
+- 临时 SSE 诊断探针已删除，8443 nginx 已恢复直接转发 `cli-proxy-api:8317`；CPA 保持 `7.2.102`。
 
 ## Acceptance Criteria
 
@@ -31,16 +33,21 @@ approved_at: 2026-07-27
 - [x] 默认 provider 与非法 URL 使用固定标记。
 - [x] Worker 全量测试和 TypeScript typecheck 通过。
 - [x] 发布新 Worker 并升级已授权的 `/home/sa/.codex-worker` 3053 实例。
+- [x] 不完整 provider stream 使用 `CODEX_STREAM_UNCONFIRMED`，不再误报 `CODEX_WORKER_NETWORK_ERROR`。
 
 ## Implementation Result
 
 - changed_paths:
   - `tools/codex-agent-worker/src/codex/sdk-wrapper.ts`
+  - `tools/codex-agent-worker/src/diagnostics.ts`
   - `tools/codex-agent-worker/tests/sdk-wrapper.test.ts`
+  - `tools/codex-agent-worker/tests/diagnostics.test.ts`
   - 本文件
 - tests_and_results:
-  - `npm test -- --test-name-pattern='describeGatewayEndpoint|custom gateway|buildCodexConfig'`: 249 passed，1 skipped。
+  - `npm test`: 250 passed，1 skipped。
   - `npm run typecheck`: passed。
+  - `npm run build`: passed。
 - residual_risk:
-  - endpoint 定位后的最终修复仍需在实际 CPA/nginx 实例启用 SSE keepalive，并保证完整转发 `response.completed`；Worker 不伪造 provider 终态。
+  - 当前旧会话的完整历史已被上游内容策略拒绝，不能通过网络参数恢复；需开启新会话，或由上游 provider 调整拦截策略。
+  - Worker 只能看到 Codex CLI 降级后的 stream-close 文本，因此对外只能安全表达为 `CODEX_STREAM_UNCONFIRMED`，不能声称获知 `invalid_prompt`。
 - readiness: READY_FOR_SIGNOFF

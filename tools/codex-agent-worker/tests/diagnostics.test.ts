@@ -39,3 +39,13 @@ test('unsupported model diagnostics use a fixed code without exposing the model 
   assert.equal(result.diagnostic_text, 'CODEX_MODEL_UNSUPPORTED')
   assert.doesNotMatch(JSON.stringify(result), /gpt-5\.6-sol|workspace|secret-token|Bearer/i)
 })
+
+test('incomplete provider streams are not misreported as worker network failures', () => {
+  const result = safeSdkError(new Error(
+    'stream disconnected before completion: stream closed before response.completed',
+  ))
+
+  assert.equal(result.error_code, 'CODEX_STREAM_UNCONFIRMED')
+  assert.equal(result.error_category, 'RUNTIME')
+  assert.equal(result.error_message, 'Codex 运行时报告了待核验错误，任务状态尚未终态')
+})
