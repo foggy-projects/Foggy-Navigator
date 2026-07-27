@@ -2774,9 +2774,15 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         Boolean recoverable = terminalRecoverability(entity.getStatus());
         String tenantId = resolveTaskTenantId(entity);
         if (Boolean.FALSE.equals(recoverable) && !StringUtils.hasText(tenantId)) {
-            throw new IllegalStateException(
-                    "CLAUDE_TASK_TENANT_MISSING: refusing definitive terminal event for task "
-                            + entity.getTaskId());
+            // Platform-super-admin sessions legitimately have no tenant.
+            // Their provider-local task/session lifecycle must still commit,
+            // but the event must not claim tenant-scoped terminal authority.
+            // BusinessTaskScopedTokenTerminalListener independently requires
+            // both tenantId and recoverable=false before writing a tombstone.
+            log.warn("CLAUDE_TASK_TENANT_MISSING: publishing non-authoritative terminal transition: "
+                            + "taskId={}, status={}",
+                    entity.getTaskId(), entity.getStatus());
+            recoverable = null;
         }
         eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
                 .taskId(entity.getTaskId())

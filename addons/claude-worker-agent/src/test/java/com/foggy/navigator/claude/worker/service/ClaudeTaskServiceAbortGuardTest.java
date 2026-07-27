@@ -6,8 +6,10 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.TerminationOperationEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.service.TerminationOperationService;
 import com.foggy.navigator.spi.auth.UserAuthService;
@@ -47,6 +49,7 @@ class ClaudeTaskServiceAbortGuardTest {
     private TransactionTemplate txTemplate;
     private ApplicationEventPublisher publisher;
     private SessionEntityRepository sessionEntityRepository;
+    private SessionTaskRepository sessionTaskRepository;
 
     private static final String TASK_ID = "task-abort-001";
     private static final String SESSION_ID = "session-abort-001";
@@ -62,6 +65,7 @@ class ClaudeTaskServiceAbortGuardTest {
         txTemplate = mock(TransactionTemplate.class);
         publisher = mock(ApplicationEventPublisher.class);
         sessionEntityRepository = mock(SessionEntityRepository.class);
+        sessionTaskRepository = mock(SessionTaskRepository.class);
 
         var sessionManager = mock(SessionManager.class);
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
@@ -95,6 +99,9 @@ class ClaudeTaskServiceAbortGuardTest {
             var sessionRepositoryField = ClaudeTaskService.class.getDeclaredField("sessionEntityRepository");
             sessionRepositoryField.setAccessible(true);
             sessionRepositoryField.set(service, sessionEntityRepository);
+            var sessionTaskRepositoryField = ClaudeTaskService.class.getDeclaredField("sessionTaskRepository");
+            sessionTaskRepositoryField.setAccessible(true);
+            sessionTaskRepositoryField.set(service, sessionTaskRepository);
         } catch (Exception e) {
             throw new RuntimeException("Failed to inject streamRelay", e);
         }
@@ -221,20 +228,29 @@ class ClaudeTaskServiceAbortGuardTest {
     }
 
     @Test
-    void definitiveTerminalEventWithoutAnyTenantFailsClosed() {
+    void tenantlessPlatformTerminalCommitsWithoutClaimingTenantAuthority() {
         ClaudeTaskEntity entity = createRunningTask();
         entity.setTenantId(null);
-        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.empty());
+        SessionEntity session = new SessionEntity();
+        session.setId(SESSION_ID);
+        session.setInteractionState("PROCESSING");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
         when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(null);
 
-        IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> service.completeTask(TASK_ID, "worker-task-1", "claude-session-1",
-                        "done", null, null, null, null, null, null));
+        service.completeTask(TASK_ID, "worker-task-1", "claude-session-1",
+                "done", null, null, null, null, null, null);
 
-        assertTrue(error.getMessage().startsWith("CLAUDE_TASK_TENANT_MISSING"));
-        verify(publisher, never()).publishEvent(any(TaskStatusChangeEvent.class));
+        assertEquals("COMPLETED", entity.getStatus());
+        assertEquals("AWAITING_REPLY", session.getInteractionState());
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity sessionTask) ->
+                TASK_ID.equals(sessionTask.getTaskId())
+                        && "COMPLETED".equals(sessionTask.getStatus())));
+        verify(publisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                TASK_ID.equals(event.getTaskId())
+                        && event.getTenantId() == null
+                        && event.getRecoverable() == null));
     }
 
     @Test
