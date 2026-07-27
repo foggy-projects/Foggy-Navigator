@@ -17,6 +17,7 @@ import {
   CODEX_ULTRA_APP_SERVER_REQUIRED,
   CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
   CodexUltraAppServerRequiredError,
+  describeGatewayEndpoint,
   ensureNavigatorBusinessMcpHomeConfig,
   formatCollabToolDiagnostic,
   getRunningTaskCount,
@@ -76,6 +77,15 @@ test('parseModelString maps extra-high to xhigh', () => {
     model: 'gpt-5.4',
     reasoningLevel: 'xhigh',
   })
+})
+
+test('describeGatewayEndpoint keeps routing coordinates without credentials or query data', () => {
+  assert.equal(
+    describeGatewayEndpoint('https://user:secret@gateway.example.com:8443/v1/?token=hidden#fragment'),
+    'https://gateway.example.com:8443/v1',
+  )
+  assert.equal(describeGatewayEndpoint(undefined), 'default')
+  assert.equal(describeGatewayEndpoint('not a URL'), 'invalid')
 })
 
 test('parseModelString accepts xhigh reasoning directly', () => {

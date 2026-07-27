@@ -80,6 +80,17 @@ export type RunQueryDependencies = {
   completionReceiptStore?: CompletionReceiptStore
 }
 
+export function describeGatewayEndpoint(baseUrl: string | undefined): string {
+  if (!baseUrl) return 'default'
+  try {
+    const parsed = new URL(baseUrl)
+    const path = parsed.pathname.replace(/\/+$/, '') || '/'
+    return `${parsed.protocol}//${parsed.host}${path}`
+  } catch {
+    return 'invalid'
+  }
+}
+
 export function configureCustomGatewayProvider(
   codexConfig: Record<string, unknown>,
   baseUrl: string | undefined,
@@ -1559,7 +1570,7 @@ export async function runQuery(
       codexOptions.apiKey = effectiveApiKey
     }
     console.log(
-      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${effectiveReasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(scopedCodexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
+      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${effectiveReasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} gateway_endpoint=${describeGatewayEndpoint(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(scopedCodexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
     )
 
     // Codex CLI defaults, explicit overrides, and custom gateway routing.
