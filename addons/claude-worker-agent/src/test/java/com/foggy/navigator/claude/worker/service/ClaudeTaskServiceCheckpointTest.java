@@ -8,14 +8,17 @@ import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import jakarta.persistence.Column;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -127,6 +130,29 @@ class ClaudeTaskServiceCheckpointTest {
         assertNotNull(json);
         assertEquals("[]", json);
         verify(taskRepository).save(entity);
+    }
+
+    @Test
+    void testCheckpointStorageSupportsPayloadBeyondMysqlTextLimit() throws Exception {
+        ClaudeTaskEntity entity = createTaskEntity();
+        when(taskRepository.findByTaskIdForUpdate(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        List<Map<String, Object>> checkpoints = IntStream.range(0, 900)
+                .mapToObj(index -> Map.<String, Object>of(
+                        "id", "checkpoint-" + index + "-" + "x".repeat(64),
+                        "turnIndex", index,
+                        "timestamp", "2026-07-27T12:00:00Z"
+                ))
+                .toList();
+
+        String json = service.scanAndPopulateCheckpoints(TASK_ID, checkpoints);
+
+        assertTrue(json.getBytes(StandardCharsets.UTF_8).length > 65_535);
+        assertEquals(json, entity.getCheckpoints());
+        Column column = ClaudeTaskEntity.class.getDeclaredField("checkpoints").getAnnotation(Column.class);
+        assertNotNull(column);
+        assertEquals("MEDIUMTEXT", column.columnDefinition());
     }
 
     // -----------------------------------------------------------------------

@@ -98,7 +98,7 @@ public class ClaudeTaskEntity {
     private String dedupKey;
 
     /** JSON array of checkpoint objects: [{"id":"uuid","turnIndex":1,"timestamp":"..."}] */
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String checkpoints;
 
     /** 已确认收到的最新 Worker 事件序号（ack_seq） */
