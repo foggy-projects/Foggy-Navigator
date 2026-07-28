@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-032
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -55,11 +55,11 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: selected physical Worker 为 OFFLINE 或 execution endpoint 不可达时，readiness/owner-smoke 在创建 Task 前失败，并包含稳定 `WORKER_RUNTIME_AVAILABILITY` 诊断。
-- [ ] AC-2: selected Worker 与 execution endpoint 可用时，readiness/owner-smoke 成功且证据与实际 Worker health 一致。
-- [ ] AC-3: Codex SDK Worker 在 remote acceptance 前连接失败时，Task 收敛到 `FAILED`，稳定错误码为 `CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE`，task token 不再 ACTIVE，active registration 不再保留。
-- [ ] AC-4: Worker 已接受 Task 后的可恢复断流行为不因本修复改变。
-- [ ] AC-5: 一个新的 SIM fixture-only SYSTEM_FAMILIARIZATION Task 被 Worker 接单并到达可信终态，或在 Worker 不可用时由 AC-1 提前拒绝；不得再次出现无限 `RUNNING` 且零 dispatch。
+- [x] AC-1: selected physical Worker 为 OFFLINE 或 execution endpoint 不可达时，readiness/owner-smoke 在创建 Task 前失败，并包含稳定 `WORKER_RUNTIME_AVAILABILITY` 诊断。
+- [x] AC-2: selected Worker 与 execution endpoint 可用时，readiness/owner-smoke 成功且证据与实际 Worker health 一致。
+- [x] AC-3: Codex SDK Worker 在 remote acceptance 前连接失败时，Task 收敛到 `FAILED`，稳定错误码为 `CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE`，task token 不再 ACTIVE，active registration 不再保留。
+- [x] AC-4: Worker 已接受 Task 后的可恢复断流行为不因本修复改变。
+- [x] AC-5: 一个新的 SIM fixture-only SYSTEM_FAMILIARIZATION Task 被 Worker 接单并到达可信终态，或在 Worker 不可用时由 AC-1 提前拒绝；不得再次出现无限 `RUNNING` 且零 dispatch。
 
 ## Validation Obligations
 
@@ -100,7 +100,12 @@ open_questions: []
   - PASS after legacy terminal-projection reconciliation coverage: Codex task 147，0 failures/errors/skips。
 - affected_tests:
   - `mvn test -pl addons/claude-worker-agent,addons/codex-worker-agent -am`
-  - PASS: affected reactor 全部成功；直接受影响模块 `claude-worker-agent` 437 tests、`codex-worker-agent` 490 tests，均 0 failures/errors/skips。
-- runtime_evidence: pending
+  - PASS: affected reactor 全部成功；直接受影响模块 `claude-worker-agent` 437 tests、`codex-worker-agent` 491 tests，均 0 failures/errors/skips。
+- runtime_evidence:
+  - Navigator clean deployment `c1978c3d648a09f6be5f12f8079b98839bd64e0a`：`/actuator/info` commit 精确匹配、`dirty=false`、build version/time 非空，health `UP`。
+  - Ubuntu-24.04 目标实例经 `VERSION`、`.env` 端口、listener cwd 与 health 联合核验：3131 Claude Worker `0.1.3`、3151 Codex SDK Worker `1.0.25`；未操作当前工作 WSL 的独立 Worker。
+  - Worker 离线时 readiness 以 `WORKER_RUNTIME_AVAILABILITY=FAIL`、`WORKER_RUNTIME_UNAVAILABLE` 提前拒绝；目标 Worker heartbeat/health 恢复后，同一检查返回 `OK`，owner-smoke 返回 `ready`，selected physical Worker `ddc45293` 为 `ONLINE`。
+  - 修复前遗留 Task `20260728-6170` 通过受约束 reconcile 重投影既有 definitive provider terminal fact：最终 `FAILED`、token `REVOKED`、active registration `false`、`dispatchCount=0`，未重新触发 Worker/model dispatch。
+  - 新 SIM fixture `sim153-bug032-20260728-122128` 关联 Navigator Task `20260728-3b68`：最终 `COMPLETED`，runtime/model dispatch 均成功，`dispatchCount=1`、`retryCount=0`、`recoveryCount=0`、token `REVOKED`、active registration `false`；未派发 BusinessFunction，未访问真实 TMS 数据。
 - deviations: none
-- residual_risks: runtime availability probe 会执行一次受 10 秒上限保护的 Worker backend health 请求；当数据库仍显示 ONLINE 但 endpoint 不可达时，readiness 最迟在该 probe timeout 后 fail closed。
+- residual_risks: Worker heartbeat 状态可能在调度周期内短暂滞后；readiness 的 exact backend probe 仍会在受 10 秒上限保护的请求内 fail closed。现有目标 Worker 版本与服务端修复兼容，因此未执行 Worker 升级。
