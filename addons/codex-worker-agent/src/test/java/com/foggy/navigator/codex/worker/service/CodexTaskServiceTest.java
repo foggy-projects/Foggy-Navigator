@@ -4382,6 +4382,39 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void runtimeReconcileRepublishesDurableProviderTerminalStateForOuterTaskConvergence() {
+        CodexTaskEntity task = createTask(
+                "task-terminal-projection-gap", "session-1", "worker-1", "dir-1",
+                "FAILED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setErrorMessage("CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE");
+        when(taskRepository.findByTaskId("task-terminal-projection-gap"))
+                .thenReturn(Optional.of(task));
+
+        var dryRun = service.reconcileRuntimeTask(
+                "task-terminal-projection-gap", "user-1", "tenant-1",
+                "worker-1", "request-dry-run", true);
+        var applied = service.reconcileRuntimeTask(
+                "task-terminal-projection-gap", "user-1", "tenant-1",
+                "worker-1", "request-apply", false);
+
+        assertFalse(dryRun.reconciliationChanged());
+        assertFalse(dryRun.alreadyConsistent());
+        assertEquals("NAVIGATOR_TERMINAL_REPUBLISH_READY", dryRun.durableEvidence());
+        assertTrue(applied.reconciliationChanged());
+        assertFalse(applied.alreadyConsistent());
+        assertEquals("NAVIGATOR_TERMINAL_REPUBLISHED", applied.durableEvidence());
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-terminal-projection-gap".equals(event.getTaskId())
+                        && "FAILED".equals(event.getStatus())
+                        && "FAILED".equals(event.getPreviousStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())));
+        verifyNoInteractions(workerManagementFacade, workerClient);
+    }
+
+    @Test
     void runtimeReconcileReplayRepairsNavigatorFromDurableWorkerProofWithoutSecondDispatch() {
         CodexTaskEntity task = createTask(
                 "task-runtime-reconcile-replay", "session-1", "worker-1", "dir-1",

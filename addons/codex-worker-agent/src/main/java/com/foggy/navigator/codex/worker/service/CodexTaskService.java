@@ -1540,8 +1540,24 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             throw new IllegalArgumentException("EXPECTED_PHYSICAL_WORKER_MISMATCH");
         }
         if (isTerminalStatus(observed.getStatus())) {
+            if (!isDefinitivePreacceptanceFailure(observed)) {
+                return new RuntimeTaskClosureProvider.ReconciliationResult(
+                        false, true, observed.getStatus(), "NAVIGATOR_ALREADY_TERMINAL", null);
+            }
+            if (dryRun) {
+                return new RuntimeTaskClosureProvider.ReconciliationResult(
+                        false, false, observed.getStatus(),
+                        "NAVIGATOR_TERMINAL_REPUBLISH_READY", null);
+            }
+            // The provider row can reach a definitive terminal state before
+            // the outer Session Task/token projection observes its event.
+            // Re-publishing the already-durable provider terminal fact is the
+            // safe reconciliation action: no Worker command is dispatched,
+            // while terminal listeners can close the outer task capability.
+            publishStatusChange(observed, observed.getStatus());
             return new RuntimeTaskClosureProvider.ReconciliationResult(
-                    false, true, observed.getStatus(), "NAVIGATOR_ALREADY_TERMINAL", null);
+                    true, false, observed.getStatus(),
+                    "NAVIGATOR_TERMINAL_REPUBLISHED", null);
         }
         if (!"CANCEL_REQUESTED".equals(observed.getStatus())) {
             throw new IllegalStateException("RUNTIME_TASK_RECONCILE_NOT_CANCEL_REQUESTED");
@@ -3695,8 +3711,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private Boolean terminalRecoverability(CodexTaskEntity entity) {
         String status = entity != null ? entity.getStatus() : null;
         if ("FAILED".equals(status)) {
-            if ("CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(entity.getErrorMessage())
-                    || "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(entity.getErrorMessage())) {
+            if (isDefinitivePreacceptanceFailure(entity)) {
                 // The Worker rejected execution, or could not be reached,
                 // before a provider task/process existed. Resync cannot attach
                 // to an execution that was never accepted, so this is a
@@ -3714,6 +3729,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return Boolean.FALSE;
         }
         return null;
+    }
+
+    private boolean isDefinitivePreacceptanceFailure(CodexTaskEntity entity) {
+        return entity != null
+                && "FAILED".equals(entity.getStatus())
+                && ("CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(entity.getErrorMessage())
+                || "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(entity.getErrorMessage()));
     }
 
     private boolean containsIgnoreCase(String value, String keyword) {
