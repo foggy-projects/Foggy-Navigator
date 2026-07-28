@@ -7,6 +7,7 @@ import lombok.Data;
 @Builder
 public class ResolvedClientAppCredentialDTO {
     private String credentialId;
+    private String runtimeAccessTokenId;
     private String tenantId;
     private String clientAppId;
     private String runtimeTokenClientRequestId;

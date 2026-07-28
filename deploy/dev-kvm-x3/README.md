@@ -246,7 +246,20 @@ bash remote/status-check.sh
 - 应用容器 Docker health，`starting` 和 `unhealthy` 会被视为未就绪。
 - `http://127.0.0.1/health`
 - `http://127.0.0.1:8112/actuator/health`
+- operator/deployment network 内的 `http://127.0.0.1:8112/actuator/info`，并要求
+  full commit 与 build 阶段写入的 `NAVIGATOR_EXPECTED_COMMIT` 精确一致、
+  `dirty=false`、build version/time 非空。校验失败只输出稳定原因，不回显原始响应。
 - 关键容器最近日志中的启动失败模式。
+
+`remote/build-and-push-images.sh` 会在构建前后拒绝 tracked、untracked 或 submodule
+脏状态，并把 clean checkout 的完整 commit 写入远端私有 `runtime/release.env`。
+pull-only 部署必须通过受控发布交接带入匹配的 `NAVIGATOR_EXPECTED_COMMIT`；不要把
+该值改成短 commit，也不要为了通过检查公开 production Actuator。
+
+部署包含 BUG-031 的镜像前，先在目标 MySQL 执行
+`docs/migration/2026-07-28-task-scoped-caller-provenance.sql`。启动前置检查会拒绝
+缺少 caller provenance 列的旧表结构；迁移前已存在的 task token 不会回填 authority，
+并会 fail closed，需要通过正常 Task governance 重新签发。
 
 `remote/deploy-by-image.sh` 在上述检查通过后还会默认启动 LangGraph Biz Worker，并由 `remote/start-langgraph-biz-worker.sh` 验证 `http://127.0.0.1:3061/health`。
 

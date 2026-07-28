@@ -189,6 +189,7 @@ public class ClientAppRuntimeCredentialResolver {
 
         return Optional.of(ResolvedClientAppCredentialDTO.builder()
                 .credentialId(token.getCredentialId())
+                .runtimeAccessTokenId(token.getTokenId())
                 .tenantId(token.getTenantId())
                 .clientAppId(token.getClientAppId())
                 .runtimeTokenClientRequestId(token.getClientRequestId())

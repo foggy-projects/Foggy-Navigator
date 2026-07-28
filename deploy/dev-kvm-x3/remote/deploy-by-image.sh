@@ -9,6 +9,7 @@ load_release_env
 require_var IMAGE_TAG
 require_var NAVIGATOR_BACKEND_IMAGE
 require_var NAVIGATOR_FRONTEND_IMAGE
+require_var NAVIGATOR_EXPECTED_COMMIT
 
 ensure_runtime_files
 

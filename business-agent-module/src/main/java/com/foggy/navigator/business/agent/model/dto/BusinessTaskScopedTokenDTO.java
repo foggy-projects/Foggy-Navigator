@@ -16,6 +16,10 @@ public class BusinessTaskScopedTokenDTO {
     private String clientAppId;
     private String upstreamUserId;
     private String navigatorEffectiveUserId;
+    private String navigatorInstanceId;
+    private String callerAuthorityType;
+    private String callerCredentialId;
+    private String callerAccessTokenId;
     private String skillId;
     private String workerPoolId;
     private String modelConfigId;
@@ -49,6 +53,10 @@ public class BusinessTaskScopedTokenDTO {
         dto.setClientAppId(entity.getClientAppId());
         dto.setUpstreamUserId(entity.getUpstreamUserId());
         dto.setNavigatorEffectiveUserId(entity.getNavigatorEffectiveUserId());
+        dto.setNavigatorInstanceId(entity.getNavigatorInstanceId());
+        dto.setCallerAuthorityType(entity.getCallerAuthorityType());
+        dto.setCallerCredentialId(entity.getCallerCredentialId());
+        dto.setCallerAccessTokenId(entity.getCallerAccessTokenId());
         dto.setSkillId(entity.getSkillId());
         dto.setWorkerPoolId(entity.getWorkerPoolId());
         dto.setModelConfigId(entity.getModelConfigId());

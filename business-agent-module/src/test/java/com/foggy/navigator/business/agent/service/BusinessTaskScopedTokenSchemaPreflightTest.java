@@ -34,7 +34,7 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
         );
 
         assertTrue(error.getMessage().contains("missing columns [issued_at]"));
-        assertTrue(error.getMessage().contains("2026-07-14-business-task-token-v2.sql"));
+        assertTrue(error.getMessage().contains("2026-07-28-task-scoped-caller-provenance.sql"));
     }
 
     @Test
@@ -95,7 +95,7 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
         );
 
         assertTrue(error.getMessage().contains("invalid column definitions [function_scope_json"));
-        assertTrue(error.getMessage().contains("2026-07-14-business-task-token-v2.sql"));
+        assertTrue(error.getMessage().contains("2026-07-28-task-scoped-caller-provenance.sql"));
     }
 
     @Test
@@ -150,6 +150,10 @@ class BusinessTaskScopedTokenSchemaPreflightTest {
                     client_app_id VARCHAR(64) NOT NULL,
                     upstream_user_id VARCHAR(128),
                     navigator_effective_user_id VARCHAR(64) NOT NULL,
+                    navigator_instance_id VARCHAR(128),
+                    caller_authority_type VARCHAR(48),
+                    caller_credential_id VARCHAR(64),
+                    caller_access_token_id VARCHAR(64),
                     skill_id VARCHAR(128),
                     worker_pool_id VARCHAR(64) NOT NULL,
                     model_config_id VARCHAR(64) NOT NULL,
