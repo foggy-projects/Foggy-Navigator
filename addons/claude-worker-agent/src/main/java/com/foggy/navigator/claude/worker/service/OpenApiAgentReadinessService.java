@@ -69,6 +69,10 @@ public class OpenApiAgentReadinessService {
             "CODEX_APP_SERVER_ENDPOINT_RUNTIME";
     private static final String CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME =
             "CODEX_APP_SERVER_ENDPOINT_RUNTIME";
+    private static final String CHECK_WORKER_RUNTIME_AVAILABILITY =
+            "WORKER_RUNTIME_AVAILABILITY";
+    private static final String ERROR_WORKER_RUNTIME_UNAVAILABLE =
+            "WORKER_RUNTIME_UNAVAILABLE";
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final UnifiedAgentResolver agentResolver;
@@ -190,6 +194,7 @@ public class OpenApiAgentReadinessService {
         addAppServerEndpointRuntimeReadinessCheck(result);
         applyPhysicalWorkerDiagnostic(result, agentResourceRef[0], workspaceResourceRef[0]);
         addWorkerHostRoleRoutingCheck(result);
+        addWorkerRuntimeAvailabilityCheck(result, credential);
         addPoolMembershipCheck(result, credential, agentResourceRef[0]);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
         addBusinessFunctionAdapterChecks(result, credential);
@@ -598,6 +603,10 @@ public class OpenApiAgentReadinessService {
                 agentResource != null ? agentResource.workerBackend() : null);
         String effectiveWorkerId = trimToNull(result.getEffectivePhysicalWorkerId());
         if (isBackend(workerBackend, BACKEND_OPENAI_CODEX) && hasClaudeCodexConfig(effectiveWorkerId)) {
+            return effectiveWorkerId;
+        }
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER)
+                && effectiveWorkerId != null) {
             return effectiveWorkerId;
         }
         if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ) && isBizWorkerIdentity(effectiveWorkerId)) {
@@ -1072,6 +1081,135 @@ public class OpenApiAgentReadinessService {
         } else if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_LANGGRAPH_BIZ)) {
             addExpectedExecutionRoleCheck(result, ROLE_BIZ, SOURCE_BIZ_WORKER_IDENTITY);
         }
+    }
+
+    private void addWorkerRuntimeAvailabilityCheck(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential) {
+        if (!hasPhysicalRoutingContext(result)) {
+            return;
+        }
+        String expectedRole = expectedExecutionRole(result.getEffectiveWorkerBackend());
+        if (expectedRole == null) {
+            return;
+        }
+        PhysicalWorkerDiagnosticDTO executionWorker = result.getPhysicalWorkerDiagnostics() == null
+                ? null
+                : result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> diagnostic != null
+                        && Boolean.TRUE.equals(diagnostic.getExecutionWorker())
+                        && sameText(expectedRole, diagnostic.getRole())
+                        && sameText(result.getEffectivePhysicalWorkerId(), diagnostic.getPhysicalWorkerId()))
+                .findFirst()
+                .orElse(null);
+        if (executionWorker == null) {
+            addWorkerRuntimeUnavailable(
+                    result,
+                    "execution Worker role is not resolved for the selected physical Worker");
+            return;
+        }
+        if (!isAvailableWorkerStatus(executionWorker.getStatus())) {
+            addWorkerRuntimeUnavailable(
+                    result,
+                    "selected physical Worker is not available: status="
+                            + printableStatus(executionWorker.getStatus()));
+            return;
+        }
+        if (StringUtils.hasText(executionWorker.getHealthStatus())
+                && !isAvailableWorkerHealth(executionWorker.getHealthStatus())) {
+            addWorkerRuntimeUnavailable(
+                    result,
+                    "selected execution Worker is not healthy: healthStatus="
+                            + printableStatus(executionWorker.getHealthStatus()));
+            return;
+        }
+        if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)
+                || isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            addWorkerBackendConnectionProbe(result, credential);
+            return;
+        }
+        result.getChecks().add(AgentReadinessCheckDTO.ok(
+                CHECK_WORKER_RUNTIME_AVAILABILITY,
+                "selected physical Worker and execution role are available"));
+    }
+
+    private void addWorkerBackendConnectionProbe(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential) {
+        String backend = trimToNull(result.getEffectiveWorkerBackend());
+        Optional<WorkerBackendConnectionTester> tester = workerBackendConnectionTesters.stream()
+                .filter(candidate -> isBackend(candidate.getWorkerBackend(), backend))
+                .findFirst();
+        if (tester.isEmpty()) {
+            addWorkerRuntimeUnavailable(
+                    result,
+                    "execution Worker connection probe is unavailable for backend " + backend);
+            return;
+        }
+        String workerId = trimToNull(result.getEffectivePhysicalWorkerId());
+        String modelName = trimToNull(result.getEffectiveModelName());
+        String credentialId = credential != null ? trimToNull(credential.getCredentialId()) : null;
+        String tenantId = credential != null ? trimToNull(credential.getTenantId()) : null;
+        if (workerId == null || modelName == null || credentialId == null || tenantId == null) {
+            addWorkerRuntimeUnavailable(
+                    result,
+                    "execution Worker connection probe is missing owner, Worker, or model context");
+            return;
+        }
+        try {
+            tester.get().testConnection(
+                    "client-app-control:" + credentialId,
+                    tenantId,
+                    workerId,
+                    modelName);
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    CHECK_WORKER_RUNTIME_AVAILABILITY,
+                    "selected execution Worker accepted the readiness connection probe"));
+        } catch (RuntimeException error) {
+            addWorkerRuntimeUnavailable(
+                    result,
+                    "selected execution Worker connection probe failed: "
+                            + sanitize(error.getMessage()));
+        }
+    }
+
+    private String expectedExecutionRole(String backend) {
+        if (isBackend(backend, BACKEND_OPENAI_CODEX)) {
+            return ROLE_CODEX;
+        }
+        if (isBackend(backend, BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            return ROLE_CODEX_APP_SERVER;
+        }
+        if (isBackend(backend, BACKEND_LANGGRAPH_BIZ)) {
+            return ROLE_BIZ;
+        }
+        return null;
+    }
+
+    private boolean isAvailableWorkerStatus(String status) {
+        String normalized = trimToNull(status);
+        return normalized != null
+                && Set.of("ONLINE", "ENABLED", "READY", "UP")
+                .contains(normalized.toUpperCase(java.util.Locale.ROOT));
+    }
+
+    private boolean isAvailableWorkerHealth(String healthStatus) {
+        String normalized = trimToNull(healthStatus);
+        return normalized != null
+                && Set.of("HEALTHY", "READY", "UP", "ONLINE")
+                .contains(normalized.toUpperCase(java.util.Locale.ROOT));
+    }
+
+    private String printableStatus(String value) {
+        return StringUtils.hasText(value) ? sanitize(value) : "(missing)";
+    }
+
+    private void addWorkerRuntimeUnavailable(AgentReadinessDTO result, String message) {
+        result.getChecks().add(AgentReadinessCheckDTO.fail(
+                CHECK_WORKER_RUNTIME_AVAILABILITY,
+                message,
+                ERROR_WORKER_RUNTIME_UNAVAILABLE,
+                "Start or repair the selected physical Worker and its execution role, then rerun readiness before creating a Task."));
     }
 
     private boolean isDirectCodexPhysicalWorkerRoute(AgentReadinessDTO result) {

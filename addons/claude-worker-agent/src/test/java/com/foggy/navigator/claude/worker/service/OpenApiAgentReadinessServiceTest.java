@@ -57,6 +57,7 @@ class OpenApiAgentReadinessServiceTest {
     private ClaudeWorkerRepository claudeWorkerRepository;
     private LlmModelManager llmModelManager;
     private WorkerBackendConnectionTester appServerConnectionTester;
+    private WorkerBackendConnectionTester codexConnectionTester;
     private Environment environment;
     private OpenApiAgentReadinessService service;
 
@@ -77,6 +78,12 @@ class OpenApiAgentReadinessServiceTest {
         appServerConnectionTester = mock(WorkerBackendConnectionTester.class);
         when(appServerConnectionTester.getWorkerBackend())
                 .thenReturn("OPENAI_CODEX_APP_SERVER");
+        codexConnectionTester = mock(WorkerBackendConnectionTester.class);
+        when(codexConnectionTester.getWorkerBackend())
+                .thenReturn("OPENAI_CODEX");
+        when(codexConnectionTester.testConnection(
+                anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("Codex SDK Worker READY");
         environment = mock(Environment.class);
         service = new OpenApiAgentReadinessService(
                 agentResolver,
@@ -91,7 +98,7 @@ class OpenApiAgentReadinessServiceTest {
                 workerIdentityRepository,
                 claudeWorkerRepository,
                 llmModelManager,
-                List.of(appServerConnectionTester),
+                List.of(appServerConnectionTester, codexConnectionTester),
                 environment,
                 new ObjectMapper());
 
@@ -545,6 +552,14 @@ class OpenApiAgentReadinessServiceTest {
         assertTrue(result.getChecks().stream().anyMatch(check ->
                 "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
                         && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_RUNTIME_AVAILABILITY".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        verify(codexConnectionTester).testConnection(
+                "client-app-control:cred_1",
+                "tenant_1",
+                "worker_codex_host",
+                "gpt-5.5");
         assertTrue(result.getChecks().stream().noneMatch(check ->
                 "WORKER_POOL_MEMBERSHIP".equals(check.getCode())));
         verify(poolWorkerSelector, never()).resolveEnabledWorkerId(
@@ -682,6 +697,64 @@ class OpenApiAgentReadinessServiceTest {
         assertTrue(result.getChecks().stream().anyMatch(check ->
                 "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
                         && "OK".equals(check.getStatus())));
+    }
+
+    @Test
+    void verify_failsBeforeProbeWhenSelectedCodexWorkerIsOffline() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_codex");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        stubDirectCodexWorkerResources("OFFLINE");
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        AgentReadinessCheckDTO check = result.getChecks().stream()
+                .filter(item -> "WORKER_RUNTIME_AVAILABILITY".equals(item.getCode()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("FAIL", check.getStatus());
+        assertEquals("WORKER_RUNTIME_UNAVAILABLE", check.getErrorCode());
+        assertTrue(check.getMessage().contains("status=OFFLINE"));
+        verify(codexConnectionTester, never()).testConnection(
+                anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void verify_failsWhenSelectedCodexExecutionEndpointIsUnreachable() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_codex");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        stubDirectCodexWorkerResources("ONLINE");
+        doThrow(new IllegalStateException("CODEX_SDK_WORKER_UNAVAILABLE"))
+                .when(codexConnectionTester)
+                .testConnection(
+                        "client-app-control:cred_1",
+                        "tenant_1",
+                        "worker_codex_host",
+                        "gpt-5.5");
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        AgentReadinessCheckDTO check = result.getChecks().stream()
+                .filter(item -> "WORKER_RUNTIME_AVAILABILITY".equals(item.getCode()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("WORKER_RUNTIME_UNAVAILABLE", check.getErrorCode());
+        assertTrue(check.getMessage().contains("CODEX_SDK_WORKER_UNAVAILABLE"));
     }
 
     @Test
@@ -1239,6 +1312,65 @@ class OpenApiAgentReadinessServiceTest {
         when(appServerConnectionTester.supportsWorker(workspaceWorkerId, "codex-terra:ultra"))
                 .thenReturn(runtimeReady);
         return form;
+    }
+
+    private void stubDirectCodexWorkerResources(String workerStatus) {
+        when(resourceResolver.resolveRequiredAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> new A2AgentResourceResolver.ResolvedAgentResource(
+                        invocation.getArgument(3),
+                        ResourceOwnerType.CLIENT_APP,
+                        "capp_1",
+                        "capp_1",
+                        "world-sim.bug-coordinator.decision.v1",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "OPENAI_CODEX",
+                        "worker_codex_host",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant_1",
+                        "CLAUDE_WORKER:TENANT",
+                        "model_codex",
+                        "gpt-5.5",
+                        "dir_user",
+                        "AGENT:CLIENT_APP"));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model_codex",
+                        "model_codex",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "gpt-5.5",
+                        "MODEL_CONFIG_DEFAULT",
+                        "OPENAI_CODEX",
+                        "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        "worker_codex_host",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker_codex_host");
+        worker.setStatus(workerStatus);
+        worker.setBaseUrl("http://127.0.0.1:3131");
+        worker.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://127.0.0.1:3151")
+                .model("gpt-5.5")
+                .build());
+        when(claudeWorkerRepository.findByWorkerId("worker_codex_host"))
+                .thenReturn(Optional.of(worker));
     }
 
     private ResolvedClientAppCredentialDTO credential() {

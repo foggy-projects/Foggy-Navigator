@@ -3695,11 +3695,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private Boolean terminalRecoverability(CodexTaskEntity entity) {
         String status = entity != null ? entity.getStatus() : null;
         if ("FAILED".equals(status)) {
-            if ("CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(entity.getErrorMessage())) {
-                // The Worker rejected execution before a provider task/process
-                // existed. Resync cannot repair the missing delegated
-                // directory, so this is a definitive terminal dispatch
-                // rejection and its task-scoped capability must close.
+            if ("CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(entity.getErrorMessage())
+                    || "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(entity.getErrorMessage())) {
+                // The Worker rejected execution, or could not be reached,
+                // before a provider task/process existed. Resync cannot attach
+                // to an execution that was never accepted, so this is a
+                // definitive terminal dispatch failure and its task-scoped
+                // capability must close.
                 return Boolean.FALSE;
             }
             // FAILED is explicitly accepted by resyncTaskForProvider and can

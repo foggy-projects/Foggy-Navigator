@@ -2880,6 +2880,37 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void sdkStreamFailureBeforeAcceptancePublishesDefinitiveTerminalEvent() {
+        CodexTaskEntity entity = createTask(
+                "task-sdk-not-accepted", "session-2", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 28, 12, 0)
+        );
+        entity.setTenantId("tenant-1");
+        entity.setWorkerTaskId(null);
+        when(taskRepository.findByTaskIdForUpdate("task-sdk-not-accepted"))
+                .thenReturn(Optional.of(entity));
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.failTask(
+                "task-sdk-not-accepted",
+                null,
+                null,
+                "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE");
+
+        assertEquals("FAILED", entity.getStatus());
+        assertNull(entity.getWorkerTaskId());
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-sdk-not-accepted".equals(event.getTaskId())
+                        && "tenant-1".equals(event.getTenantId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "FAILED".equals(event.getStatus())
+                        && "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(event.getErrorMessage())
+                        && Boolean.FALSE.equals(event.getRecoverable())
+        ));
+    }
+
+    @Test
     void preAcceptanceFailurePublishesDefinitiveTerminalEvent() {
         CodexTaskEntity entity = createTask(
                 "task-not-accepted", "session-2", "worker-1", "dir-1", "RUNNING",
