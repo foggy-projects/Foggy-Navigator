@@ -170,14 +170,15 @@ Write-Host ""
 Write-Host "Installing runtime dependencies..." -ForegroundColor Cyan
 Set-Location $InstallDir
 
-$PreservedSdkVersion = (& node (Join-Path $ScriptDir 'scripts\runtime-dependency-version.mjs') `
+$PreservedSdkOutput = & node (Join-Path $ScriptDir 'scripts\runtime-dependency-version.mjs') `
     --installed-root $InstallDir `
     --candidate-root $InstallDir `
-    --package '@openai/codex-sdk').Trim()
+    --package '@openai/codex-sdk'
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Could not compare installed Codex SDK dependency version." -ForegroundColor Red
     exit 1
 }
+$PreservedSdkVersion = if ($null -eq $PreservedSdkOutput) { "" } else { ([string]$PreservedSdkOutput).Trim() }
 if ($PreservedSdkVersion) {
     Write-Host "Preserving newer installed @openai/codex-sdk $PreservedSdkVersion..." -ForegroundColor Cyan
     & npm install --package-lock-only --ignore-scripts --save-exact --omit=dev "@openai/codex-sdk@$PreservedSdkVersion"

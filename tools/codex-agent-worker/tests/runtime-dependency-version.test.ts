@@ -52,6 +52,31 @@ test('release installers apply the monotonic SDK lockfile policy before npm ci',
   }
 })
 
+test('Windows release installer accepts valid empty runtime dependency helper output', () => {
+  const content = fs.readFileSync('release/install.ps1', 'utf8')
+  const captureIndex = content.indexOf('$PreservedSdkOutput = & node')
+  const exitCheckIndex = content.indexOf('if ($LASTEXITCODE -ne 0)', captureIndex)
+  const normalizeIndex = content.indexOf('$PreservedSdkVersion = if ($null -eq $PreservedSdkOutput)', exitCheckIndex)
+
+  assert.ok(captureIndex >= 0, 'installer must capture helper output without trimming it inline')
+  assert.ok(exitCheckIndex > captureIndex, 'installer must check the helper exit code after invocation')
+  assert.ok(normalizeIndex > exitCheckIndex, 'installer must normalize null output only after checking the helper exit code')
+  assert.doesNotMatch(content, /runtime-dependency-version\.mjs'[\s\S]*?--package '@openai\/codex-sdk'\)\.Trim\(\)/)
+})
+
+test('PowerShell null normalization expression handles a command with no stdout', {
+  skip: process.platform !== 'win32' ? 'PowerShell behavior test requires Windows' : false,
+}, () => {
+  const command = [
+    '$PreservedSdkOutput = & node -e "process.exit(0)"',
+    'if ($LASTEXITCODE -ne 0) { exit 2 }',
+    '$PreservedSdkVersion = if ($null -eq $PreservedSdkOutput) { "" } else { ([string]$PreservedSdkOutput).Trim() }',
+    'if ($PreservedSdkVersion -ne "") { exit 3 }',
+  ].join('; ')
+  const result = spawnSync('powershell', ['-NoProfile', '-Command', command], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+})
+
 test('release installers remove retired ambiguous SDK updater names', () => {
   const installSh = fs.readFileSync('release/install.sh', 'utf8')
   const installPs1 = fs.readFileSync('release/install.ps1', 'utf8')

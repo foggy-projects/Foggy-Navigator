@@ -5,7 +5,7 @@ status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-28
+last_updated: 2026-07-29
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -53,6 +53,8 @@ last_updated: 2026-07-28
 - runtime_task_completion_readiness_status: READY_FOR_SIGNOFF
 - runtime_worker_readiness_convergence_spec: workitems/BUG-032-runtime-worker-readiness-and-preacceptance-failure-convergence.md
 - runtime_worker_readiness_convergence_status: READY_FOR_SIGNOFF
+- codex_worker_windows_installer_null_output_spec: workitems/BUG-033-codex-worker-windows-installer-null-output.md
+- codex_worker_windows_installer_null_output_status: ULTRA_EXECUTING
 - app_server_compact_repair_spec: workitems/BUG-021-app-server-compact-protocol.md
 - bug021_status: READY_FOR_SIGNOFF
 - app_server_force_recovery_spec: workitems/BUG-022-app-server-force-recovery-start.md
@@ -127,6 +129,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-030 Claude 任务所有者强制中止](./workitems/BUG-030-claude-owner-force-cancel.md) | 所有用户可在二次确认后按自己的 taskId 强制中止，服务端解析并验证 Worker/PID/进程身份 | READY_FOR_SIGNOFF；Worker 0.1.13 已发布，待目标安装及 Java/前端部署后完成 live destructive smoke |
 | [BUG-031 clean runtime provenance 与 task-scoped caller token](./workitems/BUG-031-clean-runtime-provenance-and-task-scoped-caller-token.md) | clean embedded SCM/build provenance；task token 为 current caller authority 在 exact Navigator instance、单个 Task/function scope 上的短期受限委托 | READY_FOR_SIGNOFF；实现、迁移、部署和 focused/live 验证已完成 |
 | [BUG-032 runtime Worker readiness 与 pre-acceptance failure 收敛](./workitems/BUG-032-runtime-worker-readiness-and-preacceptance-failure-convergence.md) | exact physical Worker/execution role 真实可用性检查；SDK Worker 接单前失败可信终态与 token late-bind fail-closed | READY_FOR_SIGNOFF；离线 fail-closed、旧 Task 收敛及 live fixture Worker/model dispatch 已通过 |
+| [BUG-033 Codex SDK Worker Windows installer 空输出崩溃](./workitems/BUG-033-codex-worker-windows-installer-null-output.md) | PowerShell 将 runtime dependency helper 的合法空输出视为 `$null` 并调用 `.Trim()` | ULTRA_EXECUTING；目标修复并发布 SDK Worker 1.0.29 |
 | [FEAT-001 runtime binding/task read-only audit](./workitems/FEAT-001-runtime-binding-task-read-only-audit.md) | ClientApp runtime long-term credential 对 frozen binding 与既有 task durable 终态执行零 token、零 dispatch、零资源变更审计 | READY_FOR_SIGNOFF；CLI 1.0.26、server build、live zero-write audit 已完成，等待独立签核 |
 | [FEAT-003 runtime task completion readiness](./workitems/FEAT-003-runtime-task-completion-readiness.md) | 基于 durable task、真实 Worker/provider 进程和脱敏 completion evidence 区分运行中、注册残留与完成候选 | READY_FOR_SIGNOFF；Worker 1.0.25、CLI 1.0.34 和 8112 launcher clean release/deploy 已完成，live stale-registration/process-absence、快速终态失败、自然完成 V2 durable receipt 与零副作用证据均通过 |
 
