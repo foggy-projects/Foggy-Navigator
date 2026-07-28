@@ -18,6 +18,8 @@ src="$(release_source_dir)"
 release_kit="$RELEASE_KIT_DIR"
 backend="$(image_ref navigator-backend)"
 frontend="$(image_ref navigator-frontend)"
+expected_commit="$(bash "$SCRIPT_DIR/check-clean-source.sh" "$src")"
+update_release_env_value NAVIGATOR_EXPECTED_COMMIT "$expected_commit"
 
 if [ -n "${HARBOR_USERNAME:-}" ] && [ -n "${HARBOR_PASSWORD:-}" ]; then
   log "Logging in to Harbor registry $HARBOR_REGISTRY"
@@ -29,7 +31,10 @@ fi
 log "Building backend jar"
 (
   cd "$src"
-  mvn ${MAVEN_ARGS:-"-DskipTests"} package
+  mvn ${MAVEN_ARGS:-"-DskipTests"} \
+    -Dnavigator.expectedCommit="$expected_commit" \
+    -Dnavigator.requireCleanBuild=true \
+    package
 )
 
 log "Building frontend dist via pnpm registry ${NPM_REGISTRY:-default}"
@@ -45,9 +50,17 @@ log "Building frontend dist via pnpm registry ${NPM_REGISTRY:-default}"
 )
 
 log "Building images"
+verified_commit="$(bash "$SCRIPT_DIR/check-clean-source.sh" "$src")"
+if [ "$verified_commit" != "$expected_commit" ]; then
+  die "Release source commit changed during build"
+fi
 mkdir -p "$src/deploy/dev-kvm-x3"
 rm -rf "$src/deploy/dev-kvm-x3/images"
 cp -R "$release_kit/images" "$src/deploy/dev-kvm-x3/images"
+packaging_commit="$(bash "$SCRIPT_DIR/check-clean-source.sh" "$src")"
+if [ "$packaging_commit" != "$expected_commit" ]; then
+  die "Release packaging source does not match the verified commit"
+fi
 docker build -f "$release_kit/images/backend/Dockerfile" -t "$backend" "$src"
 docker build -f "$release_kit/images/frontend/Dockerfile" -t "$frontend" "$src"
 
@@ -56,9 +69,10 @@ docker push "$backend"
 docker push "$frontend"
 
 printf '%s\n' "$IMAGE_TAG" > "$RUNTIME_DIR/current-image-tag"
-git -C "$src" rev-parse HEAD > "$RUNTIME_DIR/current-source-commit"
+printf '%s\n' "$expected_commit" > "$RUNTIME_DIR/current-source-commit"
 
 log "Build and push complete"
 echo "  tag:      $IMAGE_TAG"
 echo "  backend:  $backend"
 echo "  frontend: $frontend"
+echo "  commit:   $expected_commit"

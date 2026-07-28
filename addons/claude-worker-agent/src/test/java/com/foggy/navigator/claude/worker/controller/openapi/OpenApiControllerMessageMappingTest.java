@@ -1228,7 +1228,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1274,7 +1274,7 @@ class OpenApiControllerMessageMappingTest {
         var selectionCaptor = org.mockito.ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         verify(taskService).prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1284,6 +1284,8 @@ class OpenApiControllerMessageMappingTest {
         assertEquals(List.of(), selectionCaptor.getValue().getAllowedTools());
         assertTrue(selectionCaptor.getValue().isAllowedFunctionsProvided());
         assertEquals(List.of(), selectionCaptor.getValue().getAllowedFunctions());
+        assertEquals("cred-1", selectionCaptor.getValue().getCallerCredentialId());
+        assertEquals("access-token-1", selectionCaptor.getValue().getCallerAccessTokenId());
         verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant-1",
                 "btt_open_api_1",
@@ -1313,7 +1315,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1372,7 +1374,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1478,7 +1480,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(modelResource);
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1520,7 +1522,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1576,7 +1578,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1617,7 +1619,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -1740,7 +1742,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-missing-grant"),
                 eq("agent-1"),
@@ -1793,7 +1795,7 @@ class OpenApiControllerMessageMappingTest {
                         false));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("tms.navigator.agent"),
@@ -1861,7 +1863,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -2312,7 +2314,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(workspaceResource);
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("server-route-skill"),
@@ -2342,7 +2344,7 @@ class OpenApiControllerMessageMappingTest {
         var selectionCaptor = org.mockito.ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         verify(taskService).prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("server-route-skill"),
@@ -2715,7 +2717,7 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(new BusinessAgentSessionDTO());
         when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
-                eq("app-1"),
+                eq("owner-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
@@ -3690,6 +3692,7 @@ class OpenApiControllerMessageMappingTest {
     private ResolvedClientAppCredentialDTO credential() {
         return ResolvedClientAppCredentialDTO.builder()
                 .credentialId("cred-1")
+                .runtimeAccessTokenId("access-token-1")
                 .tenantId("tenant-1")
                 .clientAppId("app-1")
                 .build();

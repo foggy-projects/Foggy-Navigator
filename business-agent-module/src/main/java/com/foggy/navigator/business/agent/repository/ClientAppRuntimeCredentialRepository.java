@@ -10,5 +10,7 @@ public interface ClientAppRuntimeCredentialRepository extends JpaRepository<Clie
 
     Optional<ClientAppRuntimeCredentialEntity> findByAppKey(String appKey);
 
+    Optional<ClientAppRuntimeCredentialEntity> findByCredentialId(String credentialId);
+
     List<ClientAppRuntimeCredentialEntity> findByClientAppIdOrderByCreatedAtDesc(String clientAppId);
 }

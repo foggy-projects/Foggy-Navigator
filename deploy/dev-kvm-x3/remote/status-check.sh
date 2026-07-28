@@ -57,6 +57,16 @@ run_status_check_once() {
   log "HTTP checks"
   check_http frontend "${NAVIGATOR_FRONTEND_HEALTH_URL:-http://127.0.0.1/health}"
   check_http backend "${NAVIGATOR_BACKEND_HEALTH_URL:-http://127.0.0.1:8112/actuator/health}"
+  if provenance="$(
+      bash "$SCRIPT_DIR/verify-runtime-provenance.sh" \
+        "${NAVIGATOR_EXPECTED_COMMIT:-}" \
+        "${NAVIGATOR_BACKEND_INFO_URL:-http://127.0.0.1:8112/actuator/info}"
+    )"; then
+    echo "  backend provenance: $provenance"
+  else
+    echo "  backend provenance: FAILED" >&2
+    failed=1
+  fi
 
   log "Startup log scan"
   for name in foggy-navigator-backend foggy-navigator-frontend; do

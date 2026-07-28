@@ -68,6 +68,8 @@ class BusinessAgentTaskServiceTest {
     @Mock
     private BusinessTaskScopedTokenLifecycleService tokenLifecycleService;
     @Mock
+    private BusinessTaskScopedCallerAuthorityService callerAuthorityService;
+    @Mock
     private BusinessAgentWorkerTaskLauncher workerTaskLauncher;
 
     @InjectMocks
@@ -273,6 +275,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
 
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
@@ -389,6 +392,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
 
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
@@ -437,6 +441,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
         pool.setPoolId("pool_01");
@@ -502,6 +507,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
 
         when(resourceResolver.resolveRequiredAgent(
@@ -601,6 +607,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
 
         ClientAppEntity clientApp = new ClientAppEntity();
@@ -894,6 +901,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
         ClientAppEntity activeClientApp = new ClientAppEntity();
         activeClientApp.setUpstreamSystemId("  trusted-upstream  ");
@@ -912,6 +920,8 @@ class BusinessAgentTaskServiceTest {
                         .workerPoolOwnerId("tenant_01")
                         .workerBackend("LANGGRAPH_BIZ")
                         .upstreamSystemId("caller-controlled-upstream")
+                        .callerCredentialId("credential-01")
+                        .callerAccessTokenId("access-token-01")
                         .build();
 
         BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
@@ -951,6 +961,8 @@ class BusinessAgentTaskServiceTest {
         assertEquals("worker_01", persisted.getWorkerId());
         assertEquals(prepared.workerLeaseId(), persisted.getWorkerLeaseId());
         assertEquals("pool_01", persisted.getWorkerPoolId());
+        verify(callerAuthorityService).bindRuntimeAuthority(
+                persisted, "credential-01", "access-token-01");
         verify(workerTaskLauncher, never()).launch(any());
     }
 
@@ -967,6 +979,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
         when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
                 .thenReturn(new ClientAppEntity());
@@ -1037,6 +1050,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
         ClientAppEntity activeClientApp = new ClientAppEntity();
         activeClientApp.setUpstreamSystemId("trusted-upstream");
@@ -1091,6 +1105,7 @@ class BusinessAgentTaskServiceTest {
                 businessAgentSessionService,
                 workerIdentityRepository,
                 tokenLifecycleService,
+                callerAuthorityService,
                 List.of(workerTaskLauncher));
         when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
         BusinessAgentWorkerTaskLaunchRequest selectionRequest =
@@ -1139,6 +1154,16 @@ class BusinessAgentTaskServiceTest {
 
         assertNotNull(result);
         assertEquals("model_01", result.getModelConfigId());
+        assertNotEquals("bt_old123", result.getTaskId());
+        assertNotNull(result.getTaskScopedToken());
+        verify(userGrantService)
+                .checkUpstreamUserAccess("tenant_01", "app_01", "user_01");
+        verify(skillRegistryService)
+                .checkClientAppSkillAccess("tenant_01", "app_01", "skill_01");
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(callerAuthorityService).bindInternalAuthority(tokenCaptor.capture());
+        assertEquals(result.getTaskId(), tokenCaptor.getValue().getTaskId());
         verify(resourceResolver).resolveRequiredModelForAgent(
                 eq("tenant_01"), eq("app_01"), any(), eq("model_01"), nullable(String.class), eq(LlmModelCategory.GENERAL));
     }
@@ -1250,6 +1275,7 @@ class BusinessAgentTaskServiceTest {
         com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO result = taskService.resolveTaskScopedToken("plain_token");
         assertNotNull(result);
         assertEquals("tst_01", result.getTokenId());
+        verify(callerAuthorityService).requireCurrentAuthorityAndTask(token);
         verify(tokenLifecycleService).requireNotTerminal(token);
     }
 

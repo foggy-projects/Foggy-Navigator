@@ -27,7 +27,9 @@ import java.util.Set;
 public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner {
 
     private static final String TABLE_NAME = "business_task_scoped_token";
-    private static final String MIGRATION_PATH = "docs/migration/2026-07-14-business-task-token-v2.sql";
+    private static final String MIGRATION_PATH =
+            "docs/migration/2026-07-14-business-task-token-v2.sql followed by "
+                    + "docs/migration/2026-07-28-task-scoped-caller-provenance.sql";
     private static final int H2_LONGTEXT_ALIAS_COLUMN_SIZE = 1_000_000_000;
     private static final Set<String> REQUIRED_COLUMNS = Set.of(
             "id",
@@ -42,6 +44,10 @@ public class BusinessTaskScopedTokenSchemaPreflight implements ApplicationRunner
             "client_app_id",
             "upstream_user_id",
             "navigator_effective_user_id",
+            "navigator_instance_id",
+            "caller_authority_type",
+            "caller_credential_id",
+            "caller_access_token_id",
             "skill_id",
             "worker_pool_id",
             "model_config_id",

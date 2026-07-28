@@ -51,6 +51,18 @@ public class BusinessTaskScopedTokenEntity {
     private String navigatorEffectiveUserId;
 
     @Column(length = 128)
+    private String navigatorInstanceId;
+
+    @Column(length = 48)
+    private String callerAuthorityType;
+
+    @Column(length = 64)
+    private String callerCredentialId;
+
+    @Column(length = 64)
+    private String callerAccessTokenId;
+
+    @Column(length = 128)
     private String skillId;
 
     @Column(length = 64, nullable = false)

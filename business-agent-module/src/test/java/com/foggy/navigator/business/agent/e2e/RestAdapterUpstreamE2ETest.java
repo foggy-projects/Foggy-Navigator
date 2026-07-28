@@ -194,7 +194,8 @@ class RestAdapterUpstreamE2ETest {
                         tokenRepository, terminalStateRepository, tokenPolicyService, tokenRuntimeStore);
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService,
                 bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService,
-                businessAgentSessionService, identityRepository, tokenLifecycleService, java.util.List.of());
+                businessAgentSessionService, identityRepository, tokenLifecycleService,
+                mock(BusinessTaskScopedCallerAuthorityService.class), java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(

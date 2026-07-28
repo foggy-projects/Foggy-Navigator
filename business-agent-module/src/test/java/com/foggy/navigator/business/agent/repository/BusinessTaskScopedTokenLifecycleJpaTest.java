@@ -11,6 +11,7 @@ import com.foggy.navigator.business.agent.service.BusinessAgentTaskScopedTokenRu
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenLifecycleService;
 import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenPolicyService;
+import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.TerminalTaskBindingException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +23,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -57,6 +59,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class BusinessTaskScopedTokenLifecycleJpaTest {
 
     private static final String TENANT_ID = "tenant-token-jpa";
+
+    @MockitoBean
+    private RuntimeRequestAuditService runtimeRequestAuditService;
 
     private final BusinessTaskScopedTokenRepository tokenRepository;
     private final BusinessTaskScopedTokenLifecycleService lifecycleService;

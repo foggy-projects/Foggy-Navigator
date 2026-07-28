@@ -160,6 +160,7 @@ class ClientAppRuntimeCredentialResolverTest {
         assertEquals("tms_app", resolved.getClientAppId());
         assertEquals("tenant_1", resolved.getTenantId());
         assertEquals("cred_1", resolved.getCredentialId());
+        assertEquals(token.getTokenId(), resolved.getRuntimeAccessTokenId());
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "tms_app", "tms-agent-v305");
     }

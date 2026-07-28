@@ -9,4 +9,6 @@ public interface ClientAppRuntimeAccessTokenRepository
         extends JpaRepository<ClientAppRuntimeAccessTokenEntity, Long> {
 
     Optional<ClientAppRuntimeAccessTokenEntity> findByTokenHash(String tokenHash);
+
+    Optional<ClientAppRuntimeAccessTokenEntity> findByTokenId(String tokenId);
 }

@@ -167,7 +167,8 @@ class BusinessAgentE2ESampleTest {
                         tokenRepository, terminalStateRepository, tokenPolicyService, tokenRuntimeStore);
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService,
                 bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService,
-                businessAgentSessionService, identityRepository, tokenLifecycleService, java.util.List.of());
+                businessAgentSessionService, identityRepository, tokenLifecycleService,
+                mock(BusinessTaskScopedCallerAuthorityService.class), java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
         auditService = new BusinessFunctionRuntimeAuditService(
                 auditRepository, new BusinessFunctionRuntimeAuditWriter(auditRepository));

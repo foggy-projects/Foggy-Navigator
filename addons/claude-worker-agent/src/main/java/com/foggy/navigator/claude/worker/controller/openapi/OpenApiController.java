@@ -981,6 +981,7 @@ public class OpenApiController {
                     metadata,
                     route.agentId(),
                     route.skillId(),
+                    agentOwnerUserId,
                     clientAppCredential,
                     request,
                     contextId,
@@ -1994,6 +1995,7 @@ public class OpenApiController {
             Map<String, Object> metadata,
             String rootAgentId,
             String skillId,
+            String actorUserId,
             ResolvedClientAppCredentialDTO clientAppCredential,
             HttpServletRequest request,
             String contextId,
@@ -2027,14 +2029,16 @@ public class OpenApiController {
             context.put("account_id", upstreamUserId);
             String token = issueBusinessRuntimeToken(
                     tenantId,
-                    clientAppCredential.getClientAppId(),
+                    actorUserId,
                     metadata,
                     clientAppCredential.getClientAppId(),
                     upstreamUserId,
                     skillId,
                     contextId,
                     metadata.get("modelConfigId"),
-                    workerSelectionRequest);
+                    workerSelectionRequest,
+                    clientAppCredential.getCredentialId(),
+                    clientAppCredential.getRuntimeAccessTokenId());
             metadata.put("context", context);
             return token;
         }
@@ -2246,11 +2250,15 @@ public class OpenApiController {
             String skillId,
             String sessionId,
             Object requestedModelConfigId,
-            BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest) {
+            BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest,
+            String callerCredentialId,
+            String callerAccessTokenId) {
         BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
         if (service == null) {
             return null;
         }
+        workerSelectionRequest.setCallerCredentialId(callerCredentialId);
+        workerSelectionRequest.setCallerAccessTokenId(callerAccessTokenId);
         BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared;
         try {
             prepared = service.prepareOpenApiTaskScopedToken(

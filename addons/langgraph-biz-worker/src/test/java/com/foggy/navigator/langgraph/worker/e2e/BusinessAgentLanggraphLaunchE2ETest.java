@@ -24,6 +24,7 @@ import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskScopedTokenRuntimeStore;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenLifecycleService;
+import com.foggy.navigator.business.agent.service.BusinessTaskScopedCallerAuthorityService;
 import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenPolicyService;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
@@ -194,6 +195,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 businessAgentSessionService,
                 identityRepository,
                 tokenLifecycleService,
+                mock(BusinessTaskScopedCallerAuthorityService.class),
                 List.of(launcher)
         );
 

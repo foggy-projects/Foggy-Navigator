@@ -54,6 +54,7 @@ public class BusinessAgentTaskService {
     private final BusinessAgentSessionService businessAgentSessionService;
     private final BizWorkerIdentityRepository workerIdentityRepository;
     private final BusinessTaskScopedTokenLifecycleService tokenLifecycleService;
+    private final BusinessTaskScopedCallerAuthorityService callerAuthorityService;
     private final List<BusinessAgentWorkerTaskLauncher> workerTaskLaunchers;
 
     @Transactional
@@ -226,6 +227,7 @@ public class BusinessAgentTaskService {
         token.setWorkerPoolId(task.getWorkerPoolId());
         token.setModelConfigId(task.getModelConfigId());
         token.setStatus(STATUS_ACTIVE);
+        callerAuthorityService.bindInternalAuthority(token);
         if (workerTaskLauncher != null) {
             token.setWorkerId(selectedWorkerId);
             token.setWorkerLeaseId(workerLeaseId);
@@ -342,6 +344,7 @@ public class BusinessAgentTaskService {
         token.setWorkerPoolId("OPEN_API");
         token.setModelConfigId(finalModelConfigId);
         token.setStatus(STATUS_ACTIVE);
+        callerAuthorityService.bindInternalAuthority(token);
         token = tokenLifecycleService.issueNewToken(token, plainToken);
         registerRollbackRevocation(token.getTenantId(), token.getTokenId());
         return plainToken;
@@ -392,6 +395,7 @@ public class BusinessAgentTaskService {
         token.setWorkerPoolId("SAFE_SMOKE");
         token.setModelConfigId(finalModelConfigId);
         token.setStatus(STATUS_ACTIVE);
+        callerAuthorityService.bindInternalAuthority(token);
 
         BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken issued =
                 tokenLifecycleService.issueNewTokenWithScope(
@@ -500,6 +504,14 @@ public class BusinessAgentTaskService {
         token.setWorkerId(selectedWorkerId);
         token.setWorkerLeaseId(workerLeaseId);
         token.setStatus(STATUS_ACTIVE);
+        String callerCredentialId = selectionRequest.getCallerCredentialId();
+        String callerAccessTokenId = selectionRequest.getCallerAccessTokenId();
+        if (StringUtils.hasText(callerCredentialId) || StringUtils.hasText(callerAccessTokenId)) {
+            callerAuthorityService.bindRuntimeAuthority(
+                    token, callerCredentialId, callerAccessTokenId);
+        } else {
+            callerAuthorityService.bindInternalAuthority(token);
+        }
         BusinessTaskScopedTokenPolicyService.FunctionScopeSummary functionScopeSummary;
         if (selectionRequest.isAllowedFunctionsProvided()) {
             BusinessTaskScopedTokenLifecycleService.IssuedTaskScopedToken issuedToken =
@@ -615,6 +627,7 @@ public class BusinessAgentTaskService {
         if (token.getExpiresAt() == null || !token.getExpiresAt().isAfter(LocalDateTime.now())) {
             throw new IllegalStateException("token is expired");
         }
+        callerAuthorityService.requireCurrentAuthorityAndTask(token);
         tokenLifecycleService.requireNotTerminal(token);
 
         return com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO.fromEntity(token);

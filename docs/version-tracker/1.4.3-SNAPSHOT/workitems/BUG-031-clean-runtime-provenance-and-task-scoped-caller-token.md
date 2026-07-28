@@ -3,13 +3,13 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-031
-status: APPROVED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
 approved_by: project-owner-user-confirmed
 approved_at: 2026-07-28
-implementation_authorized: false
+implementation_authorized: true
 open_questions: []
 ---
 
@@ -20,7 +20,7 @@ open_questions: []
 - intended_for: normal-analysis / future-ultra-implementation / independent-signoff
 - purpose: 固化 GitHub issue #153 的 clean runtime provenance 要求，并将 task token 定义为调用者既有能力在单个 Task 与允许 function/tool scope 上的短期受限委托切片。
 - canonical_path: `docs/version-tracker/1.4.3-SNAPSHOT/workitems/BUG-031-clean-runtime-provenance-and-task-scoped-caller-token.md`
-- canonical_status: 本文是该事项唯一项目级执行契约，取代先前的 strict-lock revoke、异步 capability closure 和独立 token lifecycle 方案。当前只授权文档与计划，未授权代码、部署、GitHub 修改或 live smoke。
+- canonical_status: 本文是该事项唯一项目级执行契约，取代先前的 strict-lock revoke、异步 capability closure 和独立 token lifecycle 方案。批准范围内实现与 focused/affected 验证已完成，待独立 signoff；未授权也未执行部署、GitHub 修改、目标数据库迁移或 live smoke。
 
 ## Goal
 
@@ -121,11 +121,11 @@ request allowed =
 
 ## Acceptance Criteria
 
-- [ ] AC-1: controlled release/deployment preflight rejects tracked/untracked/submodule dirtiness, carries the resolved full commit into deployment verification, and requires exact commit, `dirty=false`, nonblank build version and build time through a private runtime metadata path; malformed or mismatched data fails closed without raw response or secret leakage.
-- [ ] AC-2: on every effective use, task token cannot authorize any Navigator instance、tenant、ClientApp、upstream user、Task、function 或 tool operation outside the intersection of current caller authority and the delegated Task scope; caller authority reduction or revocation constrains the next use of an otherwise unexpired token.
-- [ ] AC-3: every effective token-use path rejects an expired token and rejects an old token when its Task is missing or in Navigator authoritative terminal state, regardless of implementation-specific storage or cache state.
-- [ ] AC-4: FSScript waiting for user authorization and transport/UI detach remain nonterminal; the token may remain valid while approval/control policy blocks the paused operation. An active Task may receive a new token after expiry only after current caller、Navigator instance、Task and scope are revalidated.
-- [ ] AC-5: a terminal Task never reuses its old token. Any later continue、retry or recovery follows existing Task governance and must obtain a newly authorized token; no independent revoke/lifecycle system is added.
+- [x] AC-1: controlled release/deployment preflight rejects tracked/untracked/submodule dirtiness, carries the resolved full commit into deployment verification, and requires exact commit, `dirty=false`, nonblank build version and build time through a private runtime metadata path; malformed or mismatched data fails closed without raw response or secret leakage.
+- [x] AC-2: on every effective use, task token cannot authorize any Navigator instance、tenant、ClientApp、upstream user、Task、function 或 tool operation outside the intersection of current caller authority and the delegated Task scope; caller authority reduction or revocation constrains the next use of an otherwise unexpired token.
+- [x] AC-3: every effective token-use path rejects an expired token and rejects an old token when its Task is missing or in Navigator authoritative terminal state, regardless of implementation-specific storage or cache state.
+- [x] AC-4: FSScript waiting for user authorization and transport/UI detach remain nonterminal; the token may remain valid while approval/control policy blocks the paused operation. An active Task may receive a new token after expiry only after current caller、Navigator instance、Task and scope are revalidated.
+- [x] AC-5: a terminal Task never reuses its old token. Any later continue、retry or recovery follows existing Task governance and must obtain a newly authorized token; no independent revoke/lifecycle system is added.
 
 ## Contract / Data / Security Constraints
 
@@ -211,7 +211,7 @@ request allowed =
 ## Ultra Execution Contract
 
 - 先读取本文件、项目根 `AGENTS.md`、相关模块规范、issue #153 和关联 work items。
-- 当前 `implementation_authorized=false`；只有用户后续明确要求实施时，才可将状态改为 `ULTRA_EXECUTING` 并开始修改代码。
+- 当前 `implementation_authorized=true`；用户已于 2026-07-28 明确要求在当前 BUG-031 分支实施，状态已改为 `ULTRA_EXECUTING`。
 - 先定位真实 token issuance 和 effective authorization path，再选择最小修补；不得把 Worker/lease、terminal storage、cache 或 cleanup 的当前实现提升为新的产品模型。
 - 对稳定可复现的 permission-elevation、stale caller-authority、cross-instance/scope bypass 或 missing/terminal Task bypass 优先形成失败回归，再修复并运行通过。
 - 如实现需要破坏性迁移、新公共 revoke API、独立 capability 生命周期或 Session lifecycle，设置 `NEEDS_REPLAN` 并停止扩展。
@@ -222,17 +222,41 @@ request allowed =
 
 ## Implementation Result
 
-> 由 Ultra 执行会话填写。
-
 - implementation_summary:
+  - controlled build 现在在构建前后拒绝 tracked、untracked 和 submodule dirty state，把 clean checkout 的完整 commit 写入私有 release env，并在部署健康检查中通过私有 `/actuator/info` 严格校验 exact commit、`dirty=false`、build version/time；失败输出只保留稳定分类。
+  - task token 新增 server-owned Navigator instance 和 caller credential provenance。OpenAPI 签发保存实际 runtime credential/access-token 引用；内部签发保存 internal-grant authority 类型。
+  - 所有 Worker Gateway 有效使用先经过同一个 token resolve 路径，逐次重新检查当前 ClientApp、upstream-user grant、skill grant、runtime credential/access token、exact instance、Task owner 和非终态，再沿用既有 gateway/function-scope、approval/control 与 Worker route policy。
+  - missing/terminal（含 timeout/cancel/reject）Task、过期 token、撤销或过期 caller credential/access token 均 fail closed；pending/running/waiting permission/input 保持非终态。既有 resume governance 会重新检查 grants、创建新 Task 并签发新 token，不复用旧 token。
+  - 增加兼容的四列 MySQL migration；历史 token 不回填 caller authority，迁移后按设计 fail closed 并通过正常 Task governance 重新签发。未新增 revoke API、CLI、生命周期实体或独立状态机。
 - changed_paths:
+  - release/provenance: `deploy/dev-kvm-x3/remote/{check-clean-source,verify-runtime-provenance,build-and-push-images,deploy-by-image,status-check}.sh`、`deploy/dev-kvm-x3/tests/provenance-preflight-test.sh`、`deploy/dev-kvm-x3/{README.md,release.env.example}`、`launcher/.../BuildMetadataResourceTest.java`
+  - authority/data: `BusinessTaskScopedTokenEntity`/DTO、runtime credential/access-token repository and resolver、`BusinessTaskScopedCallerAuthorityService`、`BusinessAgentTaskService`、Worker launch request、schema preflight
+  - OpenAPI integration: `addons/claude-worker-agent/.../OpenApiController.java`
+  - migration: `docs/migration/2026-07-28-task-scoped-caller-provenance.sql`
+  - regression tests: caller-authority、task-service、schema-preflight、token-lifecycle、credential-resolver、OpenAPI mapping 和 LangGraph/Business Agent E2E fixtures
 - tests_and_results:
+  - `bash deploy/dev-kvm-x3/tests/provenance-preflight-test.sh` — PASS；覆盖 clean、tracked dirty、untracked dirty、submodule dirty、commit mismatch、dirty runtime、缺 version/time、malformed metadata、short expected commit 和 raw-response non-leakage。
+  - `bash -n ...`（全部新增/修改 release shell scripts）— PASS。
+  - focused Maven：caller authority、credential resolver、schema preflight、task service、token lifecycle 和 OpenAPI mapping tests — PASS。
+  - `mvn -pl business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-worker,launcher -am test` — business-agent、Claude、LangGraph、Codex、Gemini、Task Assistant 及其依赖模块全部 PASS；launcher 的 BUG-031 metadata test PASS。整体命令仅因既有 `AuthorizationRouteManifestCoverageTest` 冻结数量 437、当前 HEAD 实际 444 而失败。
+  - 在未包含本次修改的 detached current HEAD 独立运行 `mvn -q -pl launcher -am -Dtest=AuthorizationRouteManifestCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test` — 同样 437/444 FAIL，确认该项是分支基线漂移且本次没有 HTTP route 变更。
+  - `mvn -pl launcher -am -DskipTests package` — PASS（14/14 reactor modules）。
+  - `git diff --check`、scoped secret scan — PASS；仅保留既有 CRLF conversion warnings，无 whitespace error 或 secret finding。
 - manual_or_experience_evidence:
-- deviations: none
-- residual_risks: none
+  - fixture-only shell subprocess matrix 已执行；未部署、未连接目标 MySQL、未探测 live runtime。
+- deviations:
+  - approved implementation scope 无 deviation。
+  - affected reactor 不能描述为全绿；唯一失败是上述已在未修改 HEAD 复现的 launcher route catalog 基线漂移。
+- residual_risks:
+  - 目标环境必须先执行 2026-07-28 migration；迁移未在真实 MySQL 执行，历史 token 会按设计 fail closed。
+  - 尚无 clean candidate image 的实际部署与私有 runtime provenance probe 证据，因此不能声称 issue #153 的部署运行态已完成 signoff。
+  - 当前分支既有 launcher route catalog 437/444 漂移仍需由其所属 work item 修复或重新冻结。
 - reused_evidence:
+  - 既有 Worker Gateway function-scope、approval suspension/resume、task-token terminal tombstone、OpenAPI detach/terminal-race 和 Task resume tests；本次 affected reactor 已重新执行这些测试。
 - omitted_validation_and_reason:
-- readiness: READY_FOR_SIGNOFF | NEEDS_REPLAN | BLOCKED
+  - target MySQL migration、image build/push、deployment、private live metadata probe、fixture-only live Task smoke、GitHub issue 修改和 sibling repository 修改均 `NOT_RUN`，因为本轮授权只包含当前分支实现与本地 focused/affected validation。
+  - MySQL-only integration tests 依环境条件跳过；H2/JPA schema contract 与 migration preflight tests 已通过。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 

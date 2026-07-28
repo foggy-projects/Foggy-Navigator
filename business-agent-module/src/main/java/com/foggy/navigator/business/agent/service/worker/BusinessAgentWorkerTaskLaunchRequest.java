@@ -15,6 +15,10 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String sessionId;
     private String contextId;
     private String clientAppId;
+    /** Server-resolved long-term runtime credential reference; never caller-selected. */
+    private String callerCredentialId;
+    /** Server-resolved short-term runtime access-token reference; never caller-selected. */
+    private String callerAccessTokenId;
     /** Server-resolved ClientApp upstream scope used for physical Worker visibility checks. */
     private String upstreamSystemId;
     private String upstreamUserId;
