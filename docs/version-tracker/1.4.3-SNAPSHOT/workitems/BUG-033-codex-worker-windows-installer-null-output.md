@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-033-codex-worker-windows-installer-null-output
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: standard
@@ -65,13 +65,13 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: helper exit `0` 且 stdout 为空时，Windows installer 得到空字符串并继续进入依赖安装。
-- [ ] AC-2: helper 非零退出时，Windows installer 仍输出明确错误并以非零状态停止。
-- [ ] AC-3: helper 返回较新已安装 SDK 版本时，既有保留逻辑不变。
-- [ ] AC-4: `package.json`、`package-lock.json` 与发布物版本均为 `1.0.29`。
-- [ ] AC-5: SDK Worker focused/full tests、typecheck、build 与三平台 full release smoke 实际运行通过。
-- [ ] AC-6: 修复提交已推送，OBS `latest.json` 指向 `1.0.29`，三个 archive 的长度和 SHA-256 及两个 bootstrap、release evidence 均与本地最终候选一致。
-- [ ] AC-7: app-server Worker 未发布，且未操作任何已安装 Worker 实例。
+- [x] AC-1: helper exit `0` 且 stdout 为空时，Windows installer 得到空字符串并继续进入依赖安装。
+- [x] AC-2: helper 非零退出时，Windows installer 仍输出明确错误并以非零状态停止。
+- [x] AC-3: helper 返回较新已安装 SDK 版本时，既有保留逻辑不变。
+- [x] AC-4: `package.json`、`package-lock.json` 与发布物版本均为 `1.0.29`。
+- [x] AC-5: SDK Worker focused/full tests、typecheck、build 与三平台 full release smoke 实际运行通过。
+- [x] AC-6: 修复提交已推送，OBS `latest.json` 指向 `1.0.29`，三个 archive 的长度和 SHA-256 及两个 bootstrap、release evidence 均与本地最终候选一致。
+- [x] AC-7: app-server Worker 未发布，且未操作任何已安装 Worker 实例。
 
 ## Contract / Data / Security Constraints
 
@@ -131,7 +131,7 @@ open_questions: []
 ## Risks and Open Questions
 
 - known_risks:
-  - Linux 发布主机不能替代真实 Windows 安装执行；回归需最大化覆盖 PowerShell 表达式与 source contract，并在证据中披露环境边界。
+  - 自动化 Node test 在 Linux 进程中跳过 Windows-only case；本次已通过 WSL interop 使用 Windows PowerShell 5.1 对最终 Windows archive 执行隔离真实安装 smoke。
   - OBS `latest.json` 更新后会立即影响后续远程安装，因此必须最后发布 pointer 并完成远端校验。
 - open_questions: none
 
@@ -146,17 +146,31 @@ open_questions: []
 
 ## Implementation Result
 
-> 由 Ultra 执行会话填写。
-
-- implementation_summary:
+- implementation_summary: Windows installer 不再对 helper 命令的捕获结果内联调用 `.Trim()`；它先保存 stdout、检查 `$LASTEXITCODE`，再把合法 `$null` 规范化为空字符串。新增 source-order/null guard 回归与 Windows-only PowerShell 行为测试，并将 SDK Worker 提升、打包和发布为 `1.0.29`。
 - changed_paths:
+  - `tools/codex-agent-worker/release/install.ps1`
+  - `tools/codex-agent-worker/tests/runtime-dependency-version.test.ts`
+  - `tools/codex-agent-worker/package.json`
+  - `tools/codex-agent-worker/package-lock.json`
+  - `docs/version-tracker/1.4.3-SNAPSHOT/{README.md,workitems/BUG-033-codex-worker-windows-installer-null-output.md}`
 - tests_and_results:
-- manual_or_experience_evidence:
-- deviations: none
+  - FAILURE-FIRST: `node --import tsx --test tests/runtime-dependency-version.test.ts` 在修复前 `6 passed / 1 failed / 1 skipped`，新增 installer null-output contract 按预期失败。
+  - PASS: 修复后同命令 `7 passed / 0 failed / 1 Windows-only skipped`。
+  - PASS: Windows PowerShell `5.1.26100.8875` 原生表达式验证输出 `EMPTY_OUTPUT_NORMALIZED`；helper exit `7` 验证输出 `NONZERO_PRESERVED:7`。
+  - PASS: `npm test` 为 `251 passed / 0 failed / 2 Windows-only skipped`；`npm run typecheck` 与 `npm run build` 通过。
+  - PASS: `npm run package:release -- --platform all --smoke auto` 解析为 `full`；`archive-structure`、`sha256-sidecars`、`forbidden-file-scan`、`candidate-npm-ci`、`candidate-health` 通过，Linux candidate health `ok`、version `1.0.29`。
+  - PASS: 最终 Windows zip 在随机 Windows temp 下执行真实 packaged `install.ps1`；输出 `WINDOWS_INSTALL_SMOKE_OK version=1.0.29 sdk=0.145.0`，未启动 Worker，temp 安装已清理。
+  - PASS: `git diff --check`、package/lock version 一致性、archive sidecar checksum 复核。
+  - PASS: release source commit `a4013ab5587bfe766835c1b45278666f79940227` 已推送 `origin/main`；`npm run publish:obs` 完成 OBS 上传和内建远端校验。
+  - PASS: 独立 HTTP 回读确认 manifest `version=1.0.29`、release commit、`gitDirty=false`、`smokeLevel=full`；archive 分别为 Linux `177567 / 73e1bf335772b87c23f6bd109df6216a81e59c3a02edc216c4874d6c80fa9448`、macOS `177567 / 73e1bf335772b87c23f6bd109df6216a81e59c3a02edc216c4874d6c80fa9448`、Windows `739307 / e3c1a9f4bb56d00d19b2bb98bfbddfd8829940fc70710cd93f49c2c10231fa24`；两个 bootstrap 与 release evidence 逐字节匹配。
+- manual_or_experience_evidence: Windows smoke 使用本机 Windows Node `v22.22.0` 和 PowerShell 5.1，在独立随机临时目录完成 fresh install；该路径越过原第 173 行故障点并完整执行 `npm ci`。未读取或修改 `C:\Users\oldse\.codex-worker`。
+- deviations: Windows PowerShell 首次 interop 在仓库根产生未跟踪 `Microsoft/Windows/PowerShell/ModuleAnalysisCache`；确认创建时间和内容后已只删除该临时 cache，提交前工作区仅保留本事项文件。
 - residual_risks:
-- reused_evidence:
-- omitted_validation_and_reason:
-- readiness: READY_FOR_SIGNOFF | NEEDS_REPLAN | BLOCKED
+  - 用户先前失败的 1.0.28 安装未由本次发布自动重启或修复；需由用户重新执行 remote installer 获取 1.0.29。
+  - `npm ci` 报告一条既有 low severity dependency audit finding；本次未改变依赖版本，未扩张为无关依赖升级。
+- reused_evidence: OBS 1.0.28 archive/hash 与 helper `exit 0 + empty stdout` 复现证据；既有 monotonic SemVer helper tests。
+- omitted_validation_and_reason: 未运行 live model、目标机器现有 Worker 升级/启动、Java/frontend reactor、app-server package 或 production soak；均在 approved non-goals，且不会改变本次 installer/publish go-no-go 结论。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
