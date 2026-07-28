@@ -7242,16 +7242,17 @@ async function confirmAndAbortTask(task: ClaudeTask): Promise<ClaudeTask | null>
   }
   if (isClaudeRetry) {
     const force = ref(false)
+    const ForceAbortCheckbox = () => h(ElCheckbox, {
+      modelValue: force.value,
+      'onUpdate:modelValue': (value: boolean | string | number) => {
+        force.value = value === true
+      },
+      style: { marginTop: '12px' },
+    }, () => '强制中止')
     await ElMessageBox.confirm(
       h('div', { style: { lineHeight: '1.7' } }, [
         h('div', '该任务的普通中止仍未得到 Worker 终态确认。'),
-        h(ElCheckbox, {
-          modelValue: force.value,
-          'onUpdate:modelValue': (value: boolean | string | number) => {
-            force.value = value === true
-          },
-          style: { marginTop: '12px' },
-        }, () => '强制中止'),
+        h(ForceAbortCheckbox),
         h('div', {
           style: { marginTop: '6px', color: 'var(--el-color-danger)', fontSize: '12px' },
         }, '强制中止只作用于当前任务绑定的 Claude CLI；Worker 会按 taskId 解析并校验进程身份。'),

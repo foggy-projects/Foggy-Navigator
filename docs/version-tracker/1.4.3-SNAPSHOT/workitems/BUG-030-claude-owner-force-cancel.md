@@ -183,6 +183,10 @@ open_questions: []
     不可达、身份/回执不一致或退出未确认时保持 `CANCEL_REQUESTED`。
   - Claude 二次中止弹窗增加默认未勾选的“强制中止”，其他 provider 的重试行为不变；
     Worker 版本提升至 `0.1.13`，health 增加 termination readiness 字段。
+  - 2026-07-28 follow-up 修复确认框内复选框的响应式渲染：原实现把
+    `modelValue=false` 固化在一次性 VNode 上，点击后请求状态虽更新但 Element Plus
+    选中态不重绘，用户看到的控件始终未选中；现由独立响应式渲染函数读取 force ref，
+    点击后立即显示选中态。
 - changed_paths:
   - `session-module`、`navigator-spi`：typed cancel form、force 路由、operation kind 和回归。
   - `addons/claude-worker-agent`：签名 force dispatch、owner/receipt 校验、状态收口和回归。
@@ -201,6 +205,15 @@ open_questions: []
   - `bash scripts/build-frontend.sh`：TypeScript、workspace tests、Navigator production
     build 和 Mobile H5 build 全部通过；workspace tests 为 mobile 59、foggy-chat 115、
     widget 31、Navigator frontend 291。
+  - 2026-07-28 follow-up failure-first 回归：
+    `pnpm exec vitest run src/views/__tests__/ClaudeWorkerView.integration.test.ts
+    -t "sends task-scoped force only after the checkbox is selected"` 在修复前因
+    `.el-checkbox` 缺少 `is-checked` 失败，修复后 `1 passed`。
+  - `pnpm exec vitest run src/views/__tests__/ClaudeWorkerView.integration.test.ts`：
+    `50 passed`；回归直接挂载确认框内容、点击真实 checkbox input，并验证 Element Plus
+    可见选中态和最终 `{ force: true }` 请求。
+  - follow-up `bash scripts/build-frontend.sh`：TypeScript、四个前端 workspace 测试及
+    Navigator/Mobile production build 全部通过；Navigator frontend `291 passed`。
   - 额外运行 `mvn test -pl addons/claude-worker-agent -am`：本次经过的
     common/SPI/framework/auth/session 均成功；随后在未改动的
     `business-agent-module` 基线测试

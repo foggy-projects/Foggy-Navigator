@@ -1934,12 +1934,17 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       }
       const refreshedTask: ClaudeTask = { ...pendingTask, status: 'ABORTED' }
       vi.mocked(ElMessageBox.confirm).mockImplementationOnce(async (message: any) => {
-        const checkbox = message.children.find(
-          (child: any) => typeof child?.props?.['onUpdate:modelValue'] === 'function',
-        )
-        expect(checkbox).toBeTruthy()
-        expect(checkbox.props.modelValue).toBe(false)
-        checkbox.props['onUpdate:modelValue'](true)
+        const messageWrapper = mount({ render: () => message }, {
+          global: { plugins: [ElementPlus] },
+        })
+        const checkbox = messageWrapper.find('input[type="checkbox"]')
+        expect(checkbox.exists()).toBe(true)
+        expect(messageWrapper.find('.el-checkbox').classes()).not.toContain('is-checked')
+
+        await checkbox.setValue(true)
+
+        expect(messageWrapper.find('.el-checkbox').classes()).toContain('is-checked')
+        messageWrapper.unmount()
         return 'confirm' as any
       })
       vi.mocked(unifiedTaskApi.getTaskUnified).mockResolvedValue(refreshedTask)
