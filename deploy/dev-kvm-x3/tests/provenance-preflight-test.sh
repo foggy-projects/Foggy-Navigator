@@ -60,6 +60,7 @@ git -C "$source_repo/sub" restore file.txt
 
 expected_commit="$(git -C "$source_repo" rev-parse HEAD)"
 good_json="$work_dir/good.json"
+actuator_json="$work_dir/actuator.json"
 dirty_json="$work_dir/dirty.json"
 mismatch_json="$work_dir/mismatch.json"
 missing_version_json="$work_dir/missing-version.json"
@@ -68,6 +69,8 @@ malformed_json="$work_dir/malformed.json"
 
 printf '{"git":{"commit":{"id":"%s"},"dirty":false},"build":{"version":"1.0.0-SNAPSHOT","time":"2026-07-28T00:00:00Z"}}\n' \
   "$expected_commit" >"$good_json"
+printf '{"git":{"branch":"main","commit":{"id":{"full":"%s","abbrev":"%s"}},"dirty":"false"},"build":{"version":"1.0.0-SNAPSHOT","time":"2026-07-28T00:00:00Z"}}\n' \
+  "$expected_commit" "${expected_commit:0:7}" >"$actuator_json"
 printf '{"git":{"commit":{"id":"%s"},"dirty":true},"build":{"version":"1.0.0-SNAPSHOT","time":"2026-07-28T00:00:00Z"},"raw":"DO_NOT_LEAK"}\n' \
   "$expected_commit" >"$dirty_json"
 printf '{"git":{"commit":{"id":"0000000000000000000000000000000000000000"},"dirty":false},"build":{"version":"1.0.0-SNAPSHOT","time":"2026-07-28T00:00:00Z"},"raw":"DO_NOT_LEAK"}\n' \
@@ -79,6 +82,8 @@ printf '{"git":{"commit":{"id":"%s"},"dirty":false},"build":{"version":"1.0.0-SN
 printf '{"raw":"DO_NOT_LEAK"\n' >"$malformed_json"
 
 NAVIGATOR_RUNTIME_PROVENANCE_FILE="$good_json" \
+  bash "$RUNTIME_CHECK" "$expected_commit" >/dev/null
+NAVIGATOR_RUNTIME_PROVENANCE_FILE="$actuator_json" \
   bash "$RUNTIME_CHECK" "$expected_commit" >/dev/null
 expect_failure "DO_NOT_LEAK" env NAVIGATOR_RUNTIME_PROVENANCE_FILE="$dirty_json" \
   bash "$RUNTIME_CHECK" "$expected_commit"

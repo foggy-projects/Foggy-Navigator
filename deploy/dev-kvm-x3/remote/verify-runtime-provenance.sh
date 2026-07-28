@@ -50,6 +50,8 @@ if not isinstance(git, dict) or not isinstance(build, dict):
     fail("missing-metadata")
 commit_block = git.get("commit")
 actual = commit_block.get("id") if isinstance(commit_block, dict) else None
+if isinstance(actual, dict):
+    actual = actual.get("full")
 dirty = git.get("dirty")
 version = build.get("version")
 build_time = build.get("time")
