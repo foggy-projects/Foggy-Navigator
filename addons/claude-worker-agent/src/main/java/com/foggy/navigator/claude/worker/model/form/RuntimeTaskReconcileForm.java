@@ -9,4 +9,16 @@ public class RuntimeTaskReconcileForm {
     private Integer expectedDispatchCount;
     private String confirmTaskId;
     private Boolean dryRun;
+
+    /**
+     * The original mutation contract remains available only when one of its
+     * legacy projection-repair fields is explicitly present. A body containing
+     * only taskId selects typed, read-only request reconciliation.
+     */
+    public boolean isLegacyProjectionRepairRequest() {
+        return expectedPhysicalWorkerId != null
+                || expectedDispatchCount != null
+                || confirmTaskId != null
+                || dryRun != null;
+    }
 }

@@ -133,6 +133,29 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    /**
+     * Returns the formal typed termination readiness contract.
+     */
+    public RuntimeTerminationReadinessDTO getRuntimeTerminationReadiness(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId,
+            String expectedPhysicalWorkerId) {
+        StringBuilder path = new StringBuilder("/api/v1/open/runtime/termination-readiness");
+        appendQuery(path, "taskId", taskId);
+        appendQuery(path, "expectedPhysicalWorkerId", expectedPhysicalWorkerId);
+        return http.get(path.toString(), Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId
+        ), new TypeReference<>() {});
+    }
+
+    /**
+     * @deprecated Use {@link #getRuntimeTerminationReadiness(String, String, String, String, String)}.
+     */
+    @Deprecated(since = "1.0.37", forRemoval = false)
     public Map<String, Object> runtimeTerminationReadiness(
             String appKey,
             String appSecret,
@@ -166,6 +189,30 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    /**
+     * Submits one typed termination request. The request id is sent in
+     * {@code X-Navigator-Client-Request-Id}; an {@code ACCEPTED} outcome is
+     * not terminal proof.
+     */
+    public RuntimeTaskTerminationDTO terminateRuntimeTask(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String clientRequestId,
+            RuntimeTaskTerminateForm form) {
+        return http.post("/api/v1/open/runtime/task-terminate", form, Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId,
+                "X-Navigator-Client-Request-Id", clientRequestId
+        ), new TypeReference<>() {});
+    }
+
+    /**
+     * @deprecated Use {@link #terminateRuntimeTask(String, String, String, String,
+     * RuntimeTaskTerminateForm)}.
+     */
+    @Deprecated(since = "1.0.37", forRemoval = false)
     public Map<String, Object> runtimeTaskTerminate(
             String appKey,
             String appSecret,
@@ -180,6 +227,31 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    /**
+     * Reconciles the authoritative result of the original termination request
+     * without dispatching, repairing, retrying, or otherwise mutating the task.
+     */
+    public RuntimeTaskReconciliationDTO reconcileRuntimeTaskTermination(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String originalClientRequestId,
+            RuntimeTaskReconcileForm form) {
+        return http.post("/api/v1/open/runtime/task-reconcile", form, Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId,
+                "X-Navigator-Client-Request-Id", originalClientRequestId
+        ), new TypeReference<>() {});
+    }
+
+    /**
+     * Legacy projection-repair/Map entry retained for source and binary
+     * compatibility. New callers must use
+     * {@link #reconcileRuntimeTaskTermination(String, String, String, String,
+     * RuntimeTaskReconcileForm)}.
+     */
+    @Deprecated(since = "1.0.37", forRemoval = false)
     public Map<String, Object> runtimeTaskReconcile(
             String appKey,
             String appSecret,

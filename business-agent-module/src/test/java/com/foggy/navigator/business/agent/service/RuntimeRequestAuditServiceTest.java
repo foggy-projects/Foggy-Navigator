@@ -481,20 +481,44 @@ class RuntimeRequestAuditServiceTest {
     @Test
     void taskTerminationClientRequestIdIsIdempotentAndAuditable() {
         String requestId = UUID.randomUUID().toString();
-        RuntimeRequestAuditService.AuditHandle first = service.beginTaskOperation(
+        RuntimeRequestAuditService.TaskOperationRegistration first =
+                service.beginTaskOperationIdempotent(
                 requestId, "task-terminate", "runtime-key", "runtime-secret",
                 "agent-1", "user-1", "task-1");
-        RuntimeRequestAuditService.AuditHandle replay = service.beginTaskOperation(
+        RuntimeRequestAuditService.TaskOperationRegistration replay =
+                service.beginTaskOperationIdempotent(
                 requestId, "task-terminate", "runtime-key", "runtime-secret",
                 "agent-1", "user-1", "task-1");
-        assertEquals(first, replay);
-        service.taskOperationCompleted(first, standardEvidence(
-                "task-1", "CANCELLED", "REVOKED", true, 1, "TERMINATION_COMPLETED"), false, true);
+        assertFalse(first.existing());
+        assertTrue(replay.existing());
+        assertEquals(first.handle(), replay.handle());
+        IllegalArgumentException taskMismatch = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.beginTaskOperationIdempotent(
+                        requestId, "task-terminate", "runtime-key", "runtime-secret",
+                        "agent-1", "user-1", "task-2"));
+        assertEquals("CLIENT_REQUEST_ID_OPERATION_MISMATCH", taskMismatch.getMessage());
+        IllegalArgumentException operationMismatch = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.beginTaskOperationIdempotent(
+                        requestId, "task-reconcile", "runtime-key", "runtime-secret",
+                        "agent-1", "user-1", "task-1"));
+        assertEquals("CLIENT_REQUEST_ID_OPERATION_MISMATCH", operationMismatch.getMessage());
+        service.taskOperationCompleted(first.handle(), standardEvidence(
+                "task-1", "CANCELLED", "REVOKED", true, 1, "TERMINATION_REQUESTED"), false, true);
 
         RuntimeRequestAuditDTO audit = exact(requestId);
+        RuntimeRequestAuditService.TaskOperationSnapshot snapshot =
+                service.findSelfTaskOperation("runtime-key", "runtime-secret", requestId)
+                        .orElseThrow();
         assertEquals("task-terminate", audit.getOperation());
         assertEquals("CANCELLED", audit.getStatus());
         assertEquals("REVOKED", audit.getTaskTokenStatus());
+        assertTrue(snapshot.completed());
+        assertEquals("TERMINATION_REQUESTED", snapshot.result());
+        assertEquals("task-1", snapshot.taskId());
+        assertEquals("user-1", snapshot.upstreamUserId());
+        assertEquals("worker-1", snapshot.physicalWorkerId());
         assertTrue(audit.getStages().stream()
                 .anyMatch(stage -> "TERMINATION_DISPATCHED".equals(stage.getStage())));
         assertTrue(audit.getStages().stream()

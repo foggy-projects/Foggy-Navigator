@@ -5454,7 +5454,7 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.36-SNAPSHOT", provenance.sourceVersion());
+        assertEquals("1.0.37-SNAPSHOT", provenance.sourceVersion());
         assertEquals("1.0.35", provenance.publishedVersion());
         assertEquals("SOURCE_NEWER_THAN_PUBLISHED", provenance.artifactDrift());
         assertNotEquals(provenance.sourceVersion(), provenance.publishedVersion());

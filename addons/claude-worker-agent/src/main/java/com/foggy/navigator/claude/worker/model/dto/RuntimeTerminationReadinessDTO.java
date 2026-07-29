@@ -1,5 +1,7 @@
 package com.foggy.navigator.claude.worker.model.dto;
 
+import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapability;
+import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
 import lombok.Builder;
 import lombok.Data;
 
@@ -8,6 +10,13 @@ import lombok.Data;
 public class RuntimeTerminationReadinessDTO {
     private Boolean taskExists;
     private String taskId;
+    private String expectedPhysicalWorkerId;
+    private String selectedPhysicalWorkerId;
+    private RuntimeWorkerIdentityMatch workerIdentityMatch;
+    private RuntimeTerminationCapability terminationCapability;
+    private String currentTaskStatus;
+    private Boolean canonicalTerminal;
+    private String reasonCode;
     private Boolean terminal;
     private String status;
     private String physicalWorkerId;

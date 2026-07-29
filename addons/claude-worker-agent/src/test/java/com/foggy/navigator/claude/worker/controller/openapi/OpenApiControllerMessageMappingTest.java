@@ -25,10 +25,16 @@ import com.foggy.navigator.claude.worker.model.dto.RuntimeAuditSideEffectsDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeCompletionEvidenceFactsDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeCompletionReconciliationAssessmentDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskClosureDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskCompletionReadinessDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTerminationReadinessDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeWorkerObservedFactsDTO;
+import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskReconciliationState;
+import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapability;
+import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
+import com.foggy.navigator.claude.worker.model.form.RuntimeTaskReconcileForm;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
@@ -62,6 +68,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -80,6 +87,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -99,6 +108,92 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class OpenApiControllerMessageMappingTest {
 
     private static final String STANDARD_CONTEXT_ID = "bctx_20260520_ab_ctx_1";
+
+    @Test
+    void runtimeTerminationReadinessReturnsTypedUnknownWhenExpectedWorkerIsOmitted()
+            throws Exception {
+        RuntimeTaskClosureService closureService = mock(RuntimeTaskClosureService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RuntimeTaskClosureService> closureProvider = mock(ObjectProvider.class);
+        when(closureProvider.getIfAvailable()).thenReturn(closureService);
+        OpenApiController controller = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        ReflectionTestUtils.setField(
+                controller, "runtimeTaskClosureService", closureProvider);
+        when(closureService.readiness(
+                "runtime-key", "runtime-secret", "user-a", "task-a", null))
+                .thenReturn(RuntimeTerminationReadinessDTO.builder()
+                        .taskId("task-a")
+                        .selectedPhysicalWorkerId("worker-a")
+                        .workerIdentityMatch(RuntimeWorkerIdentityMatch.UNKNOWN)
+                        .terminationCapability(RuntimeTerminationCapability.SUPPORTED)
+                        .currentTaskStatus("RUNNING")
+                        .canonicalTerminal(false)
+                        .reasonCode("EXPECTED_PHYSICAL_WORKER_REQUIRED")
+                        .terminateAllowed(false)
+                        .build());
+
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+        mockMvc.perform(get("/api/v1/open/runtime/termination-readiness")
+                        .queryParam("taskId", "task-a")
+                        .header("X-Client-App-Key", "runtime-key")
+                        .header("X-Client-App-Secret", "runtime-secret")
+                        .header("X-Upstream-User-Id", "user-a"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.workerIdentityMatch").value("UNKNOWN"))
+                .andExpect(jsonPath("$.data.terminationCapability").value("SUPPORTED"))
+                .andExpect(jsonPath("$.data.reasonCode")
+                        .value("EXPECTED_PHYSICAL_WORKER_REQUIRED"))
+                .andExpect(jsonPath("$.data.terminateAllowed").value(false));
+
+        verify(closureService).readiness(
+                "runtime-key", "runtime-secret", "user-a", "task-a", null);
+    }
+
+    @Test
+    void runtimeTaskReconcileTaskOnlyBodyUsesOriginalRequestIdReadOnlyMode() {
+        RuntimeTaskClosureService closureService = mock(RuntimeTaskClosureService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RuntimeTaskClosureService> closureProvider = mock(ObjectProvider.class);
+        when(closureProvider.getIfAvailable()).thenReturn(closureService);
+        OpenApiController controller = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        ReflectionTestUtils.setField(
+                controller, "runtimeTaskClosureService", closureProvider);
+
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Client-App-Secret")).thenReturn("runtime-secret");
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("user-a");
+        when(request.getHeader("X-Navigator-Client-Request-Id"))
+                .thenReturn("c66ebce8-e7ae-45d2-9576-32454a960a4f");
+        RuntimeTaskReconcileForm form = new RuntimeTaskReconcileForm();
+        form.setTaskId("task-a");
+        RuntimeTaskClosureDTO result = RuntimeTaskClosureDTO.builder()
+                .clientRequestId("c66ebce8-e7ae-45d2-9576-32454a960a4f")
+                .taskId("task-a")
+                .reconciliationState(RuntimeTaskReconciliationState.ACCEPTED)
+                .readOnly(true)
+                .build();
+        when(closureService.reconcileTerminationRequest(
+                "runtime-key", "runtime-secret", "user-a",
+                "c66ebce8-e7ae-45d2-9576-32454a960a4f", "task-a"))
+                .thenReturn(result);
+
+        RuntimeTaskClosureDTO response =
+                controller.runtimeTaskReconcile(form, request).getData();
+
+        assertEquals(RuntimeTaskReconciliationState.ACCEPTED,
+                response.getReconciliationState());
+        assertTrue(response.getReadOnly());
+        verify(closureService).reconcileTerminationRequest(
+                "runtime-key", "runtime-secret", "user-a",
+                "c66ebce8-e7ae-45d2-9576-32454a960a4f", "task-a");
+        verify(closureService, never()).reconcile(
+                any(), any(), any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+    }
 
     @Test
     void safeSmokeReturnsSanitizedZeroSurfacesWithoutResolvingRuntimeAgent() {

@@ -640,7 +640,7 @@ public class OpenApiController {
     @GetMapping("/runtime/termination-readiness")
     public RX<RuntimeTerminationReadinessDTO> runtimeTerminationReadiness(
             @RequestParam String taskId,
-            @RequestParam String expectedPhysicalWorkerId,
+            @RequestParam(required = false) String expectedPhysicalWorkerId,
             HttpServletRequest request) {
         RuntimeTaskClosureService service = runtimeTaskClosureService.getIfAvailable();
         if (service == null) return RX.failB("RUNTIME_TASK_CLOSURE_SERVICE_UNAVAILABLE");
@@ -714,14 +714,25 @@ public class OpenApiController {
         if (hasForbiddenRuntimeStateAuditCredential(request)) {
             return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
         }
-        if (form == null || form.getExpectedDispatchCount() == null) {
-            return RX.failB("RUNTIME_TASK_RECONCILE_FIELDS_REQUIRED");
+        if (form == null) {
+            return RX.failB("RUNTIME_TASK_RECONCILE_BODY_REQUIRED");
         }
         try {
+            String clientRequestId =
+                    firstHeader(request, "X-Navigator-Client-Request-Id");
+            if (!form.isLegacyProjectionRepairRequest()) {
+                return RX.ok(service.reconcileTerminationRequest(
+                        runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
+                        runtimeUpstreamUserId(request),
+                        clientRequestId, form.getTaskId()));
+            }
+            if (form.getExpectedDispatchCount() == null) {
+                return RX.failB("RUNTIME_TASK_RECONCILE_FIELDS_REQUIRED");
+            }
             return RX.ok(service.reconcile(
                     runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
                     runtimeUpstreamUserId(request),
-                    firstHeader(request, "X-Navigator-Client-Request-Id"),
+                    clientRequestId,
                     form.getTaskId(), form.getExpectedPhysicalWorkerId(),
                     form.getExpectedDispatchCount(), form.getConfirmTaskId(),
                     Boolean.TRUE.equals(form.getDryRun())));

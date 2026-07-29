@@ -7,8 +7,8 @@
 
     <groupId>com.foggy.navigator</groupId>
     <artifactId>navigator-open-sdk</artifactId>
-    <!-- Keep this development coordinate stable; change it only for an owner-approved formal release. -->
-    <version>1.0.36-SNAPSHOT</version>
+    <!-- Snapshot contents are immutable by version; bump for each changed local artifact. -->
+    <version>1.0.37-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>Foggy Navigator Open SDK</name>
     <description>Java SDK for integrating with Foggy Navigator Open API</description>

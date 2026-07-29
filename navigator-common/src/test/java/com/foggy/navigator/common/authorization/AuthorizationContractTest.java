@@ -24,7 +24,7 @@ class AuthorizationContractTest {
     @Test
     void catalog_isFrozenAtTheApprovedDeploymentAwareManifest() {
         assertEquals(462, catalog.size());
-        assertEquals("b59b59424a3cd5b94773f3dcdd88a7ead0fe9594809a38389a7e9190ae1b0e75",
+        assertEquals("bb423a4705780bbf9e88cbe0b3b67d64e830d85a8e415640fee8a786e8d71e9e",
                 catalog.checksum());
 
         AuthorizationRouteManifestEntry actuatorRoot = catalog.findByRouteId("framework:get:/actuator")

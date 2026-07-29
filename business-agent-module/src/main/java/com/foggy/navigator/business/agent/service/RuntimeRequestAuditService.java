@@ -27,6 +27,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -99,6 +101,21 @@ public class RuntimeRequestAuditService {
     private final RuntimeRequestAuditProperties properties;
 
     public record AuditHandle(String clientRequestId) {
+    }
+
+    public record TaskOperationRegistration(AuditHandle handle, boolean existing) {
+    }
+
+    public record TaskOperationSnapshot(
+            String clientRequestId,
+            String operation,
+            String taskId,
+            String upstreamUserId,
+            boolean completed,
+            String result,
+            String status,
+            String sanitizedErrorCode,
+            String physicalWorkerId) {
     }
 
     public record SafeSmokeEvidence(
@@ -234,13 +251,27 @@ public class RuntimeRequestAuditService {
             String agentCode,
             String upstreamUserId,
             String taskId) {
+        return beginTaskOperationIdempotent(
+                clientRequestId, operation, appKey, appSecret,
+                agentCode, upstreamUserId, taskId).handle();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public TaskOperationRegistration beginTaskOperationIdempotent(
+            String clientRequestId,
+            String operation,
+            String appKey,
+            String appSecret,
+            String agentCode,
+            String upstreamUserId,
+            String taskId) {
         ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
                 .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
-        return beginTaskOperation(
+        return registerTaskOperation(
                 clientRequestId, operation, resolveOwner(credential), agentCode, upstreamUserId, taskId);
     }
 
-    private AuditHandle beginTaskOperation(
+    private TaskOperationRegistration registerTaskOperation(
             String clientRequestId,
             String operation,
             OwnerScope owner,
@@ -258,10 +289,13 @@ public class RuntimeRequestAuditService {
         if (existing != null) {
             requireSameOwner(existing, owner);
             if (!normalizedOperation.equals(existing.getOperation())
-                    || (StringUtils.hasText(taskId) && !taskId.trim().equals(existing.getTaskId()))) {
+                    || !Objects.equals(clean(taskId, null), clean(existing.getTaskId(), null))
+                    || !Objects.equals(
+                            clean(upstreamUserId, null),
+                            clean(existing.getUpstreamUserId(), null))) {
                 throw new IllegalArgumentException("CLIENT_REQUEST_ID_OPERATION_MISMATCH");
             }
-            return new AuditHandle(requestId);
+            return new TaskOperationRegistration(new AuditHandle(requestId), true);
         }
         Instant now = Instant.now();
         RuntimeRequestAuditEntity entity = baseEntity(
@@ -277,7 +311,40 @@ public class RuntimeRequestAuditService {
                             : STAGE_TERMINATION_REQUESTED,
                     "RECEIVED", null, now);
         }
-        return new AuditHandle(requestId);
+        return new TaskOperationRegistration(new AuditHandle(requestId), false);
+    }
+
+    /**
+     * Returns one sanitized operation receipt in the calling ClientApp scope.
+     * This method is strictly read-only and deliberately does not create a
+     * reconciliation audit record.
+     */
+    @Transactional(readOnly = true)
+    public Optional<TaskOperationSnapshot> findSelfTaskOperation(
+            String appKey,
+            String appSecret,
+            String clientRequestId) {
+        ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
+                .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+        OwnerScope owner = resolveOwner(credential);
+        String requestId = requireRequestId(clientRequestId);
+        RuntimeRequestAuditEntity entity = auditRepository.findByClientRequestId(requestId).orElse(null);
+        if (entity == null
+                || entity.getExpiresAt() == null
+                || !entity.getExpiresAt().isAfter(Instant.now())
+                || !sameOwner(entity, owner)) {
+            return Optional.empty();
+        }
+        return Optional.of(new TaskOperationSnapshot(
+                entity.getClientRequestId(),
+                entity.getOperation(),
+                entity.getTaskId(),
+                entity.getUpstreamUserId(),
+                Boolean.TRUE.equals(entity.getTerminal()),
+                clean(entity.getResult(), UNKNOWN),
+                clean(entity.getStatus(), UNKNOWN),
+                entity.getSanitizedErrorCode(),
+                entity.getPhysicalWorkerId()));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -1025,11 +1092,15 @@ public class RuntimeRequestAuditService {
     }
 
     private void requireSameOwner(RuntimeRequestAuditEntity entity, OwnerScope owner) {
-        if (!entity.getTenantId().equals(owner.tenantId())
-                || !entity.getUpstreamSystemId().equals(owner.upstreamSystemId())
-                || !entity.getClientAppId().equals(owner.clientAppId())) {
+        if (!sameOwner(entity, owner)) {
             throw new IllegalArgumentException("CLIENT_REQUEST_ID_ALREADY_USED");
         }
+    }
+
+    private boolean sameOwner(RuntimeRequestAuditEntity entity, OwnerScope owner) {
+        return entity.getTenantId().equals(owner.tenantId())
+                && entity.getUpstreamSystemId().equals(owner.upstreamSystemId())
+                && entity.getClientAppId().equals(owner.clientAppId());
     }
 
     private String requireRequestId(String clientRequestId) {
