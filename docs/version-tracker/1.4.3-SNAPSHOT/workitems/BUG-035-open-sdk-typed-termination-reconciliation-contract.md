@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-035
-status: READY_FOR_SIGNOFF
+status: ACCEPTED
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -324,3 +324,13 @@ open_questions: []
 - requirement / issue: 当前用户请求（2026-07-29）
 - architecture / glossary: `docs/02-modules/observability-notification-integration.md`
 - related work items: `FEAT-002-runtime-standard-task-termination-reconciliation.md`
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted
+- signed_off_by: Codex release reviewer (same-thread evidence audit)
+- signed_off_at: 2026-07-30
+- acceptance_record: `docs/version-tracker/1.4.3-SNAPSHOT/evidence/BUG-035-delivery-signoff-2026-07-30.md`
+- blocking_items: none
+- follow_up_required: no

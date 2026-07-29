@@ -5,7 +5,7 @@ status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-29
+last_updated: 2026-07-30
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -57,6 +57,9 @@ last_updated: 2026-07-29
 - codex_worker_windows_installer_null_output_status: READY_FOR_SIGNOFF
 - worker_home_uid_fallback_spec: workitems/BUG-034-worker-home-uid-fallback-and-obs-release.md
 - worker_home_uid_fallback_status: READY_FOR_SIGNOFF
+- typed_termination_cli_release_spec: workitems/REL-003-navigator-upstream-cli-1.0.39-snapshot-typed-termination.md
+- typed_termination_cli_release_status: ULTRA_EXECUTING
+- bug035_status: ACCEPTED
 - app_server_compact_repair_spec: workitems/BUG-021-app-server-compact-protocol.md
 - bug021_status: READY_FOR_SIGNOFF
 - app_server_force_recovery_spec: workitems/BUG-022-app-server-force-recovery-start.md
@@ -113,6 +116,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [GOV-003 S1 system-admin ClientApp scope 管理](./workitems/GOV-003-s1-system-admin-clientapp-scope.md) | system-admin 以显式 target ClientApp 管理同 upstream 的 ClientApp-owned control-plane 资源 | ULTRA_EXECUTING；不改变 typed authority、Worker 或真实 runtime |
 | [REL-001 Navigator Upstream CLI 1.0.22 发布](./workitems/REL-001-navigator-upstream-cli-1.0.22.md) | GOV-002 三 lane CLI 的双平台 archive、OBS installer、commit/push 与 SIM handoff | READY_FOR_SIGNOFF；不改变后端、Worker 或真实 upstream runtime |
 | [REL-002 Navigator Upstream CLI 1.0.24 safe-ask 发布](./workitems/REL-002-navigator-upstream-cli-1.0.24-safe-ask.md) | BUG-016 safe-ask、request-scoped BusinessFunction 空集合与 POSIX profile `0600` 的 official OBS 发布及 SIM handoff | READY_FOR_SIGNOFF；1.0.24 official OBS 发布及公网安装验证通过 |
+| [REL-003 Navigator Upstream CLI 1.0.39-SNAPSHOT typed termination 发布](./workitems/REL-003-navigator-upstream-cli-1.0.39-snapshot-typed-termination.md) | BUG-035 typed termination/reconciliation SDK、OBS CLI、当前 8112 部署与 SIM handoff | ULTRA_EXECUTING；用户已授权 main push、OBS CLI 发布与当前开发实例重启 |
 | [BUG-002 P1A action required-section 合同缺失](./workitems/BUG-002-p1a-required-section-contract.md) | 修复 action-specific required-section catalog/context/validator 缺口和 runtime capability 误分类 | ACCEPTED |
 | [BUG-007 task capability function-scope schema contract](./workitems/BUG-007-task-token-function-scope-schema-contract.md) | 对齐 task-scoped token 的 `function_scope_json` mapping/preflight/migration 契约，并重试本机 TMS runtime-only safe ask | ULTRA_EXECUTING；runtime credential file-safety gate BLOCKED |
 | [INT-001 Synthetic Upstream Integration Harness](./workitems/INT-001-synthetic-upstream-integration-harness.md) | 可销毁、独立的 synthetic upstream runtime harness；用于本机发现/复现通用权限与运行时问题 | REJECTED；AC-2 forced-SIGNAL cleanup 为 `FAILED_CLEANUP/SIGNAL`，不替代真实 TMS/SIM 验收、Gateway external 或 production |
@@ -133,7 +137,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-032 runtime Worker readiness 与 pre-acceptance failure 收敛](./workitems/BUG-032-runtime-worker-readiness-and-preacceptance-failure-convergence.md) | exact physical Worker/execution role 真实可用性检查；SDK Worker 接单前失败可信终态与 token late-bind fail-closed | READY_FOR_SIGNOFF；离线 fail-closed、旧 Task 收敛及 live fixture Worker/model dispatch 已通过 |
 | [BUG-033 Codex SDK Worker Windows installer 空输出崩溃](./workitems/BUG-033-codex-worker-windows-installer-null-output.md) | PowerShell 将 runtime dependency helper 的合法空输出视为 `$null` 并调用 `.Trim()` | READY_FOR_SIGNOFF；SDK Worker 1.0.29 已发布，Windows fresh install smoke 与远端逐字节复核通过 |
 | [BUG-034 Worker 子进程 HOME 按执行 UID 回退与 OBS 发布](./workitems/BUG-034-worker-home-uid-fallback-and-obs-release.md) | Codex SDK/app-server、Claude、Gemini 与 LangGraph Biz Worker 在父环境缺失 HOME 时按有效 UID 对齐系统 home，并独立发布变更 Worker | READY_FOR_SIGNOFF；五个 OBS latest 已更新且 13 个归档逐字节复核通过 |
-| [BUG-035 Open SDK typed termination/reconciliation contract](./workitems/BUG-035-open-sdk-typed-termination-reconciliation-contract.md) | 为 readiness、termination 与原 request-ID 只读 reconciliation 提供正式 typed SDK/服务端契约，同时保留旧 Map 与 legacy repair 兼容分支 | READY_FOR_SIGNOFF；SDK `1.0.38-SNAPSHOT` 已本机安装，receipt 开关、独立 7 天 retention 与凌晨 cron cleanup 已验证 |
+| [BUG-035 Open SDK typed termination/reconciliation contract](./workitems/BUG-035-open-sdk-typed-termination-reconciliation-contract.md) | 为 readiness、termination 与原 request-ID 只读 reconciliation 提供正式 typed SDK/服务端契约，同时保留旧 Map 与 legacy repair 兼容分支 | ACCEPTED；[签收记录](./evidence/BUG-035-delivery-signoff-2026-07-30.md)，release-only `1.0.39-SNAPSHOT` 发布由 REL-003 承接 |
 | [FEAT-001 runtime binding/task read-only audit](./workitems/FEAT-001-runtime-binding-task-read-only-audit.md) | ClientApp runtime long-term credential 对 frozen binding 与既有 task durable 终态执行零 token、零 dispatch、零资源变更审计 | READY_FOR_SIGNOFF；CLI 1.0.26、server build、live zero-write audit 已完成，等待独立签核 |
 | [FEAT-003 runtime task completion readiness](./workitems/FEAT-003-runtime-task-completion-readiness.md) | 基于 durable task、真实 Worker/provider 进程和脱敏 completion evidence 区分运行中、注册残留与完成候选 | READY_FOR_SIGNOFF；Worker 1.0.25、CLI 1.0.34 和 8112 launcher clean release/deploy 已完成，live stale-registration/process-absence、快速终态失败、自然完成 V2 durable receipt 与零副作用证据均通过 |
 

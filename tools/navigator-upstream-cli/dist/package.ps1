@@ -130,6 +130,8 @@ if ($Upload -and $gitDirty) {
 }
 $features = @(
     "structured-json-redaction",
+    "typed-termination-reconciliation",
+    "termination-receipt-policy",
     "config-check",
     "auth-login",
     "runtime-token",
