@@ -5447,17 +5447,17 @@ class UpstreamCliTest {
     }
 
     @Test
-    void p1cProvenanceDeclaresSourceMatchesPublishedRelease() throws Exception {
+    void p1cProvenanceDeclaresDevelopmentSnapshotAfterPublishedRelease() throws Exception {
         CliProvenance provenance = CliProvenance.load();
         Path root = repositoryRoot();
         Path manifest = root.resolve("navigator-common/src/main/resources/authorization/route-manifest-v1.csv");
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.35", provenance.sourceVersion());
+        assertEquals("1.0.36-SNAPSHOT", provenance.sourceVersion());
         assertEquals("1.0.35", provenance.publishedVersion());
-        assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
-        assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
+        assertEquals("SOURCE_NEWER_THAN_PUBLISHED", provenance.artifactDrift());
+        assertNotEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
                 .contains("<version>" + provenance.sourceVersion() + "</version>"));
         assertEquals(provenance.manifestEntryCount() + 1, manifestLines.size());
