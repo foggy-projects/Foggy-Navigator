@@ -1,6 +1,6 @@
 {
   "name": "codex-agent-worker",
-  "version": "1.0.29",
+  "version": "1.0.30",
   "description": "OpenAI Codex Agent Worker - TypeScript SSE service",
   "type": "module",
   "scripts": {

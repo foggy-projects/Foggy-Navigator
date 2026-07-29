@@ -5,6 +5,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows
+    pwd = None
+
 
 _SAFE_SUBPROCESS_ENV_KEYS = frozenset({
     # Process identity and conventional filesystem locations.
@@ -77,8 +82,16 @@ def sanitized_worker_subprocess_env(
     """
 
     source = os.environ if base_env is None else base_env
-    return {
+    env = {
         key: value
         for key, value in source.items()
         if key.upper() in _SAFE_SUBPROCESS_ENV_KEYS
     }
+    if not env.get("HOME") and pwd is not None and hasattr(os, "geteuid"):
+        try:
+            user_home = pwd.getpwuid(os.geteuid()).pw_dir
+        except (KeyError, OSError):
+            user_home = ""
+        if user_home:
+            env["HOME"] = user_home
+    return env

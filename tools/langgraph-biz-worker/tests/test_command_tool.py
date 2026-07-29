@@ -5,6 +5,7 @@ import subprocess
 from langgraph_biz_worker.runtime import command_tool
 from langgraph_biz_worker.runtime.command_tool import command_tool_available, run_command_tool
 from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
+from langgraph_biz_worker.runtime import subprocess_env
 
 
 def _policy(tmp_path, *, allowed_tools: list[str] | None = None) -> ExecutionPolicy:
@@ -14,6 +15,31 @@ def _policy(tmp_path, *, allowed_tools: list[str] | None = None) -> ExecutionPol
     if allowed_tools is not None:
         payload["allowed_tools"] = allowed_tools
     return ExecutionPolicy.from_context({"execution_policy": payload})
+
+
+def test_subprocess_env_preserves_home_and_resolves_missing_home_from_effective_uid(monkeypatch):
+    user_info = type("UserInfo", (), {"pw_dir": "/home/effective-user"})()
+    monkeypatch.setattr(subprocess_env.os, "geteuid", lambda: 1001, raising=False)
+    monkeypatch.setattr(subprocess_env.pwd, "getpwuid", lambda uid: user_info)
+
+    preserved = subprocess_env.sanitized_worker_subprocess_env({"HOME": "/custom/home"})
+    resolved = subprocess_env.sanitized_worker_subprocess_env({"HOME": ""})
+
+    assert preserved["HOME"] == "/custom/home"
+    assert resolved["HOME"] == "/home/effective-user"
+
+
+def test_subprocess_env_leaves_home_unset_when_effective_uid_lookup_fails(monkeypatch):
+    monkeypatch.setattr(subprocess_env.os, "geteuid", lambda: 1001, raising=False)
+    monkeypatch.setattr(
+        subprocess_env.pwd,
+        "getpwuid",
+        lambda uid: (_ for _ in ()).throw(KeyError(uid)),
+    )
+
+    env = subprocess_env.sanitized_worker_subprocess_env({})
+
+    assert "HOME" not in env
 
 
 def test_command_tool_available_requires_linux_setting_and_workspace(tmp_path, monkeypatch):

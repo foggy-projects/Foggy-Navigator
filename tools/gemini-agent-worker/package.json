@@ -1,6 +1,6 @@
 {
   "name": "gemini-agent-worker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Google Gemini Agent Worker - TypeScript SSE service",
   "type": "module",
   "scripts": {

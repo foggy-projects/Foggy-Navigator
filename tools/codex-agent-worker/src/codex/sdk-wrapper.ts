@@ -373,6 +373,7 @@ type CodexEnvOptions = {
   platform?: NodeJS.Platform
   tempDir?: string
   additionalPathEntries?: string[]
+  resolveUserHome?: () => string | undefined
 }
 
 export function buildCodexProcessEnv(
@@ -409,6 +410,15 @@ export function buildCodexProcessEnv(
 
   if (!env.CODEX_MANAGED_BY_NPM) {
     env.CODEX_MANAGED_BY_NPM = '1'
+  }
+
+  if (platform !== 'win32' && !env.HOME) {
+    try {
+      const userHome = (options.resolveUserHome ?? (() => os.userInfo().homedir))()
+      if (userHome) env.HOME = userHome
+    } catch {
+      // Minimal containers may not have an entry for the effective UID.
+    }
   }
 
   if (platform === 'win32') {

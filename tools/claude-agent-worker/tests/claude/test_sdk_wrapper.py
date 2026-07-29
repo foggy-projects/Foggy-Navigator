@@ -509,6 +509,37 @@ class TestBuildEnv:
                 env = SdkWrapper._build_env()
         assert env["CLAUDECODE"] == ""
 
+    def test_home_preserved_and_missing_home_resolved_from_effective_uid(self):
+        with (
+            patch("agent_worker.claude.sdk_wrapper.settings") as mock_settings,
+            patch("agent_worker.claude.sdk_wrapper.pwd") as mock_pwd,
+        ):
+            mock_settings.anthropic_api_key = ""
+            mock_settings.anthropic_auth_token = ""
+            mock_settings.anthropic_base_url = ""
+            mock_pwd.getpwuid.return_value.pw_dir = "/home/effective-user"
+            with patch.dict("os.environ", {"HOME": "/custom/home"}, clear=True):
+                preserved = SdkWrapper._build_env()
+            with patch.dict("os.environ", {}, clear=True):
+                resolved = SdkWrapper._build_env()
+
+        assert preserved["HOME"] == "/custom/home"
+        assert resolved["HOME"] == "/home/effective-user"
+
+    def test_home_left_unset_when_effective_uid_lookup_fails(self):
+        with (
+            patch("agent_worker.claude.sdk_wrapper.settings") as mock_settings,
+            patch("agent_worker.claude.sdk_wrapper.pwd") as mock_pwd,
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            mock_settings.anthropic_api_key = ""
+            mock_settings.anthropic_auth_token = ""
+            mock_settings.anthropic_base_url = ""
+            mock_pwd.getpwuid.side_effect = KeyError("uid is not present")
+            env = SdkWrapper._build_env()
+
+        assert "HOME" not in env
+
 
 # ===========================================================================
 # SdkWrapper._save_images / _augment_prompt_with_images

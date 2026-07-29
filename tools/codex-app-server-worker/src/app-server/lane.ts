@@ -56,7 +56,11 @@ export function readAppServerLaneApiKey(lane: AppServerLane): string | undefined
 
 export function buildProcessEnv(
   base: NodeJS.ProcessEnv,
-  options: { codexHome: string },
+  options: {
+    codexHome: string
+    platform?: NodeJS.Platform
+    resolveUserHome?: () => string | undefined
+  },
 ): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(base)) {
@@ -65,7 +69,16 @@ export function buildProcessEnv(
   }
   setEnv(env, 'CODEX_HOME', options.codexHome)
   env.CODEX_MANAGED_BY_NPM = '1'
-  if (process.platform === 'win32') {
+  const platform = options.platform ?? process.platform
+  if (platform !== 'win32' && !env.HOME) {
+    try {
+      const userHome = (options.resolveUserHome ?? (() => os.userInfo().homedir))()
+      if (userHome) env.HOME = userHome
+    } catch {
+      // Minimal containers may not have an entry for the effective UID.
+    }
+  }
+  if (platform === 'win32') {
     env.SystemRoot ||= 'C:\\WINDOWS'
     env.ComSpec ||= path.join(env.SystemRoot, 'System32', 'cmd.exe')
     env.TEMP ||= os.tmpdir()

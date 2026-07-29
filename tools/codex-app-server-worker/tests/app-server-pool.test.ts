@@ -15,7 +15,7 @@ import {
   type AppServerLane,
   type PoolRuntimeInstance,
 } from '../src/app-server/pool.js'
-import { buildAppServerLane, readAppServerLaneApiKey } from '../src/app-server/lane.js'
+import { buildAppServerLane, buildProcessEnv, readAppServerLaneApiKey } from '../src/app-server/lane.js'
 import { testConfig, waitFor } from './helpers.js'
 import { createStubbornProcessTreeFixture, isProcessAlive } from './stubborn-app-server-fixture.js'
 
@@ -27,6 +27,35 @@ const lane = (key: string): AppServerLane => ({
   baseUrlFingerprint: `url-${key}`,
   processEnvFingerprint: `env-${key}`,
   env: {},
+})
+
+test('app-server lane preserves HOME and resolves a missing POSIX HOME from the effective user', () => {
+  const preserved = buildProcessEnv(
+    { HOME: '/custom/home' },
+    { codexHome: '/codex/home', platform: 'linux', resolveUserHome: () => '/home/effective-user' },
+  )
+  const resolved = buildProcessEnv(
+    { HOME: '' },
+    { codexHome: '/codex/home', platform: 'linux', resolveUserHome: () => '/home/effective-user' },
+  )
+
+  assert.equal(preserved.HOME, '/custom/home')
+  assert.equal(resolved.HOME, '/home/effective-user')
+})
+
+test('app-server lane leaves HOME unset when effective user lookup fails', () => {
+  const env = buildProcessEnv(
+    {},
+    {
+      codexHome: '/codex/home',
+      platform: 'linux',
+      resolveUserHome: () => {
+        throw new Error('uid is not present in the user database')
+      },
+    },
+  )
+
+  assert.equal(env.HOME, undefined)
 })
 
 test('compatible leases share one resident child without queueing', async t => {

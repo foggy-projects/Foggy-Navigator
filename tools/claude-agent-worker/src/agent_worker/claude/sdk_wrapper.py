@@ -20,6 +20,11 @@ from ..config import settings
 from ..skill_paths import project_agent_dir, user_agent_dir
 from . import event_mapper
 
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows
+    pwd = None
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -592,6 +597,17 @@ class SdkWrapper:
         # Extra env vars from LLM model config (e.g. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
         if extra_env_vars:
             env.update(extra_env_vars)
+        if not env.get("HOME"):
+            parent_home = os.environ.get("HOME")
+            if parent_home:
+                env["HOME"] = parent_home
+            elif pwd is not None and hasattr(os, "geteuid"):
+                try:
+                    user_home = pwd.getpwuid(os.geteuid()).pw_dir
+                except (KeyError, OSError):
+                    user_home = ""
+                if user_home:
+                    env["HOME"] = user_home
         return env
 
     # -- Agent Teams ---------------------------------------------------------

@@ -490,6 +490,36 @@ test('buildCodexProcessEnv preserves existing Windows variables and avoids dupli
   assert.equal(env.Path, ['D:\\codex\\vendor\\path', 'C:\\Tools'].join(';'))
 })
 
+test('buildCodexProcessEnv preserves HOME and resolves a missing POSIX HOME from the effective user', () => {
+  const resolver = () => '/home/effective-user'
+  const preserved = buildCodexProcessEnv(
+    { HOME: '/custom/home' },
+    { platform: 'linux', additionalPathEntries: [], resolveUserHome: resolver },
+  )
+  const resolved = buildCodexProcessEnv(
+    { HOME: '' },
+    { platform: 'linux', additionalPathEntries: [], resolveUserHome: resolver },
+  )
+
+  assert.equal(preserved.HOME, '/custom/home')
+  assert.equal(resolved.HOME, '/home/effective-user')
+})
+
+test('buildCodexProcessEnv leaves HOME unset when effective user lookup fails', () => {
+  const env = buildCodexProcessEnv(
+    {},
+    {
+      platform: 'linux',
+      additionalPathEntries: [],
+      resolveUserHome: () => {
+        throw new Error('uid is not present in the user database')
+      },
+    },
+  )
+
+  assert.equal(env.HOME, undefined)
+})
+
 test('buildCodexTaskEnv removes stale OpenAI settings when no effective values are present', () => {
   const env = buildCodexTaskEnv(
     {

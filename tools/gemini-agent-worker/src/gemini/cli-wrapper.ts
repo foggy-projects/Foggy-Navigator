@@ -30,10 +30,13 @@ export function buildGeminiProcessEnv(
   taskId: string,
   apiKey: string | undefined,
   baseUrl: string | undefined,
-  envVars: Record<string, string> | undefined
+  envVars: Record<string, string> | undefined,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  resolveUserHome: () => string | undefined = () => os.userInfo().homedir,
 ): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
     ...(envVars || {}),
     ...(apiKey ? { GEMINI_API_KEY: apiKey } : {}),
     ...(baseUrl ? { GEMINI_BASE_URL: baseUrl } : {}),
@@ -41,6 +44,15 @@ export function buildGeminiProcessEnv(
     GEMINI_CLI_TRUST_WORKSPACE: 'true',
     FOGGY_GEMINI_TASK_ID: taskId,
   }
+  if (platform !== 'win32' && !env.HOME) {
+    try {
+      const userHome = resolveUserHome()
+      if (userHome) env.HOME = userHome
+    } catch {
+      // Minimal containers may not have an entry for the effective UID.
+    }
+  }
+  return env
 }
 
 function stripBase64Prefix(data: string): string {
