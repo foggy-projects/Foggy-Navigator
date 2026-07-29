@@ -24,6 +24,9 @@ public class RuntimeTaskClosureDTO {
     private Boolean sameClientRequestIdReplaySafe;
     private Boolean terminationReplayRecommended;
     private Boolean newClientRequestIdAllowed;
+    private Boolean terminationRequestReceiptEnabled;
+    private Boolean terminationRequestReceiptPersisted;
+    private Boolean requestReconciliationAvailable;
     private Boolean dryRun;
     private Boolean alreadyTerminal;
     private Boolean terminationDispatched;

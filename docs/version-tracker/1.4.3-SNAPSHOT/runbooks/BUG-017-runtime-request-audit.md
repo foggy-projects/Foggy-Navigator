@@ -95,21 +95,35 @@ REQUEST_FAILED
 
 审计表只保存 owner scope、非敏感 correlation、时间、稳定阶段、布尔/计数、sanitized error code 和安全摘要。它不保存或输出 key/secret、access/runtime/task token、Authorization/API-key/header 集合、prompt/message、环境、workspace/ActorHome、Worker Gateway/provider/model payload 或响应、业务文件/数据、原始异常 body/stack。
 
-默认 retention 为 24 小时，可通过 `navigator.runtime-audit.retention` 配置。查询始终排除 expired 行；写入路径会触发有界清理，服务端也默认每 5 分钟执行一次有界物理清理。索引覆盖精确 request ID、tenant + upstream system + ClientApp + received time，以及 expiry。
+termination request receipt 默认 retention 为 7 天，可通过
+`navigator.runtime-audit.termination-receipt-retention` 配置；其他 runtime audit
+继续使用原来的 24 小时默认值，可通过 `navigator.runtime-audit.retention` 配置。
+查询始终排除 expired 行；普通写入路径不执行物理清理，服务端默认按 Spring 六段
+cron 在每天 `02:00` 执行有界批量清理。索引覆盖精确 request ID、tenant +
+upstream system + ClientApp + received time，以及 expiry。
+
+`navigator.runtime-audit.termination-receipt-enabled=false` 只关闭
+`task-terminate` 的 request receipt，不关闭 ask、safe-smoke 等其他 runtime audit。
+关闭后单次 termination 仍可执行，但 Navigator 不再提供 receipt-backed 同 request-ID
+幂等和权威 request reconciliation；typed response 会显式返回 receipt/reconciliation
+不可用，响应丢失后禁止自动重发。
 
 可配置项：
 
 ```properties
+navigator.runtime-audit.termination-receipt-enabled=true
+navigator.runtime-audit.termination-receipt-retention=7d
 navigator.runtime-audit.retention=24h
 navigator.runtime-audit.max-query-window=15m
 navigator.runtime-audit.default-limit=20
 navigator.runtime-audit.max-limit=100
 navigator.runtime-audit.cleanup-batch-size=200
-navigator.runtime-audit.cleanup-interval=5m
-navigator.runtime-audit.cleanup-initial-delay=5m
+navigator.runtime-audit.cleanup-max-batches=100
+navigator.runtime-audit.cleanup-cron=0 0 2 * * *
 ```
 
-配置只能收紧查询范围；代码硬上限仍是 15 分钟和 100 条。
+cron 使用 Navigator JVM 时区；容器默认通过 `TZ=Asia/Shanghai` 运行，其他部署应按
+自身时区调整 cron。查询配置只能收紧查询范围；代码硬上限仍是 15 分钟和 100 条。
 
 ## 安装本地 clean package
 

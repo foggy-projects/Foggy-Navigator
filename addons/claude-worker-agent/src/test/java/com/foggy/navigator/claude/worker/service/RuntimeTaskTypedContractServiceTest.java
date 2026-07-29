@@ -25,7 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -48,6 +50,8 @@ class RuntimeTaskTypedContractServiceTest {
     void setUp() {
         service = new RuntimeTaskClosureService(
                 stateAuditService, List.of(provider), requestAuditService);
+        lenient().when(requestAuditService.terminationRequestReceiptEnabled())
+                .thenReturn(true);
     }
 
     @Test
@@ -71,6 +75,7 @@ class RuntimeTaskTypedContractServiceTest {
         assertEquals("RUNNING", result.getCurrentTaskStatus());
         assertFalse(result.getCanonicalTerminal());
         assertEquals("TERMINATION_READY", result.getReasonCode());
+        assertTrue(result.getTerminationRequestReceiptEnabled());
     }
 
     @Test
@@ -125,6 +130,8 @@ class RuntimeTaskTypedContractServiceTest {
         assertFalse(result.getCanonicalTerminal());
         assertEquals("TERMINATION_REQUEST_ACCEPTED", result.getReasonCode());
         assertTrue(result.getTerminationDispatched());
+        assertTrue(result.getTerminationRequestReceiptPersisted());
+        assertTrue(result.getRequestReconciliationAvailable());
     }
 
     @Test
@@ -252,6 +259,53 @@ class RuntimeTaskTypedContractServiceTest {
         assertTrue(result.getIdempotentReplay());
         assertFalse(result.getCanonicalTerminal());
         verifyNoInteractions(provider);
+    }
+
+    @Test
+    void disabledReceiptKeepsOneShotTerminationButMakesReconciliationUnavailable() {
+        when(requestAuditService.terminationRequestReceiptEnabled()).thenReturn(false);
+        owned("RUNNING", false);
+        when(provider.supports("OPENAI_CODEX")).thenReturn(true);
+        when(provider.terminate(
+                "task-a", "owner-a", "tenant-a", "worker-a",
+                "operator-request", REQUEST_ID, false))
+                .thenReturn(new RuntimeTaskClosureProvider.TerminationResult(
+                        false, true, false, true,
+                        "CANCEL_REQUESTED", "rt-1", null));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("RUNNING", false), audit("CANCEL_REQUESTED", false));
+
+        RuntimeTaskClosureDTO termination = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+        RuntimeTaskClosureDTO repeatedTermination = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+        RuntimeTaskClosureDTO reconciliation = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED, termination.getOutcome());
+        assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED,
+                repeatedTermination.getOutcome());
+        assertFalse(termination.getTerminationRequestReceiptEnabled());
+        assertFalse(termination.getTerminationRequestReceiptPersisted());
+        assertFalse(termination.getRequestReconciliationAvailable());
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                reconciliation.getReconciliationState());
+        assertEquals("TERMINATION_REQUEST_RECEIPT_DISABLED",
+                reconciliation.getReasonCode());
+        assertFalse(reconciliation.getTerminationRequestReceiptEnabled());
+        assertFalse(reconciliation.getRequestReconciliationAvailable());
+        assertFalse(reconciliation.getSameClientRequestIdReplaySafe());
+        assertFalse(reconciliation.getTerminationReplayRecommended());
+        verify(requestAuditService, never()).beginTaskOperationIdempotent(
+                eq(REQUEST_ID), eq(RuntimeRequestAuditService.OPERATION_TASK_TERMINATE),
+                eq("key"), eq("secret"), eq(null), eq("user-a"), eq("task-a"));
+        verify(requestAuditService, never()).findSelfTaskOperation(
+                "key", "secret", REQUEST_ID);
+        verify(provider, times(2)).terminate(
+                "task-a", "owner-a", "tenant-a", "worker-a",
+                "operator-request", REQUEST_ID, false);
     }
 
     @Test
@@ -396,6 +450,8 @@ class RuntimeTaskTypedContractServiceTest {
             RuntimeTaskClosureDTO actual) {
         assertEquals(expected, actual.getReconciliationState());
         assertTrue(actual.getReadOnly());
+        assertTrue(actual.getTerminationRequestReceiptEnabled());
+        assertTrue(actual.getRequestReconciliationAvailable());
         assertFalse(actual.getNewClientRequestIdAllowed());
     }
 }

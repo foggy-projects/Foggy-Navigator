@@ -6,7 +6,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * Typed termination readiness returned by Navigator.
  *
  * <p>The selected Worker is always resolved from the durable task binding;
- * {@code expectedPhysicalWorkerId} is only an equality fence.</p>
+ * {@code expectedPhysicalWorkerId} is only an equality fence. A disabled
+ * termination request receipt does not block one-shot termination, but it
+ * removes Navigator's receipt-backed idempotency and request reconciliation.</p>
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RuntimeTerminationReadinessDTO {
@@ -18,6 +20,7 @@ public class RuntimeTerminationReadinessDTO {
     private String currentTaskStatus = "UNKNOWN";
     private Boolean canonicalTerminal;
     private String reasonCode = "UNKNOWN";
+    private Boolean terminationRequestReceiptEnabled = false;
     private Boolean terminateAllowed;
 
     public String getTaskId() {
@@ -85,6 +88,16 @@ public class RuntimeTerminationReadinessDTO {
 
     public void setReasonCode(String reasonCode) {
         this.reasonCode = normalized(reasonCode);
+    }
+
+    public Boolean getTerminationRequestReceiptEnabled() {
+        return terminationRequestReceiptEnabled;
+    }
+
+    public void setTerminationRequestReceiptEnabled(
+            Boolean terminationRequestReceiptEnabled) {
+        this.terminationRequestReceiptEnabled =
+                Boolean.TRUE.equals(terminationRequestReceiptEnabled);
     }
 
     public Boolean getTerminateAllowed() {

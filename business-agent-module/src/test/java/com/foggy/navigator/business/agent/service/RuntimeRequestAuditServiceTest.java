@@ -15,6 +15,7 @@ import com.foggy.navigator.business.agent.repository.RuntimeRequestAuditStageRep
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -346,6 +347,72 @@ class RuntimeRequestAuditServiceTest {
         assertFalse(audits.containsKey(requestId));
         assertTrue(stages.stream().noneMatch(stage -> requestId.equals(stage.getClientRequestId())));
         verify(auditRepository).findByExpiresAtBeforeOrderByExpiresAtAsc(any(Instant.class), any(Pageable.class));
+    }
+
+    @Test
+    void defaultsToEnabledWeekLongTerminationReceiptsAndNightlyCron() throws Exception {
+        Scheduled scheduled = RuntimeRequestAuditService.class
+                .getMethod("cleanupExpiredAudits")
+                .getAnnotation(Scheduled.class);
+
+        assertTrue(properties.isTerminationReceiptEnabled());
+        assertEquals(Duration.ofDays(7), properties.getTerminationReceiptRetention());
+        assertEquals(Duration.ofHours(24), properties.getRetention());
+        assertEquals("${navigator.runtime-audit.cleanup-cron:0 0 2 * * *}",
+                scheduled.cron());
+        assertEquals("", scheduled.fixedDelayString());
+    }
+
+    @Test
+    void terminationReceiptUsesDedicatedWeekRetentionWithoutExtendingOtherAudits() {
+        String terminationRequestId = UUID.randomUUID().toString();
+        String safeSmokeRequestId = UUID.randomUUID().toString();
+
+        service.beginTaskOperation(
+                terminationRequestId,
+                RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                "runtime-key",
+                "runtime-secret",
+                null,
+                "user-1",
+                "task-1");
+        service.beginSafeSmoke(
+                safeSmokeRequestId, resolvedCredential(), "agent-1", "user-1");
+
+        RuntimeRequestAuditEntity termination = audits.get(terminationRequestId);
+        RuntimeRequestAuditEntity safeSmoke = audits.get(safeSmokeRequestId);
+        assertEquals(Duration.ofDays(7),
+                Duration.between(termination.getReceivedAt(), termination.getExpiresAt()));
+        assertEquals(Duration.ofHours(24),
+                Duration.between(safeSmoke.getReceivedAt(), safeSmoke.getExpiresAt()));
+    }
+
+    @Test
+    void scheduledCleanupDrainsOnlyTheConfiguredNumberOfBatches() {
+        properties.setCleanupBatchSize(1);
+        properties.setCleanupMaxBatches(2);
+        for (int index = 0; index < 3; index++) {
+            String requestId = UUID.randomUUID().toString();
+            service.beginSafeSmoke(
+                    requestId, resolvedCredential(), "agent-1", "user-1");
+            audits.get(requestId).setExpiresAt(Instant.now().minusSeconds(1));
+        }
+        clearInvocations(auditRepository);
+
+        service.cleanupExpiredAudits();
+
+        assertEquals(1, audits.size());
+        verify(auditRepository, times(2))
+                .findByExpiresAtBeforeOrderByExpiresAtAsc(any(Instant.class), any(Pageable.class));
+    }
+
+    @Test
+    void auditWritesDoNotTriggerPhysicalCleanup() {
+        service.beginSafeSmoke(
+                UUID.randomUUID().toString(), resolvedCredential(), "agent-1", "user-1");
+
+        verify(auditRepository, never())
+                .findByExpiresAtBeforeOrderByExpiresAtAsc(any(Instant.class), any(Pageable.class));
     }
 
     @Test

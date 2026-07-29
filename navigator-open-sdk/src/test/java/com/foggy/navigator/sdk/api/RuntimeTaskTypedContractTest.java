@@ -95,7 +95,8 @@ class RuntimeTaskTypedContractTest {
                   "terminationCapability":"SUPPORTED",
                   "currentTaskStatus":"RUNNING",
                   "canonicalTerminal":false,
-                  "reasonCode":"TERMINATION_READY"
+                  "reasonCode":"TERMINATION_READY",
+                  "terminationRequestReceiptEnabled":true
                 }}
                 """;
 
@@ -107,6 +108,7 @@ class RuntimeTaskTypedContractTest {
         assertEquals(RuntimeTerminationCapability.SUPPORTED, result.getTerminationCapability());
         assertFalse(result.getCanonicalTerminal());
         assertEquals("TERMINATION_READY", result.getReasonCode());
+        assertTrue(result.getTerminationRequestReceiptEnabled());
         assertEquals("GET", lastMethod);
         assertTrue(lastPath.contains("taskId=task-a"));
         assertEquals("user-a", lastUpstreamUserId);
@@ -121,7 +123,9 @@ class RuntimeTaskTypedContractTest {
                   "outcome":"ACCEPTED",
                   "currentTaskStatus":"CANCEL_REQUESTED",
                   "canonicalTerminal":false,
-                  "reasonCode":"TERMINATION_REQUEST_ACCEPTED"
+                  "reasonCode":"TERMINATION_REQUEST_ACCEPTED",
+                  "terminationRequestReceiptPersisted":true,
+                  "requestReconciliationAvailable":true
                 }}
                 """;
         RuntimeTaskTerminateForm form = new RuntimeTaskTerminateForm();
@@ -137,6 +141,8 @@ class RuntimeTaskTypedContractTest {
 
         assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED, result.getOutcome());
         assertFalse(result.getCanonicalTerminal());
+        assertTrue(result.getTerminationRequestReceiptPersisted());
+        assertTrue(result.getRequestReconciliationAvailable());
         assertEquals(lastClientRequestId, result.getClientRequestId());
         assertEquals("POST", lastMethod);
         assertEquals("/api/v1/open/runtime/task-terminate", lastPath);
@@ -159,7 +165,9 @@ class RuntimeTaskTypedContractTest {
                   "readOnly":true,
                   "sameClientRequestIdReplaySafe":true,
                   "terminationReplayRecommended":false,
-                  "newClientRequestIdAllowed":false
+                  "newClientRequestIdAllowed":false,
+                  "terminationRequestReceiptEnabled":true,
+                  "requestReconciliationAvailable":true
                 }}
                 """;
         RuntimeTaskReconcileForm form = new RuntimeTaskReconcileForm();
@@ -174,6 +182,8 @@ class RuntimeTaskTypedContractTest {
                 result.getReconciliationState());
         assertTrue(result.getReadOnly());
         assertFalse(result.getCanonicalTerminal());
+        assertTrue(result.getTerminationRequestReceiptEnabled());
+        assertTrue(result.getRequestReconciliationAvailable());
         assertEquals(lastClientRequestId, result.getClientRequestId());
         assertEquals("{\"taskId\":\"task-a\"}", lastBody);
         assertFalse(lastBody.contains("expectedDispatchCount"));
@@ -202,6 +212,7 @@ class RuntimeTaskTypedContractTest {
         assertEquals("UNKNOWN", result.getCurrentTaskStatus());
         assertEquals("UNKNOWN", result.getReasonCode());
         assertNull(result.getCanonicalTerminal());
+        assertFalse(result.getTerminationRequestReceiptEnabled());
     }
 
     @Test
@@ -272,6 +283,33 @@ class RuntimeTaskTypedContractTest {
         assertEquals("UNKNOWN", futureReconciliation.getCurrentTaskStatus());
         assertEquals("UNKNOWN", futureReconciliation.getReasonCode());
         assertNull(futureReconciliation.getCanonicalTerminal());
+
+        RuntimeTaskTerminationDTO missingReceiptCapability = mapper.readValue(
+                """
+                {
+                  "outcome":"ACCEPTED",
+                  "terminationRequestReceiptEnabled":null,
+                  "terminationRequestReceiptPersisted":null,
+                  "requestReconciliationAvailable":null
+                }
+                """,
+                RuntimeTaskTerminationDTO.class);
+        assertFalse(missingReceiptCapability.getTerminationRequestReceiptEnabled());
+        assertFalse(missingReceiptCapability.getTerminationRequestReceiptPersisted());
+        assertFalse(missingReceiptCapability.getRequestReconciliationAvailable());
+
+        RuntimeTaskReconciliationDTO disabledReconciliation = mapper.readValue(
+                """
+                {
+                  "reconciliationState":"AMBIGUOUS",
+                  "reasonCode":"TERMINATION_REQUEST_RECEIPT_DISABLED",
+                  "terminationRequestReceiptEnabled":false,
+                  "requestReconciliationAvailable":false
+                }
+                """,
+                RuntimeTaskReconciliationDTO.class);
+        assertFalse(disabledReconciliation.getTerminationRequestReceiptEnabled());
+        assertFalse(disabledReconciliation.getRequestReconciliationAvailable());
     }
 
     @SuppressWarnings("deprecation")

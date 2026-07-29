@@ -84,6 +84,7 @@ public class RuntimeRequestAuditService {
 
     private static final String UNKNOWN = "UNKNOWN";
     private static final Duration DEFAULT_RETENTION = Duration.ofHours(24);
+    private static final Duration DEFAULT_TERMINATION_RECEIPT_RETENTION = Duration.ofDays(7);
     private static final Duration HARD_MAX_QUERY_WINDOW = Duration.ofMinutes(15);
     private static final int HARD_MAX_LIMIT = 100;
     private static final Set<String> OPERATIONS = Set.of(
@@ -199,7 +200,6 @@ public class RuntimeRequestAuditService {
             String upstreamUserId) {
         String requestId = requireRequestId(clientRequestId);
         String parentId = optionalRequestId(parentClientRequestId);
-        cleanupExpiredBatch();
         Instant now = Instant.now();
         RuntimeRequestAuditEntity entity = auditRepository.findByClientRequestId(requestId).orElse(null);
         if (entity == null) {
@@ -284,7 +284,6 @@ public class RuntimeRequestAuditService {
                 .contains(normalizedOperation)) {
             throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
         }
-        cleanupExpiredBatch();
         RuntimeRequestAuditEntity existing = auditRepository.findByClientRequestId(requestId).orElse(null);
         if (existing != null) {
             requireSameOwner(existing, owner);
@@ -300,6 +299,9 @@ public class RuntimeRequestAuditService {
         Instant now = Instant.now();
         RuntimeRequestAuditEntity entity = baseEntity(
                 requestId, normalizedOperation, owner, agentCode, upstreamUserId, now);
+        if (OPERATION_TASK_TERMINATE.equals(normalizedOperation)) {
+            entity.setExpiresAt(now.plus(effectiveTerminationReceiptRetention()));
+        }
         entity.setTaskId(clean(taskId, null));
         entity.setStatus("REQUEST_RECEIVED");
         saveNew(entity);
@@ -345,6 +347,10 @@ public class RuntimeRequestAuditService {
                 clean(entity.getStatus(), UNKNOWN),
                 entity.getSanitizedErrorCode(),
                 entity.getPhysicalWorkerId()));
+    }
+
+    public boolean terminationRequestReceiptEnabled() {
+        return properties.isTerminationReceiptEnabled();
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -513,7 +519,6 @@ public class RuntimeRequestAuditService {
         String requestId = requireRequestId(clientRequestId);
         String normalizedOperation = normalizeOperation(operation);
         OwnerScope owner = resolveOwnerByAppKey(appKey);
-        cleanupExpiredBatch();
         if (auditRepository.findByClientRequestId(requestId).isPresent()) {
             throw new IllegalArgumentException("CLIENT_REQUEST_ID_ALREADY_USED");
         }
@@ -541,7 +546,6 @@ public class RuntimeRequestAuditService {
             String upstreamUserId) {
         String requestId = requireRequestId(clientRequestId);
         OwnerScope owner = resolveOwner(credential);
-        cleanupExpiredBatch();
         Instant now = Instant.now();
         RuntimeRequestAuditEntity entity = auditRepository.findByClientRequestId(requestId).orElse(null);
         if (entity == null) {
@@ -1170,30 +1174,41 @@ public class RuntimeRequestAuditService {
         return StringUtils.hasText(value) ? value.trim() : fallback;
     }
 
-    @Scheduled(
-            fixedDelayString = "${navigator.runtime-audit.cleanup-interval:PT5M}",
-            initialDelayString = "${navigator.runtime-audit.cleanup-initial-delay:PT5M}")
+    @Scheduled(cron = "${navigator.runtime-audit.cleanup-cron:0 0 2 * * *}")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void cleanupExpiredAudits() {
-        cleanupExpiredBatch();
+        int batchSize = Math.max(1, Math.min(properties.getCleanupBatchSize(), 1000));
+        int maxBatches = Math.max(1, Math.min(properties.getCleanupMaxBatches(), 1000));
+        for (int batch = 0; batch < maxBatches; batch++) {
+            if (cleanupExpiredBatch(batchSize) < batchSize) {
+                return;
+            }
+        }
     }
 
-    private void cleanupExpiredBatch() {
-        int batchSize = Math.max(1, Math.min(properties.getCleanupBatchSize(), 1000));
+    private int cleanupExpiredBatch(int batchSize) {
         List<RuntimeRequestAuditEntity> expired = auditRepository
                 .findByExpiresAtBeforeOrderByExpiresAtAsc(Instant.now(), PageRequest.of(0, batchSize));
         if (expired.isEmpty()) {
-            return;
+            return 0;
         }
         List<String> requestIds = expired.stream().map(RuntimeRequestAuditEntity::getClientRequestId).toList();
         stageRepository.deleteByClientRequestIdIn(requestIds);
         auditRepository.deleteAll(expired);
+        return expired.size();
     }
 
     private Duration effectiveRetention() {
         Duration retention = properties.getRetention();
         return retention == null || retention.isZero() || retention.isNegative()
                 ? DEFAULT_RETENTION
+                : retention;
+    }
+
+    private Duration effectiveTerminationReceiptRetention() {
+        Duration retention = properties.getTerminationReceiptRetention();
+        return retention == null || retention.isZero() || retention.isNegative()
+                ? DEFAULT_TERMINATION_RECEIPT_RETENTION
                 : retention;
     }
 

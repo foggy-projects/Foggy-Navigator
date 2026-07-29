@@ -36,6 +36,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
             Map.entry("mvc:post:/api/v1/open/accounts/me/skill-bundles/sync", false),
             Map.entry("mvc:post:/api/v1/open/agents/{agentId}/ask", true),
             Map.entry("mvc:post:/api/v1/open/agents/{agentId}/preflight", false),
+            Map.entry("mvc:post:/api/v1/open/agents/{agentId}/safe-smoke", true),
             Map.entry("mvc:get:/api/v1/open/agents/{agentId}/sessions", false),
             Map.entry("mvc:get:/api/v1/open/agents/{agentId}/sessions/{contextId}/messages", false),
             Map.entry("mvc:get:/api/v1/open/agents/{agentId}/tasks", false),
@@ -159,13 +160,13 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         byte[] sourceBytes = Files.readAllBytes(source);
 
         assertArrayEquals(sourceBytes, Files.readAllBytes(evidence));
-        assertEquals(463, Files.readAllLines(source).size());
+        assertEquals(464, Files.readAllLines(source).size());
         assertEquals(AuthorizationRouteCatalog.EXPECTED_ENTRY_COUNT, sourceRows().size() - 1);
         assertEquals(AuthorizationRouteCatalog.EXPECTED_SHA_256, sha256(sourceBytes));
     }
 
     @Test
-    void runtimeCapabilityClassificationIsAnExactTwentyTwoIngressCatalogSnapshot() {
+    void runtimeCapabilityClassificationIsAnExactTwentyFiveIngressCatalogSnapshot() {
         Map<String, Boolean> actualCapabilityByRoute = catalog.entriesByRouteId().values().stream()
                 .filter(entry -> RUNTIME_CAPABILITY_BY_ROUTE.containsKey(entry.routeId()))
                 .collect(Collectors.toMap(AuthorizationRouteManifestEntry::routeId,
@@ -203,7 +204,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         assertEquals(236, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
         assertEquals(125, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.PLATFORM_GRANT)).count());
         assertEquals(158, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.TENANT_AUTHORITY)).count());
-        assertEquals(19, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION)).count());
+        assertEquals(20, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION)).count());
         assertTrue(entries.stream()
                         .filter(entry -> entry.requires(AuthorizationRequiredSection.PLATFORM_GRANT))
                         .allMatch(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)

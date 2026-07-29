@@ -17,6 +17,7 @@ public class RuntimeTerminationReadinessDTO {
     private String currentTaskStatus;
     private Boolean canonicalTerminal;
     private String reasonCode;
+    private Boolean terminationRequestReceiptEnabled;
     private Boolean terminal;
     private String status;
     private String physicalWorkerId;

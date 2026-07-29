@@ -89,6 +89,8 @@ public class RuntimeTaskClosureService {
                 .currentTaskStatus(taskStatus(facts, owned.status()))
                 .canonicalTerminal(facts != null ? facts.getTerminal() : owned.terminal())
                 .reasonCode(reasonCode)
+                .terminationRequestReceiptEnabled(
+                        requestAuditService.terminationRequestReceiptEnabled())
                 // Legacy response aliases retained for existing Map callers.
                 .terminal(facts != null ? facts.getTerminal() : owned.terminal())
                 .status(taskStatus(facts, owned.status()))
@@ -131,33 +133,36 @@ public class RuntimeTaskClosureService {
                     expectedPhysicalWorkerId, reason);
         }
 
-        RuntimeRequestAuditService.TaskOperationRegistration registration;
-        try {
-            registration = requestAuditService.beginTaskOperationIdempotent(
-                    clientRequestId,
-                    RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
-                    appKey,
-                    appSecret,
-                    null,
-                    upstreamUserId,
-                    taskId);
-        } catch (IllegalArgumentException error) {
-            if ("CLIENT_REQUEST_ID_ALREADY_USED".equals(error.getMessage())
-                    && requestAuditService.findSelfTaskOperation(
-                            appKey, appSecret, clientRequestId).isPresent()) {
+        RuntimeRequestAuditService.TaskOperationRegistration registration = null;
+        if (requestAuditService.terminationRequestReceiptEnabled()) {
+            try {
+                registration = requestAuditService.beginTaskOperationIdempotent(
+                        clientRequestId,
+                        RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                        appKey,
+                        appSecret,
+                        null,
+                        upstreamUserId,
+                        taskId);
+            } catch (IllegalArgumentException error) {
+                if ("CLIENT_REQUEST_ID_ALREADY_USED".equals(error.getMessage())
+                        && requestAuditService.findSelfTaskOperation(
+                                appKey, appSecret, clientRequestId).isPresent()) {
+                    return replayTermination(
+                            appKey, appSecret, upstreamUserId, clientRequestId, taskId,
+                            expectedPhysicalWorkerId);
+                }
+                throw error;
+            }
+            if (registration.existing()) {
                 return replayTermination(
                         appKey, appSecret, upstreamUserId, clientRequestId, taskId,
                         expectedPhysicalWorkerId);
             }
-            throw error;
-        }
-        if (registration.existing()) {
-            return replayTermination(
-                    appKey, appSecret, upstreamUserId, clientRequestId, taskId,
-                    expectedPhysicalWorkerId);
         }
 
-        RuntimeRequestAuditService.AuditHandle requestAudit = registration.handle();
+        RuntimeRequestAuditService.AuditHandle requestAudit =
+                registration != null ? registration.handle() : null;
         RuntimeStateAuditService.OwnedRuntimeTask owned = null;
         RuntimeTaskAuditDTO audit = null;
         RuntimeTaskClosureProvider.TerminationResult providerResult = null;
@@ -181,9 +186,10 @@ public class RuntimeTaskClosureService {
             RuntimeTaskTerminationOutcome outcome = terminationOutcome(providerResult);
             String reasonCode = terminationReason(outcome, providerResult);
             RuntimeTaskFactsDTO currentFacts = facts(audit);
-            if (outcome == RuntimeTaskTerminationOutcome.REJECTED) {
+            if (requestAudit != null
+                    && outcome == RuntimeTaskTerminationOutcome.REJECTED) {
                 requestAuditService.taskOperationFailed(requestAudit, reasonCode);
-            } else {
+            } else if (requestAudit != null) {
                 requestAuditService.taskOperationCompleted(
                         requestAudit,
                         terminationEvidence(
@@ -222,7 +228,9 @@ public class RuntimeTaskClosureService {
                         RuntimeTaskTerminationOutcome.PROCESSING, reasonCode,
                         false, false, false, true, reasonCode);
             }
-            requestAuditService.taskOperationFailed(requestAudit, reasonCode);
+            if (requestAudit != null) {
+                requestAuditService.taskOperationFailed(requestAudit, reasonCode);
+            }
             return terminationResponse(
                     clientRequestId, taskId, false, audit,
                     owned != null ? owned.physicalWorkerId() : null,
@@ -354,6 +362,16 @@ public class RuntimeTaskClosureService {
             String originalClientRequestId,
             String taskId) {
         requireClientRequestId(originalClientRequestId);
+        if (!requestAuditService.terminationRequestReceiptEnabled()) {
+            RuntimeTaskAuditDTO audit = StringUtils.hasText(taskId)
+                    ? safeAudit(appKey, appSecret, upstreamUserId, taskId)
+                    : null;
+            return reconciliationResponse(
+                    originalClientRequestId, clean(taskId), audit, null,
+                    RuntimeTaskReconciliationState.AMBIGUOUS,
+                    RuntimeTaskTerminationOutcome.UNKNOWN,
+                    "UNKNOWN", "TERMINATION_REQUEST_RECEIPT_DISABLED", false);
+        }
         if (!StringUtils.hasText(taskId)) {
             return reconciliationResponse(
                     originalClientRequestId, null, null, null,
@@ -521,6 +539,9 @@ public class RuntimeTaskClosureService {
             boolean idempotentReplay,
             boolean reconcileRequired,
             String sanitizedErrorCode) {
+        boolean receiptEnabled =
+                requestAuditService.terminationRequestReceiptEnabled();
+        boolean receiptPersisted = !dryRun && receiptEnabled;
         return base(clientRequestId, "task-terminate", taskId, dryRun, audit)
                 .outcome(outcome)
                 .currentTaskStatus(taskStatus(facts(audit), null))
@@ -531,6 +552,9 @@ public class RuntimeTaskClosureService {
                 .terminationDispatched(terminationDispatched)
                 .idempotentReplay(idempotentReplay)
                 .reconcileRequired(reconcileRequired)
+                .terminationRequestReceiptEnabled(receiptEnabled)
+                .terminationRequestReceiptPersisted(receiptPersisted)
+                .requestReconciliationAvailable(receiptPersisted)
                 .sanitizedErrorCode(sanitizedErrorCode)
                 .build();
     }
@@ -545,6 +569,8 @@ public class RuntimeTaskClosureService {
             String transition,
             String reasonCode,
             boolean requestFound) {
+        boolean receiptEnabled =
+                requestAuditService.terminationRequestReceiptEnabled();
         return base(clientRequestId, "task-reconcile", taskId, false, audit)
                 .reconciliationState(state)
                 .terminationOutcome(terminationOutcome)
@@ -556,9 +582,12 @@ public class RuntimeTaskClosureService {
                         audit, snapshot != null ? snapshot.physicalWorkerId() : null))
                 .requestFound(requestFound)
                 .readOnly(true)
-                .sameClientRequestIdReplaySafe(true)
-                .terminationReplayRecommended(state == RuntimeTaskReconciliationState.NOT_FOUND)
+                .sameClientRequestIdReplaySafe(receiptEnabled)
+                .terminationReplayRecommended(receiptEnabled
+                        && state == RuntimeTaskReconciliationState.NOT_FOUND)
                 .newClientRequestIdAllowed(false)
+                .terminationRequestReceiptEnabled(receiptEnabled)
+                .requestReconciliationAvailable(receiptEnabled)
                 .build();
     }
 

@@ -14,6 +14,11 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * configured idempotency retention window. A new request id is never an
  * automatic recovery mechanism.</p>
  *
+ * <p>If termination request receipts are disabled, reconciliation returns
+ * {@code AMBIGUOUS} with reason
+ * {@code TERMINATION_REQUEST_RECEIPT_DISABLED}; automatic termination replay
+ * is prohibited.</p>
+ *
  * <p>Unknown enum values map to {@code UNKNOWN}; missing status/reason text
  * maps to the string {@code UNKNOWN}; an unknown canonical terminal fact
  * remains {@code null}.</p>
@@ -35,6 +40,8 @@ public class RuntimeTaskReconciliationDTO {
     private Boolean sameClientRequestIdReplaySafe;
     private Boolean terminationReplayRecommended;
     private Boolean newClientRequestIdAllowed;
+    private Boolean terminationRequestReceiptEnabled = false;
+    private Boolean requestReconciliationAvailable = false;
 
     public String getClientRequestId() {
         return clientRequestId;
@@ -142,6 +149,26 @@ public class RuntimeTaskReconciliationDTO {
 
     public void setNewClientRequestIdAllowed(Boolean newClientRequestIdAllowed) {
         this.newClientRequestIdAllowed = newClientRequestIdAllowed;
+    }
+
+    public Boolean getTerminationRequestReceiptEnabled() {
+        return terminationRequestReceiptEnabled;
+    }
+
+    public void setTerminationRequestReceiptEnabled(
+            Boolean terminationRequestReceiptEnabled) {
+        this.terminationRequestReceiptEnabled =
+                Boolean.TRUE.equals(terminationRequestReceiptEnabled);
+    }
+
+    public Boolean getRequestReconciliationAvailable() {
+        return requestReconciliationAvailable;
+    }
+
+    public void setRequestReconciliationAvailable(
+            Boolean requestReconciliationAvailable) {
+        this.requestReconciliationAvailable =
+                Boolean.TRUE.equals(requestReconciliationAvailable);
     }
 
     private String normalized(String value) {

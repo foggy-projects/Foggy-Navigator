@@ -7,7 +7,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  *
  * <p>{@code ACCEPTED} records request acceptance only. A caller may treat the
  * task as terminal only when {@code canonicalTerminal} is {@code true};
- * {@code null} means Navigator could not establish the canonical fact.</p>
+ * {@code null} means Navigator could not establish the canonical fact. When
+ * {@code requestReconciliationAvailable} is false, callers must observe
+ * canonical task state and must not automatically replay after response
+ * loss.</p>
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RuntimeTaskTerminationDTO {
@@ -22,6 +25,9 @@ public class RuntimeTaskTerminationDTO {
     private Boolean terminationDispatched;
     private Boolean idempotentReplay;
     private Boolean reconcileRequired;
+    private Boolean terminationRequestReceiptEnabled = false;
+    private Boolean terminationRequestReceiptPersisted = false;
+    private Boolean requestReconciliationAvailable = false;
 
     public String getClientRequestId() {
         return clientRequestId;
@@ -109,6 +115,36 @@ public class RuntimeTaskTerminationDTO {
 
     public void setReconcileRequired(Boolean reconcileRequired) {
         this.reconcileRequired = reconcileRequired;
+    }
+
+    public Boolean getTerminationRequestReceiptEnabled() {
+        return terminationRequestReceiptEnabled;
+    }
+
+    public void setTerminationRequestReceiptEnabled(
+            Boolean terminationRequestReceiptEnabled) {
+        this.terminationRequestReceiptEnabled =
+                Boolean.TRUE.equals(terminationRequestReceiptEnabled);
+    }
+
+    public Boolean getTerminationRequestReceiptPersisted() {
+        return terminationRequestReceiptPersisted;
+    }
+
+    public void setTerminationRequestReceiptPersisted(
+            Boolean terminationRequestReceiptPersisted) {
+        this.terminationRequestReceiptPersisted =
+                Boolean.TRUE.equals(terminationRequestReceiptPersisted);
+    }
+
+    public Boolean getRequestReconciliationAvailable() {
+        return requestReconciliationAvailable;
+    }
+
+    public void setRequestReconciliationAvailable(
+            Boolean requestReconciliationAvailable) {
+        this.requestReconciliationAvailable =
+                Boolean.TRUE.equals(requestReconciliationAvailable);
     }
 
     private String normalized(String value) {

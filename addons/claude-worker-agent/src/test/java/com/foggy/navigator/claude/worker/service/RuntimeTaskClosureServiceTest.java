@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -61,7 +62,8 @@ class RuntimeTaskClosureServiceTest {
         assertTrue(result.getTaskFacts().getModelDispatched());
         assertFalse(result.getAuditSideEffects().getModelDispatched());
         assertFalse(result.getAuditSideEffects().getTaskCreated());
-        verifyNoInteractions(requestAuditService);
+        verify(requestAuditService).terminationRequestReceiptEnabled();
+        verifyNoMoreInteractions(requestAuditService);
     }
 
     @Test
@@ -84,7 +86,8 @@ class RuntimeTaskClosureServiceTest {
         assertFalse(result.getTerminationDispatched());
         assertFalse(result.getNewTaskCreated());
         assertFalse(result.getModelRedispatched());
-        verifyNoInteractions(requestAuditService);
+        verify(requestAuditService).terminationRequestReceiptEnabled();
+        verifyNoMoreInteractions(requestAuditService);
     }
 
     @Test

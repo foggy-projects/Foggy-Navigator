@@ -10,9 +10,12 @@ import java.time.Duration;
 @Component
 @ConfigurationProperties(prefix = "navigator.runtime-audit")
 public class RuntimeRequestAuditProperties {
+    private boolean terminationReceiptEnabled = true;
+    private Duration terminationReceiptRetention = Duration.ofDays(7);
     private Duration retention = Duration.ofHours(24);
     private Duration maxQueryWindow = Duration.ofMinutes(15);
     private int defaultLimit = 20;
     private int maxLimit = 100;
     private int cleanupBatchSize = 200;
+    private int cleanupMaxBatches = 100;
 }
