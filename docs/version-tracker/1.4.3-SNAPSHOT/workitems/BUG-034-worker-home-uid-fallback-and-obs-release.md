@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-034
-status: ULTRA_EXECUTING
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: standard
@@ -74,13 +74,13 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: 每个受影响 Worker 在父环境缺少或空白 `HOME` 时，POSIX 子进程环境使用当前有效 UID 对应的系统账户 home。
-- [ ] AC-2: 每个受影响 Worker 在父环境提供非空 `HOME` 时保持原值，且 UID 回退不会覆盖该值。
-- [ ] AC-3: UID/home 无法解析时不硬编码、不抛出无关启动异常，并保持 `HOME` 未设置。
-- [ ] AC-4: 既有环境 allowlist、Worker 控制凭据隔离、`CODEX_HOME` 与任务级认证优先级保持不变。
-- [ ] AC-5: 稳定自动化回归覆盖保留、回退和失败三类分支，受影响 Worker 的测试与构建实际通过。
-- [ ] AC-6: 每个发生运行时代码变更且发布前置满足的 Worker 使用新 patch 版本完成官方 OBS 发布；远端 `latest.json`、归档字节数和 SHA-256 与本地候选一致。
-- [ ] AC-7: 变更已提交并推送，canonical work item 记录 changed paths、精确命令、结果、deviation 和 residual risk，状态为 `READY_FOR_SIGNOFF`。
+- [x] AC-1: 每个受影响 Worker 在父环境缺少或空白 `HOME` 时，POSIX 子进程环境使用当前有效 UID 对应的系统账户 home。
+- [x] AC-2: 每个受影响 Worker 在父环境提供非空 `HOME` 时保持原值，且 UID 回退不会覆盖该值。
+- [x] AC-3: UID/home 无法解析时不硬编码、不抛出无关启动异常，并保持 `HOME` 未设置。
+- [x] AC-4: 既有环境 allowlist、Worker 控制凭据隔离、`CODEX_HOME` 与任务级认证优先级保持不变。
+- [x] AC-5: 稳定自动化回归覆盖保留、回退和失败三类分支，受影响 Worker 的测试与构建实际通过。
+- [x] AC-6: 每个发生运行时代码变更且发布前置满足的 Worker 使用新 patch 版本完成官方 OBS 发布；远端 `latest.json`、归档字节数和 SHA-256 与本地候选一致。
+- [x] AC-7: 变更已提交并推送，canonical work item 记录 changed paths、精确命令、结果、deviation 和 residual risk，状态为 `READY_FOR_SIGNOFF`。
 
 ## Contract / Data / Security Constraints
 
@@ -158,7 +158,7 @@ open_questions: []
 
 > 由 Ultra 执行会话填写。
 
-- implementation_summary: 已完成五类 Worker 的 POSIX `HOME` 缺失回退与三分支自动化回归；各 Worker patch 版本已独立递增，待 clean/pushed commit 后打包发布。
+- implementation_summary: 已完成五类 Worker 的 POSIX `HOME` 缺失回退与三分支自动化回归；仅在 `HOME` 缺失/空值时查询有效 UID 的系统账户 home，已有值和既有凭据隔离保持不变。五个 Worker 已从 clean/pushed commit `59f344d3e1a118d87519776830b823c91e8a76e7` 独立打包并发布 OBS。
 - changed_paths:
   - `tools/codex-agent-worker`
   - `tools/codex-app-server-worker`
@@ -172,12 +172,26 @@ open_questions: []
   - `tools/claude-agent-worker`: `.venv/bin/python -m pytest -q`，`554 passed / 11 skipped`。
   - `tools/gemini-agent-worker`: `node --import tsx --test tests/*.test.ts && npm run typecheck && npm run build`，`15 passed / 1 skipped`，typecheck/build PASS。
   - `tools/langgraph-biz-worker`: `.venv/bin/python -m pytest -q`，`798 passed`。
+  - SDK Codex package: `npm run package:release -- --platform all --smoke basic`，archive structure、SHA-256 sidecar、forbidden-file scan PASS。
+  - app-server package: `npm run package:release`，`348 passed / 1 skipped`、schema verify、typecheck、build 与 deterministic archive PASS。
+  - Claude: `bash dist/package.sh all`；Gemini/Biz: 官方 PowerShell packager `-OS all`，三平台候选生成成功。
 - manual_or_experience_evidence:
-- deviations: none
-- residual_risks: OBS 打包、发布与远端完整性核验尚未执行。
-- reused_evidence:
-- omitted_validation_and_reason:
-- readiness: ULTRA_EXECUTING
+  - `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/latest.json` -> `1.0.30`。
+  - `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json` -> `0.3.26`。
+  - `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/latest.json` -> `0.1.14`。
+  - `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/gemini-worker/latest.json` -> `1.0.1`。
+  - `https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker/latest.json` -> `0.2.2`。
+  - 13 个远端 archive 全部重新下载到 `temp/test-artifacts/BUG-034-worker-home-release-20260729/`，逐字节 `cmp` 本地候选并复算 byte length/SHA-256，全部 PASS。
+  - 五个产品的远端 `install.sh` / `install.ps1` 均可下载且非空；Codex 两条发布器另已完成内建 archive/bootstrap 字节校验。
+- deviations:
+  - Gemini 与 LangGraph Biz Worker 的 Windows `obsutil` 使用失效 Access Key，首个 immutable archive 上传返回 `403 InvalidAccessKeyId`，未更新对应 `latest.json`。
+  - 随后使用已被 Codex/Claude 发布证明有效的当前 WSL Linux `obsutil` 上传同一官方候选，并将 `latest.json` 最后提交。两者未重复上传未变更的 bootstrap，现有 bootstrap 已验证可访问且继续按通用 `latest.json` 安装。
+- residual_risks:
+  - 本事项只发布、不部署；当前运行实例仍保持原版本，需由各实例 owner 按既有升级流程选择维护窗口。
+  - LangGraph Biz Worker 远端从 `0.1.1` 跳至 `0.2.2`，包含此前已在当前仓库但未发布的累计差异；全量 `798 passed`，未执行本事项明确排除的 live model/upstream smoke。
+- reused_evidence: 同一 commit 下首次全量测试结果用于后续 package gate；Codex packager自身重新执行了对应强制验证。
+- omitted_validation_and_reason: 未运行 Java/frontend/Playwright/live model/生产 soak；均不受本次 Worker 子进程环境与 OBS 制品变更影响，且 live/soak 属明确 non-goal。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
