@@ -58,7 +58,7 @@ last_updated: 2026-07-30
 - worker_home_uid_fallback_spec: workitems/BUG-034-worker-home-uid-fallback-and-obs-release.md
 - worker_home_uid_fallback_status: READY_FOR_SIGNOFF
 - typed_termination_cli_release_spec: workitems/REL-003-navigator-upstream-cli-1.0.39-snapshot-typed-termination.md
-- typed_termination_cli_release_status: ULTRA_EXECUTING
+- typed_termination_cli_release_status: ACCEPTED
 - bug035_status: ACCEPTED
 - app_server_compact_repair_spec: workitems/BUG-021-app-server-compact-protocol.md
 - bug021_status: READY_FOR_SIGNOFF
@@ -116,7 +116,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [GOV-003 S1 system-admin ClientApp scope 管理](./workitems/GOV-003-s1-system-admin-clientapp-scope.md) | system-admin 以显式 target ClientApp 管理同 upstream 的 ClientApp-owned control-plane 资源 | ULTRA_EXECUTING；不改变 typed authority、Worker 或真实 runtime |
 | [REL-001 Navigator Upstream CLI 1.0.22 发布](./workitems/REL-001-navigator-upstream-cli-1.0.22.md) | GOV-002 三 lane CLI 的双平台 archive、OBS installer、commit/push 与 SIM handoff | READY_FOR_SIGNOFF；不改变后端、Worker 或真实 upstream runtime |
 | [REL-002 Navigator Upstream CLI 1.0.24 safe-ask 发布](./workitems/REL-002-navigator-upstream-cli-1.0.24-safe-ask.md) | BUG-016 safe-ask、request-scoped BusinessFunction 空集合与 POSIX profile `0600` 的 official OBS 发布及 SIM handoff | READY_FOR_SIGNOFF；1.0.24 official OBS 发布及公网安装验证通过 |
-| [REL-003 Navigator Upstream CLI 1.0.39-SNAPSHOT typed termination 发布](./workitems/REL-003-navigator-upstream-cli-1.0.39-snapshot-typed-termination.md) | BUG-035 typed termination/reconciliation SDK、OBS CLI、当前 8112 部署与 SIM handoff | ULTRA_EXECUTING；用户已授权 main push、OBS CLI 发布与当前开发实例重启 |
+| [REL-003 Navigator Upstream CLI 1.0.39-SNAPSHOT typed termination 发布](./workitems/REL-003-navigator-upstream-cli-1.0.39-snapshot-typed-termination.md) | BUG-035 typed termination/reconciliation SDK、OBS CLI、当前 8112 部署与 SIM handoff | ACCEPTED；[签收记录](./evidence/REL-003-delivery-signoff-2026-07-30.md)，main/OBS/8112 均已完成并复核 |
 | [BUG-002 P1A action required-section 合同缺失](./workitems/BUG-002-p1a-required-section-contract.md) | 修复 action-specific required-section catalog/context/validator 缺口和 runtime capability 误分类 | ACCEPTED |
 | [BUG-007 task capability function-scope schema contract](./workitems/BUG-007-task-token-function-scope-schema-contract.md) | 对齐 task-scoped token 的 `function_scope_json` mapping/preflight/migration 契约，并重试本机 TMS runtime-only safe ask | ULTRA_EXECUTING；runtime credential file-safety gate BLOCKED |
 | [INT-001 Synthetic Upstream Integration Harness](./workitems/INT-001-synthetic-upstream-integration-harness.md) | 可销毁、独立的 synthetic upstream runtime harness；用于本机发现/复现通用权限与运行时问题 | REJECTED；AC-2 forced-SIGNAL cleanup 为 `FAILED_CLEANUP/SIGNAL`，不替代真实 TMS/SIM 验收、Gateway external 或 production |

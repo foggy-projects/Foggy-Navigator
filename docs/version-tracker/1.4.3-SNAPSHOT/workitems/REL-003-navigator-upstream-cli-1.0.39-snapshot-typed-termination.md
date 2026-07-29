@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: REL-003
-status: ULTRA_EXECUTING
+status: ACCEPTED
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -79,14 +79,14 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: BUG-035 elevated signoff 有完整 AC/evidence matrix 且结论允许交付。
-- [ ] AC-2: SDK/observer 版本为唯一 `1.0.39-SNAPSHOT`；binary/sources 本机安装，`javap` typed 签名与 SHA-256 可复核。
-- [ ] AC-3: Linux packager 从 project POM 精确解析 `1.0.39-SNAPSHOT`，不再误读 SLF4J 或其他依赖版本；shell syntax 与实际 package 通过。
-- [ ] AC-4: CLI 双平台归档的 VERSION、内嵌 SDK JAR、BUILD_INFO、feature metadata、commit 和 `gitDirty=false` 一致；离线 Linux install/version/help smoke 通过。
-- [ ] AC-5: `main` 以非 force 方式同步到 `origin/main`，发布候选 commit 可从远端解析。
-- [ ] AC-6: OBS archive、`latest.json`、`install.ps1`、`install.sh` 上传成功；远端 manifest、下载 SHA 和 Linux installer smoke 与本地候选一致。
-- [ ] AC-7: 当前 8112 listener 的命令行/cwd 属于本工作区；重建重启后 health `UP`，运行 provenance 对应发布后的 main commit。
-- [ ] AC-8: SIM handoff 明确目标 URL、SDK/CLI 版本与 SHA、credential lane、typed API、请求 ID 幂等/只读 reconciliation、禁止重发条件和 do-not-provision 边界。
+- [x] AC-1: BUG-035 elevated signoff 有完整 AC/evidence matrix 且结论允许交付。
+- [x] AC-2: SDK/observer 版本为唯一 `1.0.39-SNAPSHOT`；binary/sources 本机安装，`javap` typed 签名与 SHA-256 可复核。
+- [x] AC-3: Linux packager 从 project POM 精确解析 `1.0.39-SNAPSHOT`，不再误读 SLF4J 或其他依赖版本；shell syntax 与实际 package 通过。
+- [x] AC-4: CLI 双平台归档的 VERSION、内嵌 SDK JAR、BUILD_INFO、feature metadata、commit 和 `gitDirty=false` 一致；离线 Linux install/version/help smoke 通过。
+- [x] AC-5: `main` 以非 force 方式同步到 `origin/main`，发布候选 commit 可从远端解析。
+- [x] AC-6: OBS archive、`latest.json`、`install.ps1`、`install.sh` 上传成功；远端 manifest、下载 SHA 和 Linux installer smoke 与本地候选一致。
+- [x] AC-7: 当前 8112 listener 的命令行/cwd 属于本工作区；重建重启后 health `UP`，运行 provenance 对应发布后的 main commit。
+- [x] AC-8: SIM handoff 明确目标 URL、SDK/CLI 版本与 SHA、credential lane、typed API、请求 ID 幂等/只读 reconciliation、禁止重发条件和 do-not-provision 边界。
 
 ## Contract / Data / Security Constraints
 
@@ -152,17 +152,95 @@ open_questions: []
 ## Implementation Result
 
 - implementation_summary:
+  - BUG-035 已按 elevated checklist 签收为 `accepted`，签收记录逐项覆盖 AC-1 至 AC-13。
+  - SDK/observer release-only 版本递增为 `1.0.39-SNAPSHOT`；provenance 对齐
+    `source.version=published.version=1.0.39-SNAPSHOT` 和
+    `SOURCE_MATCHES_PUBLISHED`。
+  - Linux packager 只在 `navigator-open-sdk` project 坐标范围读取完整 snapshot
+    版本并校验格式，修复旧逻辑误读依赖 `2.0.12` 的问题；PowerShell/Linux
+    metadata 均增加 typed termination 与 receipt policy feature。
+  - `main` 以 fast-forward 非 force 方式推送到 `origin/main`；clean commit
+    `efbe55262bd3e8a2a207fc6e348ff152bb128594` 构建双平台 CLI 并发布 OBS。
+  - 当前工作区 8112 launcher 在 PID/cwd/argv 归属确认后重建重启；新进程 health
+    与 MySQL 均 `UP`，build provenance 为 `main@efbe5526`、`dirty=false`。
 - changed_paths:
+  - `navigator-open-sdk/pom.xml`、CLI provenance test/resource。
+  - `tools/navigator-chat-observer-bff/pom.xml`。
+  - `tools/navigator-upstream-cli/dist/package.sh`、`package.ps1`。
+  - BUG-035 signoff、REL-003 与版本索引。
 - tests_and_results:
+  - `mvn -q -pl navigator-open-sdk -Dtest=UpstreamCliTest,RuntimeTaskTypedContractTest test`：
+    exit `0`。
+  - `mvn -q -pl navigator-open-sdk clean install`：exit `0`；SDK `203` tests、
+    `0` failures/errors/skips；binary 与 sources 均安装。
+  - `mvn -q -pl tools/navigator-chat-observer-bff -am -DskipTests package`：
+    exit `0`。
+  - `bash -n` 覆盖 package/upload/install/remote-install；snapshot version
+    resolver 精确输出 `1.0.39-SNAPSHOT`。
+  - `bash tools/navigator-upstream-cli/dist/package.sh`：clean package exit `0`；
+    双平台归档生成。离线 Linux install/version/help、profile mode `0600` 和单一
+    SDK JAR 检查通过。
+  - `bash tools/navigator-upstream-cli/dist/upload.sh --version
+    1.0.39-SNAPSHOT`：五个 OBS object 上传均 HTTP `200`，内建 remote Linux
+    installer smoke 通过。
+  - `bash scripts/start-launcher.sh`：14-module skip-test deployment build
+    `BUILD SUCCESS`，总耗时 `02:12`；启动脚本 health check `UP`。
 - manual_or_experience_evidence:
+  - Git release candidate:
+    `efbe55262bd3e8a2a207fc6e348ff152bb128594`，已在 `origin/main`。
+  - SDK GAV:
+    `com.foggy.navigator:navigator-open-sdk:1.0.39-SNAPSHOT`。
+  - SDK binary SHA-256:
+    `2c23ae604f1a34a2b0447e0c3d25730982eb88aa2345df6316b4b288af36697f`。
+  - SDK sources SHA-256:
+    `bc743b617ac10f904702f583f070ac54b6c68c38e308785db7ea965d4249b26b`。
+  - Linux CLI SHA-256:
+    `6365d5a33c62ebc60b3f37c0c314e269df75cfff9ca6e384b5fa358884590399`。
+  - Windows CLI SHA-256:
+    `88baf5bcf272f093da2e8dd0d0235c660e3a891986abc3f120af490dc42d8c00`。
+  - 双平台归档内嵌 SDK SHA 与 Maven local binary 完全一致；BUILD_INFO 为
+    `1.0.39-SNAPSHOT+efbe55262bd3`、`gitDirty=false`。
+  - remote `latest.json` version/buildId/commit/SHA/features 与本地候选一致；
+    两个远端 archive 重新 GET 后 SHA 一致，installers HTTP `200`。
+  - 8112 新 PID `2405362`，cwd
+    `/home/sa/workspace/Foggy-Navigator`，只监听 `127.0.0.1:8112`；
+    `/actuator/info` 为 `efbe55262bd3e8a2a207fc6e348ff152bb128594`、
+    `main`、`dirty=false`。
 - deviations: none
 - residual_risks:
+  - official CLI `latest.json` 当前指向 development snapshot；只用于开发联调，
+    不构成 production promotion。
+  - CLI distribution 内嵌 typed SDK，但现有 shell `runtime task-reconcile`
+    继续保留 legacy projection-repair 参数/Map 语义；SIM 实现新的原 request-ID
+    reconciliation 必须调用 typed Java
+    `BusinessAgentApi#reconcileRuntimeTaskTermination`，不得从 CLI Map 猜字段。
+  - 8112 为 loopback-only；非同一 WSL/主机网络域不能直接连接，且本事项未授权
+    改变监听或 Gateway/external network exposure。
+  - launcher 启动后记录了若干历史 Codex task reconnect WARN；health/MySQL 为
+    `UP` 且 `backend-error.log` 为空。SIM 应使用新建的 disposable SIM-owned task，
+    不复用历史 task。
+  - Windows native wrapper 未实际执行；Windows archive structure、VERSION、
+    BUILD_INFO、SDK byte hash、remote SHA 与 installer 可达性已验证。
 - reused_evidence:
+  - BUG-035 focused/affected/route/config/idempotency/JSON/compatibility tests；
+    release-only metadata/tooling 变更未改变服务端 typed contract。
 - omitted_validation_and_reason:
-- readiness:
+  - 未修改或执行 SIM/TMS；未发起 live termination；未读取 credential；未重启
+    Worker；未做 production/Gateway/external promotion，均属于明确 non-goal。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
 - requirement / issue: project owner request on 2026-07-30
 - architecture / glossary: `docs/dev-specs/local-upstream-collaboration.md`
 - related work items: `BUG-035-open-sdk-typed-termination-reconciliation-contract.md`
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted
+- signed_off_by: Codex release reviewer (same-thread evidence audit)
+- signed_off_at: 2026-07-30
+- acceptance_record: `docs/version-tracker/1.4.3-SNAPSHOT/evidence/REL-003-delivery-signoff-2026-07-30.md`
+- blocking_items: none
+- follow_up_required: no
