@@ -3,12 +3,12 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: NEEDS_REPLAN
+status: APPROVED
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
-approved_by: pending-independent-rereview-after-round-4
-approved_at: null
+approved_by: project-owner-user
+approved_at: 2026-07-30
 previous_architecture_direction_confirmed_by: project-owner-user
 previous_contract_approval_at: 2026-07-30
 independent_review_at: 2026-07-30
@@ -19,12 +19,18 @@ independent_round_3_review_at: 2026-07-30
 independent_round_3_review_verdict: NEEDS_REPLAN
 independent_round_4_review_at: 2026-07-30
 independent_round_4_review_verdict: NEEDS_REPLAN
-replan_round: 4
+independent_round_5_review_at: 2026-07-30
+independent_round_5_review_verdict: NEEDS_REPLAN
+independent_round_6_review_at: 2026-07-30
+independent_round_6_review_verdict: NEEDS_REPLAN
+independent_round_7_review_at: 2026-07-30
+independent_round_7_review_verdict: APPROVED
+replan_round: 7
 replan_decisions_confirmed_by: project-owner-user
 replan_decisions_confirmed_at: 2026-07-30
-replan_review_status: pending-independent-rereview-after-round-4
-execution_start_authorized: false
-decision_stage: round-4-replan-contract-frozen-pending-independent-rereview
+replan_review_status: approved-after-round-7
+execution_start_authorized: true
+decision_stage: approved-source-slices-authorized-activation-separate
 open_questions: []
 deferred_topics:
   - worker-generated-physical-id-claim-and-recovery
@@ -44,8 +50,9 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: round-4 replan contract 已冻结，等待独立复审；在复审通过并重新批准
-  前，不得开始 schema、owner foundation 或其他实现。
+- execution_status: `APPROVED`；Source Slice 0–8 可按顺序进入实现，但 Slice 7/8
+  仍只允许 repo-owned ephemeral fixture。真实 controller/process、首次非 fixture
+  `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
 
 ## Independent Review Disposition
 
@@ -53,7 +60,11 @@ deferred_topics:
 - round_2_verdict: `NEEDS_REPLAN`
 - round_3_verdict: `NEEDS_REPLAN`
 - round_4_verdict: `NEEDS_REPLAN`
-- implementation_gate: closed
+- round_5_verdict: `NEEDS_REPLAN`
+- round_6_verdict: `NEEDS_REPLAN`
+- round_7_verdict: `APPROVED`
+- implementation_gate: open-for-source-slices-0-through-8
+- activation_gate: closed-pending-separate-owner-authorization
 - accepted_blockers:
   1. authorization-authoritative terminal tombstone 必须是 canonical terminal commit 的
      同步 fail-closed 围栏，不能降级为异步 cleanup effect。
@@ -133,6 +144,31 @@ deferred_topics:
   5. Task/Session/Worker snapshot 统一使用一个 `availability` enum 和一个
      `conflictState` 字段，不再混用 bare `QUARANTINED`、`authorityConflict` 或未声明的
      configuration state。
+- accepted_round_5_findings:
+  1. `ownership_mode` 决定 SHADOW/ENFORCED authority 和 effect semantics，必须进入
+     binding digest、durable disposition 与 status expected/actual validation；同一
+     dispatch/body 的 cross-mode record 绝不能复用。
+  2. legacy Worker operational strings 不能成为第二套 target state machine；必须删除
+     或明确规范化到唯一 `availability/conflictState`，并冻结多 blocker 同时存在时的
+     single-value precedence、合法组合和 clear/reveal 规则。
+- accepted_round_6_finding:
+  1. round-5 独立复审已确认所有 blocker 闭合，但 exact command surface 汇总表遗漏
+     required expected ownership-mode header，且场景 36 错误允许 cross-mode 使用
+     generic binding mismatch。command/status 两个入口及 SHADOW→ENFORCED、
+     ENFORCED→SHADOW 两个方向必须唯一返回
+     `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`，不能用其他 409 code 通过验收。
+- accepted_round_7_finding:
+  1. round-6 独立复审确认 command binding、status、AC-26 和场景 36 已一致，但
+     Fenced Dispatch Status 的并行/晚到 attempt 仍保留未限定 mode 的旧 generic
+     binding-mismatch 表述。该路径同样必须先比较 durable mode，只有 mode exact
+     match 后才允许返回 prior record 或
+     `LIFECYCLE_DISPATCH_BINDING_MISMATCH`。
+- round_7_final_review:
+  - verdict: `APPROVED`
+  - remaining_findings: `0 BLOCKER / 0 MAJOR / 0 MINOR`
+  - r5_m1_01: `CLOSED`
+  - source_slices_0_through_8: authorized-in-contract-order
+  - real_activation: separately-authorized-and-currently-disabled
 
 ### Review Finding Closure Matrix
 
@@ -143,27 +179,27 @@ deferred_topics:
 |---|---|---|
 | B1 | terminal/tombstone 提交窗口 | CLOSED：canonical terminal、authorization tombstone、cleanup plan 同事务，失败整体回滚 |
 | B2 | 首次 `ENFORCED` 早于完整 vertical chain | CLOSED：Slice 6 全链 SHADOW、Slice 7 readiness、Slice 8 才首次 enforcement |
-| B3 | Worker v1 identity/inventory/ACK contract 不可执行 | REVISED THROUGH ROUND 4：identity/inventory/ACK、exact command wire、dispatch binding reread、provider Task identity、one-use ordering 和 durable negative 均已冻结；待独立复审 |
-| B4 | mixed-version/旧 writer 无真实 fence | REVISED THROUGH ROUND 4：homogeneous controller lock + DB proof lease、逐 Worker/Session/Task reference 与 effect authorization linearization；待独立复审 |
+| B3 | Worker v1 identity/inventory/ACK contract 不可执行 | CLOSED BY ROUND-7 REVIEW：identity/inventory/ACK、mode-bound exact command wire/status、provider Task identity、one-use ordering 和 durable negative 已冻结 |
+| B4 | mixed-version/旧 writer 无真实 fence | CLOSED BY ROUND-5 REVIEW：homogeneous controller lock + DB proof lease、逐 Worker/Session/Task reference 与 effect authorization linearization 已确认 |
 | B5 | admin logical close 无现有高权限边界 | CLOSED：从 MVP-A 延后，现有 `force` 仍是 provider cancellation |
 | M1 | cleanup applicability 无 N/A 语义 | CLOSED：terminal transaction 冻结逐 participant `REQUIRED/NOT_APPLICABLE` |
 | M2 | WorkerLifecycleOwner 模块/SPI 方向未冻结 | CLOSED：`session-module -> navigator-spi <- addon/business participant` |
-| M3 | termination/cross-surface compatibility mapping 未闭合 | REVISED THROUGH ROUND 4：public receipt-disabled one-shot、enabled persistence failure、legacy operation mapping 与唯一 availability/conflict vocabulary 均已冻结；待独立复审 |
+| M3 | termination/cross-surface compatibility mapping 未闭合 | CLOSED BY ROUND-7 REVIEW：public receipt-disabled one-shot、enabled persistence failure、legacy operation mapping、唯一 availability/conflict vocabulary 与 precedence 已冻结 |
 | M4 | production migration/startup gate 不安全 | CLOSED：schema pre-apply、validate、readiness fail closed |
-| M5 | failure-first 验收矩阵不完整 | REVISED THROUGH ROUND 4：补 exact wire/provider identity/binding、late negative、proof-reference/effect-loss races、receipt failure/codex-biz typed lane；待独立复审 |
+| M5 | failure-first 验收矩阵不完整 | CLOSED BY ROUND-7 REVIEW：exact cross-mode code、provider identity、state precedence、proof-reference/effect-loss races、receipt failure/codex-biz typed lane 已纳入 |
 | m1 | 前端 localStorage 草案超出阶段范围 | CLOSED：降为 non-normative deferred design |
 
 ### Round-3 Review Closure Matrix
 
 | ID | Round-3 Finding | Round-3 Contract Disposition |
 |---|---|---|
-| F-01 | Worker command/duplicate wire 未冻结 | REVISED THROUGH ROUND 4：补 disposition/status digest/proof、route-specific binding、durable provider Task ID required/null matrix；待独立复审 |
-| F-02 | 非耐久 negative 被当作 never-accepted proof | REVISED THROUGH ROUND 4：store unavailable 永远 frozen；只有 expected-binding matched durable `never_accepted_proof=true` 可证明；待独立复审 |
-| F-03 | exclusivity proof 止于首次 enrollment | REVISED THROUGH ROUND 4：proof lease 持续 observer、逐 Worker/Session/Task reference、proof-loss quarantine 与 effect authorization linearization；待独立复审 |
+| F-01 | Worker command/duplicate wire 未冻结 | CLOSED BY ROUND-7 REVIEW：disposition/status digest/proof、route-specific binding、durable provider Task ID required/null matrix 已冻结 |
+| F-02 | 非耐久 negative 被当作 never-accepted proof | CLOSED BY ROUND-7 REVIEW：store unavailable 永远 frozen；只有 expected-binding matched durable `never_accepted_proof=true` 可证明 |
+| F-03 | exclusivity proof 止于首次 enrollment | CLOSED BY ROUND-7 REVIEW：proof lease 持续 observer、逐 Worker/Session/Task reference、proof-loss quarantine 与 effect authorization linearization 已冻结 |
 | F-04 | disabled duplicate 与 BUG-035 冲突 | CLOSED BY ROUND-4 REVIEW：保留同 request ID 每次都是新 one-shot、provider 可调用两次的既有行为 |
 | F-05 | enabled receipt persistence failure 未冻结 | CLOSED BY ROUND-4 REVIEW：receipt + owner intent 同事务、effect 前置；失败 stable `REJECTED` 且 provider 调用为零 |
 | F-06 | cutover drill 授权/预算矛盾 | CLOSED BY ROUND-4 REVIEW：repo-owned fixture 与未获批真实 controller rehearsal/activation 已分离 |
-| F-07 | failure-first matrix 缺关键竞态/codex-biz lane | REVISED THROUGH ROUND 4：新增 provider identity/binding、proof-reference、effect-loss races 与唯一 enum tests；待独立复审 |
+| F-07 | failure-first matrix 缺关键竞态/codex-biz lane | CLOSED BY ROUND-7 REVIEW：provider identity/binding、proof-reference、effect-loss races 与唯一 enum tests 已纳入 |
 
 ### Round-3 Replan Resolutions
 
@@ -216,18 +252,19 @@ deferred_topics:
 
 | ID | Round-4 Finding | Round-4 Contract Disposition |
 |---|---|---|
-| R4-B1 | dispatch reread 无法证明 exact local binding | REVISED：disposition/status 共用 digest/version，status request 携带 expected digest；missing/version/binding mismatch 的 HTTP/code 已冻结 |
-| R4-B2 | accepted query 无 durable provider Task identity | REVISED：create/resume 在 accepted `PREPARED` record 内原子分配 ID，primary/duplicate/status 均回带，Java 先于业务 SSE 持久绑定 |
-| R4-B3 | proof 未覆盖 Worker/Session 且 effect-claim/loss 无顺序 | REVISED：逐 aggregate reference 建立/释放，零 reference + 零 unfinished outbox 才可释放；claim 与 effect authorization 分离并冻结两种 race 结果 |
-| R4-M1 | availability/conflict vocabulary 矛盾 | REVISED：唯一 `availability` enum 与 `conflictState` enum 已冻结，删除 `authorityConflict`/bare `QUARANTINED` 字段语义 |
+| R4-B1 | dispatch reread 无法证明 exact local binding | CLOSED BY ROUND-7 REVIEW：binding/disposition/status exact 包含 `ownership_mode`；command/status cross-mode mismatch 的唯一 HTTP/code/test 已冻结 |
+| R4-B2 | accepted query 无 durable provider Task identity | CLOSED BY ROUND-7 REVIEW：accepted `PREPARED` 原子保存 provider Task ID，并由 mode-bound status 安全恢复 |
+| R4-B3 | proof 未覆盖 Worker/Session 且 effect-claim/loss 无顺序 | CLOSED BY ROUND-5 REVIEW：逐 aggregate reference 与两种 CAS 顺序已确认 |
+| R4-M1 | availability/conflict vocabulary 矛盾 | CLOSED BY ROUND-7 REVIEW：删除第二套 target Worker states，blocker mapping、single-value precedence、合法组合与 clear/reveal rule 已冻结 |
 | R4-m1 | never-accepted 标题疑似重复 | CLOSED：当前 canonical 文件只有一个对应 heading，并改为唯一名称 `Mode Semantics and Durable Never-accepted Proof` |
 
 ### Round-4 Replan Resolutions
 
 1. durable disposition 对所有 durable phase 都 required
-   `safe_binding_digest_version=JCS_SHA256_V1` 与 `safe_binding_digest`；read-only status
-   必须由 Navigator 提交 expected digest/version 并由 Worker exact compare 后才返回
-   record。未匹配 record 不能形成 fact。
+   `ownership_mode`、`safe_binding_digest_version=JCS_SHA256_V1` 与
+   `safe_binding_digest`；read-only status 必须由 Navigator 提交 expected
+   mode/digest/version 并由 Worker exact compare 后才返回 record。未匹配 record 不能
+   形成 fact。
 2. query create/resume 的 `provider_task_id` 是 accepted disposition 的 durable output，
    不进入调用方可预计算的 binding digest；它必须与 `PREPARED` 在同一 Worker-local
    atomic record 中创建，后续 provider call、SSE、inventory、duplicate 和 status
@@ -244,7 +281,86 @@ deferred_topics:
    零；authorization 先提交则该 exact effect 最多调用一次，随后 loss 只允许
    quarantine，不得重投。
 6. snapshot field 固定为 `availability` 与 `conflictState`。配置、存储、离线和 writer
-   authority 分别投影到唯一 enum；public SDK availability flags 不因此改变 wire。
+   authority 分别投影到唯一 enum及冻结 precedence；public SDK availability flags
+   不因此改变 wire。
+
+### Round-5 Review Closure Matrix
+
+| ID | Round-5 Finding | Round-5 Contract Disposition |
+|---|---|---|
+| R5-B1 | ownership mode 未进入 exact binding | REVISED：JCS binding object、route input、durable disposition、expected status header/response 均 required mode；same-dispatch cross-mode 返回 409且不调用 provider |
+| R5-M1 | Sentinel/Worker 第二套 state 与组合 precedence 未冻结 | REVISED：删除 target `ONLINE/SUSPECTED/RECOVERING_RECONCILIATION/STORAGE_PRESSURE_*` enum；仅保留 ephemeral backoff metadata，补 normalized fact mapping、合法 pair 和全序 precedence |
+
+### Round-5 Replan Resolutions
+
+1. `ownership_mode` 是 binding authority input。它与 command kind、route、Task、
+   dispatch、payload/capability digest 一起进入 `safe_binding_digest`，并作为 durable
+   disposition required field。相同 payload 的 SHADOW/ENFORCED digest 必须不同。
+2. dispatch-status required expected mode header。record mode mismatch 使用
+   `LIFECYCLE_OWNERSHIP_MODE_MISMATCH`；digest mismatch 继续使用
+   `LIFECYCLE_DISPATCH_BINDING_MISMATCH`。任一 mismatch 不返回 actual
+   mode/digest/provider Task ID，不产生 fact/effect。
+3. provider Task ID recovery 只有在 expected mode + digest + identity 全部匹配后可信；
+   SHADOW record 无论字段多完整都不能被 ENFORCED reducer摄取。
+4. target schema 只有 `availability/conflictState`。Sentinel attempt/backoff/circuit
+   breaker 是可重建的 lease metadata；legacy operational strings 只允许在 adapter
+   source side出现，规范化后不得持久化为 owner state。
+5. conflict precedence 固定为 writer exclusivity loss > Worker state loss > evidence
+   conflict > none；availability precedence 固定为 authority quarantine > storage >
+   configuration > offline > recovering > ready。所有 active blocker facts 保留，最高项
+   clear 后 full recompute 显露下一项。
+6. `conflictState != NONE` 与 `availability=AUTHORITY_QUARANTINED` 必须同时成立；
+   其他 availability 只能搭配 `NONE`。unknown input不得创建新 enum。
+
+### Round-5 Independent Rereview Closure Matrix
+
+| ID | Round-5 Rereview Finding | Round-6 Contract Disposition |
+|---|---|---|
+| R5-B1 | ownership-mode binding | CORE CLOSED：mode 已进入 JCS、route inputs、disposition、facts/inventory、status 与 ENFORCED never-accepted proof；其 exact mismatch 验收歧义由 R5-M1-01 单独追踪 |
+| R5-M1 | target lifecycle 双状态机与多 blocker reducer | CLOSED：target 只保留 `availability/conflictState`；legacy state、precedence、合法 pair、clear/reveal、scope 与 incremental/full parity 均已冻结 |
+| R5-M1-01 | exact command/status mismatch 验收口径不唯一 | CLOSED BY ROUND-7 REVIEW：汇总表、command/status、AC-26、场景 36 与并行/晚到 attempt 全部采用 mode-first；cross-mode 仅接受 exact `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH` |
+
+### Round-6 Replan Resolutions
+
+1. exact dispatch reread 的 request surface 必须同时列出 expected identity、required
+   expected ownership mode 与 expected binding digest/version；汇总表不得省略 mode。
+2. 已存在相同 `dispatch_id`、但 durable `ownership_mode` 与 command context 或 status
+   expected-mode 不同，无论 `SHADOW -> ENFORCED` 还是
+   `ENFORCED -> SHADOW`，都必须在 digest comparison、duplicate handling、capability
+   consumption、fact ingestion 和 provider effect 前唯一返回
+   `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`。不得降级或归并为
+   `LIFECYCLE_DISPATCH_BINDING_MISMATCH`。
+3. `409 LIFECYCLE_DISPATCH_BINDING_MISMATCH` 只适用于 durable mode 已 exact 匹配，
+   但其余 route-specific binding input/digest 不同的情况。所有 cross-mode negative
+   response 均不得回显 actual mode/digest/provider Task ID，不得新增 owner fact，
+   provider invocation count 相对已有 record baseline 不增加。
+
+### Round-6 Independent Rereview Closure Matrix
+
+| ID | Round-6 Rereview Finding | Round-7 Contract Disposition |
+|---|---|---|
+| R5-M1-01 | 并行/晚到 attempt 的旧句未限定 mode-first | CLOSED BY ROUND-7 REVIEW：先比较 durable ownership mode；mode 不同 exact 返回 ownership-mode mismatch，只有 mode exact match 才可返回 prior record 或 binding mismatch |
+
+### Round-7 Replan Resolution
+
+Worker 对相同 `(physicalWorkerId,stateGeneration,dispatchId)` 的并行或晚到 attempt
+必须先比较 durable `ownership_mode`。mode 不同必须在 digest comparison、duplicate
+handling、capability consumption 和 provider effect 前返回
+`409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`；只有 mode exact match 后，才可按其余 binding
+决定返回同一 durable record 或 `409 LIFECYCLE_DISPATCH_BINDING_MISMATCH`。晚到的旧
+client-side response 仍只记 audit，不能生成 owner fact。
+
+### Round-7 Independent Rereview Approval
+
+- verdict: `APPROVED`
+- remaining_findings: `0 / 0 / 0`
+- R5-M1-01: `CLOSED`
+- compatibility: BUG-035 receipt-disabled one-shot、public SDK wire 和现有 provider
+  mapping 保持不变。
+- implementation_authority: Source Slice 0–8 可按本文依赖顺序执行；批准本 spec 不等于
+  授权跳过 SHADOW、直接 enrollment 或执行真实 activation。
+- activation_authority: Slice 7/8 只限 repo-owned ephemeral fixture；真实
+  controller/process、首次非 fixture `ENFORCED` aggregate 与 live SIM 仍未授权。
 
 ## Goal
 
@@ -362,10 +478,12 @@ deferred_topics:
 5. 正常 execution-derived terminal 必须具有可信 Worker/runtime terminal evidence。
    admin logical close 与 permanent-loss authority 不属于 MVP-A，当前不存在可复用的
    高权限调用面。
-6. absence of evidence 不是 evidence of absence；事实冲突或长期不可观测收敛为
-   `AMBIGUOUS/CONFLICT`，不得制造 terminal。
-7. Worker `OFFLINE_FROZEN` 时，所有依赖 Worker 的写操作明确拒绝且不在服务端保存
-   pending intent；前端可以保留本地失败项/草稿，由用户恢复后显式重新发起。
+6. absence of evidence 不是 evidence of absence；长期不可观测只更新 operation
+   `AMBIGUOUS` 和适用 aggregate 的 `availability=OFFLINE_FROZEN`，可信事实互相冲突
+   则设置 `availability=AUTHORITY_QUARANTINED +
+   conflictState=EVIDENCE_CONFLICT`，均不得制造 terminal。
+7. Worker `availability=OFFLINE_FROZEN` 时，所有依赖 Worker 的写操作明确拒绝且不在
+   服务端保存 pending intent；前端可以保留本地失败项/草稿，由用户恢复后显式重新发起。
 8. Worker recovery 采用两层解冻：identity、capability 和 inventory 对账完成后 Worker
    可以接收新 Task；重连前的旧 Task 分别重算，未明确的 Task 继续保持 frozen，不阻塞
    已恢复 Worker 的新 Task。
@@ -505,6 +623,55 @@ projection：
 enum。public DTO 中既有 availability/reconciliation booleans 不直接暴露这些内部
 枚举，因此本次统一不改变 SDK wire。
 
+每个 aggregate 保留所有仍有效的 normalized blocker facts，reducer 再按下表计算一个
+`availability` 和一个 `conflictState`；后到 fact 不能覆盖或删除另一个仍有效条件：
+
+| Active condition/fact | Availability candidate | Conflict candidate | Clear condition |
+|---|---|---|---|
+| exact writer proof `LOST` | `AUTHORITY_QUARANTINED` | `LEGACY_WRITER_EXCLUSIVITY_LOST` | proof restored + exact legacy-drift scan complete |
+| durable Worker state generation loss/reset or unrecoverable protected coverage gap | `AUTHORITY_QUARANTINED` | `WORKER_STATE_LOSS` | new generation baseline explicitly established and affected aggregate reconciliation complete |
+| mutually contradictory exact lifecycle evidence or Worker/provider Task/mode identity conflict | `AUTHORITY_QUARANTINED` | `EVIDENCE_CONFLICT` | superseding evidence/conflict decision explicitly resolves exact conflict |
+| `WORKER_LIFECYCLE_STORAGE_FROZEN` | `STORAGE_FROZEN` | `NONE` | storage recovered + durability probe complete |
+| required lifecycle/receipt/capability configuration unavailable | `CONFIGURATION_FROZEN` | `NONE` | exact configuration readiness restored |
+| disconnect or observation freshness expired | `OFFLINE_FROZEN` | `NONE` | reconnect fact received；仍先进入 recovering |
+| reconnect/storage recovery observed but identity/capability/inventory reconciliation incomplete | `RECOVERING` | `NONE` | `WORKER_RECONCILIATION_COMPLETED` for exact affected scope |
+| no active blocker | `READY` | `NONE` | 任一新 blocker fact 生效 |
+
+单值 precedence 固定为：
+
+```text
+conflictState:
+  LEGACY_WRITER_EXCLUSIVITY_LOST
+  > WORKER_STATE_LOSS
+  > EVIDENCE_CONFLICT
+  > NONE
+
+availability:
+  AUTHORITY_QUARANTINED
+  > STORAGE_FROZEN
+  > CONFIGURATION_FROZEN
+  > OFFLINE_FROZEN
+  > RECOVERING
+  > READY
+```
+
+合法组合只有：
+
+- `conflictState != NONE` 当且仅当
+  `availability=AUTHORITY_QUARANTINED`；
+- `STORAGE_FROZEN|CONFIGURATION_FROZEN|OFFLINE_FROZEN|RECOVERING|READY` 必须搭配
+  `conflictState=NONE`；
+- 多个非 conflict blocker 同时存在时显示最高 precedence，较低 blocker 事实继续保留；
+  最高项解除后在同一次 full recompute 中显露下一项；
+- Task/Session/Worker 分别只计算作用于自身 scope 的 facts。一个 Task
+  `EVIDENCE_CONFLICT` 不把已恢复 Worker 或其他 Session 置为 quarantine；
+- canonical terminal/cleanup 与 operational pair 正交。Task 可以在 terminal safety
+  fence 已提交后仍因 proof/storage conflict 保持 cleanup frozen，但不能 reopen。
+
+任何 unknown/future input 都不能生成新 enum：无法分类的 authenticated evidence 设置
+exact aggregate `conflictState=EVIDENCE_CONFLICT`；无法鉴权或无法绑定的 input 不进入
+fact set，只保留 stable rejection/audit。
+
 ### Task Lifecycle Snapshot
 
 | Dimension | Initial Values | Semantics |
@@ -601,8 +768,11 @@ termination request result 与 Task terminal 是两个维度：
 - Task 因独立可信 terminal evidence 进入 `COMPLETED/FAILED/CANCELLED` 时，typed
   reconciliation 可以如实返回 canonical `TERMINAL`；只有 evidence 与 exact
   termination operation 相关时，内部 termination state 才能标记 `CONFIRMED`。
-- 未知或未来 Worker status 进入 `AMBIGUOUS/CONFLICT`，禁止 default-to-running 或
-  default-to-terminal 掩盖。
+- 未知或未来 Worker status 使相关 operation 保持 `AMBIGUOUS`；若它来自已鉴权但无法
+  归类的 exact evidence，同时设置
+  `availability=AUTHORITY_QUARANTINED +
+  conflictState=EVIDENCE_CONFLICT`。禁止 default-to-running、default-to-terminal 或
+  创建新 enum 掩盖。
 
 receipt-disabled public matrix 固定沿用 BUG-035；唯一额外 gate 是 live ENFORCED aggregate
 发生 receipt configuration drift 时，在新 operation acceptance 前 fail closed，见表后：
@@ -736,6 +906,7 @@ prompt、模型回复或业务 payload。
 | `aggregateType/aggregateId` | Worker、Session、Task 或 TerminationOperation |
 | `sessionId/taskId/operationId` | 存在时使用 exact correlation |
 | `physicalWorkerId/providerTaskId` | 存在时使用 durable identity |
+| `ownershipMode/dispatchId/safeBindingDigestVersion/safeBindingDigest` | Worker command-derived fact 必须回带 initial durable dispatch binding；mode/digest exact match 后才可摄取 |
 | `sourceType/sourceId/sourceEpoch` | authority 与 Worker instance/restart epoch |
 | `sourceStateGeneration` | Worker durable lifecycle store generation；本机 state 丢失/重建时变化 |
 | `sourceSequence` | 同一 source/aggregate 内的单调序号 |
@@ -745,6 +916,11 @@ prompt、模型回复或业务 payload。
 | `validUntil` | observation freshness；durable evidence/decision 可为空 |
 | `supersedesFactId` | 显式纠正旧 observation，不原地篡改 |
 | `safeReasonCode` | fixed/sanitized code |
+
+Worker JSON wire 的 `ownership_mode/safe_binding_digest_version/safe_binding_digest`
+规范化为 fact envelope 的
+`ownershipMode/safeBindingDigestVersion/safeBindingDigest`；这是固定 casing mapping，
+不是两个不同概念。
 
 跨 source 不依赖 wall-clock timestamp 建立全序；使用 aggregate version、source
 sequence、causation 和明确 precedence。
@@ -799,28 +975,43 @@ identity record 不保存 credential、claim token、Authorization 或长期 sec
 | `WORKER_IDENTITY_VERIFIED` | Navigator identity verifier | epoch-bound | connected endpoint 与 durable physical Worker/instance 匹配 |
 | `WORKER_STATE_GENERATION_VERIFIED` | Navigator identity verifier | durable-generation-bound | Worker lifecycle store 与上次已知 generation 一致 |
 | `WORKER_STATE_GENERATION_CHANGED` | Navigator identity verifier | durable decision input | durable state 已重建/丢失；旧 Task 进入 reconciliation/ambiguous，不 terminal |
+| `WORKER_LIFECYCLE_COVERAGE_GAP_CONFIRMED` | Navigator cursor verifier | durable decision input | protected fact interval 无法恢复；exact affected aggregate 进入 Worker state-loss conflict |
+| `WORKER_STATE_BASELINE_REESTABLISHED` | Worker lifecycle owner after explicit baseline + affected-scope reconciliation | durable conflict resolution | 只 supersede exact `WORKER_STATE_LOSS` candidate；不清除 evidence/writer conflict |
 | `WORKER_CAPABILITY_READY_OBSERVED` | Worker readiness adapter | staleable | 指定 capability 在观察时 ready |
 | `WORKER_RECONNECTED_OBSERVED` | Navigator connection observer | staleable | 进入 recovering；不能立即解冻 |
 | `WORKER_TASK_INVENTORY_OBSERVED` | verified Worker instance | epoch-bound evidence | exact epoch 的结构化 Task snapshot；missing 不自动等于 terminal |
 | `WORKER_LIFECYCLE_CURSOR_ACKED` | Worker lifecycle owner | monotonic checkpoint | Navigator 已持久化 through-sequence；允许 Worker 按 retention policy 回收旧 facts |
-| `WORKER_LIFECYCLE_STORAGE_PRESSURE_OBSERVED` | Worker storage monitor | staleable | lifecycle store 接近容量；触发 compaction/degraded gate，不允许丢失 protected facts |
+| `WORKER_LIFECYCLE_STORAGE_PRESSURE_OBSERVED` | Worker storage monitor | staleable | lifecycle store 接近容量；只触发 compaction/alert，不改变 availability；不得丢失 protected facts |
 | `WORKER_LIFECYCLE_STORAGE_FROZEN` | Worker lifecycle owner | operational decision | 无法安全持久新 fact，拒绝新 Task/effect |
 | `WORKER_LIFECYCLE_STORAGE_RECOVERED` | Worker lifecycle owner | operational decision | compaction/扩容后重新通过 durability probe，可进入 reconciliation |
 | `WORKER_RECONCILIATION_COMPLETED` | Worker lifecycle owner | decision/checkpoint | identity、capability 和受影响 Task 对账已完成，可重新计算 gate |
 
-Derived Worker operational states:
+required configuration 使用 normalized、content-free facts，不允许 reducer 自行读取环境：
 
-```text
-ONLINE
-SUSPECTED
-OFFLINE_FROZEN
-RECOVERING_RECONCILIATION
-STORAGE_PRESSURE_DEGRADED
-STORAGE_PRESSURE_FROZEN
-```
+| Fact Type | Authority | Meaning |
+|---|---|---|
+| `LIFECYCLE_REQUIRED_CONFIGURATION_UNAVAILABLE` | configuration readiness adapter + aggregate owner | exact scope/configuration kind 当前不满足；不保存 credential/value |
+| `LIFECYCLE_REQUIRED_CONFIGURATION_RESTORED` | configuration readiness adapter + aggregate owner | exact unavailable fact 已由新 readiness observation supersede |
 
-`TRANSPORT_CONNECTED` 不足以产生 `ONLINE`；重连至少需要 exact identity、required
-capability 和受影响 Task reconciliation。
+这些 facts 只投影到前述唯一 `availability/conflictState`。不存在第二套持久 Worker
+operational state enum：
+
+| Observation/decision | Canonical projection |
+|---|---|
+| transport connected/heartbeat only | 不改变 snapshot；fresh observation 只是 READY 的必要非充分条件 |
+| probe failure before freshness expiry | 不改变 snapshot；Sentinel 只更新本 lease 内的 ephemeral attempt/backoff counter |
+| disconnect or freshness expiry fact | `availability=OFFLINE_FROZEN` |
+| reconnect or storage-recovered fact | `availability=RECOVERING`，直到 exact reconciliation complete |
+| storage pressure observation below freeze threshold | 不改变 snapshot；只触发 compaction/alert effect |
+| durable storage frozen decision | `availability=STORAGE_FROZEN` |
+| exact reconciliation complete and no higher-precedence blocker | `availability=READY` |
+
+`ONLINE`、`SUSPECTED`、`RECOVERING_RECONCILIATION`、
+`STORAGE_PRESSURE_DEGRADED`、`STORAGE_PRESSURE_FROZEN` 不再是 target schema、snapshot、
+reducer 或 API 值；它们若出现在当前 legacy adapter/log，只能作为 source text，经上表
+规范化后立即丢弃。Sentinel 的 attempt count、next probe time、backoff 和 circuit
+breaker 是可重建的 effect-participant lease metadata，不是 lifecycle fact，也不能被
+compatibility projector 读取。
 
 ### Connectivity Sentinel / Supervisor Boundary
 
@@ -841,21 +1032,26 @@ TaskStreamWatcher (one logical watcher per affected Task)
   resume from last durable cursor + report normalized facts
 ```
 
-最小状态流为：
+最小 canonical fact/projection flow 为：
 
 ```text
-ONLINE
-  -> SUSPECTED
-  -> OFFLINE_FROZEN
-  -> RECOVERING_RECONCILIATION
-  -> ONLINE
+fresh verified observations + reconciliation complete
+  -> availability=READY
+freshness expired or disconnected fact
+  -> availability=OFFLINE_FROZEN
+reconnected fact
+  -> availability=RECOVERING
+exact reconciliation complete + no higher-precedence blocker
+  -> availability=READY
 ```
 
 - 单个 Task SSE 断流而 Worker health/identity 仍可信时，只产生
   `TASK_STREAM_DISCONNECTED_OBSERVED` 并恢复该 Task 观察通道；不能立即把整个 Worker
   置为 offline。
-- Worker probe 连续失败或连接信号整体失效时，owner 才进入 `SUSPECTED`/
-  `OFFLINE_FROZEN`。具体阈值是可配置 policy，不是 terminal rule。
+- Worker probe 连续失败本身只改变 Sentinel ephemeral backoff；只有
+  `WORKER_DISCONNECTED_OBSERVED` 或 freshness-expiry fact 才让 owner 投影
+  `availability=OFFLINE_FROZEN`。具体阈值是 versioned policy input，不是新的 state
+  value或 terminal rule。
 - 一个 Physical Worker 只运行一个退避回路。Worker 已确认不可达时暂停各 Task 独立
   撞击 endpoint；probe 恢复后再以有界并发恢复受影响 stream，避免 Task 数量放大重连
   风暴。
@@ -885,7 +1081,7 @@ lane、三类 adapter：
 
 | Current Component | Retained Capability | Removed Responsibility | Target Role |
 |---|---|---|---|
-| `WorkerHealthChecker` | health/identity/capability probe | 独立 `@Scheduled`、直接写 ONLINE/OFFLINE | stateless `WorkerProbeAdapter` |
+| `WorkerHealthChecker` | health/identity/capability probe | 独立 `@Scheduled`、直接写 legacy `ONLINE/OFFLINE` flag | stateless `WorkerProbeAdapter`；target 只产 normalized facts |
 | `WorkerStreamRelay` | SSE subscribe、durable cursor、event replay、subscription dedup | 自行无限调度重连、直接改 Task/Session/UI lifecycle | `TaskStreamAdapter` |
 | `TaskStateReconciler` | process/task inventory、status/sequence gap 采集 | 独立 `@Scheduled`、自行判断状态和触发重连 | `WorkerInventoryAdapter` |
 | new Worker Sentinel | keyed scheduling、backoff/jitter、bounded concurrency、startup recovery | 不解析 provider payload、不决定 Task terminal | `WorkerConnectivitySupervisor` |
@@ -939,7 +1135,8 @@ MVP-B 归一后必须满足：
 | `TASK_INTERACTION_INVENTORY_OBSERVED` | verified Worker instance | reconnect 时 exact current pending interaction snapshot |
 | `TASK_PROVIDER_TERMINAL_OBSERVED` | verified Worker/provider | provider 发出结构化 terminal result |
 | `TASK_PROCESS_EXIT_VERIFIED` | process identity verifier | exact PID/start identity 已确认退出 |
-| `TASK_EXECUTION_EVIDENCE_CONFLICT` | Task lifecycle owner | 多个可信 evidence 互相冲突，进入 quarantine/CONFLICT |
+| `TASK_EXECUTION_EVIDENCE_CONFLICT` | Task lifecycle owner | 多个可信 evidence 互相冲突；该 Task 设置 `availability=AUTHORITY_QUARANTINED + conflictState=EVIDENCE_CONFLICT` |
+| `TASK_EXECUTION_EVIDENCE_CONFLICT_RESOLVED` | Task lifecycle owner from exact superseding evidence | 只清除 exact Task 的 evidence-conflict candidate并 full recompute；不能选择“较新文本” |
 
 Worker 文本、普通日志、SSE 断开和 generic error 均不是上述 terminal evidence。
 
@@ -956,6 +1153,7 @@ Worker 文本、普通日志、SSE 断开和 generic error 均不是上述 termi
 | `TERMINATION_PROCESS_EXIT_VERIFIED` | process identity verifier | exact operation/task process 已退出 |
 | `TERMINATION_EVIDENCE_DEADLINE_ELAPSED` | lifecycle timer | caller disposition 可变为 `AMBIGUOUS`；Task 不 terminal |
 | `TERMINATION_EVIDENCE_CONFLICT` | Termination owner | operation/task/Worker/evidence 不一致 |
+| `TERMINATION_EVIDENCE_CONFLICT_RESOLVED` | Termination owner from exact superseding evidence | 只清除 exact operation/Task evidence-conflict candidate并 full recompute |
 
 ### Canonical Task and Cleanup Decision Facts
 
@@ -1081,16 +1279,25 @@ owner 对 normalized facts 使用以下第一版确定性规则；“保持”�
 | accepted terminal candidate | 同事务写 authorization tombstone、`TASK_CANONICAL_TERMINAL_COMMITTED` 和 immutable cleanup applicability plan；提交后才产生 required async effect outbox | terminal 先提交、墓碑后补；或 participant 旁路改 canonical state |
 | terminal cleanup checkpoint facts | 单项幂等推进 cleanup | checkpoint 缺失时返回 typed `TERMINAL` |
 | 所有 required cleanup checkpoint 齐备且其余 participant 明确 not-applicable | `cleanupState=COMPLETED`，产生 `TASK_TERMINAL_CLEANUP_COMPLETED` | 无条件等待不存在的 token/registration/receipt，或缺失 required cleanup 时伪装完成 |
-| `WORKER_DISCONNECTED_OBSERVED` / stale heartbeat | `availability=OFFLINE_FROZEN`，fresh execution observation 过期为 `UNKNOWN` | 改变 canonical phase、outcome 或 termination ACK |
-| `WORKER_RECONNECTED_OBSERVED` | `availability=RECOVERING` | 立即恢复 Worker-dependent writes |
-| exact identity/capability/inventory reconciliation complete | 按 Task 独立重算并有条件恢复 `availability=READY` | 一个旧 Task ambiguous 冻结整个 Worker |
+| `WORKER_DISCONNECTED_OBSERVED` / stale heartbeat | 增加 `OFFLINE_FROZEN` candidate，full precedence 后投影；fresh execution observation 过期为 `UNKNOWN` | 改变 canonical phase、outcome 或 termination ACK |
+| `WORKER_RECONNECTED_OBSERVED` | 清除 offline candidate并增加 `RECOVERING` candidate，full precedence 后投影 | 立即恢复 Worker-dependent writes |
+| exact identity/capability/inventory reconciliation complete | 清除 recovering candidate；按 Task 独立 full recompute，无其他 blocker 才 `availability=READY` | 一个旧 Task ambiguous 冻结整个 Worker |
+| `WORKER_LIFECYCLE_STORAGE_FROZEN` | 若无 authority conflict，`availability=STORAGE_FROZEN + conflictState=NONE` | 继续普通 Worker/provider effect或创造 storage pressure 新 enum |
+| `WORKER_LIFECYCLE_STORAGE_RECOVERED` | 清除 storage candidate；若 reconciliation 未完成则 `availability=RECOVERING` | 无对账直接 READY |
+| `LIFECYCLE_REQUIRED_CONFIGURATION_UNAVAILABLE` | 若无更高 precedence blocker，`availability=CONFIGURATION_FROZEN + conflictState=NONE` | 把 config failure 写成 storage/offline/terminal |
+| matching `LIFECYCLE_REQUIRED_CONFIGURATION_RESTORED` | 清除 exact config candidate并 full recompute | 清除其他仍 active blocker |
+| `TASK_EXECUTION_EVIDENCE_CONFLICT` | exact Task `availability=AUTHORITY_QUARANTINED + conflictState=EVIDENCE_CONFLICT` | 泛化为 Worker-wide freeze或自动选择一个 evidence |
+| `WORKER_STATE_GENERATION_CHANGED` / `WORKER_LIFECYCLE_COVERAGE_GAP_CONFIRMED` | exact affected scope `availability=AUTHORITY_QUARANTINED + conflictState=WORKER_STATE_LOSS` | missing evidence 推断 terminal |
+| matching `TASK_EXECUTION_EVIDENCE_CONFLICT_RESOLVED` / `TERMINATION_EVIDENCE_CONFLICT_RESOLVED` | 只清除 exact evidence-conflict candidate并 full recompute | 顺带清除 state/writer conflict |
+| `WORKER_STATE_BASELINE_REESTABLISHED` | 只清除 exact affected scope 的 state-loss candidate并 full recompute | 缺 explicit baseline/coverage decision 就恢复 READY |
 | `WRITER_EXCLUSIVITY_PROOF_LOST` | 引用 proof 的 live ENFORCED Worker/Session/Task 均设置 `availability=AUTHORITY_QUARANTINED`、`conflictState=LEGACY_WRITER_EXCLUSIVITY_LOST`；只保留单调 local safety action | 仅停止新 enrollment却让既存 aggregate 继续普通 effect，或回退 legacy |
-| `WRITER_EXCLUSIVITY_PROOF_RESTORED` + exact conflict scan | 逐 aggregate 重放 quarantine facts并恢复允许的 projection/effect | 未检查 legacy drift 就自动清除 conflict |
+| `WRITER_EXCLUSIVITY_PROOF_RESTORED` + exact conflict scan | 只清除 `LEGACY_WRITER_EXCLUSIVITY_LOST` candidate并 full recompute；若 state/evidence conflict 仍 active则继续 `AUTHORITY_QUARANTINED` | 未检查 legacy drift 就自动清除 conflict，或顺带清除较低 precedence blocker |
 
 全局 reducer invariants：
 
-1. `canonicalPhase=TERMINAL` 单调不可逆；晚到 RUNNING observation 进入 conflict/quarantine，
-   不 reopen。
+1. `canonicalPhase=TERMINAL` 单调不可逆；晚到 RUNNING observation 设置 exact Task
+   `availability=AUTHORITY_QUARANTINED +
+   conflictState=EVIDENCE_CONFLICT`，不 reopen。
 2. `canonicalPhase=TERMINAL` 与 authorization tombstone 必须同事务；不存在“已 terminal
    但 capability 仍可用”的提交窗口。
 3. `cleanupState` 只有在 canonical terminal 后才能从 `NOT_REQUIRED` 进入 `PENDING`，
@@ -1104,7 +1311,9 @@ owner 对 normalized facts 使用以下第一版确定性规则；“保持”�
 7. `WORKER_PRE_EFFECT_REJECTION` 只在 snapshot 尚无
    `TASK_ACCEPTED_BY_WORKER/TASK_EXECUTION_STARTED_OBSERVED`，且 exact authenticated
    response 同时绑定 `dispatchId + navigatorTaskId + physicalWorkerId +
-   stateGeneration` 时合法；否则产生 conflict/quarantine，不关闭 Task。
+   stateGeneration + ownershipMode + safeBindingDigest` 时合法；否则设置 exact Task
+   `availability=AUTHORITY_QUARANTINED +
+   conflictState=EVIDENCE_CONFLICT`，不关闭 Task。
 8. never-accepted `FAILED` 与 execution-derived terminal 使用完全相同的 terminal
    tombstone、cleanup、typed canonical gate 和 Session lane release；不得用删除 Task
    row或直接清空 `foregroundTaskId` 作为补偿。
@@ -1115,8 +1324,8 @@ owner 对 normalized facts 使用以下第一版确定性规则；“保持”�
 
 #### Rejected Before Acceptance
 
-- 例如 Worker 已处于 `OFFLINE_FROZEN`、identity 未 claim、Task correlation 在 preflight
-  阶段明确不合法。
+- 例如 Worker 已处于 `availability=OFFLINE_FROZEN`、identity 未 claim、Task
+  correlation 在 preflight 阶段明确不合法。
 - Navigator 返回 stable command rejection，不产生 `TERMINATION_INTENT_ACCEPTED`、
   termination operation、dispatch outbox 或 server pending intent。
 - 前端可以保存 local retry draft；恢复后用户重新点击属于新 command，使用新 client
@@ -1189,7 +1398,8 @@ Worker offline 时保存待执行 response。
 
 ## Offline Freeze Policy
 
-Worker 从 `ONLINE` 进入 `OFFLINE_FROZEN` 时：
+Worker snapshot 从 `availability=READY|RECOVERING` 重算为
+`availability=OFFLINE_FROZEN` 时：
 
 - canonical Session/Task status 保持不变。
 - execution observation 变为 `UNKNOWN`，disposition 为
@@ -1247,7 +1457,7 @@ contract。当前 normative 约束仅是 server 不排队、前端不自动重�
 
 ## Reconnect Recalculation
 
-Worker transport 恢复后先进入 `RECOVERING_RECONCILIATION`：
+Worker transport 恢复后先投影为 `availability=RECOVERING`：
 
 1. 验证 physical Worker、instance/epoch 和 endpoint ownership。
 2. 验证 required capability/readiness。
@@ -1263,8 +1473,12 @@ Worker transport 恢复后先进入 `RECOVERING_RECONCILIATION`：
 
 - Worker gate：完成 exact identity、required capability 和 inventory reconciliation 后，
   Worker 可恢复新 Task dispatch。
-- Existing Task gate：每个旧 Task 独立重算；仍 missing/unknown/conflict 的 Task 保持
-  `FROZEN/AMBIGUOUS`，其 Session 继续冻结，但不反向冻结整个 Worker。
+- Existing Task gate：每个旧 Task 独立重算；missing/unknown 使 operation 保持
+  `AMBIGUOUS`，其 `availability` 按上述 active blockers 计算；exact evidence conflict
+  则设置该 Task
+  `availability=AUTHORITY_QUARANTINED +
+  conflictState=EVIDENCE_CONFLICT`。其 Session gate 按 foreground Task聚合，但不反向
+  冻结整个 Worker。
 
 ### Inventory, Epoch and ACK Protocol
 
@@ -1378,6 +1592,7 @@ Task payload 或 credential。HTTP status、stable code 和是否允许携带 sa
       "EXACT_DISPATCH_DEDUPE_V1",
       "FENCED_DISPATCH_STATUS_V1",
       "DISPATCH_BINDING_PROOF_V1",
+      "OWNERSHIP_MODE_BOUND_DISPATCH_V1",
       "DURABLE_PROVIDER_TASK_ID_V1",
       "QUERY_SSE_DISPOSITION_V1",
       "TERMINATION_ATOMIC_CAPABILITY_V1"
@@ -1421,6 +1636,10 @@ complete_active_task_set = true
 tasks[] = {
   navigator_task_id,
   provider_task_id,
+  ownership_mode,
+  initial_dispatch_id,
+  safe_binding_digest_version,
+  safe_binding_digest,
   lifecycle_state,
   execution_observation,
   pending_interaction_ref,
@@ -1439,6 +1658,10 @@ facts[]
   非整数或负数返回 400 `LIFECYCLE_CURSOR_INVALID`，不能隐式改用当前 head。
 - `facts` 只含标准 fact envelope 和 content-free lifecycle metadata，不含 prompt、
   模型回复、tool payload、workspace path、credential 或业务数据。
+- 每个 v1 `tasks[]`/terminal tombstone/fact 必须回带 initial
+  ownership-mode-bound dispatch digest；Navigator 与本地 aggregate mode/binding
+  不匹配时不消费该 Task evidence，并按 exact scope设置
+  `conflictState=EVIDENCE_CONFLICT`。
 - 若 requested cursor 小于 `min_available_sequence - 1`，返回 HTTP 409 与稳定 code
   `LIFECYCLE_CURSOR_COVERAGE_GAP`，同时返回 identity triple 和当前 cursor bounds；
   不得用当前 inventory 假装覆盖缺失区间。
@@ -1515,7 +1738,7 @@ MVP-A 只批准以下 Worker v1 command/read surface；route、transport 和 app
 |---|---|---|---|---|
 | Task create/resume | `POST /api/v1/query` | 现有 JSON body 的 additive `lifecycle_context` | `200 text/event-stream` | `SHADOW` + `ENFORCED` |
 | termination/cancel | `POST /api/v1/tasks/{providerTaskId}/abort` | JSON body 只新增 `lifecycle_context`；继续携带既有 signed operation/signature headers | `202 application/json` | `SHADOW` + `ENFORCED` |
-| exact dispatch reread | `GET /api/v1/lifecycle/dispatches/{dispatchId}` | expected-identity + expected-binding digest/version headers | `200 application/json` | read-only authority |
+| exact dispatch reread | `GET /api/v1/lifecycle/dispatches/{dispatchId}` | expected-identity + required expected ownership-mode + expected-binding digest/version headers | `200 application/json` | read-only authority |
 | termination readiness | `GET /api/v1/tasks/{providerTaskId}/termination-reconciliation-readiness?original_operation_id=...` | 现有 query | 现有 JSON | legacy diagnostic only；不能形成 owner terminal/never-accepted |
 | mutating termination reconcile | `POST /api/v1/tasks/{providerTaskId}/termination-reconcile` | 现有 body/header | 现有 JSON | legacy only；携带 `SHADOW/ENFORCED` context 时在 capability consumption/effect 前返回 `409 LIFECYCLE_COMMAND_NOT_APPLICABLE` |
 | permission/input response | Java 现有 `/api/v1/tasks/{taskId}/respond` 在 SDK Node Worker 无对应 route | none | none | `NOT_APPLICABLE(CODEX_SDK_INTERACTION_RESPONSE_SURFACE_ABSENT)`；Navigator 在 dispatch 前返回 `WORKER_INTERACTION_RESPONSE_UNSUPPORTED` |
@@ -1554,7 +1777,8 @@ Java shared typed adapter 的 applicability 同样冻结：
 
 - `ownership_mode` 只允许 `SHADOW|ENFORCED`；`command_kind` 只允许
   `TASK_CREATE|TASK_RESUME|TERMINATION_CANCEL`。route 与 kind 不匹配返回
-  `409 LIFECYCLE_COMMAND_KIND_MISMATCH`。
+  `409 LIFECYCLE_COMMAND_KIND_MISMATCH`。mode 是 authority/effect 语义，不是
+  transport hint；它必须进入下述 durable binding、disposition 和 status validation。
 - create/resume 不携带 `termination_operation_id`；termination 必须携带并 exact 匹配
   signed capability claims。所有字段 required，明确为 null 的不适用字段除外。
 - `delivery_attempt` 是 Navigator outbox 对同一 `dispatch_id` 持久单调递增的正整数；
@@ -1586,6 +1810,7 @@ capability。`safe_binding_digest_version` 固定为 `JCS_SHA256_V1`：
 ```json
 {
   "schema": "NAVIGATOR_LIFECYCLE_BINDING_V1",
+  "ownership_mode": "SHADOW",
   "http_method": "POST",
   "route_template": "/api/v1/query",
   "command_kind": "TASK_CREATE",
@@ -1600,15 +1825,20 @@ capability。`safe_binding_digest_version` 固定为 `JCS_SHA256_V1`：
 
 route-specific digest input 固定如下：
 
-| Command kind | Method/template | `provider_task_id` input | `termination_operation_id` input | Payload/capability rule |
-|---|---|---|---|---|
-| `TASK_CREATE` | `POST /api/v1/query` | null；ID 是 accepted disposition 的 durable output | null | query body 移除 lifecycle context 后做 payload digest；capability null |
-| `TASK_RESUME` | `POST /api/v1/query` | null；新的 Worker Task ID 是 accepted disposition 的 durable output | null | resume body（含既有 session/thread selector）移除 lifecycle context 后做 payload digest；capability null |
-| `TERMINATION_CANCEL` | `POST /api/v1/tasks/{providerTaskId}/abort` | exact decoded route segment | exact context/capability operation ID | body 移除 lifecycle context 后固定为空 object digest；signed operation header另做 capability digest |
+| Command kind | `ownership_mode` input | Method/template | `provider_task_id` input | `termination_operation_id` input | Payload/capability rule |
+|---|---|---|---|---|---|
+| `TASK_CREATE` | exact context `SHADOW|ENFORCED` | `POST /api/v1/query` | null；ID 是 accepted disposition 的 durable output | null | query body 移除 lifecycle context 后做 payload digest；capability null |
+| `TASK_RESUME` | exact context `SHADOW|ENFORCED` | `POST /api/v1/query` | null；新的 Worker Task ID 是 accepted disposition 的 durable output | null | resume body（含既有 session/thread selector）移除 lifecycle context 后做 payload digest；capability null |
+| `TERMINATION_CANCEL` | exact context `SHADOW|ENFORCED` | `POST /api/v1/tasks/{providerTaskId}/abort` | exact decoded route segment | exact context/capability operation ID | body 移除 lifecycle context 后固定为空 object digest；signed operation header另做 capability digest |
 
 `delivery_attempt`、accepted create/resume 后才分配的 `provider_task_id`、instance epoch、
 Authorization 和 signature 不进入调用方预计算的 binding digest，使合法 technical
-redelivery 保持同一 binding。Worker store 必须把 durable output
+redelivery 保持同一 binding。`ownership_mode` 必须进入 digest；同一
+dispatch/body/route 从 `SHADOW` 改为 `ENFORCED` 或反向改变时必须得到不同 digest，
+不能复用或升级旧 record。command route 查到同 dispatch 的不同 durable mode 时必须在
+duplicate handling/capability consumption/provider effect 前返回
+`409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`；同 mode 但其他 binding input 不同才返回
+`409 LIFECYCLE_DISPATCH_BINDING_MISMATCH`。Worker store 必须把 durable output
 `provider_task_id` 与该 dispatch record 原子绑定，不能在同一 digest 下换 ID。store
 只保存上述 digest/version、opaque correlation 和 opaque provider Task ID。Java 与
 Node 使用相同 conformance fixtures，任何算法或 input 变更都需要 Worker contract
@@ -1621,6 +1851,7 @@ query 的首个非 comment SSE frame、abort JSON response 和 dispatch-status r
 
 ```text
 schema = NAVIGATOR_WORKER_LIFECYCLE_V1
+ownership_mode = SHADOW | ENFORCED
 physical_worker_id
 state_generation
 instance_epoch
@@ -1657,6 +1888,10 @@ termination_operation_id?
   都 required，且必须来自同一 fsync record；本 protocol 只允许
   `JCS_SHA256_V1`。`never_accepted_proof` 也是 required boolean，不能由 Navigator
   根据 HTTP status 或 `accepted=false` 自行补算。
+- `ownership_mode` 对每一个 durable disposition required，并且必须与形成该 record
+  的 lifecycle context 和 binding object exact 相同；duplicate/status/fact 不允许修改
+  mode。Navigator 只有在 mode、digest/version 和本地 aggregate ownership 全部 exact
+  match 时才可摄取 record。SHADOW disposition 永远不能满足 ENFORCED authority。
 - durable phase 的 required/null 规则固定如下；任何不满足的 envelope 都是
   `LIFECYCLE_DISPOSITION_SCHEMA_INVALID`，不得摄取为 fact：
 
@@ -1670,8 +1905,9 @@ termination_operation_id?
 | termination `ACCEPTED/EFFECT_STARTED|RESULT_OBSERVED` | required，且与 PREPARED 相同 | required | false | `accepted=true`, `provider_effect_started=true` |
 
 non-durable auth/context/fence/binding/store-unavailable error envelope 不得携带
-`disposition_version/fact_cursor/safe_binding_digest/never_accepted_proof`，也不能伪装
-成上述 durable disposition。SHADOW proposed disposition 使用同一字段形状，但
+`ownership_mode/disposition_version/fact_cursor/safe_binding_digest/
+never_accepted_proof`，也不能伪装成上述 durable disposition。SHADOW proposed
+disposition 使用同一字段形状，但
 `never_accepted_proof` 固定为 false，永远不是 owner authority。
 
 对 `TASK_CREATE|TASK_RESUME`，Worker 必须先完成 route-specific admission validation，
@@ -1681,10 +1917,11 @@ thread reservation、task registry、provider invocation、business/lifecycle SS
 inventory、terminal fact、duplicate response 与 dispatch-status；禁止在后续业务 SSE
 才首次建立 identity。Navigator Java adapter 必须在消费任何业务 SSE 前，从第一帧
 durable disposition 持久化
-`navigatorTaskId + dispatchId + providerTaskId + safe_binding_digest` binding；后续 event
-ID 不同则进入 evidence conflict。primary response 丢失时，Sentinel/status reread 用
-同一 binding 恢复该 ID；termination outbox/capability 在 ID 未恢复前不得创建、不得
-猜测或新建 provider Task。若 `PREPARED` atomic commit 失败，尚未 durable 的 ID 必须
+`navigatorTaskId + dispatchId + ownershipMode + providerTaskId + safe_binding_digest`
+binding；后续 event ID 或 mode 不同则进入 evidence conflict。primary response 丢失
+时，Sentinel/status reread 用同一 binding 恢复该 ID；termination outbox/capability
+在 ID 未恢复前不得创建、不得猜测或新建 provider Task。若 `PREPARED` atomic commit
+失败，尚未 durable 的 ID 必须
 丢弃、thread/local admission reservation 必须释放，返回 non-durable 503；该 ID 不得
 出现在 status/inventory，也不得调用 provider。
 
@@ -1725,11 +1962,15 @@ stable reason string，不增加 SDK enum。
 GET /api/v1/lifecycle/dispatches/{dispatch_id}
 X-Navigator-Expected-Physical-Worker-Id: ...
 X-Navigator-Expected-State-Generation: ...
+X-Navigator-Expected-Ownership-Mode: SHADOW | ENFORCED
 X-Navigator-Expected-Safe-Binding-Digest-Version: JCS_SHA256_V1
 X-Navigator-Expected-Safe-Binding-Digest: ...
 ```
 
 - 使用 lifecycle Bearer credential 和与 inventory 相同的 expected-identity 顺序。
+- expected ownership mode header required，只允许 `SHADOW|ENFORCED`。missing/invalid
+  返回 `400 LIFECYCLE_EXPECTED_OWNERSHIP_MODE_REQUIRED`；找到 dispatch 但 record mode
+  不同返回 `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`，且不得继续返回 disposition。
 - 两个 expected-binding header 都 required。missing/blank/invalid base64url 值返回
   `400 LIFECYCLE_EXPECTED_BINDING_REQUIRED`；version 不是
   `JCS_SHA256_V1` 返回
@@ -1739,26 +1980,32 @@ X-Navigator-Expected-Safe-Binding-Digest: ...
 - exact record 返回上述 durable disposition；`404
   LIFECYCLE_DISPATCH_NOT_FOUND` 只表示当前 durable store 中未找到，不能证明 never
   accepted、terminal 或 safe replay。
-- preflight 顺序固定为 Bearer auth → expected identity syntax/match → expected binding
-  syntax/version → dispatch lookup → constant-time binding match → durable envelope。
-  identity/generation/version/binding mismatch 返回上述 409；store unavailable 返回
-  503。只有匹配成功的 200 response 才回带 record 中的
-  `safe_binding_digest_version/safe_binding_digest`；所有 negative response 不携带
-  Task payload、actual digest 或 provider Task ID。
+- preflight 顺序固定为 Bearer auth → expected identity syntax/match → expected
+  ownership mode syntax → expected binding syntax/version → dispatch lookup → record
+  mode match → constant-time binding match → durable envelope。
+  identity/generation/mode/version/binding mismatch 返回上述 409；store unavailable
+  返回 503。只有匹配成功的 200 response 才回带 record 中的
+  `ownership_mode/safe_binding_digest_version/safe_binding_digest`；所有 negative
+  response 不携带 Task payload、actual mode/digest 或 provider Task ID。
 - Navigator 在创建 command outbox 时按 route-specific table 计算并持久保存 expected
-  digest/version；status reread 不从 primary response 学习或替换 expected binding。
-  create/resume 的 provider Task ID 是匹配成功后从 record 恢复的 durable output，不是
-  status request 的 expected input。
+  ownership mode/digest/version；status reread 不从 primary response 学习或替换
+  expected mode/binding。create/resume 的 provider Task ID 是匹配成功后从 record
+  恢复的 durable output，不是 status request 的 expected input。
 - Navigator command adapter 禁用 HTTP client/reverse proxy 的自动 POST retry。每个
   `dispatch_id` 同时最多一个 client-side in-flight attempt；发送前先持久化新的
   `delivery_attempt`。低于当前 outbox attempt 的晚到 response 只记 audit，不能生成
   owner fact。
 - Worker 按 `(physicalWorkerId,stateGeneration,dispatchId)` 串行化，使用 durable
-  `disposition_version` 和 process-bound executor lease；并行/晚到 attempt 只能得到同一
-  record或 `LIFECYCLE_DISPATCH_BINDING_MISMATCH`，不能各自启动 effect。
+  `disposition_version` 和 process-bound executor lease。并行/晚到 attempt 必须先比较
+  durable `ownership_mode`：mode 不同 exact 返回
+  `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`；只有 mode exact match 时，才可得到同一
+  record 或 `409 LIFECYCLE_DISPATCH_BINDING_MISMATCH`。上述 mode 判断发生在 binding
+  digest comparison、duplicate handling、capability consumption 和 provider effect
+  前，任何 attempt 都不能各自启动 effect。
 - transport timeout 后，Navigator 先 fenced 读取 dispatch status。只有 exact
   `NOT_FOUND`、当前无 in-flight attempt 且 policy 仍允许时，才可用相同 dispatch ID、
-  相同 binding、递增 attempt 做一次 technical redelivery；status unavailable/
+  相同 ownership mode/binding、递增 attempt 做一次 technical redelivery；改变 mode
+  不是 retry，而是 `LIFECYCLE_OWNERSHIP_MODE_MISMATCH`。status unavailable/
   `PREPARED/EFFECT_STARTED/RESULT_OBSERVED` 时只读对账。termination capability 必须仍在
   有效期内，且不能换 operation/client request ID。
 
@@ -1811,7 +2058,8 @@ SHADOW 只计算/持久化 proposed atomic disposition；现有 one-use consume/
    dispatch binding 成功后作为 Worker business-admission result 原子落盘，普通 request
    validation error 不在 allowlist；
 3. Navigator 通过 authenticated lifecycle fact 或上述 fenced dispatch-status reread
-   取得 record，exact 匹配 Worker/generation/Task/dispatch/binding/disposition version，
+   取得 record，且 `ownership_mode=ENFORCED`，exact 匹配
+   Worker/generation/Task/dispatch/binding/disposition version，
    其中 disposition 的 `safe_binding_digest_version/safe_binding_digest` 必须与
    Navigator outbox 中原始 expected binding exact match，且
    `never_accepted_proof=true` 来自同一 durable version，
@@ -1823,9 +2071,10 @@ SHADOW 只计算/持久化 proposed atomic disposition；现有 one-use consume/
 原 command HTTP response 本身只能触发 fenced reread，不能直接形成该 fact。
 `WORKER_LIFECYCLE_STORE_UNAVAILABLE`、generic 4xx/5xx、auth/fence/binding failure、
 `LIFECYCLE_DISPATCH_NOT_FOUND`、timeout、response loss、Task 404 和 inventory absence
-一律 `AMBIGUOUS/FROZEN`。若 attempt A 的 store-unavailable response 晚于 attempt B 的
-durable acceptance，attempt fencing 和 durable record precedence 必须忽略 A，不得把
-正在执行的 Task terminalize。
+一律只使 operation 保持 `AMBIGUOUS`；它们自身不创建新 availability enum，snapshot
+按仍有效的 offline/storage/configuration/conflict facts和冻结 precedence重算。若
+attempt A 的 store-unavailable response 晚于 attempt B 的 durable acceptance，attempt
+fencing 和 durable record precedence 必须忽略 A，不得把正在执行的 Task terminalize。
 
 ENFORCED crash boundary：
 
@@ -1834,7 +2083,8 @@ ENFORCED crash boundary：
 - crash at durable `PREPARED`：只有 executor lease 已随原 instance death 失效后，同
   dispatch 才能 CAS 接管；live executor 存在时 duplicate 只返回 PREPARED。
 - crash/response loss at `EFFECT_STARTED`：无论 provider effect 是否真正开始都不得再次
-  调用；Task保持 ambiguous/frozen并从 durable Worker/provider facts 对账。
+  调用；operation 保持 `AMBIGUOUS`，Task availability 按 blocker precedence 重算并从
+  durable Worker/provider facts 对账。
 - response loss after `RESULT_OBSERVED`：duplicate 只返回 prior disposition/fact cursor，
   不重放 provider effect或业务 content。
 - durable allowlisted never-accepted proof：Task 进入受限 `FAILED` branch，走同一
@@ -1850,9 +2100,13 @@ Task absence rules：
 - exact terminal tombstone/evidence 可以形成 terminal candidate；只有上述 durable
   fenced rejection disposition 可以证明 Worker never accepted。
 - Navigator 已有 Worker acceptance、但 inventory 中既无 active Task 又无 terminal
-  tombstone时，产生 state-loss/conflict evidence，Task 保持 frozen/ambiguous。
+  tombstone时，产生 state-loss evidence，Task 设置
+  `availability=AUTHORITY_QUARANTINED +
+  conflictState=WORKER_STATE_LOSS`，operation 保持 `AMBIGUOUS`。
 - `stateGeneration` 变化或 ACK cursor 已落到 `minAvailableSequence` 之前，表示 evidence
-  coverage gap；受影响旧 Task 不 terminal，并进入逐 Task recovery/人工处置。
+  coverage gap；受影响旧 Task 不 terminal，并按 exact scope 设置
+  `availability=AUTHORITY_QUARANTINED +
+  conflictState=WORKER_STATE_LOSS`，进入逐 Task recovery/人工处置。
 - 旧 `instanceEpoch` 的 heartbeat/running observation 失效；同一 state generation 中
   带稳定 fact ID/sequence 的晚到 durable terminal evidence 仍可幂等接收。
 
@@ -1983,7 +2237,7 @@ precedence 按 authority domain 和 fact scope 决定，不设置一个粗暴的
 | stale connectivity observation vs newer Worker epoch | 新 epoch/freshness 仅更新 connectivity；不改历史 canonical terminal |
 | Worker disconnected vs Task active | Task canonical 保持；execution unknown + offline frozen |
 | verified Worker terminal vs active logical Task | 产生 canonical terminal candidate |
-| canonical terminal vs later Worker running observation | 进入 `CONFLICT/quarantine`；不 reopen、不自动 mutation |
+| canonical terminal vs later Worker running observation | exact Task 设置 `availability=AUTHORITY_QUARANTINED + conflictState=EVIDENCE_CONFLICT`；不 reopen、不自动 mutation |
 | ACK/text/log vs any canonical state | 无 terminal authority |
 | deadline elapsed vs active Task | disposition 变 ambiguous；canonical state 不变 |
 
@@ -2294,24 +2548,25 @@ exclusivity 分工如下：
 
 ```text
 WORKER_DISCONNECTED_OBSERVED
-  -> OFFLINE_FROZEN
+  -> availability=OFFLINE_FROZEN
   -> preserve canonical Session/Task
   -> suspend Worker-dependent effects
 
 WORKER_RECONNECTED_OBSERVED
-  -> RECOVERING_RECONCILIATION
+  -> availability=RECOVERING
   -> do not resume effects yet
 
 WORKER_RECONCILIATION_COMPLETED
   -> recompute all affected Task projections
-  -> conditionally exit freeze
+  -> conditionally availability=READY
 
 TERMINATION_ACKNOWLEDGED
   -> termination acknowledged only
   -> never Task terminal
 
 TERMINATION_EVIDENCE_DEADLINE_ELAPSED
-  -> AMBIGUOUS/FROZEN disposition
+  -> terminationState=AMBIGUOUS
+  -> availability full recompute from active blockers
   -> never Task terminal
 
 exact authenticated TASK_NEVER_ACCEPTED_CONFIRMED
@@ -2340,8 +2595,8 @@ MVP-A 只交付 Codex SDK 的首条完整 vertical chain，不扩展完整平台
    变为 false。
 4. Codex SDK Worker lifecycle v1、Codex Sentinel adapter、offline command gate 与 Session
    foreground single-flight；v1 包括专用 auth、expected identity fence、双 mode
-   context、expected binding status reread、durable provider Task identity 和 exact
-   dispatch dedupe。
+   context、ownership-mode-bound digest/status reread、durable provider Task identity 和
+   exact dispatch dedupe。
 5. public receipt-disabled 保持 BUG-035；first canary 只允许 receipt-enabled exact tuple。
 6. additive SHADOW 完成后，source delivery 先以 repo-owned ephemeral fixture 验证
    homogeneous stop-all/proof-lease gate 和 exact allowlisted Codex SDK aggregate 的
@@ -2387,15 +2642,17 @@ authorization。所有切片在 Slice 8 之前均为 inventory/contract/test 或
    token/registration/receipt resource 和 compatibility surface inventory。
 2. 冻结 cross-surface status mapping、cleanup applicability、Worker v1 contract、
    Worker lifecycle module/SPI direction、canary provider list、逐 aggregate proof
-   reference、effect/proof-loss linearization、writer fence/rollback floor。
+   reference、effect/proof-loss linearization、availability/conflict precedence、writer
+   fence/rollback floor。
 3. admin logical close、Claude MVP-B、rolling mixed-version 和 Worker-generated identity
    明确 defer。
 4. 固定 public receipt-disabled compatibility、legacy `termination_operations` mapping、
-   lifecycle credential/expected-identity/expected-binding fence、provider Task ID
-   disposition recovery、SHADOW wire 和 exact dispatch dedupe。
+   lifecycle credential/expected-identity/expected-mode/expected-binding fence、provider
+   Task ID disposition recovery、SHADOW wire 和 exact dispatch dedupe。
 5. 列出 review 要求的 failure-first test cases，但不新增 schema 或产品实现。
 
-Gate：open questions 已清零；独立复审通过并由 owner 将文档恢复 `APPROVED`。
+Gate：已满足。open questions 已清零，Round 7 独立复审通过且 owner 已将本文恢复
+`APPROVED`；Source Slice 0 可开始，后续切片仍须满足各自前置 gate。
 
 ### Slice 1: Task Owner SHADOW Foundation
 
@@ -2443,8 +2700,9 @@ one-shot baseline 为两次。
    probe/lifecycle-stream/inventory adapter；不修改 Claude loop。
 2. Codex Node Worker 实现已冻结的 identity/epoch/state-generation、inventory、
    Worker-level event cursor、monotonic ACK、专用 lifecycle auth、required expected-ID
-   headers、exact query SSE/abort JSON/dispatch-status wire、SHADOW context、exact
-   dispatch dedupe、one-use capability ordering 和 durability failure contract。
+   /mode/binding headers、exact query SSE/abort JSON/dispatch-status wire、
+   ownership-mode-bound SHADOW context、exact dispatch dedupe、one-use capability
+   ordering 和 durability failure contract。
 3. startup、timer、stream-loss 和人工 probe 只生成 reconcile intent；Sentinel
    shadow 记录 proposed gate/reconnect，不改变 canonical state。
 
@@ -2592,12 +2850,13 @@ cutover/first deployment enrollment 已执行。
   数据。
 - [ ] AC-15: canary Worker v1 contract 明确定义并实测 identity triple、
    exact query SSE/abort JSON/dispatch-status endpoint/field/duplicate phase shape、
-  `JCS_SHA256_V1` binding + expected digest reread、durable provider Task identity、
-  phase-specific `never_accepted_proof`、atomic one-use capability、state-generation
-  reset、fenced inventory、Worker-level cursor coverage、monotonic ACK、专用 lifecycle
-  auth、required expected-ID/binding headers、SHADOW/ENFORCED context、exact dispatch
-  dedupe、persist-before-effect failure 和 version negotiation；旧 epoch/coverage
-  gap、不鉴权或 identity/binding fence mismatch 不产生 terminal 或解冻。
+  `JCS_SHA256_V1` binding（包含 exact `ownership_mode`）+ expected mode/digest reread、
+  durable provider Task identity、phase-specific `never_accepted_proof`、atomic one-use
+  capability、state-generation reset、fenced inventory、Worker-level cursor coverage、
+  monotonic ACK、专用 lifecycle auth、required expected-ID/mode/binding headers、
+  SHADOW/ENFORCED context、exact dispatch dedupe、persist-before-effect failure 和 version
+  negotiation；旧 epoch/coverage gap、不鉴权或 identity/mode/binding fence mismatch
+  不产生 terminal 或解冻。
 - [ ] AC-16: source-level ephemeral fixture 证明 homogeneous non-rolling cutover gate、
   DB proof lease 从 drain 持续覆盖 Worker/Session/Task exact references 与 unfinished
   outbox、OPEN Session/ENFORCED Worker 不随 Task cleanup 提前 release、
@@ -2615,10 +2874,11 @@ cutover/first deployment enrollment 已执行。
 - [ ] AC-19: Navigator 已接受但 Worker exact definitive never-accepted 的 Task 以
   `FAILED + WORKER_PRE_EFFECT_REJECTION + NOT_STARTED` 收敛，并完成同一
   tombstone/cleanup/lane release；proof 必须是 allowlisted durable
-  `REJECTED/PRE_EFFECT + never_accepted_proof=true`，并由 expected
-  `safe_binding_digest` fenced dispatch reread/fact exact 验证。store unavailable、原
-  command response、stale attempt、timeout、response loss、404、inventory absence
-  或 identity/binding mismatch response 仍 fail closed 为 ambiguous/frozen。
+  `ownership_mode=ENFORCED + REJECTED/PRE_EFFECT +
+  never_accepted_proof=true`，并由 expected mode + `safe_binding_digest` fenced
+  dispatch reread/fact exact 验证。store unavailable、原 command response、stale
+  attempt、timeout、response loss、404、inventory absence 或 identity/mode/binding
+  mismatch response 仍 fail closed，不产生 terminal。
 - [ ] AC-20: 同一 Task dispatch 的 outbox/HTTP redelivery 复用同一 `dispatch_id`；
   `delivery_attempt` 持久递增且单 in-flight，late response 不越过较新 durable
   disposition；crash-before-effect、`EFFECT_STARTED` response loss、Java/Worker restart
@@ -2648,10 +2908,16 @@ cutover/first deployment enrollment 已执行。
   status、inventory、SSE 和 terminal facts 使用同一 ID。Java 在业务 SSE 前持久化该
   binding，response loss 后可只读恢复；ID 缺失/冲突时 termination capability/provider
   invocation count 为零。
-- [ ] AC-26: dispatch status 缺 expected digest/version 时 400，version 或 exact digest
-  mismatch 时使用冻结的 409 code，均不回显 actual digest/provider Task ID且不产生
-  owner fact；匹配成功时 disposition 的 digest/proof/provider ID required/null matrix
-  全部通过 schema validation。
+- [ ] AC-26: dispatch status 缺 expected mode/digest/version 时使用冻结的 400 code。
+  已存在相同 dispatch record、但 command context 或 status expected-mode 与 durable
+  mode 不同时，command/status 两入口及 `SHADOW -> ENFORCED`、
+  `ENFORCED -> SHADOW` 两方向都必须 exact 返回
+  `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`；只有 mode exact 匹配而 version 或其余
+  route-specific digest input 不同时，才使用各自冻结的 409 version/binding code。
+  所有 negative 均不回显 actual mode/digest/provider Task ID、不新增 owner fact，
+  cross-mode request 后 provider invocation count 相对已有 record baseline 不增加。
+  同 dispatch/body 只改变 mode 时 digest 必须不同；匹配成功时 disposition 的
+  mode/digest/proof/provider ID required/null matrix 全部通过 schema validation。
 - [ ] AC-27: Worker、Session、Task proof reference 分别通过 transaction 建立和冻结的
   predicate 释放；只有三类 reference 全为零且无 unfinished outbox/claim/authorization
   才能释放 proof。Worker retirement 未实现时不得伪造 release；OPEN Session 始终持有
@@ -2659,8 +2925,12 @@ cutover/first deployment enrollment 已执行。
 - [ ] AC-28: proof-loss 与 claimed-yet-not-called effect 的两种顺序均可重复验证：
   loss 先 commit 时 provider count 为零；exact outbox
   `effectState=EFFECT_STARTED` authorization 先 commit 时最多调用一次且后续 loss
-  禁止 retry。snapshot 只使用 frozen `availability/conflictState` enum，无未知内部
-  状态。
+  禁止 retry。
+- [ ] AC-29: snapshot 只使用 frozen `availability/conflictState`。legacy
+  `ONLINE/SUSPECTED/RECOVERING_RECONCILIATION/STORAGE_PRESSURE_*` 不进入 target
+  schema/reducer；offline、storage、configuration、proof loss、state loss 与 evidence
+  conflict 并发组合按冻结 precedence 得到唯一 pair，最高 blocker 清除后显露下一
+  active blocker，incremental/full recompute 完全一致。
 
 ## Contract, Data and Security Constraints
 
@@ -2722,7 +2992,7 @@ cutover/first deployment enrollment 已执行。
 
 | Item | Classification | Required Validation | Required Evidence |
 |---|---|---|---|
-| reducer/ownership | must-pass | deterministic, property, duplicate/out-of-order/late fact, recompute parity tests | exact focused command and test count |
+| reducer/ownership | must-pass | deterministic/property, duplicate/out-of-order/late fact, availability/conflict precedence and legal-combination matrix, incremental/full recompute parity | exact focused command and test count |
 | termination authority | must-pass | accepted→cancel→terminal, ACK then final result, ACK/text/timeout/404 negative tests | failure-first and passing outputs |
 | reconciliation/idempotency | must-pass | receipt-enabled same ID repeated reads/replay/reconnect provider count exactly one；receipt-disabled same-ID termination provider count exactly two and reconcile unavailable | integration assertions |
 | terminal safety/cleanup | must-pass | terminal+tombstone atomic crash/race, participant required/not-applicable, partial failure/retry/restart | transaction/JPA/outbox fault-injection evidence |
@@ -2731,8 +3001,8 @@ cutover/first deployment enrollment 已执行。
 | compatibility and rollout | must-pass | all-surface mapping, shadow zero-effect, exact Codex allowlist, homogeneous proof-lease gate and monotonic ownership in ephemeral fixture | contract/parity report plus fixture drill |
 | migration | must-pass | clean forward, idempotent re-run, production pre-apply/`validate`, schema-not-ready reject, rollback before enforcement | migration test output |
 | affected Java lane | must-pass | affected module tests, then one final launcher reactor | exact Maven commands/results |
-| Codex Worker v1 auth/fence lane | must-pass before SHADOW parity | missing/unconfigured/invalid credential, required expected-ID headers, mismatch/coverage ordering, no fact/effect on negative response | Node contract outputs without credential values |
-| Codex Worker v1 dispatch lane | must-pass before isolated canary | exact query SSE/abort JSON/dispatch-status phase wire, expected-binding mismatch, provider Task ID durable recovery, proof/digest required-null matrix, JCS digest fixtures, SHADOW/ENFORCED context, atomic capability, delivery-attempt fencing, dedupe/effect phase, persist-before-effect plus full tests/typecheck/build | exact commands/results, content type/envelope and provider invocation count |
+| Codex Worker v1 auth/fence lane | must-pass before SHADOW parity | missing/unconfigured/invalid credential, required expected-ID/mode/binding headers, mismatch/coverage ordering, no fact/effect on negative response | Node contract outputs without credential values |
+| Codex Worker v1 dispatch lane | must-pass before isolated canary | exact query SSE/abort JSON/dispatch-status phase wire, ownership-mode + expected-binding mismatch, SHADOW/ENFORCED cross-mode negative, provider Task ID durable recovery, mode/proof/digest required-null matrix, JCS digest fixtures, atomic capability, delivery-attempt fencing, dedupe/effect phase, persist-before-effect plus full tests/typecheck/build | exact commands/results, content type/envelope and provider invocation count |
 | Open SDK published contract lane | must-pass | BUG-035 receipt-enabled/disabled typed fixtures, availability/replay flags, enum fallback, same-request semantics | exact SDK test command/result; no SDK publication |
 | receipt admission | must-pass | enabled receipt/owner intent/outbox atomic success and injected persistence/commit/config-drift failure before provider effect | typed field assertions and provider count zero |
 | codex-biz typed closure | must-pass | exact provider supports/readiness/terminate/reconcile; legacy provider non-regression; SDK interaction response N/A | focused Java/Open API integration output |
@@ -2774,8 +3044,8 @@ Minimum regression scenarios include:
     enrollment，并跑通 typed readiness/terminate/same-request reconcile，不能返回
     `RUNTIME_TASK_PROVIDER_UNSUPPORTED`。
 19. Worker lifecycle store 在 Task accept、termination ACK 或 terminal fact 前 fsync
-    失败时不先执行对应 provider effect；已运行 Task 中途 store failure 进入 frozen/
-    ambiguous，而非伪 terminal。
+    失败时不先执行对应 provider effect；已运行 Task 中途 store failure 使 operation
+    保持 `AMBIGUOUS` 并按 storage blocker 投影，不伪 terminal或创造新 state enum。
 20. 前一代 owner-capable instance 使用旧 writer generation 的 fact/snapshot/outbox
     conditional write 被拒绝；模拟旧 binary 仍存活或归属未知时 cutover gate 不允许
     enrollment。
@@ -2822,8 +3092,9 @@ Minimum regression scenarios include:
     返回 prior 202 disposition且 provider count 一，replay mismatch 409，store failure
     不先消费 capability或调用 effect。
 32. `safe_binding_digest` Java/Node RFC 8785/SHA-256 conformance fixtures覆盖 key order、
-    Unicode、null、query payload 与 termination capability digest；日志/store 无原始
-    prompt、path、credential 或 capability。
+    Unicode、null、query payload、termination capability digest 和
+    `ownership_mode`；同一 payload 的 SHADOW/ENFORCED digest 必须不同。日志/store 无
+    原始 prompt、path、credential 或 capability。
 33. SDK Worker 对 Java `/respond` 不做假覆盖；Navigator 在 dispatch 前返回
     `WORKER_INTERACTION_RESPONSE_UNSUPPORTED`。mutating termination-reconcile 携带 v1
     context 时在 capability/effect 前返回 `LIFECYCLE_COMMAND_NOT_APPLICABLE`。
@@ -2831,12 +3102,20 @@ Minimum regression scenarios include:
     target controller evidence 时，部署状态保持
     `ENFORCED_DISABLED_PENDING_ACTIVATION_EVIDENCE`。
 35. create/resume 的 durable disposition phase matrix逐项断言
-    `provider_task_id/safe_binding_digest_version/safe_binding_digest/
+    `ownership_mode/provider_task_id/safe_binding_digest_version/safe_binding_digest/
     never_accepted_proof` required/null 值；accepted `PREPARED` 后 response loss，Java
-    仅用 dispatch-status 恢复同一 provider Task ID，再允许创建 termination capability。
-36. dispatch-status 缺 expected digest、错误 version、同 dispatch 不同 create/resume/
-    abort binding 时分别返回冻结 400/409 code；不返回 actual digest/provider Task ID、
-    不摄取 fact、不调用 provider。匹配 route-specific JCS fixture 才返回 200 prior
+    仅用 exact mode+binding dispatch-status 恢复同一 provider Task ID，再允许创建
+    termination capability。
+36. dispatch-status 缺 expected mode/digest、错误 digest version、同 mode 但同一
+    dispatch 使用不同 create/resume/abort binding 时，分别返回冻结的 400、version
+    mismatch 409、binding mismatch 409 code。同一 dispatch/body 已写 SHADOW record
+    后，以 ENFORCED status reread 与 command 访问，以及已写 ENFORCED record 后以
+    SHADOW status reread 与 command 访问，四种 cross-mode case 均必须 exact 返回
+    `409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`，不得返回 binding mismatch；错误在
+    digest comparison、duplicate handling、capability consumption、fact ingestion
+    和 provider effect 前完成。cross-mode request 后 provider count 相对已有 record
+    baseline 不增加，negative response 不返回 actual mode/digest/provider Task ID、
+    不新增 owner fact；只有匹配 route-specific JCS fixture 才返回 200 prior
     disposition。
 37. proof-reference fixture 分别覆盖 Worker enrollment、Session OPEN、Task active/
     terminal-cleanup、Session CLOSED 与 Worker retirement N/A；最后一个 Task cleanup
@@ -2846,9 +3125,16 @@ Minimum regression scenarios include:
     count 为零；outbox `effectState=EFFECT_STARTED` 先 commit 时 exact provider effect
     最多一次，随后 loss quarantine 且 crash/response loss 不重投。两个测试必须使用
     同一 proof row lock/CAS，而非 timing sleep 推断顺序。
-39. reducer exhaustive enum/property test 覆盖所有
-    `availability/conflictState` combination 和 unknown value rejection；代码、schema、
-    projection 不存在 `authorityConflict` 字段或 bare `QUARANTINED` availability。
+39. reducer/adapter test 证明 legacy
+    `ONLINE/SUSPECTED/RECOVERING_RECONCILIATION/STORAGE_PRESSURE_*` 只产生规范化
+    fact或 Sentinel ephemeral backoff metadata，不进入 snapshot/schema/API；
+    `authorityConflict` 字段、bare `QUARANTINED` availability 和未知 target enum 均被
+    拒绝。
+40. reducer exhaustive/property test 覆盖 offline + storage + configuration + proof loss
+    + state loss + evidence conflict 的单项和组合：先按 conflict precedence，再按
+    availability precedence得到唯一合法 pair；逐个 clear 最高 blocker 时依次显露下一
+    blocker，Task-local conflict 不扩大到 Worker，incremental reduce 与 full recompute
+    完全相同。
 
 ## Validation Budget and Evidence Sufficiency
 
@@ -2957,24 +3243,27 @@ Minimum regression scenarios include:
     exact vertical test 前，allowlist 不构成可用性证明。
   - Claude MVP-B 未随本切片迁移，短期内不同 runtime 的 lifecycle ownership mode 不同；
     provider allowlist 与 contract capability 必须 fail closed，避免误接管。
-- open_questions: `[]`；原 11 项 finding、第二轮 4 项 blocker、第三轮 F-01–F-07 与
-  第四轮 exact binding/provider identity/proof-reference/effect-race/state-vocabulary
-  finding 已在 closure matrix 和对应 resolutions 中冻结。真实 activation 的 exact
-  target 不是 implementation open question，而是尚未授权、默认 disabled 的 deployment
-  input。当前 implementation gate 仍是 round-4 独立复审，不是实现者自由选择。
+- open_questions: `[]`；原 11 项 finding、第二轮 4 项 blocker、第三轮 F-01–F-07、
+  第四轮 findings、第五轮 ownership-mode/state findings，以及 round-5/round-6
+  rereview 追踪的 exact mismatch 验收歧义和并行/晚到 attempt 旧表述，均已在 closure
+  matrix 和对应 resolutions 中冻结。真实 activation 的 exact target 不是
+  implementation open question，而是尚未授权、默认 disabled 的 deployment input。
+  Round 7 独立复审已通过，Source Slice 0–8 的 implementation gate 已打开；切片顺序、
+  SHADOW/ENFORCED gate 和 activation 单独授权边界不是实现者自由选择。
 
 ## Ultra Execution Contract
 
-- 当前状态为 `NEEDS_REPLAN`（replan frozen, independent rereview pending），Ultra
-  不得开工。
+- 当前状态为 `APPROVED`。Ultra 可以从 Slice 0 开始，按
+  `0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8` 顺序推进；不得跳过当前切片的
+  must-pass/gate。
 - 先读取本文件、根 `AGENTS.md` 与实际受影响模块指引；若修改共享 typed/Open API
   adapter，必须读取 `addons/claude-worker-agent/AGENTS.md`。MVP-A 不修改 Claude
   Worker lifecycle loops 或 Python Worker。
 - 在 scope 内自主决定具体类、package 和局部实现；本文件中的组件名表达责任边界，不是
   强制一类一文件。
-- 只有独立复审与 review checklist 通过、owner 重新批准并将状态恢复为
-  `APPROVED` 后，才可开始任何 source Slice 0–8 活动；当前文档 replan 不计为 Slice 0
-  implementation。获批后也不得跳过 shadow 直接 enforced。
+- Round 7 独立复审、review checklist 和 owner approval 已满足 source implementation
+  开工门槛；不得据此跳过 shadow 直接 enforced，也不得把 repo-owned fixture evidence
+  当作真实 deployment evidence。
 - Slice 7/8 只允许 repo-owned ephemeral fixture；真实 systemd/Kubernetes/Docker/
   supervisor/CI controller mutation、现存 Navigator/Worker stop/start 和首个实际
   enrollment 不因 spec 批准而自动获权。
@@ -3000,7 +3289,7 @@ Minimum regression scenarios include:
 - residual_risks: pending
 - reused_evidence: BUG-036 baseline only
 - omitted_validation_and_reason: live/deploy/release not authorized
-- readiness: NEEDS_REPLAN
+- readiness: APPROVED_FOR_IMPLEMENTATION
 
 ## References
 

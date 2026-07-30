@@ -63,9 +63,11 @@ last_updated: 2026-07-30
 - typed_termination_terminal_convergence_spec: workitems/BUG-036-typed-termination-terminal-convergence.md
 - bug036_status: READY_FOR_SIGNOFF
 - unified_session_task_lifecycle_owner_spec: workitems/ARCH-001-unified-session-task-lifecycle-owner.md
-- arch001_status: NEEDS_REPLAN
-- arch001_replan_round: 4
-- arch001_replan_review_status: PENDING_INDEPENDENT_REREVIEW_AFTER_ROUND_4
+- arch001_status: APPROVED
+- arch001_replan_round: 7
+- arch001_replan_review_status: APPROVED_AFTER_ROUND_7
+- arch001_source_execution_authorized: true
+- arch001_real_activation_authorized: false
 - app_server_compact_repair_spec: workitems/BUG-021-app-server-compact-protocol.md
 - bug021_status: READY_FOR_SIGNOFF
 - app_server_force_recovery_spec: workitems/BUG-022-app-server-force-recovery-start.md
@@ -114,7 +116,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 
 | Workitem | Scope | Status |
 |---|---|---|
-| [ARCH-001 Unified Session and Task Lifecycle Owner](./workitems/ARCH-001-unified-session-task-lifecycle-owner.md) | Codex SDK MVP-A 的 Session/Task/termination/Worker 分层 owner、Worker v1、offline freeze、Sentinel 与 deterministic reducer | NEEDS_REPLAN；第四轮已补齐 exact binding/status proof、durable provider Task identity、逐 Worker/Session/Task proof reference、effect-loss 线性化及唯一状态词汇，等待独立复审，复审前禁止开工 |
+| [ARCH-001 Unified Session and Task Lifecycle Owner](./workitems/ARCH-001-unified-session-task-lifecycle-owner.md) | Codex SDK MVP-A 的 Session/Task/termination/Worker 分层 owner、Worker v1、offline freeze、Sentinel 与 deterministic reducer | APPROVED；Round 7 独立复审 0/0/0，Source Slice 0–8 可按顺序实现；真实 controller/process、首次非 fixture ENFORCED 与 live SIM 仍需单独授权 |
 | [GOV-001 开发期 S1/S2 联调 MVP](./workitems/GOV-001-dev-s1-s2-integration-mvp.md) | SIM 专属实例和 TMS 平台/租户的本地联调路径；动态 tenant ClientApp list、CLI lane 提示、runtime-only 交付手册 | ACCEPTED；仅本地 preflight，非 live/runtime acceptance |
 | [GOV-001 上游权限体系与多场景信任边界](./workitems/GOV-001-upstream-permission-and-trust-boundary.md) | 历史权限模型基线、S1 最终 instance root、S2 最终 SaaS platform/tenant 分层及 S3 默认拒绝边界 | 已接受基础切片保留；宽泛 P1B-B/P2/P3/P4 为当前开发期 MVP `NEEDS_REPLAN` / deferred |
 | [GOV-001 P1B-B/P2/P3/P4 Owner Decision Intake](./workitems/GOV-001-owner-decision-intake-adr-packet.md) | 具名责任人、脱敏事实、架构/生产/迁移决策及 immutable approval reference 占位 | `PENDING_OWNER_INPUT` / deferred；不解除任何 `DRAFT + BLOCKED` gate |

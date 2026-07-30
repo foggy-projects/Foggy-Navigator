@@ -210,22 +210,31 @@ accepted operation 进行审计/告警（不得自动 terminal 或自动重放�
 [ARCH-001 Unified Session and Task Lifecycle Owner](./ARCH-001-unified-session-task-lifecycle-owner.md)
 delivery spec 承接。其总体方向仍采用“authoritative facts + deterministic reducer +
 durable effects + Worker-scoped Sentinel”的增量
-`LEGACY -> SHADOW -> ENFORCED` 路线，但 2026-07-30 独立 review 已将状态降为
-`NEEDS_REPLAN`。第一次审查的 `5 BLOCKER + 5 MAJOR + 1 MINOR` 已建立显式 closure
+`LEGACY -> SHADOW -> ENFORCED` 路线。2026-07-30 初次独立 review 曾将状态降为
+`NEEDS_REPLAN`；Round 7 独立复审现已以 `0 BLOCKER / 0 MAJOR / 0 MINOR` 批准。
+第一次审查的 `5 BLOCKER + 5 MAJOR + 1 MINOR` 已建立显式 closure
 matrix；第三轮的 F-04/F-05/F-06 已闭合，第四轮独立复审进一步指出 exact
 binding/status、accepted query provider Task identity、Worker/Session/Task proof
 reference、proof-loss/effect authorization 线性化和内部状态词汇缺口。ARCH-001 现已按
 最小兼容/fail-closed 方向冻结：disposition/status 回带并校验
-`safe_binding_digest` 与 durable `never_accepted_proof`；create/resume 在
+`ownership_mode + safe_binding_digest` 与 durable `never_accepted_proof`，同一
+dispatch/body 的 SHADOW/ENFORCED record 不可复用；create/resume 在
 `PREPARED` 同一 record 原子分配 provider Task ID；proof 按三类 aggregate 持续持有；
 outbox claim 不授权 provider call，loss 与 outbox
 `effectState=EFFECT_STARTED` 使用同一 CAS 顺序；
-`availability/conflictState` 使用唯一 enum。同时继续保留 BUG-035 相同 ID 两次
-one-shot provider attempt、receipt-enabled pre-effect admission gate、activation
-授权边界及 exact `codex-biz-worker` must-pass。当前仍为第四轮修订后等待独立复审，
-复审通过并重新批准前禁止开工。ARCH-001 也明确不把历史 Task replay、全 provider
-接管、Session transfer、Worker-generated Physical Worker identity、真实部署 cutover
-或发布并入本 BUG。
+`availability/conflictState` 使用唯一 enum，并冻结 offline/storage/configuration/
+proof-loss/state-loss/evidence-conflict 的 precedence 与合法组合。legacy
+`ONLINE/SUSPECTED/RECOVERING_RECONCILIATION/STORAGE_PRESSURE_*` 不进入 target
+snapshot。同时继续保留 BUG-035 相同 ID 两次 one-shot provider attempt、
+receipt-enabled pre-effect admission gate、activation授权边界及 exact
+`codex-biz-worker` must-pass。第七轮将 command/status 两入口、cross-mode 两方向以及
+并行/晚到 attempt 的失败结果统一冻结为 mode-first：
+`409 LIFECYCLE_OWNERSHIP_MODE_MISMATCH`；只有 durable mode exact match 后才允许
+generic binding mismatch。ARCH-001 当前为 `APPROVED`，Source Slice 0–8 可按契约顺序
+实现；真实 controller/process、首次非 fixture `ENFORCED` aggregate、live SIM、
+部署和发布仍需单独授权。ARCH-001 也明确不把历史 Task replay、全 provider 接管、
+Session transfer、Worker-generated Physical Worker identity 或真实部署 cutover 并入
+本 BUG。
 
 本 BUG 继续只承载已完成的兼容修复和原始 incident evidence；不得因 ARCH-001 获批而
 重开、重放或修改历史 Task。
