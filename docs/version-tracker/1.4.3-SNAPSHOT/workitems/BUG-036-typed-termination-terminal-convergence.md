@@ -100,6 +100,33 @@ termination operation、request receipt、token/tombstone 多个投影中，缺�
 | typed TERMINAL 增加 cleanup gate | 同时要求 canonical terminal status、`canonicalTerminal=true`、token `REVOKED`、active registration `false` |
 | accepted bounded timeout | 默认五分钟后返回 `AMBIGUOUS`，reason 区分 request 未完成与最终 result 未观察到 |
 | reconciliation 保持只读 | 重复查询不调用 provider、不创建 operation、不 repair、不允许新 ID |
+| Worker 断连只表示观测不可用 | Worker unreachable、SSE disconnect、query timeout 均不得推导 Task aborted/failed，也不得撤销仍可能运行的 Task token |
+
+## Authority Boundary and Disconnect Semantics
+
+- Worker/runtime 是执行域事实的 authority，负责报告 provider turn、CLI/process、
+  exact termination operation 和 verified process-exit 等结构化事实。
+- Navigator 是 control-plane/canonical lifecycle 的 authority，负责 request
+  idempotency、owner/tenant/physical Worker binding、canonical Session Task、token、
+  active registration、receipt 和 cleanup。
+- 正常 execution-derived terminal 必须有 Worker/runtime terminal evidence，但不能
+  单独形成对外 typed `TERMINAL`；Navigator 还必须完成 exact correlation、canonical
+  Task persistence 和 terminal cleanup。管理员 logical close 属于 ARCH-001 延后范围；
+  当前普通 task-owner `force` 仍是 provider cancellation，不能冒充独立 canonical
+  terminal authority 或 verified Worker process/provider terminal。
+- Worker 当前内存 registry 不是跨重启的唯一事实源；可作为 authority 的必须是与
+  exact task/operation/Worker 绑定、可校验和可持久重放的结构化 evidence。
+- Navigator 已基于可信 evidence 持久化的 canonical terminal 不因 Worker 重启、
+  registry 丢失或暂时 unreachable 而重新打开。
+- 以下推导明确禁止：
+  - `WORKER_UNREACHABLE -> TASK_FAILED`
+  - `SSE_DISCONNECTED -> TASK_ABORTED`
+  - `WORKER_TASK_NOT_FOUND -> TASK_TERMINAL`（除非另有严格的 never-accepted 或
+    exact process-absence 证明）
+  - `TERMINATION_ACKNOWLEDGED -> TASK_TERMINAL`
+  - `CONVERGENCE_TIMEOUT -> TASK_TERMINAL`
+- 观测不可用或证据冲突时保持当前 canonical Task，并将 caller disposition 收敛到
+  `AMBIGUOUS`；不得通过新 request ID、自动第二次 termination 或伪造 cleanup 绕过。
 
 ## Acceptance Criteria
 
@@ -178,3 +205,27 @@ termination lifecycle aggregate/outbox，将
 CANONICAL_TERMINAL/CLEANUP_COMPLETE` 作为单一幂等 finalizer 管理，并对 stale
 accepted operation 进行审计/告警（不得自动 terminal 或自动重放）。该重构超出本 BUG
 的兼容修复范围。
+
+统一 lifecycle owner 的第一阶段 MVP 由独立
+[ARCH-001 Unified Session and Task Lifecycle Owner](./ARCH-001-unified-session-task-lifecycle-owner.md)
+delivery spec 承接。其总体方向仍采用“authoritative facts + deterministic reducer +
+durable effects + Worker-scoped Sentinel”的增量
+`LEGACY -> SHADOW -> ENFORCED` 路线，但 2026-07-30 独立 review 已将状态降为
+`NEEDS_REPLAN`。第一次审查的 `5 BLOCKER + 5 MAJOR + 1 MINOR` 已建立显式 closure
+matrix；第三轮的 F-04/F-05/F-06 已闭合，第四轮独立复审进一步指出 exact
+binding/status、accepted query provider Task identity、Worker/Session/Task proof
+reference、proof-loss/effect authorization 线性化和内部状态词汇缺口。ARCH-001 现已按
+最小兼容/fail-closed 方向冻结：disposition/status 回带并校验
+`safe_binding_digest` 与 durable `never_accepted_proof`；create/resume 在
+`PREPARED` 同一 record 原子分配 provider Task ID；proof 按三类 aggregate 持续持有；
+outbox claim 不授权 provider call，loss 与 outbox
+`effectState=EFFECT_STARTED` 使用同一 CAS 顺序；
+`availability/conflictState` 使用唯一 enum。同时继续保留 BUG-035 相同 ID 两次
+one-shot provider attempt、receipt-enabled pre-effect admission gate、activation
+授权边界及 exact `codex-biz-worker` must-pass。当前仍为第四轮修订后等待独立复审，
+复审通过并重新批准前禁止开工。ARCH-001 也明确不把历史 Task replay、全 provider
+接管、Session transfer、Worker-generated Physical Worker identity、真实部署 cutover
+或发布并入本 BUG。
+
+本 BUG 继续只承载已完成的兼容修复和原始 incident evidence；不得因 ARCH-001 获批而
+重开、重放或修改历史 Task。
