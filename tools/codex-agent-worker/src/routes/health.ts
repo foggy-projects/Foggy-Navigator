@@ -13,8 +13,49 @@ import { APP_VERSION } from '../version.js'
 import { resolveExternalModeState } from '../external-mode.js'
 import { pathApiFor } from '../path-guards.js'
 import { TerminationOperationReceiptLedger } from '../termination-operation.js'
+import {
+  lifecycleInitializationCode,
+  lifecycleStore,
+} from '../lifecycle/runtime.js'
+import { LIFECYCLE_SCHEMA, type LifecycleStore } from '../lifecycle/store.js'
 
 const router = Router()
+
+const LIFECYCLE_CAPABILITIES = [
+  'AUTHENTICATED_LIFECYCLE_V1',
+  'FENCED_INVENTORY_V1',
+  'DURABLE_LIFECYCLE_FACTS_V1',
+  'MONOTONIC_ACK_V1',
+  'SHADOW_CONTEXT_V1',
+  'EXACT_DISPATCH_DEDUPE_V1',
+  'FENCED_DISPATCH_STATUS_V1',
+  'DISPATCH_BINDING_PROOF_V1',
+  'OWNERSHIP_MODE_BOUND_DISPATCH_V1',
+  'DURABLE_PROVIDER_TASK_ID_V1',
+  'QUERY_SSE_DISPOSITION_V1',
+  'TERMINATION_ATOMIC_CAPABILITY_V1',
+] as const
+
+export function resolveLifecycleContractHealth(
+  store: LifecycleStore | undefined,
+  initializationCode?: string,
+): HealthResponse['lifecycle_contract'] {
+  const ready = Boolean(store)
+  return {
+    schema: LIFECYCLE_SCHEMA,
+    version: 1,
+    ready,
+    reason_codes: ready ? [] : [
+      initializationCode || 'WORKER_LIFECYCLE_STORE_UNAVAILABLE',
+    ],
+    physical_worker_id: store?.identity.physical_worker_id ?? '',
+    state_generation: store?.identity.state_generation ?? '',
+    instance_epoch: store?.identity.instance_epoch ?? '',
+    high_watermark: store?.highWatermark ?? 0,
+    min_available_sequence: 1,
+    capabilities: ready ? [...LIFECYCLE_CAPABILITIES] : [],
+  }
+}
 
 export function resolveCodexAuthMode(
   apiKey: string | undefined,
@@ -126,6 +167,7 @@ router.get('/health', (_req: Request, res: Response) => {
     config.workerToken,
     new TerminationOperationReceiptLedger(config.terminationOperationLedgerDir).isReady(),
   )
+  const lifecycle = lifecycleStore()
   const external = resolveExternalModeState(config)
   const reasons = [...external.reasons]
   reasons.push(...resolveNavigatorWorkerCredentialReadiness(
@@ -155,6 +197,9 @@ router.get('/health', (_req: Request, res: Response) => {
     ...codexHomeAuth,
     ...codexBizReadiness,
     ...terminationReadiness,
+    lifecycle_contract: resolveLifecycleContractHealth(
+      lifecycle, lifecycleInitializationCode(),
+    ),
   }
 
   res.json(response)

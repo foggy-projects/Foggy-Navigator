@@ -24,16 +24,27 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
     "com.foggy.navigator.session.filter",
     "com.foggy.navigator.session.registry",
     "com.foggy.navigator.session.agent",
-    "com.foggy.navigator.session.util"
+    "com.foggy.navigator.session.util",
+    "com.foggy.navigator.session.lifecycle"
 })
-@EntityScan(basePackages = {"com.foggy.navigator.common.entity"})
+@EntityScan(basePackages = {
+    "com.foggy.navigator.common.entity",
+    "com.foggy.navigator.session.lifecycle.persistence"
+})
 @EnableJpaRepositories(basePackages = {
-    "com.foggy.navigator.session.repository"
+    "com.foggy.navigator.session.repository",
+    "com.foggy.navigator.session.lifecycle.repository"
 })
 @EnableConfigurationProperties(ErrorDiagnosticProperties.class)
 @EnableAsync
 @EnableScheduling
 public class SessionModuleAutoConfiguration {
+
+    @Bean
+    public com.foggy.navigator.session.lifecycle.TerminalCleanupPlanFactory
+            terminalCleanupPlanFactory() {
+        return new com.foggy.navigator.session.lifecycle.TerminalCleanupPlanFactory();
+    }
 
     @Bean("sessionEventExecutor")
     public AsyncTaskExecutor sessionEventExecutor() {

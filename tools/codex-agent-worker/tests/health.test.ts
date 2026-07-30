@@ -9,9 +9,11 @@ import {
   resolveCodexBizReadiness,
   resolveCodexHomeAuthReadiness,
   resolveNavigatorWorkerCredentialReadiness,
+  resolveLifecycleContractHealth,
   resolveTerminationReadiness,
   resolveWorkerHealthStatus,
 } from '../src/routes/health.ts'
+import { LifecycleStore } from '../src/lifecycle/store.ts'
 import { CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY } from '../src/codex/sdk-wrapper.ts'
 import { resolveExternalModeState } from '../src/external-mode.ts'
 
@@ -109,6 +111,33 @@ test('termination readiness is independent and reports only fixed non-secret rea
     termination_replay_ledger_ready: false,
   })
   assert.doesNotMatch(JSON.stringify(unavailable), /worker-a|worker-token|\/var\//)
+})
+
+test('lifecycle health is content-free and fail-closed', () => {
+  const unavailable = resolveLifecycleContractHealth(
+    undefined, 'LIFECYCLE_AUTH_NOT_CONFIGURED',
+  )
+  assert.equal(unavailable.ready, false)
+  assert.deepEqual(unavailable.reason_codes, ['LIFECYCLE_AUTH_NOT_CONFIGURED'])
+  assert.deepEqual(unavailable.capabilities, [])
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-lifecycle-health-'))
+  try {
+    const store = LifecycleStore.open({
+      directory: root,
+      physicalWorkerId: 'fixture-worker',
+      workerToken: 'fixture-token',
+      instanceEpoch: 'fixture-epoch',
+    })
+    const ready = resolveLifecycleContractHealth(store)
+    assert.equal(ready.ready, true)
+    assert.equal(ready.physical_worker_id, 'fixture-worker')
+    assert.ok(ready.capabilities.includes('OWNERSHIP_MODE_BOUND_DISPATCH_V1'))
+    assert.doesNotMatch(JSON.stringify(ready), new RegExp(root))
+    assert.doesNotMatch(JSON.stringify(ready), /fixture-token/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('external mode never treats a configured bearer token as execution readiness', () => {

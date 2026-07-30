@@ -56,6 +56,11 @@ export interface AppConfig {
    */
   terminationOperationLedgerDir: string
   /**
+   * Durable lifecycle-v1 store. Empty keeps lifecycle v1 unready while legacy
+   * routes remain available.
+   */
+  lifecycleStoreDir: string
+  /**
    * Worker 兜底默认模型（请求未显式指定 model 时使用）。
    *
    * 1.0.4 起：默认值为 alias `codex-latest`（与 Claude/Gemini 的 alias-first 风格一致）。
@@ -419,6 +424,10 @@ export function createConfig(
       env.CODEX_TERMINATION_OPERATION_LEDGER_DIR,
       'CODEX_TERMINATION_OPERATION_LEDGER_DIR',
     ) || path.resolve(__dirname, '..', 'logs', 'termination-operations'),
+    lifecycleStoreDir: parseOptionalAbsolutePath(
+      env.CODEX_LIFECYCLE_STORE_DIR,
+      'CODEX_LIFECYCLE_STORE_DIR',
+    ),
     defaultModel: parseDefaultModel(env.CODEX_DEFAULT_MODEL),
     modelAliases: parseModelAliases(env.CODEX_MODEL_ALIASES),
   }

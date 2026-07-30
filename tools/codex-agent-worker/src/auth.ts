@@ -12,6 +12,15 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     return
   }
 
+  // Lifecycle v1 has a stricter, content-free fail-closed guard with frozen
+  // error codes. Its router (and lifecycle-context command preflight) owns
+  // authentication instead of inheriting the optional legacy behavior here.
+  if (req.path.startsWith('/api/v1/lifecycle/')
+      || (req.body && typeof req.body === 'object' && req.body.lifecycle_context)) {
+    next()
+    return
+  }
+
   const token = config.workerToken
   if (!token) {
     next()

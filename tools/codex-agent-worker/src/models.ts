@@ -34,6 +34,7 @@ export interface QueryRequest {
   web_search_mode?: CodexWebSearchMode
   business_runtime_context?: Record<string, unknown>
   additional_directories?: string[]
+  lifecycle_context?: import('./lifecycle/store.js').LifecycleContext
 }
 
 /**
@@ -191,6 +192,18 @@ export interface HealthResponse {
   termination_worker_id_configured: boolean
   termination_auth_configured: boolean
   termination_replay_ledger_ready: boolean
+  lifecycle_contract: {
+    schema: 'NAVIGATOR_WORKER_LIFECYCLE_V1'
+    version: 1
+    ready: boolean
+    reason_codes: string[]
+    physical_worker_id: string
+    state_generation: string
+    instance_epoch: string
+    high_watermark: number
+    min_available_sequence: number
+    capabilities: string[]
+  }
 }
 
 /**

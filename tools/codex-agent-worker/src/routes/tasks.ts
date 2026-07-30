@@ -27,6 +27,8 @@ import {
   toTerminationOperationSummary,
   validateTerminationOperation,
 } from '../termination-operation.js'
+import { preflightLifecycleCommand } from '../lifecycle/command.js'
+import { LIFECYCLE_SCHEMA } from '../lifecycle/store.js'
 
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000
 
@@ -403,6 +405,18 @@ router.get('/api/v1/tasks/:taskId/completion-readiness', async (req: Request, re
  */
 router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
   const taskId = getSingleParam(req.params.taskId)
+  const encodedOperation = Array.isArray(req.headers['x-navigator-termination-operation'])
+    ? req.headers['x-navigator-termination-operation'][0] ?? null
+    : req.headers['x-navigator-termination-operation'] ?? null
+  const lifecycle = preflightLifecycleCommand(
+    req,
+    res,
+    ['TERMINATION_CANCEL'],
+    '/api/v1/tasks/{providerTaskId}/abort',
+    taskId,
+    encodedOperation,
+  )
+  if (lifecycle === undefined) return
   const entry = getTaskStatus(taskId)
   if (!entry) {
     res.status(404).json({ error: `Task not found: ${taskId}` })
@@ -420,11 +434,61 @@ router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
         expectedKind: 'REMOTE_CANCEL',
         expectedTaskId: taskId,
         replayLedger: terminationReplayLedger,
+        consumeReplayReceipt: lifecycle?.context.ownership_mode !== 'ENFORCED',
       },
     )
   } catch (error) {
     if (sendTerminationOperationError(res, error)) return
     throw error
+  }
+  if (lifecycle
+      && claims.operation_id !== lifecycle.context.termination_operation_id) {
+    res.status(409).json({
+      schema: LIFECYCLE_SCHEMA,
+      code: 'TERMINATION_OPERATION_REPLAY_DETECTED',
+    })
+    return
+  }
+
+  let lifecycleDisposition
+  if (lifecycle) {
+    try {
+      lifecycleDisposition = lifecycle.store.prepareAcceptedTerminationDispatch(
+        lifecycle.context,
+        lifecycle.binding,
+        taskId,
+      )
+    } catch (error) {
+      const code = error instanceof Error
+        ? error.message
+        : 'WORKER_LIFECYCLE_STORE_UNAVAILABLE'
+      res.status(code === 'WORKER_LIFECYCLE_STORE_UNAVAILABLE' ? 503 : 409).json({
+        schema: LIFECYCLE_SCHEMA,
+        code,
+      })
+      return
+    }
+    if (lifecycleDisposition.duplicate
+        && lifecycle.context.ownership_mode === 'ENFORCED') {
+      res.status(202).json({
+        ...lifecycleDisposition,
+        ...taskStatusPayload(entry),
+      })
+      return
+    }
+    if (lifecycle.context.ownership_mode === 'ENFORCED') {
+      try {
+        lifecycleDisposition = lifecycle.store.markEffectStarted(
+          lifecycle.context.dispatch_id,
+        )
+      } catch {
+        res.status(503).json({
+          schema: LIFECYCLE_SCHEMA,
+          code: 'WORKER_LIFECYCLE_STORE_UNAVAILABLE',
+        })
+        return
+      }
+    }
   }
 
   const operation = toTerminationOperationSummary(claims, 'CANCEL_REQUESTED')
@@ -440,6 +504,7 @@ router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
   }
 
   res.status(202).json({
+    ...(lifecycleDisposition ?? {}),
     ...taskStatusPayload(requested),
     status: 'cancel_requested',
     lifecycle_state: 'CANCEL_REQUESTED',
@@ -467,6 +532,22 @@ router.get('/api/v1/tasks/:taskId/termination-reconciliation-readiness', async (
 
 router.post('/api/v1/tasks/:taskId/termination-reconcile', async (req: Request, res: Response) => {
   const taskId = getSingleParam(req.params.taskId)
+  if (req.body?.lifecycle_context !== undefined) {
+    const lifecycle = preflightLifecycleCommand(
+      req,
+      res,
+      ['TERMINATION_CANCEL'],
+      '/api/v1/tasks/{providerTaskId}/termination-reconcile',
+      taskId,
+      null,
+    )
+    if (lifecycle === undefined) return
+    res.status(409).json({
+      schema: LIFECYCLE_SCHEMA,
+      code: 'LIFECYCLE_COMMAND_NOT_APPLICABLE',
+    })
+    return
+  }
   const originalOperationId = typeof req.body?.original_operation_id === 'string'
     ? req.body.original_operation_id
     : ''

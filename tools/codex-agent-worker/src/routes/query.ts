@@ -40,6 +40,11 @@ import {
   CodexThreadActiveError,
   type CodexThreadReservation,
 } from '../codex/thread-reservations.js'
+import { preflightLifecycleCommand } from '../lifecycle/command.js'
+import {
+  LIFECYCLE_SCHEMA,
+  type LifecycleDisposition,
+} from '../lifecycle/store.js'
 
 export { isPathWithinAllowedCwd }
 export { CODEX_ULTRA_APP_SERVER_REQUIRED }
@@ -107,6 +112,15 @@ const router = Router()
  * POST /api/v1/query — Start a Codex query and stream results as SSE
  */
 router.post('/api/v1/query', async (req: Request, res: Response) => {
+  const lifecycle = preflightLifecycleCommand(
+    req,
+    res,
+    ['TASK_CREATE', 'TASK_RESUME'],
+    '/api/v1/query',
+    null,
+    null,
+  )
+  if (lifecycle === undefined) return
   if (isUnsupportedCodexModelRequest(req.body?.model)) {
     res.status(400).json({ error: UNSUPPORTED_CODEX_MODEL })
     return
@@ -129,6 +143,15 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
   const body = validation.value
+  if (lifecycle
+      && ((lifecycle.context.command_kind === 'TASK_RESUME' && !body.session_id)
+        || (lifecycle.context.command_kind === 'TASK_CREATE' && Boolean(body.session_id)))) {
+    res.status(409).json({
+      schema: LIFECYCLE_SCHEMA,
+      code: 'LIFECYCLE_COMMAND_KIND_MISMATCH',
+    })
+    return
+  }
   const businessMcpPreflightError = resolveNavigatorBusinessMcpPreflightError(
     body.business_runtime_context,
   )
@@ -183,6 +206,37 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
 
+  let priorDisposition: LifecycleDisposition | undefined
+  if (lifecycle) {
+    try {
+      priorDisposition = lifecycle.store.getDispatch(
+        lifecycle.context.dispatch_id,
+        lifecycle.context.ownership_mode,
+        lifecycle.binding,
+      )
+    } catch (error) {
+      const code = error instanceof Error
+        ? error.message
+        : 'LIFECYCLE_DISPATCH_BINDING_MISMATCH'
+      res.status(409).json({ schema: LIFECYCLE_SCHEMA, code })
+      return
+    }
+    if (priorDisposition && lifecycle.context.ownership_mode === 'ENFORCED') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'close',
+      })
+      res.write(`event: lifecycle_disposition\ndata: ${JSON.stringify({
+        ...priorDisposition,
+        duplicate: true,
+        request_delivery_attempt: lifecycle.context.delivery_attempt,
+      })}\n\n`)
+      res.end()
+      return
+    }
+  }
+
   const taskId = uuidv4()
 
   let threadReservation: CodexThreadReservation | undefined
@@ -221,6 +275,25 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
 
   // Clean up old tasks periodically
   cleanupOldTasks()
+
+  let lifecycleDisposition = priorDisposition
+  if (lifecycle && !lifecycleDisposition) {
+    try {
+      lifecycleDisposition = lifecycle.store.prepareAcceptedDispatch(
+        lifecycle.context,
+        lifecycle.binding,
+        () => taskId,
+      )
+    } catch (error) {
+      threadReservation?.release()
+      const code = error instanceof Error
+        ? error.message
+        : 'WORKER_LIFECYCLE_STORE_UNAVAILABLE'
+      const status = code === 'WORKER_LIFECYCLE_STORE_UNAVAILABLE' ? 503 : 409
+      res.status(status).json({ schema: LIFECYCLE_SCHEMA, code })
+      return
+    }
+  }
 
   // Set SSE headers
   res.writeHead(200, {
@@ -262,6 +335,14 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       threadReservation?.release()
     }
   })
+  if (lifecycleDisposition) {
+    res.write(`event: lifecycle_disposition\ndata: ${JSON.stringify({
+      ...lifecycleDisposition,
+      duplicate: Boolean(priorDisposition),
+      request_delivery_attempt: lifecycle?.context.delivery_attempt ?? null,
+      code: priorDisposition ? 'SHADOW_WOULD_DEDUPE' : undefined,
+    })}\n\n`)
+  }
 
   // Wait a tick for broadcast to be registered
   await new Promise(resolve => setTimeout(resolve, 10))

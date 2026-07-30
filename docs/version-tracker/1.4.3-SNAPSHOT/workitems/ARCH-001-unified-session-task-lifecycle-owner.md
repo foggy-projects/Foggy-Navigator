@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: APPROVED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -31,6 +31,7 @@ replan_decisions_confirmed_at: 2026-07-30
 replan_review_status: approved-after-round-7
 execution_start_authorized: true
 decision_stage: approved-source-slices-authorized-activation-separate
+implementation_completed_at: 2026-07-31
 open_questions: []
 deferred_topics:
   - worker-generated-physical-id-claim-and-recovery
@@ -50,7 +51,7 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: `APPROVED`；Source Slice 0–8 可按顺序进入实现，但 Slice 7/8
+- execution_status: `READY_FOR_SIGNOFF`；Source Slice 0–8 已按顺序完成，但 Slice 7/8
   仍只允许 repo-owned ephemeral fixture。真实 controller/process、首次非 fixture
   `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
 
@@ -3253,9 +3254,9 @@ Minimum regression scenarios include:
 
 ## Ultra Execution Contract
 
-- 当前状态为 `APPROVED`。Ultra 可以从 Slice 0 开始，按
-  `0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8` 顺序推进；不得跳过当前切片的
-  must-pass/gate。
+- 当前状态为 `READY_FOR_SIGNOFF`。Ultra 已按
+  `0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8` 顺序完成 source implementation；
+  后续只允许独立 signoff，不得据此执行真实 activation。
 - 先读取本文件、根 `AGENTS.md` 与实际受影响模块指引；若修改共享 typed/Open API
   adapter，必须读取 `addons/claude-worker-agent/AGENTS.md`。MVP-A 不修改 Claude
   Worker lifecycle loops 或 Python Worker。
@@ -3280,16 +3281,342 @@ Minimum regression scenarios include:
 
 > 由 Ultra implementation session 填写。
 
-- implementation_summary: pending
-- changed_paths: pending
-- tests_and_results: pending
-- migration_and_compatibility_evidence: pending
-- shadow_and_canary_evidence: pending
+### Slice Execution Record
+
+#### Slice 0 — Contract and Failure-first Baseline
+
+- status: `COMPLETED`
+- source_inventory:
+  - Task/Session compatibility writers and terminal predicates:
+    `session-module/.../TaskController.java`,
+    `AgentDiscoveryController.java`, `SharedAskController.java`,
+    `SessionMetadataService.java`, `UnifiedSessionTaskProjectionService.java`,
+    `addons/codex-worker-agent/.../CodexTaskService.java`,
+    `CodexTaskRuntimeStateService.java`, `CodexStreamRelay.java` and
+    `addons/claude-worker-agent/.../ClaudeTaskService.java`,
+    `WorkerStreamRelay.java`, `TaskStateReconciler.java`.
+  - termination authority/typed compatibility:
+    `session-module/.../TerminationOperationService.java`,
+    `TerminationOperationRepository.java`,
+    `addons/claude-worker-agent/.../RuntimeTaskClosureService.java`,
+    `RuntimeStateAuditService.java` and Codex `terminate/reconcile` paths.
+  - token/receipt/registration resources:
+    `BusinessTaskScopedTokenTerminalListener.java`,
+    `BusinessTaskScopedTokenLifecycleService.java`,
+    `BusinessTaskTerminalStateRepository.java`,
+    `termination_operations`, Worker termination replay ledger and completion
+    receipt store. `activeTaskRegistrationPresent` is confirmed as a derived
+    status projection, not a separately deletable registration resource.
+  - Worker connectivity/recovery triggers:
+    Codex `CodexStreamRelay` startup/stream recovery and Claude
+    `WorkerHealthChecker`, `WorkerStreamRelay`, `TaskStateReconciler`.
+    Claude loops remain MVP-B and are not modified by ARCH-001.
+  - Worker contract baseline:
+    current SDK Worker has `/health`, `/api/v1/query`, task SSE/status/abort,
+    JSONL event and one-use termination ledgers, but no lifecycle v1 identity
+    store, fenced inventory/events/ACK/dispatch status, ownership-mode-bound
+    digest, or persist-before-effect disposition.
+- contract_inventory_result:
+  - no existing lifecycle fact/snapshot/outbox/writer-proof schema or canonical
+    reducer was found;
+  - public BUG-035 receipt-disabled one-shot and existing provider strings are
+    retained;
+  - deferred authority/provider/rolling/identity topics remain unchanged.
+- failure_first_commands:
+  - `mvn -q -pl session-module -am -Dtest=TaskLifecycleReducerTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    — failed as expected at test compile because `TaskLifecycleReducer` did not
+    exist.
+  - `cd tools/codex-agent-worker && node --import tsx --test tests/lifecycle-contract.test.ts`
+    — failed as expected with `ERR_MODULE_NOT_FOUND` for the lifecycle v1 store.
+- failure_first_tests:
+  `session-module/.../TaskLifecycleReducerTest.java` and
+  `tools/codex-agent-worker/tests/lifecycle-contract.test.ts`.
+
+- implementation_summary:
+  - 已完成真实 writer/contract inventory；没有发现可复用的 canonical reducer、
+    lifecycle schema、writer proof 或 Worker lifecycle v1 store。
+  - 先固定缺失实现的失败基线，再进入 Slice 1；后续 terminal、typed closure 和
+    `codex-biz-worker` 缺口也均先由回归测试暴露。
+- changed_paths:
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TaskLifecycleReducerTest.java`
+  - `tools/codex-agent-worker/tests/lifecycle-contract.test.ts`
+- tests_and_results: 两条 failure-first 命令均按预期失败，失败原因分别是缺少 reducer
+  和 lifecycle store，而不是环境或依赖问题。
+- migration_and_compatibility_evidence: inventory 确认现有 public typed DTO 与
+  receipt-disabled 语义必须保持不变。
+- shadow_and_canary_evidence: Slice 0 未创建 aggregate、未执行 effect。
 - deviations: none
-- residual_risks: pending
+- residual_risks: none beyond the approved activation boundary
 - reused_evidence: BUG-036 baseline only
 - omitted_validation_and_reason: live/deploy/release not authorized
-- readiness: APPROVED_FOR_IMPLEMENTATION
+- readiness: COMPLETED
+
+#### Slice 1 — Canonical Reducer, Persistence and Schema Readiness
+
+- status: `COMPLETED`
+- implementation_summary:
+  - 新增纯函数 Task lifecycle reducer、规范化 canonical dimensions、blocker precedence、
+    duplicate/out-of-order/late fact 处理与 incremental/full recompute parity。
+  - 新增 fact、Worker/Session/Task snapshot、effect outbox 的 JPA model/repository；
+    SHADOW 只持久化 proposal，所有 owner effect 均保持 `SUPPRESSED`。
+  - 新增 12 张表的 additive forward/rollback SQL 与 fail-closed schema readiness；
+    schema ready 也不会解除独立 activation gate。
+- changed_paths:
+  - `navigator-spi/src/main/java/com/foggy/navigator/spi/lifecycle/**`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/TaskLifecycle*.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/Lifecycle*.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/persistence/**`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/repository/**`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TaskLifecycleReducerTest.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/LifecycleMigrationContractTest.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/LifecycleSchemaReadinessTest.java`
+  - `docs/migration/2026-07-30-arch-001-lifecycle-owner.sql`
+  - `docs/migration/2026-07-30-arch-001-lifecycle-owner-rollback.sql`
+- gate_result: reducer、migration static contract 与 schema-not-ready rejection focused
+  tests passed；进入 Slice 2。
+
+#### Slice 2 — Terminal Tombstone and Frozen Cleanup Plan
+
+- status: `COMPLETED`
+- implementation_summary:
+  - canonical terminal、authorization tombstone 与 participant-specific cleanup plan
+    同事务提交；derived active registration 固定为
+    `NOT_APPLICABLE(DERIVED_PROJECTION_NO_RESOURCE)`。
+  - cleanup step 使用独立幂等 checkpoint，支持重复投递、部分失败后重试和重启恢复；
+    cleanup pending 继续占用 Session lane。
+- changed_paths:
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/TaskTerminal*.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/Terminal*.java`
+  - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/lifecycle/BusinessTaskTerminalTombstoneParticipant.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TaskTerminalCommitServiceTest.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TerminalCleanupPlanFactoryTest.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TerminalCleanupStepExecutorTest.java`
+- gate_result: transaction、N/A、partial failure/retry/restart focused tests passed；进入 Slice 3。
+
+#### Slice 3 — Typed Termination Admission and Codex Biz Closure
+
+- status: `COMPLETED`
+- implementation_summary:
+  - receipt-enabled admission 通过 REQUIRED transaction 同步提交 public receipt、
+    owner intent 与 suppressed owner outbox binding；commit/persistence 失败在 provider
+    effect 前返回冻结的 typed rejection。
+  - `RuntimeTaskClosureProvider` 精确支持 `codex-biz-worker`，未扩展其他 provider；
+    public DTO、force authority 和 receipt-disabled BUG-035 matrix 未改变。
+- changed_paths:
+  - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/RuntimeTaskClosureService.java`
+  - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/RuntimeTerminationAcceptanceCoordinator.java`
+  - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/service/RuntimeTaskTypedContractServiceTest.java`
+  - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/RuntimeRequestAuditService.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/TaskTerminationIntentRecorder.java`
+  - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/spi/CodexWorkerFacadeImpl.java`
+  - `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/spi/CodexWorkerFacadeRuntimeClosureProviderTest.java`
+- failure_first_result: injected receipt persistence failure initially exposed missing atomic
+  admission；exact `codex-biz-worker` focused test initially returned unsupported；两者修复后通过。
+- gate_result: typed closure、Open SDK published contract 与 affected addon lanes passed；
+  进入 Slice 4。
+
+#### Slice 4 — Codex Worker Lifecycle v1 and Provider-neutral Sentinel
+
+- status: `COMPLETED`
+- implementation_summary:
+  - Codex SDK Worker 新增 durable identity/state-generation/epoch、canonical binding digest
+    （含 ownership mode）、fenced inventory/events/ACK/dispatch status、durable dispatch 与
+    provider Task ID、termination reservation/effect-start，以及 persist-before-effect。
+  - lifecycle route 使用 non-empty runtime credential 且严格校验 expected identity/mode/
+    binding/version；cross-mode mismatch 先于 digest、duplicate、capability 与 effect。
+  - Java 新增 provider-neutral Sentinel/lease/snapshot 与 Codex HTTP adapter；单 Task SSE
+    断开不直接扩大为 Worker offline。
+- changed_paths:
+  - `tools/codex-agent-worker/src/lifecycle/**`
+  - `tools/codex-agent-worker/src/routes/lifecycle.ts`
+  - `tools/codex-agent-worker/src/routes/query.ts`
+  - `tools/codex-agent-worker/src/routes/tasks.ts`
+  - `tools/codex-agent-worker/src/routes/health.ts`
+  - `tools/codex-agent-worker/src/auth.ts`
+  - `tools/codex-agent-worker/src/config.ts`
+  - `tools/codex-agent-worker/src/index.ts`
+  - `tools/codex-agent-worker/src/models.ts`
+  - `tools/codex-agent-worker/src/termination-operation.ts`
+  - `tools/codex-agent-worker/src/validation/query.ts`
+  - `tools/codex-agent-worker/.env.example`
+  - `tools/codex-agent-worker/tests/lifecycle-contract.test.ts`
+  - `tools/codex-agent-worker/tests/lifecycle-route.test.ts`
+  - `tools/codex-agent-worker/tests/health.test.ts`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/WorkerLifecycleSentinel*.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/JpaSentinelLeaseStore.java`
+  - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/lifecycle/CodexWorkerLifecycleHttpAdapter.java`
+  - corresponding focused tests under `session-module/.../lifecycle/` and
+    `addons/codex-worker-agent/.../lifecycle/`.
+- gate_result: Worker focused 16 tests、Worker full suite、typecheck/build、Sentinel and Java
+  adapter tests passed；进入 Slice 5。
+
+#### Slice 5 — Session Foreground Lane and Offline Command Gate
+
+- status: `COMPLETED`
+- implementation_summary:
+  - 新增 Session row-lock foreground lane snapshot，create/resume 只能观察和提议；
+    offline/cleanup pending/active Task 均不能通过新 request ID 绕过。
+  - Task dispatch 仅在显式 `navigator.lifecycle.shadow-enabled=true` 时写 SHADOW observation；
+    repository 默认配置为 false，不改变 legacy effect。
+  - offline command gate 稳定拒绝且不保存 pending user command；local terminal cleanup
+    可继续。
+- changed_paths:
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/SessionForegroundLaneService.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/SessionLaneDecision.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/OfflineCommandGate.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/config/SessionModuleAutoConfiguration.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/SessionForegroundLaneServiceTest.java`
+  - `launcher/src/main/resources/application.yml`
+- gate_result: lane/offline focused tests and session affected reactor passed；进入 Slice 6。
+
+#### Slice 6 — SHADOW Parity and Exact Canary Enrollment Gate
+
+- status: `COMPLETED`
+- implementation_summary:
+  - parity report 按 exact aggregate tuple 分类 legacy/owner diff，unclassified diff 阻止
+    enrollment；SHADOW owner effect count 保持零。
+  - canary gate 精确限定 `codex-biz-worker`、receipt、schema、auth、identity、protocol/
+    build、capabilities、proof 和 tuple；缺少真实 activation evidence 时稳定返回
+    `ENFORCED_DISABLED_PENDING_ACTIVATION_EVIDENCE`。
+- changed_paths:
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/LifecycleShadowParityService.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/LifecycleParityReport.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/LifecycleEnrollmentGate.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/LifecycleShadowParityServiceTest.java`
+- gate_result: exact tuple separation、zero-effect 与 negative enrollment matrix passed；
+  进入 Slice 7。
+
+#### Slice 7 — Writer Exclusivity Proof and Reference Fencing
+
+- status: `COMPLETED`
+- fixture_scope: repo-owned H2/JPA fixture only
+- implementation_summary:
+  - 新增 writer generation、instance registration、proof、Worker/Session/Task reference
+    与 outbox authorization persistence。
+  - proof/reference/outbox 通过同 row-lock transaction 线性化；claim 本身不授权 provider
+    call，只有 `EFFECT_STARTED` authorization commit 后才允许最多一次调用。
+  - proof loss/expiry quarantine aggregate、阻止新 unsafe effect且不回退 LEGACY；
+    OPEN Session/ENFORCED Worker/unfinished outbox 阻止 proof 提前释放。
+- changed_paths:
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/WriterExclusivityProofService.java`
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/ProofAggregateType.java`
+  - writer generation/proof/reference persistence and repository files under
+    `session-module/src/main/java/com/foggy/navigator/session/lifecycle/`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/WriterExclusivityProofServiceTest.java`
+- gate_result: proof reference predicate、expiry/quarantine 和两种 proof-loss/effect
+  authorization ordering passed；进入 Slice 8。
+
+#### Slice 8 — Isolated ENFORCED Source Fixture
+
+- status: `COMPLETED`
+- fixture_scope: repo-owned in-memory H2 + fake controller; no shared port/process
+- implementation_summary:
+  - isolated fixture 验证 homogeneous source gate、proof lease、late exclusivity loss
+    quarantine、reference/outbox drain 后恢复，以及 non-fixture activation evidence 缺失时
+    持续 disabled。
+  - fixture 未访问 systemd/Kubernetes/Docker/supervisor/CI/manual launcher，未停止或
+    启动任何 Navigator/Worker，未创建真实 ENFORCED aggregate。
+- changed_paths:
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/IsolatedEnforcedLifecycleContractTest.java`
+- gate_result: isolated fixture passed；source implementation 可进入独立 signoff。
+
+### Validation Evidence
+
+- `mvn -q -pl session-module -am -Dtest='*Lifecycle*Test,TerminalCleanupPlanFactoryTest,TaskTerminalCommitServiceTest,TerminalCleanupStepExecutorTest' -Dsurefire.failIfNoSpecifiedTests=false test`
+  — passed.
+- `mvn -pl session-module -am test`
+  — passed; Session Module 465 tests, 0 failures/errors.
+- `mvn -pl addons/codex-worker-agent -am -Dtest=CodexWorkerFacadeRuntimeClosureProviderTest,CodexWorkerLifecycleHttpAdapterTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — passed; 2 tests.
+- `mvn -q -pl addons/codex-worker-agent -am test`
+  — passed.
+- `mvn -pl addons/claude-worker-agent -am -Dtest=RuntimeTaskTypedContractServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — passed; 17 tests.
+- `mvn -q -pl addons/claude-worker-agent -am test`
+  — passed.
+- `mvn -q -pl navigator-open-sdk -am test`
+  — passed.
+- `cd tools/codex-agent-worker && npm run typecheck && node --import tsx --test tests/lifecycle-contract.test.ts tests/lifecycle-route.test.ts tests/health.test.ts`
+  — passed; 16 tests.
+- `cd tools/codex-agent-worker && node --import tsx --test --test-reporter=dot tests/*.test.ts`
+  — passed; full Worker suite.
+- `cd tools/codex-agent-worker && npm run build`
+  — passed.
+- `mvn -q -pl launcher -am test`
+  — first candidate failed in launcher because the newly added lifecycle configuration used a
+  duplicate top-level YAML key. The lifecycle block was merged into the existing key.
+- `mvn -pl launcher -am -Dtest='ActuatorDiscoveryContractTest,ActuatorDiscoveryRouteContractTest,AuthorizationRouteManifestCoverageTest,CommonRepositoryOwnershipContextTest,RuntimeTimeBasisConfigurationTest' -Dsurefire.failIfNoSpecifiedTests=false test`
+  — passed; 8 tests.
+- `mvn -q -pl launcher -am test`
+  — final post-fix reactor passed with exit code 0.
+- `git diff --check`
+  — passed.
+
+### Changed-path Manifest
+
+- SPI: `navigator-spi/src/main/java/com/foggy/navigator/spi/lifecycle/**`.
+- lifecycle owner and tests:
+  `session-module/src/main/java/com/foggy/navigator/session/lifecycle/**`,
+  `session-module/src/test/java/com/foggy/navigator/session/lifecycle/**`,
+  `session-module/src/main/java/com/foggy/navigator/session/config/SessionModuleAutoConfiguration.java`,
+  `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java`,
+  `session-module/pom.xml`.
+- terminal participants/admission:
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/lifecycle/**`,
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/config/BusinessAgentAutoConfiguration.java`,
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/RuntimeRequestAuditService.java`,
+  `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/RuntimeTaskClosureService.java`,
+  `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/RuntimeTerminationAcceptanceCoordinator.java`,
+  `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/service/RuntimeTaskTypedContractServiceTest.java`.
+- Codex Java:
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/lifecycle/**`,
+  `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/lifecycle/**`,
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/config/CodexWorkerAutoConfiguration.java`,
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/spi/CodexWorkerFacadeImpl.java`,
+  `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/spi/CodexWorkerFacadeRuntimeClosureProviderTest.java`.
+- Codex SDK Worker:
+  `tools/codex-agent-worker/.env.example`,
+  `tools/codex-agent-worker/src/auth.ts`,
+  `tools/codex-agent-worker/src/config.ts`,
+  `tools/codex-agent-worker/src/index.ts`,
+  `tools/codex-agent-worker/src/lifecycle/**`,
+  `tools/codex-agent-worker/src/models.ts`,
+  `tools/codex-agent-worker/src/routes/health.ts`,
+  `tools/codex-agent-worker/src/routes/lifecycle.ts`,
+  `tools/codex-agent-worker/src/routes/query.ts`,
+  `tools/codex-agent-worker/src/routes/tasks.ts`,
+  `tools/codex-agent-worker/src/termination-operation.ts`,
+  `tools/codex-agent-worker/src/validation/query.ts`,
+  `tools/codex-agent-worker/tests/health.test.ts`,
+  `tools/codex-agent-worker/tests/lifecycle-contract.test.ts`,
+  `tools/codex-agent-worker/tests/lifecycle-route.test.ts`.
+- migration/config/delivery:
+  `docs/migration/2026-07-30-arch-001-lifecycle-owner.sql`,
+  `docs/migration/2026-07-30-arch-001-lifecycle-owner-rollback.sql`,
+  `launcher/src/main/resources/application.yml`,
+  this canonical work item.
+
+### Deviations and Residual Risks
+
+- deviations: none. No goal、scope、public compatibility、authority、安全边界、状态机或
+  migration strategy change was required.
+- residual_risks:
+  - production/shared MySQL pre-apply/validate/rollback drill 未执行；当前证据是 additive
+    SQL static contract、H2 schema readiness 与 launcher reactor。真实数据库操作属于后续
+    separately authorized deployment gate。
+  - real controller inventory/disable/late-relaunch、真实 process stop/start、首个
+    non-fixture ENFORCED aggregate 和 live SIM 均未执行且未被暗示为通过。
+  - `navigator.lifecycle.shadow-enabled=false` 与
+    `activation-evidence-present=false` 为默认值；非 fixture enrollment 持续返回
+    `ENFORCED_DISABLED_PENDING_ACTIVATION_EVIDENCE`。
+- boundary_evidence:
+  - 未操作历史 Task `20260730-0e01`；
+  - 未访问或修改 sibling repo、SIM/TMS 业务数据；
+  - 未操作真实 controller/process，未停止、重启、升级或发布 Navigator/Worker；
+  - 未 push、tag 或 release，测试输出与交付记录不保存 credential、prompt、模型回复或
+    业务数据。
+- readiness: `READY_FOR_SIGNOFF`
 
 ## References
 

@@ -29,7 +29,8 @@ import java.util.Arrays;
 @ComponentScan(basePackages = {
         "com.foggy.navigator.business.agent.service",
         "com.foggy.navigator.business.agent.controller",
-        "com.foggy.navigator.business.agent.event"
+        "com.foggy.navigator.business.agent.event",
+        "com.foggy.navigator.business.agent.lifecycle"
 })
 @EntityScan(basePackages = {
         "com.foggy.navigator.business.agent.model.entity",

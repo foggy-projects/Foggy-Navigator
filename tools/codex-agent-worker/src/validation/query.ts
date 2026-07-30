@@ -270,8 +270,13 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
 
   const additionalDirectories = validateOptionalStringArray(body.additional_directories, 'additional_directories')
   if (additionalDirectories && !Array.isArray(additionalDirectories)) return additionalDirectories
+  const lifecycleContext = validateOptionalObject(body.lifecycle_context, 'lifecycle_context')
+  if (isValidationFailure(lifecycleContext)) return lifecycleContext
 
   const value: QueryRequest = { prompt }
+  if (lifecycleContext !== undefined) {
+    value.lifecycle_context = lifecycleContext as unknown as QueryRequest['lifecycle_context']
+  }
 
   if (cwd !== undefined) {
     value.cwd = cwd

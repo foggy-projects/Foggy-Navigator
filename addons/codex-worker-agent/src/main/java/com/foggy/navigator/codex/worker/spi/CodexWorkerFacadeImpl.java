@@ -79,12 +79,14 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClos
     @Override
     public boolean supports(String providerType) {
         return CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType)
+                || CodexTaskService.CODEX_BIZ_PROVIDER_TYPE.equals(providerType)
                 || CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE.equals(providerType);
     }
 
     @Override
     public boolean supportsCompletionReadiness(String providerType) {
-        return CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType);
+        return CodexTaskService.CODEX_PROVIDER_TYPE.equals(providerType)
+                || CodexTaskService.CODEX_BIZ_PROVIDER_TYPE.equals(providerType);
     }
 
     @Override

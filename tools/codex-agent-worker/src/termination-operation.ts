@@ -52,6 +52,8 @@ export type TerminationOperationValidationOptions = {
    * Worker cannot make an unexpired signed command replayable.
    */
   replayLedger: TerminationOperationReceiptLedger
+  /** ENFORCED lifecycle v1 reserves the one-use operation in its own store. */
+  consumeReplayReceipt?: boolean
 }
 
 export class TerminationOperationValidationError extends Error {
@@ -514,7 +516,9 @@ export function validateTerminationOperation(
       || expiresAt - issuedAt > MAX_OPERATION_LIFETIME_MS) {
     throw new TerminationOperationValidationError('TERMINATION_OPERATION_EXPIRED', 409)
   }
-  options.replayLedger.consume(claims.worker_id, claims.operation_id, expiresAt, now)
+  if (options.consumeReplayReceipt !== false) {
+    options.replayLedger.consume(claims.worker_id, claims.operation_id, expiresAt, now)
+  }
   return claims
 }
 

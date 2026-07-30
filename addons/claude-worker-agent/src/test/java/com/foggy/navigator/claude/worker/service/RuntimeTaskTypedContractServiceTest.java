@@ -135,6 +135,30 @@ class RuntimeTaskTypedContractServiceTest {
     }
 
     @Test
+    void receiptPersistenceFailureRejectsBeforeProviderEffect() {
+        when(requestAuditService.beginTaskOperationIdempotent(
+                REQUEST_ID,
+                RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                "key", "secret", null, "user-a", "task-a"))
+                .thenThrow(new IllegalStateException("FIXTURE_RECEIPT_INSERT_FAILED"));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("RUNNING", false));
+
+        RuntimeTaskClosureDTO result = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+
+        assertEquals(RuntimeTaskTerminationOutcome.REJECTED, result.getOutcome());
+        assertEquals("TERMINATION_REQUEST_RECEIPT_PERSISTENCE_FAILED",
+                result.getReasonCode());
+        assertFalse(result.getTerminationDispatched());
+        assertTrue(result.getTerminationRequestReceiptEnabled());
+        assertFalse(result.getTerminationRequestReceiptPersisted());
+        assertFalse(result.getRequestReconciliationAvailable());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
     void acceptedWithUnobservableCanonicalFactsRemainsAcceptedAndRequiresReconciliation() {
         newOperation();
         owned("RUNNING", false);

@@ -286,6 +286,28 @@ public class RuntimeRequestAuditService {
                 clientRequestId, operation, resolveOwner(credential), agentCode, upstreamUserId, taskId);
     }
 
+    /**
+     * ARCH-001 receipt variant. The caller owns the surrounding transaction so
+     * receipt, lifecycle intent and effect outbox either commit together or all
+     * roll back. Existing non-lifecycle callers retain the REQUIRES_NEW method.
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public TaskOperationRegistration beginTaskOperationIdempotentAtomic(
+            String clientRequestId,
+            String operation,
+            String appKey,
+            String appSecret,
+            String agentCode,
+            String upstreamUserId,
+            String taskId) {
+        ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+        return registerTaskOperation(
+                clientRequestId, operation, resolveOwner(credential),
+                agentCode, upstreamUserId, taskId);
+    }
+
     private TaskOperationRegistration registerTaskOperation(
             String clientRequestId,
             String operation,

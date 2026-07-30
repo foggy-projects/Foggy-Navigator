@@ -14,6 +14,7 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
+import com.foggy.navigator.session.lifecycle.SessionForegroundLaneService;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -35,6 +36,7 @@ import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -102,6 +104,13 @@ public class TaskDispatchFacade {
     @Autowired(required = false)
     @Nullable
     private PlatformTransactionManager transactionManager;
+
+    @Autowired(required = false)
+    @Nullable
+    private SessionForegroundLaneService lifecycleLaneService;
+
+    @Value("${navigator.lifecycle.shadow-enabled:false}")
+    private boolean lifecycleShadowEnabled;
 
     public TaskDispatchFacade(UnifiedAgentResolver agentResolver,
                               SessionBindingService bindingService,
@@ -201,6 +210,7 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
+        observeLifecycleLane(dto);
         return dto;
     }
 
@@ -349,6 +359,7 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = operationRouter().resumeTask(request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, dto.getProviderType());
+        observeLifecycleLane(dto);
         return dto;
     }
 
@@ -1017,7 +1028,18 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = operationRouter().createTaskDirect(providerType, request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
+        observeLifecycleLane(dto);
         return dto;
+    }
+
+    private void observeLifecycleLane(DispatchTaskDTO dto) {
+        if (!lifecycleShadowEnabled || lifecycleLaneService == null || dto == null
+                || dto.getSessionId() == null || dto.getSessionId().isBlank()
+                || dto.getTaskId() == null || dto.getTaskId().isBlank()) {
+            return;
+        }
+        lifecycleLaneService.observeReservation(
+                dto.getSessionId(), dto.getTaskId(), dto.getWorkerId());
     }
 
     private void rejectBusyContextContinuationIfNeeded(String providerType,

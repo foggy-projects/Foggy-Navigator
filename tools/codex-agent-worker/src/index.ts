@@ -10,6 +10,7 @@ import initDirectoryRouter from './routes/init-directory.js'
 import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
 import sessionFileHintsRouter from './routes/session-file-hints.js'
+import lifecycleRouter from './routes/lifecycle.js'
 import { ensureUserAgentsSkillsDir } from './startup/skills-link.js'
 import { markTaskAttention, taskRegistry } from './codex/sdk-wrapper.js'
 import { isTaskExecutionActive } from './models.js'
@@ -44,6 +45,7 @@ app.use(initDirectoryRouter)
 app.use(tasksRouter)
 app.use(sessionsRouter)
 app.use(sessionFileHintsRouter)
+app.use(lifecycleRouter)
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

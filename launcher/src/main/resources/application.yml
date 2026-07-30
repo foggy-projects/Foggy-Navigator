@@ -90,6 +90,12 @@ agent:
 
 # 凭证加密配置
 navigator:
+  lifecycle:
+    # SHADOW projection is opt-in after the additive schema is pre-applied.
+    shadow-enabled: ${NAVIGATOR_LIFECYCLE_SHADOW_ENABLED:false}
+    # Real activation is a separate authorization. Test-owned isolated
+    # fixtures may override this only inside their own application context.
+    activation-evidence-present: ${NAVIGATOR_LIFECYCLE_ACTIVATION_EVIDENCE_PRESENT:false}
   runtime-audit:
     termination-receipt-enabled: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_ENABLED:true}
     termination-receipt-retention: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_RETENTION:P7D}
