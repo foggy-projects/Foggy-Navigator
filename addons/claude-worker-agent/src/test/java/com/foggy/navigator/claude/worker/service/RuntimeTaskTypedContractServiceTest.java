@@ -395,6 +395,125 @@ class RuntimeTaskTypedContractServiceTest {
         assertFalse(result.getNewClientRequestIdAllowed());
     }
 
+    @Test
+    void acceptedRequestFailsClosedAsAmbiguousAfterConvergenceTimeout() {
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TERMINATION_REQUESTED", "CANCEL_REQUESTED", null, true)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("CANCEL_REQUESTED", false));
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED,
+                result.getTerminationOutcome());
+        assertEquals("TERMINATION_RESULT_NOT_OBSERVED_WITHIN_TIMEOUT",
+                result.getReasonCode());
+        assertFalse(result.getCanonicalTerminal());
+        assertFalse(result.getNewClientRequestIdAllowed());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void receiptClaimCannotProduceTerminalWithoutCanonicalTaskStatus() {
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "ALREADY_TERMINAL", "CANCEL_REQUESTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("CANCEL_REQUESTED", false));
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertFalse(result.getCanonicalTerminal());
+        assertEquals("TERMINATION_RECEIPT_TERMINAL_WITHOUT_CANONICAL_TASK",
+                result.getReasonCode());
+    }
+
+    @Test
+    void acceptedAckAndReceiptTextCannotBecomeTerminalAuthority() {
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(
+                        Optional.of(snapshot(
+                                true, "TERMINATION_ACCEPTED", "ACKNOWLEDGED", null)),
+                        Optional.of(snapshot(
+                                true, "TASK_TERMINATED", "ABORTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(
+                        audit("CANCEL_REQUESTED", false),
+                        audit("CANCEL_REQUESTED", false));
+
+        RuntimeTaskClosureDTO acknowledged = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+        RuntimeTaskClosureDTO receiptText = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.ACCEPTED,
+                acknowledged.getReconciliationState());
+        assertFalse(acknowledged.getCanonicalTerminal());
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                receiptText.getReconciliationState());
+        assertEquals("TERMINATION_EVIDENCE_WITHOUT_CANONICAL_TASK",
+                receiptText.getReasonCode());
+        assertFalse(receiptText.getCanonicalTerminal());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void terminalReconciliationIncludesRevokedTokenAndRemovedActiveRegistration() {
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TASK_TERMINATED", "ABORTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("CANCELLED", true));
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.TERMINAL,
+                result.getReconciliationState());
+        assertTrue(result.getCanonicalTerminal());
+        assertEquals("CANCELLED", result.getCurrentTaskStatus());
+        assertEquals("REVOKED", result.getTaskFacts().getTaskTokenStatus());
+        assertFalse(result.getTaskFacts().getActiveTaskRegistrationPresent());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void canonicalTaskDoesNotReportTerminalUntilTokenAndRegistrationCleanupConverge() {
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TASK_TERMINATED", "ABORTED", null)));
+        RuntimeTaskFactsDTO incompleteFacts = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .status("CANCELLED")
+                .terminal(true)
+                .physicalWorkerId("worker-a")
+                .taskTokenStatus("ACTIVE")
+                .activeTaskRegistrationPresent(false)
+                .build();
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(RuntimeTaskAuditDTO.builder()
+                        .taskId("task-a")
+                        .status("CANCELLED")
+                        .terminal(true)
+                        .taskFacts(incompleteFacts)
+                        .build());
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertTrue(result.getCanonicalTerminal());
+        assertEquals("TERMINAL_CLEANUP_INCOMPLETE", result.getReasonCode());
+    }
+
     private void newOperation() {
         when(requestAuditService.beginTaskOperationIdempotent(
                 REQUEST_ID, RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
@@ -433,6 +552,15 @@ class RuntimeTaskTypedContractServiceTest {
 
     private RuntimeRequestAuditService.TaskOperationSnapshot snapshot(
             boolean completed, String result, String status, String errorCode) {
+        return snapshot(completed, result, status, errorCode, false);
+    }
+
+    private RuntimeRequestAuditService.TaskOperationSnapshot snapshot(
+            boolean completed,
+            String result,
+            String status,
+            String errorCode,
+            boolean convergenceTimedOut) {
         return new RuntimeRequestAuditService.TaskOperationSnapshot(
                 REQUEST_ID,
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
@@ -442,7 +570,8 @@ class RuntimeTaskTypedContractServiceTest {
                 result,
                 status,
                 errorCode,
-                "worker-a");
+                "worker-a",
+                convergenceTimedOut);
     }
 
     private void assertState(

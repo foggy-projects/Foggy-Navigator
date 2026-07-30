@@ -60,6 +60,8 @@ last_updated: 2026-07-30
 - typed_termination_cli_release_spec: workitems/REL-003-navigator-upstream-cli-1.0.39-snapshot-typed-termination.md
 - typed_termination_cli_release_status: ACCEPTED
 - bug035_status: ACCEPTED
+- typed_termination_terminal_convergence_spec: workitems/BUG-036-typed-termination-terminal-convergence.md
+- bug036_status: READY_FOR_SIGNOFF
 - app_server_compact_repair_spec: workitems/BUG-021-app-server-compact-protocol.md
 - bug021_status: READY_FOR_SIGNOFF
 - app_server_force_recovery_spec: workitems/BUG-022-app-server-force-recovery-start.md
@@ -138,6 +140,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 | [BUG-033 Codex SDK Worker Windows installer 空输出崩溃](./workitems/BUG-033-codex-worker-windows-installer-null-output.md) | PowerShell 将 runtime dependency helper 的合法空输出视为 `$null` 并调用 `.Trim()` | READY_FOR_SIGNOFF；SDK Worker 1.0.29 已发布，Windows fresh install smoke 与远端逐字节复核通过 |
 | [BUG-034 Worker 子进程 HOME 按执行 UID 回退与 OBS 发布](./workitems/BUG-034-worker-home-uid-fallback-and-obs-release.md) | Codex SDK/app-server、Claude、Gemini 与 LangGraph Biz Worker 在父环境缺失 HOME 时按有效 UID 对齐系统 home，并独立发布变更 Worker | READY_FOR_SIGNOFF；五个 OBS latest 已更新且 13 个归档逐字节复核通过 |
 | [BUG-035 Open SDK typed termination/reconciliation contract](./workitems/BUG-035-open-sdk-typed-termination-reconciliation-contract.md) | 为 readiness、termination 与原 request-ID 只读 reconciliation 提供正式 typed SDK/服务端契约，同时保留旧 Map 与 legacy repair 兼容分支 | ACCEPTED；[签收记录](./evidence/BUG-035-delivery-signoff-2026-07-30.md)，release-only `1.0.39-SNAPSHOT` 发布由 REL-003 承接 |
+| [BUG-036 Typed termination terminal convergence](./workitems/BUG-036-typed-termination-terminal-convergence.md) | 修复 Codex SDK Worker 首事件前取消竞态、accepted receipt 无界悬挂和 terminal cleanup gate 缺失 | READY_FOR_SIGNOFF；历史 Task 仅只读诊断，未重放或修改 |
 | [FEAT-001 runtime binding/task read-only audit](./workitems/FEAT-001-runtime-binding-task-read-only-audit.md) | ClientApp runtime long-term credential 对 frozen binding 与既有 task durable 终态执行零 token、零 dispatch、零资源变更审计 | READY_FOR_SIGNOFF；CLI 1.0.26、server build、live zero-write audit 已完成，等待独立签核 |
 | [FEAT-003 runtime task completion readiness](./workitems/FEAT-003-runtime-task-completion-readiness.md) | 基于 durable task、真实 Worker/provider 进程和脱敏 completion evidence 区分运行中、注册残留与完成候选 | READY_FOR_SIGNOFF；Worker 1.0.25、CLI 1.0.34 和 8112 launcher clean release/deploy 已完成，live stale-registration/process-absence、快速终态失败、自然完成 V2 durable receipt 与零副作用证据均通过 |
 

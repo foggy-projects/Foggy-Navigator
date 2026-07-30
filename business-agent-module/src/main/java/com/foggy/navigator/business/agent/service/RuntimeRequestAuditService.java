@@ -85,6 +85,7 @@ public class RuntimeRequestAuditService {
     private static final String UNKNOWN = "UNKNOWN";
     private static final Duration DEFAULT_RETENTION = Duration.ofHours(24);
     private static final Duration DEFAULT_TERMINATION_RECEIPT_RETENTION = Duration.ofDays(7);
+    private static final Duration DEFAULT_TERMINATION_CONVERGENCE_TIMEOUT = Duration.ofMinutes(5);
     private static final Duration HARD_MAX_QUERY_WINDOW = Duration.ofMinutes(15);
     private static final int HARD_MAX_LIMIT = 100;
     private static final Set<String> OPERATIONS = Set.of(
@@ -116,7 +117,21 @@ public class RuntimeRequestAuditService {
             String result,
             String status,
             String sanitizedErrorCode,
-            String physicalWorkerId) {
+            String physicalWorkerId,
+            boolean convergenceTimedOut) {
+        public TaskOperationSnapshot(
+                String clientRequestId,
+                String operation,
+                String taskId,
+                String upstreamUserId,
+                boolean completed,
+                String result,
+                String status,
+                String sanitizedErrorCode,
+                String physicalWorkerId) {
+            this(clientRequestId, operation, taskId, upstreamUserId, completed,
+                    result, status, sanitizedErrorCode, physicalWorkerId, false);
+        }
     }
 
     public record SafeSmokeEvidence(
@@ -330,10 +345,11 @@ public class RuntimeRequestAuditService {
                 .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
         OwnerScope owner = resolveOwner(credential);
         String requestId = requireRequestId(clientRequestId);
+        Instant now = Instant.now();
         RuntimeRequestAuditEntity entity = auditRepository.findByClientRequestId(requestId).orElse(null);
         if (entity == null
                 || entity.getExpiresAt() == null
-                || !entity.getExpiresAt().isAfter(Instant.now())
+                || !entity.getExpiresAt().isAfter(now)
                 || !sameOwner(entity, owner)) {
             return Optional.empty();
         }
@@ -346,7 +362,8 @@ public class RuntimeRequestAuditService {
                 clean(entity.getResult(), UNKNOWN),
                 clean(entity.getStatus(), UNKNOWN),
                 entity.getSanitizedErrorCode(),
-                entity.getPhysicalWorkerId()));
+                entity.getPhysicalWorkerId(),
+                terminationConvergenceTimedOut(entity, now)));
     }
 
     public boolean terminationRequestReceiptEnabled() {
@@ -404,26 +421,52 @@ public class RuntimeRequestAuditService {
         if (!StringUtils.hasText(taskId) || !isTerminalTaskStatus(status)) {
             return;
         }
-        RuntimeRequestAuditEntity entity = auditRepository
+        Instant now = Instant.now();
+        String normalizedTaskId = taskId.trim();
+        String normalizedStatus = status.trim().toUpperCase(Locale.ROOT);
+        RuntimeRequestAuditEntity ask = auditRepository
                 .findTopByTaskIdAndOperationAndExpiresAtAfterOrderByReceivedAtDesc(
-                        taskId.trim(), OPERATION_ASK, Instant.now())
+                        normalizedTaskId, OPERATION_ASK, now)
                 .orElse(null);
-        if (entity == null) {
+        if (ask != null) {
+            ask.setStatus(normalizedStatus);
+            ask.setSanitizedErrorCode(clean(sanitizedErrorCode, ask.getSanitizedErrorCode()));
+            ask.setTaskTokenStatus("REVOKED");
+            ask.setTerminal(true);
+            ask.setCompletedAt(now);
+            ask.setResult("COMPLETED".equals(ask.getStatus())
+                    ? "STANDARD_ASK_COMPLETED"
+                    : "STANDARD_ASK_TERMINAL");
+            auditRepository.save(ask);
+            appendStageOnce(ask.getClientRequestId(), STAGE_TASK_TERMINAL, "SUCCEEDED", null, now);
+            appendStageOnce(ask.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+            appendStageOnce(ask.getClientRequestId(), STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
+        }
+
+        RuntimeRequestAuditEntity termination = auditRepository
+                .findTopByTaskIdAndOperationAndExpiresAtAfterOrderByReceivedAtDesc(
+                        normalizedTaskId, OPERATION_TASK_TERMINATE, now)
+                .orElse(null);
+        if (termination == null) {
             return;
         }
-        Instant now = Instant.now();
-        entity.setStatus(status.trim().toUpperCase(Locale.ROOT));
-        entity.setSanitizedErrorCode(clean(sanitizedErrorCode, entity.getSanitizedErrorCode()));
-        entity.setTaskTokenStatus("REVOKED");
-        entity.setTerminal(true);
-        entity.setCompletedAt(now);
-        entity.setResult("COMPLETED".equals(entity.getStatus())
-                ? "STANDARD_ASK_COMPLETED"
-                : "STANDARD_ASK_TERMINAL");
-        auditRepository.save(entity);
-        appendStageOnce(entity.getClientRequestId(), STAGE_TASK_TERMINAL, "SUCCEEDED", null, now);
-        appendStageOnce(entity.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
-        appendStageOnce(entity.getClientRequestId(), STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
+        termination.setStatus(normalizedStatus);
+        termination.setSanitizedErrorCode(clean(
+                sanitizedErrorCode, termination.getSanitizedErrorCode()));
+        termination.setTaskTokenStatus("REVOKED");
+        termination.setTerminal(true);
+        termination.setCompletedAt(now);
+        termination.setResult("TASK_TERMINATED");
+        termination.setSafeErrorSummary(null);
+        auditRepository.save(termination);
+        appendStageOnce(termination.getClientRequestId(),
+                STAGE_TERMINATION_EVIDENCE_OBSERVED, "SUCCEEDED", null, now);
+        appendStageOnce(termination.getClientRequestId(),
+                STAGE_TASK_TERMINAL, "SUCCEEDED", null, now);
+        appendStageOnce(termination.getClientRequestId(),
+                STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+        appendStageOnce(termination.getClientRequestId(),
+                STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -1210,6 +1253,22 @@ public class RuntimeRequestAuditService {
         return retention == null || retention.isZero() || retention.isNegative()
                 ? DEFAULT_TERMINATION_RECEIPT_RETENTION
                 : retention;
+    }
+
+    private boolean terminationConvergenceTimedOut(
+            RuntimeRequestAuditEntity entity,
+            Instant now) {
+        Instant startedAt = entity.getCompletedAt() != null
+                ? entity.getCompletedAt()
+                : entity.getReceivedAt();
+        if (startedAt == null) {
+            return false;
+        }
+        Duration timeout = properties.getTerminationConvergenceTimeout();
+        Duration effectiveTimeout = timeout == null || timeout.isZero() || timeout.isNegative()
+                ? DEFAULT_TERMINATION_CONVERGENCE_TIMEOUT
+                : timeout;
+        return !startedAt.plus(effectiveTimeout).isAfter(now);
     }
 
     private record OwnerScope(String credentialId, String tenantId, String upstreamSystemId, String clientAppId) {

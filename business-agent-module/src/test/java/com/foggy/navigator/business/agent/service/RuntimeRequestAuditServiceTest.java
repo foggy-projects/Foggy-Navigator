@@ -594,6 +594,56 @@ class RuntimeRequestAuditServiceTest {
     }
 
     @Test
+    void canonicalTerminalEventBackfillsTerminationReceiptAndRevocationEvidence() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle termination = service.beginTaskOperation(
+                requestId, "task-terminate", "runtime-key", "runtime-secret",
+                "agent-1", "user-1", "task-1");
+        service.taskOperationCompleted(termination, standardEvidence(
+                "task-1", "CANCEL_REQUESTED", "ACTIVE", true, 1,
+                "TERMINATION_REQUESTED"), false, true);
+
+        service.taskTerminalRecorded("task-1", "ABORTED", "OPERATOR_TERMINATED");
+
+        RuntimeRequestAuditDTO audit = exact(requestId);
+        RuntimeRequestAuditService.TaskOperationSnapshot snapshot =
+                service.findSelfTaskOperation("runtime-key", "runtime-secret", requestId)
+                        .orElseThrow();
+        assertAll(
+                () -> assertTrue(snapshot.completed()),
+                () -> assertEquals("TASK_TERMINATED", snapshot.result()),
+                () -> assertEquals("ABORTED", snapshot.status()),
+                () -> assertEquals("REVOKED", audit.getTaskTokenStatus()),
+                () -> assertEquals(1, audit.getDispatchCount()),
+                () -> assertEquals(0, audit.getRetryCount()),
+                () -> assertEquals(0, audit.getRecoveryCount()),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TERMINATION_EVIDENCE_OBSERVED"
+                                .equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "TASK_TOKEN_REVOKED".equals(stage.getStage()))));
+    }
+
+    @Test
+    void terminationSnapshotMarksAcceptedReceiptPastConvergenceDeadline() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle termination = service.beginTaskOperation(
+                requestId, "task-terminate", "runtime-key", "runtime-secret",
+                "agent-1", "user-1", "task-1");
+        service.taskOperationCompleted(termination, standardEvidence(
+                "task-1", "CANCEL_REQUESTED", "ACTIVE", true, 1,
+                "TERMINATION_REQUESTED"), false, true);
+        audits.get(requestId).setCompletedAt(Instant.now().minus(Duration.ofMinutes(6)));
+
+        RuntimeRequestAuditService.TaskOperationSnapshot snapshot =
+                service.findSelfTaskOperation("runtime-key", "runtime-secret", requestId)
+                        .orElseThrow();
+
+        assertTrue(snapshot.convergenceTimedOut());
+        assertEquals("TERMINATION_REQUESTED", snapshot.result());
+    }
+
+    @Test
     void failedReconciliationReplayConvergesSameAuditToSuccessfulTerminalEvidence() {
         String requestId = UUID.randomUUID().toString();
         RuntimeRequestAuditService.AuditHandle handle = service.beginTaskOperation(

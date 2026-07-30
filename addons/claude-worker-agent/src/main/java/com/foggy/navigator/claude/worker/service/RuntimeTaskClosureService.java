@@ -17,8 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Runtime-lane task termination and reconciliation.
@@ -32,6 +34,9 @@ import java.util.Optional;
 public class RuntimeTaskClosureService {
 
     private static final String UNKNOWN = "UNKNOWN";
+    private static final Set<String> CANONICAL_TERMINAL_STATUSES = Set.of(
+            "COMPLETED", "FAILED", "REJECTED", "TIMED_OUT", "TIMEOUT",
+            "ABORTED", "CANCELLED", "CANCELED");
 
     private final RuntimeStateAuditService stateAuditService;
     private final List<RuntimeTaskClosureProvider> providers;
@@ -415,20 +420,49 @@ public class RuntimeTaskClosureService {
                     stableCode(snapshot.sanitizedErrorCode(), "TERMINATION_REQUEST_REJECTED"),
                     true);
         }
-        if (originalOutcome == RuntimeTaskTerminationOutcome.ALREADY_TERMINAL) {
-            return reconciliationResponse(
-                    originalClientRequestId, taskId, audit, snapshot,
-                    RuntimeTaskReconciliationState.TERMINAL,
-                    originalOutcome,
-                    stableText(snapshot.status()), "TASK_ALREADY_TERMINAL", true);
-        }
         if (Boolean.TRUE.equals(canonicalTerminal(audit))) {
+            if (!terminalCleanupComplete(audit)) {
+                return reconciliationResponse(
+                        originalClientRequestId, taskId, audit, snapshot,
+                        RuntimeTaskReconciliationState.AMBIGUOUS,
+                        originalOutcome == RuntimeTaskTerminationOutcome.PROCESSING
+                                ? RuntimeTaskTerminationOutcome.ACCEPTED : originalOutcome,
+                        stableText(snapshot.status()),
+                        "TERMINAL_CLEANUP_INCOMPLETE", true);
+            }
             return reconciliationResponse(
                     originalClientRequestId, taskId, audit, snapshot,
                     RuntimeTaskReconciliationState.TERMINAL,
                     originalOutcome == RuntimeTaskTerminationOutcome.PROCESSING
                             ? RuntimeTaskTerminationOutcome.ACCEPTED : originalOutcome,
                     stableText(snapshot.status()), "TASK_CANONICAL_TERMINAL", true);
+        }
+        if (originalOutcome == RuntimeTaskTerminationOutcome.ALREADY_TERMINAL) {
+            return reconciliationResponse(
+                    originalClientRequestId, taskId, audit, snapshot,
+                    RuntimeTaskReconciliationState.AMBIGUOUS,
+                    originalOutcome,
+                    stableText(snapshot.status()),
+                    "TERMINATION_RECEIPT_TERMINAL_WITHOUT_CANONICAL_TASK", true);
+        }
+        if ("TASK_TERMINATED".equals(stableText(snapshot.result()))) {
+            return reconciliationResponse(
+                    originalClientRequestId, taskId, audit, snapshot,
+                    RuntimeTaskReconciliationState.AMBIGUOUS,
+                    originalOutcome,
+                    stableText(snapshot.status()),
+                    "TERMINATION_EVIDENCE_WITHOUT_CANONICAL_TASK", true);
+        }
+        if (snapshot.convergenceTimedOut()) {
+            return reconciliationResponse(
+                    originalClientRequestId, taskId, audit, snapshot,
+                    RuntimeTaskReconciliationState.AMBIGUOUS,
+                    originalOutcome,
+                    stableText(snapshot.status()),
+                    snapshot.completed()
+                            ? "TERMINATION_RESULT_NOT_OBSERVED_WITHIN_TIMEOUT"
+                            : "TERMINATION_REQUEST_NOT_COMPLETED_WITHIN_TIMEOUT",
+                    true);
         }
         if (!snapshot.completed()) {
             return reconciliationResponse(
@@ -759,7 +793,12 @@ public class RuntimeTaskClosureService {
 
     private Boolean canonicalTerminal(RuntimeTaskAuditDTO audit) {
         RuntimeTaskFactsDTO facts = facts(audit);
-        return facts != null ? facts.getTerminal() : null;
+        if (facts == null) {
+            return null;
+        }
+        return Boolean.TRUE.equals(facts.getTerminal())
+                && CANONICAL_TERMINAL_STATUSES.contains(
+                stableText(facts.getStatus()).toUpperCase(Locale.ROOT));
     }
 
     private String taskStatus(RuntimeTaskFactsDTO facts, String fallback) {
@@ -770,6 +809,13 @@ public class RuntimeTaskClosureService {
         RuntimeTaskFactsDTO facts = facts(audit);
         return facts != null && StringUtils.hasText(facts.getPhysicalWorkerId())
                 ? facts.getPhysicalWorkerId() : clean(fallback);
+    }
+
+    private boolean terminalCleanupComplete(RuntimeTaskAuditDTO audit) {
+        RuntimeTaskFactsDTO facts = facts(audit);
+        return facts != null
+                && "REVOKED".equalsIgnoreCase(facts.getTaskTokenStatus())
+                && Boolean.FALSE.equals(facts.getActiveTaskRegistrationPresent());
     }
 
     private boolean terminationMayBeInFlight(

@@ -29,6 +29,8 @@ class RuntimeTimeBasisConfigurationTest {
                 properties.getProperty("navigator.runtime-audit.termination-receipt-enabled"));
         assertEquals("${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_RETENTION:P7D}",
                 properties.getProperty("navigator.runtime-audit.termination-receipt-retention"));
+        assertEquals("${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_CONVERGENCE_TIMEOUT:PT5M}",
+                properties.getProperty("navigator.runtime-audit.termination-convergence-timeout"));
         assertEquals("${NAVIGATOR_RUNTIME_AUDIT_RETENTION:PT24H}",
                 properties.getProperty("navigator.runtime-audit.retention"));
         assertEquals("${NAVIGATOR_RUNTIME_AUDIT_CLEANUP_CRON:0 0 2 * * *}",

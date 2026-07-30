@@ -201,6 +201,8 @@ export interface TaskEntry {
   status: TaskStatus
   abortController?: AbortController
   cancelExecution?: (operation: TerminationOperationSummary) => void
+  /** True only after the SDK execution loop has stopped and cannot spawn later work. */
+  sdkExecutionSettled?: boolean
   threadId?: string
   pid?: number
   processStartedAt?: string

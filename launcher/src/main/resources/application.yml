@@ -93,6 +93,7 @@ navigator:
   runtime-audit:
     termination-receipt-enabled: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_ENABLED:true}
     termination-receipt-retention: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_RETENTION:P7D}
+    termination-convergence-timeout: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_CONVERGENCE_TIMEOUT:PT5M}
     retention: ${NAVIGATOR_RUNTIME_AUDIT_RETENTION:PT24H}
     # Spring six-field cron; defaults to 02:00 in the Navigator JVM time zone.
     cleanup-cron: "${NAVIGATOR_RUNTIME_AUDIT_CLEANUP_CRON:0 0 2 * * *}"

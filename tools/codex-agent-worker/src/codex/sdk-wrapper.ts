@@ -988,7 +988,9 @@ function finalizeTask(
   entry.status = status
   entry.completedAt = Date.now()
   entry.availableActions = []
-  if (entry.terminationOperation && entry.terminationOperation.status === 'CANCEL_REQUESTED') {
+  if (entry.terminationOperation
+    && (entry.terminationOperation.status === 'CANCEL_REQUESTED'
+      || entry.terminationOperation.status === 'UNCONFIRMED')) {
     entry.terminationOperation = {
       ...entry.terminationOperation,
       status: 'OBSERVED_EXIT',
@@ -1009,13 +1011,13 @@ type CancellationProcessDependencies = Pick<
   | 'cancellationPollIntervalMs'
 >
 
-type BoundProcessObservation = 'exited' | 'running' | 'unverified'
+type BoundProcessObservation = 'exited' | 'running' | 'binding_pending' | 'unverified'
 
 async function observeBoundTaskProcess(
   entry: TaskEntry,
   listProcesses: typeof listCodexCliProcesses,
 ): Promise<BoundProcessObservation> {
-  if (!entry.pid || !entry.processStartedAt) return 'unverified'
+  if (!entry.pid || !entry.processStartedAt) return 'binding_pending'
   const duplicateBinding = [...taskRegistry.values()].some(candidate => (
     candidate.taskId !== entry.taskId
     && candidate.pid === entry.pid
@@ -1040,13 +1042,59 @@ async function waitForBoundTaskProcessExit(
   do {
     try {
       const observation = await observeBoundTaskProcess(entry, listProcesses)
-      if (observation !== 'running') return observation
+      if (observation === 'exited' || observation === 'unverified') return observation
+      if (observation === 'binding_pending' && Date.now() >= deadline) {
+        return observation
+      }
     } catch {
       return 'unverified'
     }
     if (Date.now() >= deadline) return 'running'
     await new Promise(resolve => setTimeout(resolve, Math.max(1, pollIntervalMs)))
   } while (true)
+}
+
+async function settleUnboundCancellationAfterExecution(
+  entry: TaskEntry,
+  operationId: string,
+  listProcesses: typeof listCodexCliProcesses,
+): Promise<TaskEntry | undefined> {
+  if (!entry.sdkExecutionSettled) {
+    return markTaskTerminationUnconfirmed(
+      entry.taskId,
+      operationId,
+      'SDK_CANCEL_PROCESS_BINDING_PENDING',
+    )
+  }
+
+  try {
+    const processes = await listProcesses()
+    if (entry.terminationOperation?.operation_id !== operationId || isTaskTerminal(entry.status)) {
+      return entry
+    }
+    // An accepted cancellation plus a settled SDK execution proves that no
+    // later process can be spawned by this run. A fresh worker-wide zero
+    // process snapshot is therefore authoritative even when cancellation
+    // raced the first event/PID binding.
+    if (processes.length === 0) {
+      return confirmTaskProcessExit(
+        entry.taskId,
+        operationId,
+        'SDK_CANCEL_SETTLED_ZERO_PROCESS_VERIFIED',
+      )
+    }
+  } catch {
+    return markTaskTerminationUnconfirmed(
+      entry.taskId,
+      operationId,
+      'SDK_CANCEL_PROCESS_SCAN_UNAVAILABLE',
+    )
+  }
+  return markTaskTerminationUnconfirmed(
+    entry.taskId,
+    operationId,
+    'SDK_CANCEL_PROCESS_BINDING_UNVERIFIED',
+  )
 }
 
 /**
@@ -1073,7 +1121,10 @@ export async function settleAuthorizedTaskCancellation(
   if (initial === 'exited') {
     return confirmTaskProcessExit(taskId, operationId, 'SDK_ABORT_PROCESS_EXIT_VERIFIED')
   }
-  if (initial === 'unverified' || !entry.pid) {
+  if (initial === 'binding_pending' || !entry.pid || !entry.processStartedAt) {
+    return settleUnboundCancellationAfterExecution(entry, operationId, listProcesses)
+  }
+  if (initial === 'unverified') {
     return markTaskTerminationUnconfirmed(taskId, operationId, 'SDK_CANCEL_PROCESS_BINDING_UNVERIFIED')
   }
 
@@ -1963,6 +2014,19 @@ export async function runQuery(
       })
     }
   } finally {
+    entry.sdkExecutionSettled = true
+    const operationId = entry.terminationOperation?.operation_id
+    if (entry.status === 'cancel_requested' && operationId) {
+      try {
+        await settleAuthorizedTaskCancellation(taskId, operationId, dependencies)
+      } catch {
+        markTaskTerminationUnconfirmed(
+          taskId,
+          operationId,
+          'SDK_CANCEL_SETTLEMENT_FAILED',
+        )
+      }
+    }
     if (isTaskTerminal(entry.status)) {
       broadcast.close()
     }

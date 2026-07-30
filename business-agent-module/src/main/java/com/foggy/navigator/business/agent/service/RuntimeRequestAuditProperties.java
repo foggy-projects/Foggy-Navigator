@@ -12,6 +12,7 @@ import java.time.Duration;
 public class RuntimeRequestAuditProperties {
     private boolean terminationReceiptEnabled = true;
     private Duration terminationReceiptRetention = Duration.ofDays(7);
+    private Duration terminationConvergenceTimeout = Duration.ofMinutes(5);
     private Duration retention = Duration.ofHours(24);
     private Duration maxQueryWindow = Duration.ofMinutes(15);
     private int defaultLimit = 20;

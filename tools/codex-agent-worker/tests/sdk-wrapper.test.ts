@@ -1308,6 +1308,13 @@ test('an explicit SDK cancellation that lacks a provider exit observation remain
         }),
         snapshotCodexCliPids: async () => new Set<number>(),
         detectSpawnedCodexPid: async () => 123,
+        listCodexCliProcesses: async () => [{
+          pid: 999,
+          command: 'codex --experimental-json',
+          memory_mb: 1,
+          started_at: '2026-07-29T01:02:03.000Z',
+        }],
+        cancellationGraceMs: 0,
       },
     )
     await firstEvent
@@ -1335,6 +1342,84 @@ test('an explicit SDK cancellation that lacks a provider exit observation remain
     assert.equal(entry?.terminationOperation?.status, 'UNCONFIRMED')
     assert.equal(entry?.attention?.at(-1)?.code, 'TERMINATION_UNCONFIRMED')
     assert.equal(taskBroadcasts.get(taskId)?.isClosed(), false)
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})
+
+test('authorized cancellation before the first SDK event converges after execution settles with zero processes', async () => {
+  const taskId = `task-cancel-before-first-event-${Date.now()}`
+  let streamEntered!: () => void
+  const streamStarted = new Promise<void>(resolve => { streamEntered = resolve })
+  let releaseStream!: () => void
+  const streamRelease = new Promise<void>(resolve => { releaseStream = resolve })
+  let cancellationSignal: AbortSignal | undefined
+  const streamedThread = {
+    async runStreamed(_input: unknown, options: { signal: AbortSignal }) {
+      cancellationSignal = options.signal
+      async function* events() {
+        streamEntered()
+        await streamRelease
+        if (options.signal.aborted) {
+          throw new Error('SDK stream stopped before the first event')
+        }
+        yield { type: 'thread.started', thread_id: 'thread-too-late' }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    const query = runQuery(
+      taskId,
+      'cancel before provider stream startup completes',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        listCodexCliProcesses: async () => [],
+        cancellationGraceMs: 0,
+        cancellationForceGraceMs: 0,
+      },
+    )
+    await streamStarted
+
+    const requested = requestTaskCancellation(
+      taskId,
+      remoteCancelOperation('operation-before-first-event', taskId),
+    )
+    assert.equal(requested?.status, 'cancel_requested')
+    assert.equal(requested?.completedAt, undefined)
+    assert.equal(cancellationSignal?.aborted, true)
+
+    releaseStream()
+    await query
+
+    const entry = taskRegistry.get(taskId)
+    assert.equal(entry?.status, 'aborted')
+    assert.equal(entry?.terminationOperation?.status, 'OBSERVED_EXIT')
+    assert.equal(
+      entry?.terminationOperation?.result,
+      'SDK_CANCEL_SETTLED_ZERO_PROCESS_VERIFIED',
+    )
+    const terminal = taskBroadcasts.get(taskId)?.getEventsAfter(0)
+      .find(event => event.terminal_observed === true)
+    assert.equal(terminal?.terminal_status, 'ABORTED')
+    assert.equal(terminal?.terminal_source, 'VERIFIED_PROCESS_EXIT')
+    assert.equal(taskBroadcasts.get(taskId)?.isClosed(), true)
   } finally {
     taskBroadcasts.get(taskId)?.cleanup()
     taskBroadcasts.delete(taskId)
