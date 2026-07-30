@@ -5,7 +5,7 @@ status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-30
+last_updated: 2026-07-31
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -63,7 +63,9 @@ last_updated: 2026-07-30
 - typed_termination_terminal_convergence_spec: workitems/BUG-036-typed-termination-terminal-convergence.md
 - bug036_status: READY_FOR_SIGNOFF
 - unified_session_task_lifecycle_owner_spec: workitems/ARCH-001-unified-session-task-lifecycle-owner.md
-- arch001_status: APPROVED
+- arch001_status: REJECTED
+- arch001_acceptance_status: rejected
+- arch001_acceptance_record: evidence/ARCH-001-independent-signoff-2026-07-31.md
 - arch001_replan_round: 7
 - arch001_replan_review_status: APPROVED_AFTER_ROUND_7
 - arch001_source_execution_authorized: true

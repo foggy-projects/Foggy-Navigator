@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: READY_FOR_SIGNOFF
+status: REJECTED
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -32,6 +32,9 @@ replan_review_status: approved-after-round-7
 execution_start_authorized: true
 decision_stage: approved-source-slices-authorized-activation-separate
 implementation_completed_at: 2026-07-31
+independent_signoff_at: 2026-07-31
+independent_signoff_verdict: REJECTED
+acceptance_record: ../evidence/ARCH-001-independent-signoff-2026-07-31.md
 open_questions: []
 deferred_topics:
   - worker-generated-physical-id-claim-and-recovery
@@ -51,9 +54,9 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: `READY_FOR_SIGNOFF`；Source Slice 0–8 已按顺序完成，但 Slice 7/8
-  仍只允许 repo-owned ephemeral fixture。真实 controller/process、首次非 fixture
-  `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
+- execution_status: `REJECTED`；implementation session 提交的 Source Slice 0–8
+  completion claim 未通过 2026-07-31 独立签收。真实 controller/process、首次非
+  fixture `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
 
 ## Independent Review Disposition
 
@@ -3617,6 +3620,23 @@ Minimum regression scenarios include:
   - 未 push、tag 或 release，测试输出与交付记录不保存 credential、prompt、模型回复或
     业务数据。
 - readiness: `READY_FOR_SIGNOFF`
+
+## Acceptance Status
+
+- acceptance_status: rejected
+- acceptance_decision: rejected
+- signed_off_by: Independent Signoff Reviewer (Codex)
+- signed_off_at: 2026-07-31
+- acceptance_record:
+  `docs/version-tracker/1.4.3-SNAPSHOT/evidence/ARCH-001-independent-signoff-2026-07-31.md`
+- blocking_items:
+  `ARCH-001-B1-owner-vertical-chain-not-integrated`,
+  `ARCH-001-B2-receipt-admission-not-recoverable`,
+  `ARCH-001-B3-terminal-authority-and-cleanup-incomplete`,
+  `ARCH-001-B4-worker-v1-cross-runtime-contract-broken`,
+  `ARCH-001-B5-writer-proof-and-enforced-fixture-not-representative`,
+  `ARCH-001-B6-schema-validation-obligation-not-met`
+- follow_up_required: yes
 
 ## References
 
