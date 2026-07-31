@@ -4131,3 +4131,140 @@ Minimum regression scenarios include:
 - SDK/CLI publication: `not-required`
 - runtime_restart_or_deployment: `not-performed`
 - follow_up_required: `yes`
+
+## Third-round Remediation Delivery Contract (2026-07-31)
+
+- remediation_round: `3`
+- status: `APPROVED`
+- execution_mode: `ultra`
+- assurance_level: `elevated`
+- approved_by: `project-owner-user`
+- approved_at: `2026-07-31`
+- baseline_head: `6ec3f32165a209238387ef8d07925bc8b45072cb`
+- open_questions: `[]`
+- canonical_path:
+  `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
+- rejection_input:
+  `../evidence/ARCH-001-independent-second-remediation-resignoff-2026-07-31.md`
+
+### Goal and Critical Outcomes
+
+- close the current independent resignoff blockers B1–B5 without redefining the approved
+  lifecycle authority, compatibility, security, migration or activation boundaries;
+- provide one continuous, reviewable production-path Slice 8 fixture rather than combining
+  independently seeded or mocked segments;
+- preserve B6 and public compatibility unless their inputs change;
+- keep MySQL transactions bounded and prevent Worker/provider/network latency from extending
+  row-lock lifetime.
+
+### Scope and Non-goals
+
+- in_scope:
+  - exact receipt admission fencing and Worker-v1 binding;
+  - durable never-accepted producer, ingestion validation and exact cleanup correlation;
+  - successful Java-to-real-Node create/resume/abort/status contract evidence;
+  - connected public receipt/outbox/dispatcher/Codex/Sentinel/owner/terminal/cleanup Slice 8;
+  - real dispatcher/handler loss-first and authorization-first concurrency evidence;
+  - transaction-boundary and batch-size remediation directly required by those flows.
+- non_goals:
+  - changing `navigator-open-sdk` public DTO/wire;
+  - changing receipt-disabled BUG-035 semantics or SHADOW legacy provider behavior;
+  - changing approved authority, security or activation boundaries;
+  - bulk migration/repair of historical aggregates;
+  - creating the first non-fixture ENFORCED aggregate;
+  - live SIM, real controller/process, sibling repositories, deployment, restart, publish or
+    release.
+- do_not_touch:
+  - Task `20260730-0e01`;
+  - both historical rejection evidence files;
+  - sibling repositories and business data.
+
+### Confirmed Decisions
+
+| Decision | Constraint |
+|---|---|
+| Internal receipt admission must fence exact mode, generation, epoch, Worker/Session/Task readiness/conflict, enrollment and all proof references. | Public SDK/wire remains unchanged. |
+| Receipt/outbox and Node command must share the exact Worker-v1 JCS binding identity. | No parallel legacy digest may authorize ENFORCED effect. |
+| Never-accepted authority originates from a durable Worker `REJECTED/PRE_EFFECT/never_accepted_proof=true` disposition and exact fact. | ACK, HTTP status, timeout, absence or fabricated Java fact cannot substitute. |
+| Cleanup receipt/resource applicability is correlated to the exact terminal operation/client request. | Latest receipt by Task plus generic operation type is insufficient. |
+| Exact codex-biz evidence uses the production Java client and mounted real Node routes. | Mock `CodexWorkerClient`, fake command server and negative-only route probes are insufficient. |
+| Slice 8 is one continuous chain from public closure through cleanup. | Manual outbox/proof seeding and `AtomicInteger` provider substitutes are prohibited as must-pass evidence. |
+| Worker/provider HTTP, SSE and Node calls occur outside MySQL transactions. | Authorization/receipt/outbox state commits before effect; result observation uses a later transaction. |
+| Reconciliation and proof-quarantine writes must be bounded or chunked with durable, fail-closed continuation. | An unbounded task/fact/reference loop under one row-locking transaction is not accepted. |
+
+### Acceptance Criteria
+
+- [ ] R3-AC1: B1 production vertical executes scheduler/Sentinel, production
+  `WorkerLifecyclePort`, repository, reducer, snapshot, terminal, tombstone, real cleanup, lane
+  release and typed projection.
+- [ ] R3-AC2: B2 receipt admission rejects every independent mode/generation/epoch,
+  Worker/Session/Task readiness/conflict, binding, enrollment and proof-reference mismatch before
+  provider count can increase.
+- [ ] R3-AC3: receipt, owner operation/fact, exact binding and PREPARED outbox commit atomically;
+  failure returns the existing typed rejection with provider count zero.
+- [ ] R3-AC4: proof authorization locks exact Worker, Session, Task and outbox references;
+  loss-first and authorization-first tests execute the real repository dispatcher/handler with
+  real concurrent transactions/CAS.
+- [ ] R3-AC5: Node durably produces and Sentinel ingests exact never-accepted evidence; Java
+  validates `REJECTED`, `PRE_EFFECT`, proof, fence and allowlisted reason before terminal commit.
+- [ ] R3-AC6: terminal cleanup applicability and mutation use the exact operation/client-request
+  receipt; a different receipt for the same Task cannot satisfy the plan.
+- [ ] R3-AC7: exact codex-biz test executes successful real Node query/create, resume, POST abort
+  and dispatch status through the production Java client, proving PREPARED, unique provider Task,
+  EFFECT_STARTED, RESULT_OBSERVED and durable terminal fact behavior.
+- [ ] R3-AC8: one connected Slice 8 executes
+  enrollment/readiness → proof references → receipt/owner/outbox → proof authorization →
+  dispatcher → Java client → real Node route → durable disposition/fact → scheduled Sentinel →
+  reducer/terminal/business cleanup.
+- [ ] R3-AC9: receipt-disabled same request ID still performs two one-shot provider attempts,
+  reconciliation remains AMBIGUOUS/unavailable and all replay flags remain fail closed; SHADOW
+  provider effect and public SDK wire remain unchanged.
+- [ ] R3-AC10: no Worker/provider/network call occurs while a MySQL transaction is active; the
+  reconciliation and proof-quarantine paths have reviewable bounded/chunked transaction behavior
+  with restart-safe continuation and concurrency regression coverage.
+- [ ] R3-AC11: activation gate remains CLOSED and no non-fixture ENFORCED aggregate is created.
+
+### Validation Budget and Evidence Sufficiency
+
+- lightweight `<5m`:
+  - regression-first focused tests for each changed blocker;
+  - `git diff --check`;
+  - Node typecheck and focused lifecycle tests.
+- medium `5-30m`:
+  - affected Session, Claude, Codex and Business module suites;
+  - complete Node tests/build;
+  - one affected reactor after focused lanes pass;
+  - one final launcher reactor after the candidate stops changing.
+- MySQL:
+  - reuse B6 only if production migration, JPA entities, fixture selection and rollback
+    assumptions are unchanged;
+  - otherwise run the repo-owned MySQL 8.0.44 Testcontainers fixture once and retain its raw
+    positive log/XML in `temp/test-artifacts/ARCH-001-third-remediation/`.
+- expensive `>30m` authority/replay/rehearsal/full-chain:
+  `prohibited-unless-user-approved`; not approved by this contract.
+- maximum medium/final attempts:
+  - focused/affected tests may be rerun after relevant fixes;
+  - final launcher reactor: one successful final-candidate run;
+  - after two non-product failures of an expensive validation, set `NEEDS_REPLAN` before another
+    attempt.
+- reusable evidence:
+  - Open SDK and B6 evidence only while their code, test selection and assumptions remain
+    unchanged;
+  - previous passing tests do not close B1–B5 because their asserted topology is the rejected
+    condition.
+- evidence sufficiency:
+  stop when every R3 acceptance criterion maps to source plus actually executed, reviewable
+  production-path evidence and all affected suites are green. Do not add live/production
+  validation that cannot change independent signoff.
+
+### Ultra Execution Contract
+
+- read root and relevant module `AGENTS.md`, this canonical item, and the latest independent
+  rejection evidence before editing;
+- establish failing regression evidence before fixing each stable, automatable blocker;
+- choose local classes/files autonomously while preserving the confirmed boundaries above;
+- if closure requires public wire, authority, security, migration strategy or activation changes,
+  set `NEEDS_REPLAN` and stop that expansion;
+- record changed paths, exact commands, exit codes, test/failure/error/skip counts, deviations,
+  transaction-boundary evidence and residual risks in this section;
+- finish at `READY_FOR_SIGNOFF`; do not mark `ACCEPTED`.
