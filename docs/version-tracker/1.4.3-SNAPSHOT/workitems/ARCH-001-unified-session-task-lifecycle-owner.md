@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: READY_FOR_SIGNOFF
+status: REJECTED
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -33,10 +33,13 @@ execution_start_authorized: true
 decision_stage: approved-source-slices-authorized-activation-separate
 implementation_completed_at: 2026-07-31
 remediation_completed_at: 2026-07-31
-remediation_status: READY_FOR_SIGNOFF
+remediation_status: REJECTED_AT_INDEPENDENT_RESIGNOFF
 independent_signoff_at: 2026-07-31
 independent_signoff_verdict: REJECTED
-acceptance_record: ../evidence/ARCH-001-independent-signoff-2026-07-31.md
+original_independent_signoff_record: ../evidence/ARCH-001-independent-signoff-2026-07-31.md
+independent_resignoff_at: 2026-07-31
+independent_resignoff_verdict: REJECTED
+acceptance_record: ../evidence/ARCH-001-independent-resignoff-2026-07-31.md
 open_questions: []
 deferred_topics:
   - worker-generated-physical-id-claim-and-recovery
@@ -56,10 +59,11 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: `READY_FOR_SIGNOFF`；2026-07-31 独立拒签发现的 B1–B6 已完成
-  remediation implementation 和 repo-owned 验证，等待新的独立签收。原
-  `REJECTED` verdict 与 evidence 保留；真实 controller/process、首次非 fixture
-  `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
+- execution_status: `REJECTED`；2026-07-31 独立复签确认 B1–B6 仍存在生产调用点、
+  durable delivery、terminal authority、Worker-v1 command chain 和 writer-proof
+  representative evidence blocker，以及 migration rollback reference/outbox 分支未实跑。
+  原独立拒签 verdict 与 evidence 保留；真实 controller/process、首次非 fixture
+  `ENFORCED` aggregate、live SIM、部署和发布继续禁止，activation gate 保持关闭。
 
 ## Independent Review Disposition
 
@@ -3811,6 +3815,51 @@ Minimum regression scenarios include:
 - remediation_disposition: all six blocker implementations are closed in current source and
   pending a new independent signoff
 - remediation_follow_up_status: ready-for-independent-resignoff
+- historical_rejection_preserved: true
+- follow_up_required: yes
+
+## Independent Resignoff Status (2026-07-31, remediation `adb9ee4`)
+
+- resignoff_status: `REJECTED`
+- resignoff_verdict: `REJECTED`
+- resignoff_at: `2026-07-31T12:07:49+08:00`
+- audited_remediation_commit:
+  `adb9ee449fe4b7eecfd1e5c6e4d257ff44302449`
+- audited_original_rejection_commit:
+  `297c79160657d0413b608ba2f4f5386486e14837`
+- audited_rejected_implementation_commit:
+  `fac98161d5e59b54d8f605061af1adae6f4b6415`
+- audited_baseline:
+  `d3eb7f76d31d6dfd2a78009d30caff9f8307284d`
+- resignoff_record:
+  `docs/version-tracker/1.4.3-SNAPSHOT/evidence/ARCH-001-independent-resignoff-2026-07-31.md`
+- blocker_verdicts:
+  - B1 `REJECTED`: Sentinel cannot bootstrap the first Worker snapshot, never invokes
+    lifecycle events, and the vertical test bypasses the production Sentinel/adapter chain.
+  - B2 `REJECTED`: exact enrollment/owner fact/proof are not part of termination admission;
+    the outbox dispatcher has no scheduled/consumer entry and recovery tests mock the
+    coordinator.
+  - B3 `REJECTED`: production normalization cannot create authoritative
+    `TASK_NEVER_ACCEPTED_CONFIRMED`; terminal commit requires a provider-terminal fact and
+    cleanup applicability is inferred rather than frozen from exact durable resources.
+  - B4 `REJECTED`: Java↔Node testing does not mount real query/abort routes, Java does not
+    persist `lifecycle_disposition`, termination dispatch identity is reused incorrectly, and
+    asynchronous abort completion is not linked to its lifecycle dispatch.
+  - B5 `REJECTED`: proof/reference authorization has no production provider-effect caller,
+    proof loss does not quarantine referenced aggregates, and Slice 8 is not one connected
+    production vertical chain.
+  - B6 `REJECTED`: disposable MySQL forward/reapply, Hibernate validate, selected schema
+    metadata, empty rollback and one ENFORCED Task-marker gate passed, but active
+    generation/reference/unfinished-outbox rollback branches were not executed and cannot be
+    accepted from SQL text alone.
+- public_compatibility: `PASS`; Open SDK tests pass, BUG-035 receipt-disabled two-attempt and
+  disabled reconciliation semantics remain unchanged, and SHADOW keeps legacy provider wire.
+- sdk_cli_publication_required: false
+- navigator_worker_restart_required_for_audit: false
+- activation_gate: `CLOSED`
+- first_non_fixture_enforced_aggregate: prohibited
+- needs_replan: false; the failures are against the approved contract and do not require a
+  contract-boundary change.
 - historical_rejection_preserved: true
 - follow_up_required: yes
 
