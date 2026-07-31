@@ -42,4 +42,16 @@ public class TerminalCleanupStepExecutor {
         plans.save(plan);
         return true;
     }
+
+    /**
+     * Re-read checkpoints in an isolated persistence context. The runner may
+     * itself be invoked from an afterCommit callback, so its first plan list
+     * must not be trusted after checkpoint transactions have completed.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public boolean allRequiredCompleted(String taskId) {
+        return plans.findByIdTaskIdOrderByIdParticipant(taskId).stream()
+                .noneMatch(plan -> "REQUIRED".equals(plan.getApplicability())
+                        && !"COMPLETED".equals(plan.getCheckpointState()));
+    }
 }

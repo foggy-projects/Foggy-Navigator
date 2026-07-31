@@ -141,3 +141,127 @@ test('state generation survives restart and ack is monotonic', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('query create/resume and abort phases survive restart without a second provider effect', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-lifecycle-fixture-'))
+  try {
+    const commands = [
+      {
+        name: 'create',
+        command_kind: 'TASK_CREATE' as const,
+        httpMethod: 'POST',
+        routeTemplate: '/api/v1/query',
+        providerTaskId: null,
+        terminationOperationId: null,
+        terminalOutcome: 'COMPLETED' as const,
+      },
+      {
+        name: 'resume',
+        command_kind: 'TASK_RESUME' as const,
+        httpMethod: 'POST',
+        routeTemplate: '/api/v1/query',
+        providerTaskId: null,
+        terminationOperationId: null,
+        terminalOutcome: 'FAILED' as const,
+      },
+      {
+        name: 'abort',
+        command_kind: 'TERMINATION_CANCEL' as const,
+        httpMethod: 'PUT',
+        routeTemplate: '/api/v1/tasks/:taskId/abort',
+        providerTaskId: 'provider-task-abort',
+        terminationOperationId: 'operation-abort',
+        terminalOutcome: 'CANCELLED' as const,
+      },
+    ]
+    for (const command of commands) {
+      const commandDir = path.join(dir, command.name)
+      const first = LifecycleStore.open({
+        directory: commandDir,
+        physicalWorkerId: workerId,
+        workerToken: token,
+        instanceEpoch: `${command.name}-epoch-1`,
+      })
+      const lifecycle: LifecycleContext = {
+        ...context('ENFORCED'),
+        command_kind: command.command_kind,
+        navigator_task_id: `fixture-task-${command.name}`,
+        dispatch_id: `fixture-dispatch-${command.name}`,
+        expected_state_generation: first.identity.state_generation,
+        termination_operation_id: command.terminationOperationId,
+      }
+      const binding = computeSafeBindingDigest({
+        context: lifecycle,
+        httpMethod: command.httpMethod,
+        routeTemplate: command.routeTemplate,
+        bodyWithoutLifecycleContext: { command: command.name },
+        providerTaskId: command.providerTaskId,
+        capabilityPayload: command.terminationOperationId,
+      })
+      let allocations = 0
+      const prepared = command.command_kind === 'TERMINATION_CANCEL'
+        ? first.prepareAcceptedTerminationDispatch(
+          lifecycle,
+          binding,
+          command.providerTaskId as string,
+        )
+        : first.prepareAcceptedDispatch(lifecycle, binding, () => {
+          allocations += 1
+          return `provider-task-${command.name}`
+        })
+      assert.equal(prepared.effect_phase, 'PREPARED')
+      assert.equal(first.markEffectStarted(lifecycle.dispatch_id).effect_phase, 'EFFECT_STARTED')
+
+      const restarted = LifecycleStore.open({
+        directory: commandDir,
+        physicalWorkerId: workerId,
+        workerToken: token,
+        instanceEpoch: `${command.name}-epoch-2`,
+      })
+      const redelivery = { ...lifecycle, delivery_attempt: 2 }
+      const duplicate = command.command_kind === 'TERMINATION_CANCEL'
+        ? restarted.prepareAcceptedTerminationDispatch(
+          redelivery,
+          binding,
+          command.providerTaskId as string,
+        )
+        : restarted.prepareAcceptedDispatch(redelivery, binding, () => {
+          allocations += 1
+          return `provider-task-${command.name}-duplicate`
+        })
+      assert.equal(duplicate.effect_phase, 'EFFECT_STARTED')
+      assert.equal(duplicate.duplicate, true)
+      assert.equal(allocations, command.command_kind === 'TERMINATION_CANCEL' ? 0 : 1)
+      assert.equal(
+        restarted.markEffectStarted(lifecycle.dispatch_id).disposition_version,
+        2,
+      )
+
+      const observed = restarted.markResultObserved(
+        lifecycle.dispatch_id,
+        'TASK_PROVIDER_TERMINAL_OBSERVED',
+        command.terminalOutcome,
+        'PROVIDER_RESULT_OBSERVED',
+      )
+      assert.equal(observed.effect_phase, 'RESULT_OBSERVED')
+      const afterSecondRestart = LifecycleStore.open({
+        directory: commandDir,
+        physicalWorkerId: workerId,
+        workerToken: token,
+        instanceEpoch: `${command.name}-epoch-3`,
+      })
+      assert.equal(
+        afterSecondRestart.getDispatch(
+          lifecycle.dispatch_id,
+          'ENFORCED',
+          binding,
+        )?.effect_phase,
+        'RESULT_OBSERVED',
+      )
+      const facts = afterSecondRestart.inventory(0).facts
+      assert.equal(facts.at(-1)?.terminal_outcome, command.terminalOutcome)
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * Provider-neutral SHADOW reconciler. It never executes a task or owner effect.
@@ -36,6 +37,15 @@ public final class WorkerLifecycleSentinel {
             String physicalWorkerId,
             SentinelTrigger trigger,
             WorkerLifecyclePort port) {
+        return reconcile(physicalWorkerId, trigger, port, ignored -> {
+        });
+    }
+
+    public SentinelReconcileResult reconcile(
+            String physicalWorkerId,
+            SentinelTrigger trigger,
+            WorkerLifecyclePort port,
+            Consumer<WorkerLifecycleSnapshot> beforeAcknowledge) {
         if (leases.tryAcquire(
                 physicalWorkerId, holderId, clock.instant(), leaseDuration).isEmpty()) {
             return SentinelReconcileResult.blocked(
@@ -69,11 +79,24 @@ public final class WorkerLifecycleSentinel {
                     SentinelReconcileState.STATE_GENERATION_RESET,
                     "LIFECYCLE_STATE_GENERATION_RESET");
         }
+        if (!physicalWorkerId.equals(inventory.identity().physicalWorkerId())
+                || (prior != null && !prior.identity().instanceEpoch()
+                .equals(inventory.identity().instanceEpoch()))) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.IDENTITY_CHANGED,
+                    "LIFECYCLE_INSTANCE_IDENTITY_CHANGED");
+        }
+        if (!inventory.completeActiveTaskSet()) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.COVERAGE_GAP,
+                    "LIFECYCLE_INVENTORY_INCOMPLETE");
+        }
         if (prior != null && inventory.minAvailableSequence() > prior.throughSequence() + 1) {
             return SentinelReconcileResult.blocked(
                     SentinelReconcileState.COVERAGE_GAP,
                     "LIFECYCLE_CURSOR_COVERAGE_GAP");
         }
+        beforeAcknowledge.accept(inventory);
         long ack = port.acknowledge(inventory.identity(), inventory.throughSequence());
         if (ack < inventory.throughSequence()) {
             return SentinelReconcileResult.blocked(
@@ -88,6 +111,15 @@ public final class WorkerLifecycleSentinel {
                 inventory.facts(),
                 true,
                 "SHADOW_RECONCILE_" + trigger.name());
+    }
+
+    public void seedCursor(
+            String physicalWorkerId,
+            WorkerLifecycleIdentity identity,
+            long throughSequence) {
+        if (identity != null && throughSequence >= 0) {
+            cursors.putIfAbsent(physicalWorkerId, new Cursor(identity, throughSequence));
+        }
     }
 
     private record Cursor(WorkerLifecycleIdentity identity, long throughSequence) {

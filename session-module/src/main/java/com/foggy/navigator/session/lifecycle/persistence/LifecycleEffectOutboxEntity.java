@@ -24,6 +24,39 @@ public class LifecycleEffectOutboxEntity {
     @Column(length = 64, nullable = false)
     private String aggregateId;
 
+    @Column(length = 32, nullable = false)
+    private String aggregateType;
+
+    @Column(length = 128)
+    private String physicalWorkerId;
+
+    @Column(length = 32)
+    private String providerType;
+
+    @Column(length = 128)
+    private String providerTaskId;
+
+    @Column(length = 96)
+    private String dispatchId;
+
+    @Column(length = 64)
+    private String operationId;
+
+    @Column(length = 128)
+    private String bindingDigest;
+
+    @Column(length = 64)
+    private String effectClaim;
+
+    @Column(length = 160)
+    private String aggregateReferenceId;
+
+    @Column(length = 96)
+    private String writerGenerationId;
+
+    @Column(length = 128)
+    private String controllerInventoryDigest;
+
     @Column(length = 64, nullable = false)
     private String effectType;
 
@@ -58,6 +91,7 @@ public class LifecycleEffectOutboxEntity {
     void create() {
         if (createdAt == null) createdAt = LocalDateTime.now();
         if (rowVersion == null) rowVersion = 0L;
+        if (aggregateType == null) aggregateType = "TASK";
     }
 
     public void setEffectId(String effectId) {
@@ -66,6 +100,20 @@ public class LifecycleEffectOutboxEntity {
 
     public void setAggregateId(String aggregateId) {
         this.aggregateId = aggregateId;
+    }
+
+    public void setAggregateType(String value) { aggregateType = value; }
+    public void setPhysicalWorkerId(String value) { physicalWorkerId = value; }
+    public void setProviderType(String value) { providerType = value; }
+    public void setProviderTaskId(String value) { providerTaskId = value; }
+    public void setDispatchId(String value) { dispatchId = value; }
+    public void setOperationId(String value) { operationId = value; }
+    public void setBindingDigest(String value) { bindingDigest = value; }
+    public void setEffectClaim(String value) { effectClaim = value; }
+    public void setAggregateReferenceId(String value) { aggregateReferenceId = value; }
+    public void setWriterGenerationId(String value) { writerGenerationId = value; }
+    public void setControllerInventoryDigest(String value) {
+        controllerInventoryDigest = value;
     }
 
     public void setEffectType(String effectType) {
@@ -89,6 +137,21 @@ public class LifecycleEffectOutboxEntity {
     }
 
     public String getEffectId() { return effectId; }
+    public String getAggregateId() { return aggregateId; }
+    public String getAggregateType() { return aggregateType; }
+    public String getPhysicalWorkerId() { return physicalWorkerId; }
+    public String getProviderType() { return providerType; }
+    public String getProviderTaskId() { return providerTaskId; }
+    public String getDispatchId() { return dispatchId; }
+    public String getOperationId() { return operationId; }
+    public String getBindingDigest() { return bindingDigest; }
+    public String getEffectClass() { return effectClass; }
+    public String getEffectClaim() { return effectClaim; }
+    public String getAggregateReferenceId() { return aggregateReferenceId; }
+    public String getWriterGenerationId() { return writerGenerationId; }
+    public String getControllerInventoryDigest() { return controllerInventoryDigest; }
+    public String getIdempotencyKey() { return idempotencyKey; }
+    public String getContentFreePayloadJson() { return contentFreePayloadJson; }
     public String getEffectState() { return effectState; }
     public String getProofId() { return proofId; }
     public String getEffectAuthorizationProofVersion() {

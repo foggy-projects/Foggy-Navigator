@@ -6,7 +6,9 @@ public record TaskLifecycleFact(
         String factId,
         TaskLifecycleFactType type,
         long sourceSequence,
-        TaskTerminalOutcome terminalOutcome
+        TaskTerminalOutcome terminalOutcome,
+        TaskLifecycleBinding binding,
+        boolean exactTerminalAuthority
 ) {
     public TaskLifecycleFact {
         if (factId == null || factId.isBlank()) {
@@ -20,6 +22,22 @@ public record TaskLifecycleFact(
                 && terminalOutcome != null) {
             throw new IllegalArgumentException("LIFECYCLE_TERMINAL_OUTCOME_NOT_APPLICABLE");
         }
+        if (exactTerminalAuthority
+                && (type != TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED
+                && type != TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED)) {
+            throw new IllegalArgumentException("LIFECYCLE_TERMINAL_AUTHORITY_NOT_APPLICABLE");
+        }
+        if (exactTerminalAuthority && binding == null) {
+            throw new IllegalArgumentException("LIFECYCLE_TERMINAL_AUTHORITY_BINDING_REQUIRED");
+        }
+    }
+
+    public TaskLifecycleFact(
+            String factId,
+            TaskLifecycleFactType type,
+            long sourceSequence,
+            TaskTerminalOutcome terminalOutcome) {
+        this(factId, type, sourceSequence, terminalOutcome, null, false);
     }
 
     public static TaskLifecycleFact commandAccepted(String id, long sequence) {
@@ -54,10 +72,35 @@ public record TaskLifecycleFact(
             String id, long sequence, TaskTerminalOutcome outcome) {
         return new TaskLifecycleFact(
                 id, TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED, sequence,
-                Objects.requireNonNull(outcome, "outcome"));
+                Objects.requireNonNull(outcome, "outcome"), null, false);
+    }
+
+    public static TaskLifecycleFact workerTerminal(
+            String id,
+            long sequence,
+            TaskTerminalOutcome outcome,
+            TaskLifecycleBinding binding) {
+        return new TaskLifecycleFact(
+                id,
+                TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED,
+                sequence,
+                Objects.requireNonNull(outcome, "outcome"),
+                Objects.requireNonNull(binding, "binding"),
+                true);
+    }
+
+    public static TaskLifecycleFact exactPreEffectRejection(
+            String id, long sequence, TaskLifecycleBinding binding) {
+        return new TaskLifecycleFact(
+                id,
+                TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED,
+                sequence,
+                null,
+                Objects.requireNonNull(binding, "binding"),
+                true);
     }
 
     public static TaskLifecycleFact of(String id, TaskLifecycleFactType type, long sequence) {
-        return new TaskLifecycleFact(id, type, sequence, null);
+        return new TaskLifecycleFact(id, type, sequence, null, null, false);
     }
 }

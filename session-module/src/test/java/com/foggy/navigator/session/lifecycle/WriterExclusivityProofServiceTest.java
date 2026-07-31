@@ -5,6 +5,9 @@ import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofEnt
 import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofReferenceRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
+import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofReferenceEntity;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -30,12 +33,13 @@ class WriterExclusivityProofServiceTest {
         LifecycleEffectOutboxRepository outbox = mock(LifecycleEffectOutboxRepository.class);
         LifecycleEffectOutboxEntity effect = effect("CLAIMED");
         LifecycleWriterProofEntity expired = proof("QUARANTINED", NOW.minusSeconds(1));
-        when(outbox.findForUpdate("effect-1")).thenReturn(Optional.of(effect));
         when(proofs.findForUpdate("proof-1")).thenReturn(Optional.of(expired));
+        when(refs.findForUpdate("reference-1")).thenReturn(Optional.of(reference()));
+        when(outbox.findForUpdate("effect-1")).thenReturn(Optional.of(effect));
 
         WriterExclusivityProofService service =
-                new WriterExclusivityProofService(proofs, refs, outbox);
-        assertThatThrownBy(() -> service.authorizeEffect("effect-1", "proof-1", NOW))
+                service(proofs, refs, outbox);
+        assertThatThrownBy(() -> service.authorizeEffect(command(), NOW))
                 .hasMessage("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
         verify(outbox, never()).save(effect);
     }
@@ -46,24 +50,32 @@ class WriterExclusivityProofServiceTest {
         LifecycleWriterProofReferenceRepository refs =
                 mock(LifecycleWriterProofReferenceRepository.class);
         LifecycleEffectOutboxRepository outbox = mock(LifecycleEffectOutboxRepository.class);
-        LifecycleEffectOutboxEntity effect = effect("PROPOSED");
+        LifecycleEffectOutboxEntity effect = effect("CLAIMED");
         when(outbox.findForUpdate("effect-1")).thenReturn(Optional.of(effect));
         when(proofs.findForUpdate("proof-1"))
                 .thenReturn(Optional.of(proof("ACTIVE", NOW.plusMinutes(1))));
+        when(refs.findForUpdate("reference-1")).thenReturn(Optional.of(reference()));
         WriterExclusivityProofService service =
-                new WriterExclusivityProofService(proofs, refs, outbox);
+                service(proofs, refs, outbox);
 
-        assertThat(service.authorizeEffect("effect-1", "proof-1", NOW)
+        assertThat(service.authorizeEffect(command(), NOW)
                 .providerCallAuthorized()).isTrue();
-        assertThat(service.authorizeEffect("effect-1", "proof-1", NOW.plusSeconds(1))
+        assertThat(service.authorizeEffect(command(), NOW.plusSeconds(1))
                 .alreadyStarted()).isTrue();
-        verify(proofs).findForUpdate("proof-1");
+        verify(proofs, org.mockito.Mockito.times(2)).findForUpdate("proof-1");
     }
 
     private LifecycleEffectOutboxEntity effect(String state) {
         LifecycleEffectOutboxEntity effect = new LifecycleEffectOutboxEntity();
         effect.setEffectId("effect-1");
+        effect.setAggregateType("TASK");
+        effect.setAggregateId("task-1");
+        effect.setEffectClass("EXTERNAL_PROVIDER_ONCE");
         effect.setEffectState(state);
+        effect.setAggregateReferenceId("reference-1");
+        effect.setWriterGenerationId("generation-1");
+        effect.setControllerInventoryDigest("inventory-1");
+        effect.setEffectClaim("TASK_CREATE_PROVIDER_CALL");
         return effect;
     }
 
@@ -71,9 +83,38 @@ class WriterExclusivityProofServiceTest {
         LifecycleWriterProofEntity proof = new LifecycleWriterProofEntity();
         proof.setProofId("proof-1");
         proof.setGenerationId("generation-1");
+        proof.setControllerInventoryDigest("inventory-1");
         proof.setProofVersion(7);
         proof.setStatus(status);
         proof.setExpiresAt(expires);
         return proof;
+    }
+
+    private LifecycleWriterProofReferenceEntity reference() {
+        LifecycleWriterProofReferenceEntity reference =
+                new LifecycleWriterProofReferenceEntity();
+        reference.setReferenceId("reference-1");
+        reference.setProofId("proof-1");
+        reference.setAggregateType("TASK");
+        reference.setAggregateId("task-1");
+        reference.setAcquiredAt(NOW);
+        return reference;
+    }
+
+    private WriterExclusivityProofService.EffectAuthorizationCommand command() {
+        return new WriterExclusivityProofService.EffectAuthorizationCommand(
+                "effect-1", "proof-1", "reference-1",
+                ProofAggregateType.TASK, "task-1", "generation-1",
+                "inventory-1", "TASK_CREATE_PROVIDER_CALL");
+    }
+
+    private WriterExclusivityProofService service(
+            LifecycleWriterProofRepository proofs,
+            LifecycleWriterProofReferenceRepository refs,
+            LifecycleEffectOutboxRepository outbox) {
+        return new WriterExclusivityProofService(
+                proofs, refs, outbox,
+                mock(TaskLifecycleSnapshotRepository.class),
+                mock(SessionLifecycleSnapshotRepository.class));
     }
 }

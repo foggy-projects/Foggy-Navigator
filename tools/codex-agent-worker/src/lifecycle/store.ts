@@ -79,10 +79,12 @@ export interface LifecycleFactInput {
   safe_reason_code: string
   navigator_task_id?: string
   provider_task_id?: string
+  operation_id?: string
   ownership_mode?: LifecycleOwnershipMode
   dispatch_id?: string
   safe_binding_digest_version?: typeof BINDING_VERSION
   safe_binding_digest?: string
+  terminal_outcome?: 'COMPLETED' | 'FAILED' | 'CANCELLED'
 }
 
 export interface LifecycleFactRecord extends LifecycleFactInput {
@@ -451,6 +453,64 @@ export class LifecycleStore {
       ...this.state,
       high_watermark: nextSequence,
       dispatches: { ...this.state.dispatches, [dispatchId]: next },
+    })
+    return next
+  }
+
+  /**
+   * Atomically records the no-longer-replayable result phase and its normalized
+   * lifecycle fact. A restart or redelivery observes the same disposition.
+   */
+  markResultObserved(
+    dispatchId: string,
+    factType: string,
+    terminalOutcome: 'COMPLETED' | 'FAILED' | 'CANCELLED' | null,
+    safeReasonCode: string,
+  ): LifecycleDisposition {
+    const prior = this.state.dispatches[dispatchId]
+    if (!prior) throw new Error('LIFECYCLE_DISPATCH_NOT_FOUND')
+    if (prior.effect_phase === 'RESULT_OBSERVED') return prior
+    if (prior.effect_phase !== 'EFFECT_STARTED') {
+      throw new Error('LIFECYCLE_EFFECT_NOT_STARTED')
+    }
+    const nextSequence = this.state.high_watermark + 1
+    const next: LifecycleDisposition = {
+      ...prior,
+      effect_phase: 'RESULT_OBSERVED',
+      disposition_version: prior.disposition_version + 1,
+      provider_effect_started: true,
+      fact_cursor: nextSequence,
+    }
+    const fact: LifecycleFactRecord = {
+      fact_type: factType,
+      aggregate_type: terminalOutcome ? 'TASK' : 'TERMINATION_OPERATION',
+      aggregate_id: terminalOutcome
+        ? prior.navigator_task_id
+        : prior.termination_operation_id ?? prior.dispatch_id,
+      safe_reason_code: safeReasonCode,
+      navigator_task_id: prior.navigator_task_id,
+      provider_task_id: prior.provider_task_id ?? undefined,
+      operation_id: prior.termination_operation_id,
+      ownership_mode: prior.ownership_mode,
+      dispatch_id: prior.dispatch_id,
+      safe_binding_digest_version: prior.safe_binding_digest_version,
+      safe_binding_digest: prior.safe_binding_digest,
+      terminal_outcome: terminalOutcome ?? undefined,
+      schema: LIFECYCLE_SCHEMA,
+      schema_version: 1,
+      fact_id: crypto.randomUUID(),
+      idempotency_key: `${this.identity.state_generation}:${nextSequence}`,
+      source_sequence: nextSequence,
+      physical_worker_id: this.identity.physical_worker_id,
+      state_generation: this.identity.state_generation,
+      instance_epoch: this.identity.instance_epoch,
+      recorded_at: new Date().toISOString(),
+    }
+    this.commit({
+      ...this.state,
+      high_watermark: nextSequence,
+      dispatches: { ...this.state.dispatches, [dispatchId]: next },
+      facts: [...this.state.facts, fact],
     })
     return next
   }

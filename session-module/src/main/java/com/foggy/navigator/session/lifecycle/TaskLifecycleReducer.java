@@ -19,7 +19,7 @@ public final class TaskLifecycleReducer {
         Map<String, TaskLifecycleFact> facts = new HashMap<>(previous.factsById());
         facts.putIfAbsent(fact.factId(), fact);
         return reduce(previous.taskId(), facts.values(), previous.activeBlockers(),
-                previous.ownershipMode(), policyVersion);
+                previous.ownershipMode(), null, policyVersion);
     }
 
     public TaskLifecycleDecision recompute(
@@ -29,7 +29,17 @@ public final class TaskLifecycleReducer {
             String policyVersion,
             long evaluationTick) {
         return reduce(taskId, facts, irreversibleBlockers, LifecycleOwnershipMode.SHADOW,
-                policyVersion);
+                null, policyVersion);
+    }
+
+    public TaskLifecycleDecision recompute(
+            String taskId,
+            List<TaskLifecycleFact> facts,
+            Set<LifecycleBlocker> irreversibleBlockers,
+            TaskLifecycleBinding expectedBinding,
+            String policyVersion) {
+        return reduce(taskId, facts, irreversibleBlockers,
+                expectedBinding.ownershipMode(), expectedBinding, policyVersion);
     }
 
     private TaskLifecycleDecision reduce(
@@ -37,6 +47,7 @@ public final class TaskLifecycleReducer {
             Iterable<TaskLifecycleFact> input,
             Set<LifecycleBlocker> initialBlockers,
             LifecycleOwnershipMode ownershipMode,
+            TaskLifecycleBinding expectedBinding,
             String policyVersion) {
         Map<String, TaskLifecycleFact> factsById = new HashMap<>();
         for (TaskLifecycleFact fact : input) {
@@ -50,16 +61,36 @@ public final class TaskLifecycleReducer {
         Set<LifecycleBlocker> blockers = new HashSet<>(initialBlockers);
         long cursor = 0;
         TaskTerminalOutcome observedOutcome = null;
+        boolean terminalEvidenceConflict = false;
+        boolean exactNeverAccepted = false;
         for (TaskLifecycleFact fact : facts) {
             types.add(fact.type());
             cursor = Math.max(cursor, fact.sourceSequence());
             if (fact.type() == TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED) {
-                if (observedOutcome != null && observedOutcome != fact.terminalOutcome()) {
+                if (!fact.exactTerminalAuthority()
+                        || expectedBinding == null
+                        || !expectedBinding.exactRuntimeMatch(fact.binding())) {
                     blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
+                    terminalEvidenceConflict = true;
+                } else if (observedOutcome != null
+                        && observedOutcome != fact.terminalOutcome()) {
+                    blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
+                    terminalEvidenceConflict = true;
                 } else {
                     observedOutcome = fact.terminalOutcome();
                 }
+            } else if (fact.type() == TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED) {
+                exactNeverAccepted = fact.exactTerminalAuthority()
+                        && expectedBinding != null
+                        && expectedBinding.exactRuntimeMatch(fact.binding());
+                if (!exactNeverAccepted) {
+                    blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
+                    terminalEvidenceConflict = true;
+                }
             }
+        }
+        if (terminalEvidenceConflict) {
+            observedOutcome = null;
         }
         updateBlockers(types, blockers);
 
@@ -73,7 +104,7 @@ public final class TaskLifecycleReducer {
             outcome = observedOutcome;
             source = TaskTerminalSource.WORKER_EVIDENCE;
             execution = TaskExecutionObservation.STOPPED;
-        } else if (types.contains(TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED)
+        } else if (exactNeverAccepted
                 && !types.contains(TaskLifecycleFactType.TASK_ACCEPTED_BY_WORKER)
                 && !types.contains(TaskLifecycleFactType.TASK_EXECUTION_STARTED_OBSERVED)
                 && !types.contains(TaskLifecycleFactType.TASK_RUNNING_OBSERVED)) {
@@ -82,7 +113,7 @@ public final class TaskLifecycleReducer {
             source = TaskTerminalSource.WORKER_PRE_EFFECT_REJECTION;
             dispatch = TaskDispatchState.REJECTED;
             execution = TaskExecutionObservation.NOT_STARTED;
-        } else if (types.contains(TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED)) {
+        } else if (exactNeverAccepted) {
             blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
         }
 
@@ -95,7 +126,8 @@ public final class TaskLifecycleReducer {
                 termination, operational.availability(), operational.conflictState(), cleanup,
                 ownershipMode, factsById, blockers, cursor, policyVersion, factsById.size());
         List<LifecycleEffect> effects = new ArrayList<>();
-        if (phase == TaskCanonicalPhase.TERMINAL) {
+        if (phase == TaskCanonicalPhase.TERMINAL
+                && !blockers.contains(LifecycleBlocker.EVIDENCE_CONFLICT)) {
             effects.add(new LifecycleEffect(
                     "COMMIT_TERMINAL_SAFETY_FENCE",
                     taskId,

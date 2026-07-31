@@ -221,7 +221,9 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       res.status(409).json({ schema: LIFECYCLE_SCHEMA, code })
       return
     }
-    if (priorDisposition && lifecycle.context.ownership_mode === 'ENFORCED') {
+    if (priorDisposition
+        && lifecycle.context.ownership_mode === 'ENFORCED'
+        && priorDisposition.effect_phase !== 'PREPARED') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -237,7 +239,11 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     }
   }
 
-  const taskId = uuidv4()
+  // PREPARED is durable admission but not provider-effect authorization. A
+  // redelivery after a crash may safely continue with the originally allocated
+  // provider task id. EFFECT_STARTED and RESULT_OBSERVED are returned above and
+  // never invoke the provider twice.
+  const taskId = priorDisposition?.provider_task_id ?? uuidv4()
 
   let threadReservation: CodexThreadReservation | undefined
   if (body.session_id) {
@@ -295,6 +301,22 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     }
   }
 
+  if (lifecycleDisposition
+      && lifecycle?.context.ownership_mode === 'ENFORCED') {
+    try {
+      lifecycleDisposition = lifecycle.store.markEffectStarted(
+        lifecycle.context.dispatch_id,
+      )
+    } catch {
+      threadReservation?.release()
+      res.status(503).json({
+        schema: LIFECYCLE_SCHEMA,
+        code: 'WORKER_LIFECYCLE_STORE_UNAVAILABLE',
+      })
+      return
+    }
+  }
+
   // Set SSE headers
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -333,6 +355,21 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     // reservation until an observed terminal state releases it centrally.
     if (!entry || isTaskTerminal(entry.status)) {
       threadReservation?.release()
+    }
+    if (entry && isTaskTerminal(entry.status)
+        && lifecycleDisposition
+        && lifecycle?.context.ownership_mode === 'ENFORCED') {
+      const terminalOutcome = entry.status === 'completed'
+        ? 'COMPLETED'
+        : entry.status === 'aborted'
+          ? 'CANCELLED'
+          : 'FAILED'
+      lifecycle.store.markResultObserved(
+        lifecycle.context.dispatch_id,
+        'TASK_PROVIDER_TERMINAL_OBSERVED',
+        terminalOutcome,
+        'PROVIDER_RESULT_OBSERVED',
+      )
     }
   })
   if (lifecycleDisposition) {

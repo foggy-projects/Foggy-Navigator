@@ -45,6 +45,7 @@ import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import com.foggy.navigator.spi.task.RuntimeTaskCompletionReadinessProvider;
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.session.service.TerminationOperationService;
+import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -174,6 +175,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Autowired(required = false)
     @Nullable
     private TerminationOperationService terminationOperationService;
+
+    @Autowired(required = false)
+    @Nullable
+    private TaskLifecycleSnapshotRepository lifecycleSnapshots;
 
     /**
      * Used only to reserve a termination operation under the task-row lock.
@@ -1384,7 +1389,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return unavailableCompletionObservation(
                     false, "EXPECTED_PHYSICAL_WORKER_MISMATCH");
         }
-        if (!CODEX_PROVIDER_TYPE.equals(entity.getProviderType())
+        if ((!CODEX_PROVIDER_TYPE.equals(entity.getProviderType())
+                && !CODEX_BIZ_PROVIDER_TYPE.equals(entity.getProviderType()))
                 || CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
             return unavailableCompletionObservation(
                     null, "RUNTIME_COMPLETION_READINESS_UNSUPPORTED");
@@ -1924,8 +1930,47 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             CodexWorkerClient client = terminationClient(current);
             TerminationOperationCapability capability = TerminationOperationCapability.issue(
                     reservation.operation(), client.terminationSigningSecret());
-            Map<String, Object> acknowledgement = client.abortTask(reservation.providerTaskId(), capability)
-                    .block(Duration.ofSeconds(10));
+            String ownershipMode = lifecycleSnapshots == null
+                    ? "SHADOW"
+                    : lifecycleSnapshots.findById(reservation.taskId())
+                    .map(value -> value.getOwnershipMode())
+                    .orElse("SHADOW");
+            String lifecycleDispatchId = lifecycleSnapshots == null
+                    ? "termination-" + reservation.operation().getOperationId()
+                    : lifecycleSnapshots.findById(reservation.taskId())
+                    .map(value -> value.getDispatchId())
+                    .filter(CodexTaskService::hasNonBlank)
+                    .orElse("termination-"
+                            + reservation.operation().getOperationId());
+            reactor.core.publisher.Mono<Map<String, Object>>
+                    lifecycleContextRequest = client.lifecycleContext(
+                    current.getWorkerId(),
+                    ownershipMode,
+                    "TERMINATION_CANCEL",
+                    reservation.taskId(),
+                    lifecycleDispatchId,
+                    1,
+                    reservation.operation().getOperationId());
+            Map<String, Object> lifecycleContext =
+                    lifecycleContextRequest == null
+                            ? null
+                            : lifecycleContextRequest
+                            .onErrorResume(error ->
+                                    reactor.core.publisher.Mono.empty())
+                            .block(Duration.ofSeconds(12));
+            if (lifecycleContext == null && "ENFORCED".equals(ownershipMode)) {
+                throw new TerminationDispatchException(
+                        "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE", true);
+            }
+            reactor.core.publisher.Mono<Map<String, Object>>
+                    acknowledgementRequest = lifecycleContext == null
+                    ? client.abortTask(reservation.providerTaskId(), capability)
+                    : client.abortTask(
+                            reservation.providerTaskId(),
+                            capability,
+                            lifecycleContext);
+            Map<String, Object> acknowledgement =
+                    acknowledgementRequest.block(Duration.ofSeconds(10));
             if (!isCancellationAcknowledged(acknowledgement)) {
                 throw new TerminationDispatchUnconfirmedException("TERMINATION_ACK_INVALID");
             }

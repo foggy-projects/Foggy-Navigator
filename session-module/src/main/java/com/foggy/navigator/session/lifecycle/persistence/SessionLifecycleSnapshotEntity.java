@@ -48,6 +48,9 @@ public class SessionLifecycleSnapshotEntity {
     public String getSessionId() { return sessionId; }
     public String getForegroundTaskId() { return foregroundTaskId; }
     public String getForegroundLaneState() { return foregroundLaneState; }
+    public String getOwnershipMode() { return ownershipMode; }
+    public String getPhysicalWorkerId() { return physicalWorkerId; }
+    public String getCanonicalPhase() { return canonicalPhase; }
     public void setSessionId(String value) { sessionId = value; }
     public void setPhysicalWorkerId(String value) { physicalWorkerId = value; }
     public void setOwnershipMode(String value) { ownershipMode = value; }

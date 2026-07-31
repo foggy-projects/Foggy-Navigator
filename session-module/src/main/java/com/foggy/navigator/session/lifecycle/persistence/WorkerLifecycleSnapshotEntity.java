@@ -53,4 +53,12 @@ public class WorkerLifecycleSnapshotEntity {
     public void setPolicyVersion(String value) { policyVersion = value; }
     public void setWriterGenerationId(String value) { writerGenerationId = value; }
     public void setSnapshotJson(String value) { snapshotJson = value; }
+    public String getPhysicalWorkerId() { return physicalWorkerId; }
+    public String getOwnershipMode() { return ownershipMode; }
+    public String getStateGeneration() { return stateGeneration; }
+    public String getInstanceEpoch() { return instanceEpoch; }
+    public long getFactCursor() { return factCursor; }
+    public String getWriterGenerationId() { return writerGenerationId; }
+    public String getAvailability() { return availability; }
+    public String getConflictState() { return conflictState; }
 }

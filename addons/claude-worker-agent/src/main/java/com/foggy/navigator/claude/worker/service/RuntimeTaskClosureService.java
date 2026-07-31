@@ -11,6 +11,8 @@ import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskTerminationOutco
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapability;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
+import com.foggy.navigator.spi.lifecycle.TaskLifecycleProjectionPort;
+import org.springframework.lang.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,17 +43,36 @@ public class RuntimeTaskClosureService {
     private final List<RuntimeTaskClosureProvider> providers;
     private final RuntimeRequestAuditService requestAuditService;
     private final RuntimeTerminationAcceptanceCoordinator acceptanceCoordinator;
+    private final RuntimeTerminationOutboxDispatcher outboxDispatcher;
+
+    @Autowired(required = false)
+    @Nullable
+    private TaskLifecycleProjectionPort lifecycleProjection;
 
     @Autowired
     public RuntimeTaskClosureService(
             RuntimeStateAuditService stateAuditService,
             List<RuntimeTaskClosureProvider> providers,
             RuntimeRequestAuditService requestAuditService,
-            RuntimeTerminationAcceptanceCoordinator acceptanceCoordinator) {
+            RuntimeTerminationAcceptanceCoordinator acceptanceCoordinator,
+            RuntimeTerminationOutboxDispatcher outboxDispatcher) {
         this.stateAuditService = stateAuditService;
         this.providers = providers;
         this.requestAuditService = requestAuditService;
         this.acceptanceCoordinator = acceptanceCoordinator;
+        this.outboxDispatcher = outboxDispatcher;
+    }
+
+    RuntimeTaskClosureService(
+            RuntimeStateAuditService stateAuditService,
+            List<RuntimeTaskClosureProvider> providers,
+            RuntimeRequestAuditService requestAuditService,
+            RuntimeTerminationAcceptanceCoordinator acceptanceCoordinator) {
+        this(stateAuditService, providers, requestAuditService,
+                acceptanceCoordinator,
+                acceptanceCoordinator == null ? null
+                        : new RuntimeTerminationOutboxDispatcher(
+                                acceptanceCoordinator));
     }
 
     RuntimeTaskClosureService(
@@ -157,13 +178,46 @@ public class RuntimeTaskClosureService {
                     expectedPhysicalWorkerId, reason);
         }
 
+        RuntimeStateAuditService.OwnedRuntimeTask owned;
+        RuntimeTaskAuditDTO audit;
+        RuntimeTaskClosureProvider selectedProvider;
+        try {
+            requireTerminationFields(taskId, expectedPhysicalWorkerId, reason);
+            if (!Objects.equals(taskId, confirmTaskId)) {
+                throw new IllegalArgumentException("CONFIRM_TASK_ID_MISMATCH");
+            }
+            owned = stateAuditService.requireOwnedTask(
+                    appKey, appSecret, upstreamUserId, taskId);
+            requireExpectedWorker(owned, expectedPhysicalWorkerId);
+            audit = stateAuditService.auditTask(
+                    appKey, appSecret, upstreamUserId, taskId);
+            selectedProvider = provider(owned);
+            RuntimeTaskClosureProvider.TerminationReadiness readiness =
+                    selectedProvider.inspect(taskId, owned.physicalWorkerId());
+            if (readiness == null || !readiness.terminateAllowed()) {
+                throw new IllegalStateException(readinessReason(readiness, facts(audit)));
+            }
+        } catch (RuntimeException preflightFailure) {
+            audit = StringUtils.hasText(taskId)
+                    ? safeAudit(appKey, appSecret, upstreamUserId, taskId) : null;
+            String code = sanitizedCode(
+                    preflightFailure, "TERMINATION_PREFLIGHT_REJECTED");
+            return terminationResponse(
+                    clientRequestId, taskId, false, audit,
+                    clean(expectedPhysicalWorkerId),
+                    RuntimeTaskTerminationOutcome.REJECTED,
+                    code, false, false, false, false, code);
+        }
+
         RuntimeRequestAuditService.TaskOperationRegistration registration = null;
         if (requestAuditService.terminationRequestReceiptEnabled()) {
             try {
                 registration = acceptanceCoordinator != null
                         ? acceptanceCoordinator.accept(
                                 clientRequestId, appKey, appSecret,
-                                upstreamUserId, taskId, null, expectedPhysicalWorkerId)
+                                upstreamUserId, taskId,
+                                owned.sessionId(), owned.providerType(),
+                                owned.physicalWorkerId(), owned.providerTaskId())
                         : requestAuditService.beginTaskOperationIdempotent(
                                 clientRequestId,
                                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
@@ -185,7 +239,21 @@ public class RuntimeTaskClosureService {
                 return receiptPersistenceFailure(
                         appKey, appSecret, upstreamUserId, clientRequestId, taskId);
             }
-            if (registration.existing()) {
+            if (acceptanceCoordinator != null) {
+                try {
+                    var authorization =
+                            outboxDispatcher.authorize(clientRequestId);
+                    if (!authorization.providerCallAuthorized()) {
+                        return replayTermination(
+                                appKey, appSecret, upstreamUserId, clientRequestId,
+                                taskId, expectedPhysicalWorkerId);
+                    }
+                } catch (RuntimeException persistenceFailure) {
+                    return receiptPersistenceFailure(
+                            appKey, appSecret, upstreamUserId,
+                            clientRequestId, taskId);
+                }
+            } else if (registration.existing()) {
                 return replayTermination(
                         appKey, appSecret, upstreamUserId, clientRequestId, taskId,
                         expectedPhysicalWorkerId);
@@ -194,23 +262,21 @@ public class RuntimeTaskClosureService {
 
         RuntimeRequestAuditService.AuditHandle requestAudit =
                 registration != null ? registration.handle() : null;
-        RuntimeStateAuditService.OwnedRuntimeTask owned = null;
-        RuntimeTaskAuditDTO audit = null;
         RuntimeTaskClosureProvider.TerminationResult providerResult = null;
         try {
-            requireTerminationFields(taskId, expectedPhysicalWorkerId, reason);
-            if (!Objects.equals(taskId, confirmTaskId)) {
-                throw new IllegalArgumentException("CONFIRM_TASK_ID_MISMATCH");
-            }
-            owned = stateAuditService.requireOwnedTask(
-                    appKey, appSecret, upstreamUserId, taskId);
-            requireExpectedWorker(owned, expectedPhysicalWorkerId);
-            audit = stateAuditService.auditTask(
-                    appKey, appSecret, upstreamUserId, taskId);
-            RuntimeTaskClosureProvider selectedProvider = provider(owned);
             providerResult = selectedProvider.terminate(
                     taskId, owned.ownerUserId(), owned.tenantId(), owned.physicalWorkerId(),
                     reason.trim(), clientRequestId, false);
+            if (acceptanceCoordinator != null
+                    && requestAuditService.terminationRequestReceiptEnabled()) {
+                outboxDispatcher.resultObserved(
+                        clientRequestId,
+                        providerResult.terminationDispatched()
+                                ? "TERMINATION_DISPATCHED"
+                                : providerResult.alreadyTerminal()
+                                ? "TASK_ALREADY_TERMINAL"
+                                : "TERMINATION_RESULT_OBSERVED");
+            }
             audit = safeAudit(
                     appKey, appSecret, upstreamUserId, taskId);
 
@@ -491,8 +557,17 @@ public class RuntimeTaskClosureService {
                     stableCode(snapshot.sanitizedErrorCode(), "TERMINATION_REQUEST_REJECTED"),
                     true);
         }
-        if (Boolean.TRUE.equals(canonicalTerminal(audit))) {
-            if (!terminalCleanupComplete(audit)) {
+        Optional<TaskLifecycleProjectionPort.TaskLifecycleProjection> ownerProjection =
+                lifecycleProjection == null
+                        ? Optional.empty() : lifecycleProjection.find(taskId);
+        boolean canonicalTerminal = ownerProjection
+                .map(TaskLifecycleProjectionPort.TaskLifecycleProjection::typedTerminal)
+                .orElseGet(() -> Boolean.TRUE.equals(canonicalTerminal(audit)));
+        boolean cleanupComplete = ownerProjection
+                .map(TaskLifecycleProjectionPort.TaskLifecycleProjection::cleanupComplete)
+                .orElseGet(() -> terminalCleanupComplete(audit));
+        if (canonicalTerminal) {
+            if (!cleanupComplete) {
                 return reconciliationResponse(
                         originalClientRequestId, taskId, audit, snapshot,
                         RuntimeTaskReconciliationState.AMBIGUOUS,
@@ -507,6 +582,19 @@ public class RuntimeTaskClosureService {
                     originalOutcome == RuntimeTaskTerminationOutcome.PROCESSING
                             ? RuntimeTaskTerminationOutcome.ACCEPTED : originalOutcome,
                     stableText(snapshot.status()), "TASK_CANONICAL_TERMINAL", true);
+        }
+        if (ownerProjection.isPresent()
+                && ownerProjection.get().canonicalTerminal()
+                && !ownerProjection.get().typedTerminal()) {
+            return reconciliationResponse(
+                    originalClientRequestId, taskId, audit, snapshot,
+                    RuntimeTaskReconciliationState.AMBIGUOUS,
+                    originalOutcome,
+                    stableText(snapshot.status()),
+                    ownerProjection.get().cleanupComplete()
+                            ? "CANONICAL_STATUS_NOT_TERMINAL"
+                            : "TERMINAL_CLEANUP_INCOMPLETE",
+                    true);
         }
         if (originalOutcome == RuntimeTaskTerminationOutcome.ALREADY_TERMINAL) {
             return reconciliationResponse(

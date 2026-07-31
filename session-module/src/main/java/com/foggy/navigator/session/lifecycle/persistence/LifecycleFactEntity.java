@@ -43,6 +43,27 @@ public class LifecycleFactEntity {
     @Column(length = 64, updatable = false)
     private String operationId;
 
+    @Column(length = 128, updatable = false)
+    private String physicalWorkerId;
+
+    @Column(length = 128, updatable = false)
+    private String stateGeneration;
+
+    @Column(length = 128, updatable = false)
+    private String instanceEpoch;
+
+    @Column(length = 128, updatable = false)
+    private String providerTaskId;
+
+    @Column(length = 96, updatable = false)
+    private String dispatchId;
+
+    @Column(length = 32, updatable = false)
+    private String safeBindingDigestVersion;
+
+    @Column(length = 128, updatable = false)
+    private String safeBindingDigest;
+
     @Column(length = 16, nullable = false, updatable = false)
     private String ownershipMode;
 
@@ -106,6 +127,23 @@ public class LifecycleFactEntity {
     public void setOperationId(String operationId) {
         this.operationId = operationId;
     }
+
+    public void setPhysicalWorkerId(String value) { physicalWorkerId = value; }
+    public void setStateGeneration(String value) { stateGeneration = value; }
+    public void setInstanceEpoch(String value) { instanceEpoch = value; }
+    public void setProviderTaskId(String value) { providerTaskId = value; }
+    public void setDispatchId(String value) { dispatchId = value; }
+    public void setSafeBindingDigestVersion(String value) {
+        safeBindingDigestVersion = value;
+    }
+    public void setSafeBindingDigest(String value) { safeBindingDigest = value; }
+
+    public String getFactType() { return factType; }
+    public String getTaskId() { return taskId; }
+    public String getSessionId() { return sessionId; }
+    public String getOperationId() { return operationId; }
+    public String getOwnershipMode() { return ownershipMode; }
+    public Long getSourceSequence() { return sourceSequence; }
 
     public void setOwnershipMode(String ownershipMode) {
         this.ownershipMode = ownershipMode;

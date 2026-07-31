@@ -40,7 +40,7 @@ public class SessionForegroundLaneService {
                 .orElse(null);
         if (snapshot == null || !taskId.equals(snapshot.getForegroundTaskId())) return false;
         snapshot.setForegroundTaskId(null);
-        snapshot.setForegroundLaneState("AVAILABLE");
+        snapshot.setForegroundLaneState("FREE");
         snapshots.save(snapshot);
         return true;
     }
@@ -52,7 +52,7 @@ public class SessionForegroundLaneService {
         entity.setPhysicalWorkerId(physicalWorkerId);
         entity.setOwnershipMode("SHADOW");
         entity.setCanonicalPhase("OPEN");
-        entity.setForegroundLaneState("AVAILABLE");
+        entity.setForegroundLaneState("FREE");
         entity.setAvailability(LifecycleAvailability.READY.name());
         entity.setConflictState(LifecycleConflictState.NONE.name());
         return entity;

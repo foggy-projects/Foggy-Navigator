@@ -34,6 +34,7 @@ public class LifecycleWriterProofEntity {
 
     public String getProofId() { return proofId; }
     public String getGenerationId() { return generationId; }
+    public String getControllerInventoryDigest() { return controllerInventoryDigest; }
     public long getProofVersion() { return proofVersion; }
     public String getStatus() { return status; }
     public LocalDateTime getExpiresAt() { return expiresAt; }

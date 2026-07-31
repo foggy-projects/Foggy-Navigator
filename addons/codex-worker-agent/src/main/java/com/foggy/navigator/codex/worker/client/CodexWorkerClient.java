@@ -303,6 +303,14 @@ public class CodexWorkerClient {
                 developerInstructions, outputSchema, codexConfig, sandboxMode, approvalPolicy,
                 networkAccessEnabled, webSearchMode, businessRuntimeContext, additionalDirectories);
 
+        return streamQuery(body);
+    }
+
+    public Flux<ServerSentEvent<String>> streamQuery(Map<String, Object> body) {
+        if (body == null || body.isEmpty()) {
+            return Flux.error(new IllegalArgumentException(
+                    "CODEX_QUERY_BODY_REQUIRED"));
+        }
         return webClient.post()
                 .uri("/api/v1/query")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -332,6 +340,49 @@ public class CodexWorkerClient {
                     return response.bodyToFlux(
                             new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {});
                 });
+    }
+
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> lifecycleContext(
+            String expectedPhysicalWorkerId,
+            String ownershipMode,
+            String commandKind,
+            String navigatorTaskId,
+            String dispatchId,
+            int deliveryAttempt,
+            String terminationOperationId) {
+        return webClient.get().uri("/health")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .flatMap(body -> {
+                    Object raw = body.get("lifecycle_contract");
+                    if (!(raw instanceof Map<?, ?> lifecycle)
+                            || !Boolean.TRUE.equals(lifecycle.get("ready"))) {
+                        return Mono.empty();
+                    }
+                    String worker = stringValue(
+                            lifecycle.get("physical_worker_id"), null);
+                    String generation = stringValue(
+                            lifecycle.get("state_generation"), null);
+                    if (!expectedPhysicalWorkerId.equals(worker)
+                            || generation == null) {
+                        return Mono.error(new IllegalStateException(
+                                "LIFECYCLE_IDENTITY_MISMATCH"));
+                    }
+                    Map<String, Object> context = new LinkedHashMap<>();
+                    context.put("schema", "NAVIGATOR_WORKER_LIFECYCLE_V1");
+                    context.put("ownership_mode", ownershipMode);
+                    context.put("command_kind", commandKind);
+                    context.put("navigator_task_id", navigatorTaskId);
+                    context.put("dispatch_id", dispatchId);
+                    context.put("delivery_attempt", deliveryAttempt);
+                    context.put("expected_physical_worker_id", worker);
+                    context.put("expected_state_generation", generation);
+                    context.put("termination_operation_id",
+                            terminationOperationId);
+                    return Mono.just(context);
+                })
+                .timeout(Duration.ofSeconds(10));
     }
 
     private static String stringValue(Object value, String fallback) {
@@ -435,11 +486,24 @@ public class CodexWorkerClient {
      */
     @SuppressWarnings("unchecked")
     public Mono<Map<String, Object>> abortTask(String taskId, TerminationOperationCapability capability) {
+        return abortTask(taskId, capability, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> abortTask(
+            String taskId,
+            TerminationOperationCapability capability,
+            Map<String, Object> lifecycleContext) {
         requireCapability(capability);
-        return webClient.post()
+        WebClient.RequestBodySpec request = webClient.post()
                 .uri("/api/v1/tasks/{taskId}/abort", taskId)
                 .header(TerminationOperationCapability.OPERATION_HEADER, capability.encodedOperation())
-                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature())
+                .header(TerminationOperationCapability.SIGNATURE_HEADER, capability.signature());
+        WebClient.RequestHeadersSpec<?> exchange = lifecycleContext == null
+                ? request
+                : request.contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("lifecycle_context", lifecycleContext));
+        return exchange
                 .exchangeToMono(response -> {
                     if (response.statusCode().is2xxSuccessful()) {
                         return response.bodyToMono(Map.class)

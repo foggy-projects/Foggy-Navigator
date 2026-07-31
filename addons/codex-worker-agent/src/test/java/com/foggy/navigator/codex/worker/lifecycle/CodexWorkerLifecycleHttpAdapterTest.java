@@ -36,6 +36,7 @@ class CodexWorkerLifecycleHttpAdapterTest {
                     "complete_active_task_set":true,"tasks":[],"facts":[]}""");
         });
         fixture.createContext("/api/v1/lifecycle/ack", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("PUT");
             assertFence(exchange);
             fencedCalls.incrementAndGet();
             json(exchange, "{\"acked_through_sequence\":2}");

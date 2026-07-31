@@ -6,6 +6,8 @@ import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofRef
 import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofReferenceRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
+import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshotRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,14 +19,20 @@ public class WriterExclusivityProofService {
     private final LifecycleWriterProofRepository proofs;
     private final LifecycleWriterProofReferenceRepository references;
     private final LifecycleEffectOutboxRepository outbox;
+    private final TaskLifecycleSnapshotRepository taskSnapshots;
+    private final SessionLifecycleSnapshotRepository sessionSnapshots;
 
     public WriterExclusivityProofService(
             LifecycleWriterProofRepository proofs,
             LifecycleWriterProofReferenceRepository references,
-            LifecycleEffectOutboxRepository outbox) {
+            LifecycleEffectOutboxRepository outbox,
+            TaskLifecycleSnapshotRepository taskSnapshots,
+            SessionLifecycleSnapshotRepository sessionSnapshots) {
         this.proofs = proofs;
         this.references = references;
         this.outbox = outbox;
+        this.taskSnapshots = taskSnapshots;
+        this.sessionSnapshots = sessionSnapshots;
     }
 
     @Transactional
@@ -48,12 +56,14 @@ public class WriterExclusivityProofService {
 
     @Transactional
     public boolean releaseReference(
-            String referenceId, boolean releasePredicateSatisfied,
-            String reason, LocalDateTime now) {
-        if (!releasePredicateSatisfied) return false;
+            String referenceId, String reason, LocalDateTime now) {
         LifecycleWriterProofReferenceEntity reference =
-                references.findById(referenceId).orElse(null);
+                references.findForUpdate(referenceId).orElse(null);
         if (reference == null || reference.getReleasedAt() != null) return false;
+        if (!aggregateReleaseSatisfied(reference)
+                || outbox.countUnfinishedByReferenceId(referenceId) != 0) {
+            return false;
+        }
         reference.setReleasedAt(now);
         reference.setReleaseReason(reason);
         references.save(reference);
@@ -66,14 +76,50 @@ public class WriterExclusivityProofService {
      */
     @Transactional
     public EffectAuthorization authorizeEffect(
-            String effectId, String proofId, LocalDateTime now) {
-        LifecycleEffectOutboxEntity effect = outbox.findForUpdate(effectId)
+            EffectAuthorizationCommand command, LocalDateTime now) {
+        // Global lock order: proof -> exact aggregate reference -> outbox.
+        LifecycleWriterProofEntity proof = proofs.findForUpdate(command.proofId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_PROOF_NOT_FOUND"));
+        if (!proof.getGenerationId().equals(command.writerGenerationId())
+                || !proof.getControllerInventoryDigest()
+                .equals(command.controllerInventoryDigest())) {
+            throw new IllegalStateException("LIFECYCLE_PROOF_BINDING_MISMATCH");
+        }
+        LifecycleWriterProofReferenceEntity reference = references
+                .findForUpdate(command.aggregateReferenceId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_AGGREGATE_REFERENCE_NOT_FOUND"));
+        if (reference.getReleasedAt() != null
+                || !reference.getProofId().equals(command.proofId())
+                || !reference.getAggregateType().equals(command.aggregateType().name())
+                || !reference.getAggregateId().equals(command.aggregateId())) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_AGGREGATE_REFERENCE_MISMATCH");
+        }
+        LifecycleEffectOutboxEntity effect = outbox.findForUpdate(command.effectId())
                 .orElseThrow(() -> new IllegalStateException("LIFECYCLE_EFFECT_NOT_FOUND"));
-        if ("EFFECT_STARTED".equals(effect.getEffectState())) {
+        if ("EFFECT_STARTED".equals(effect.getEffectState())
+                || "RESULT_OBSERVED".equals(effect.getEffectState())
+                || "COMPLETED".equals(effect.getEffectState())) {
             return new EffectAuthorization(false, true, "EFFECT_ALREADY_STARTED");
         }
-        LifecycleWriterProofEntity proof = activeProof(proofId, now);
-        effect.setProofId(proofId);
+        requireActive(proof, now);
+        if (!"CLAIMED".equals(effect.getEffectState())
+                || !"EXTERNAL_PROVIDER_ONCE".equals(effect.getEffectClass())
+                || !command.aggregateType().name().equals(effect.getAggregateType())
+                || !command.aggregateId().equals(effect.getAggregateId())
+                || !command.aggregateReferenceId()
+                .equals(effect.getAggregateReferenceId())
+                || !command.writerGenerationId()
+                .equals(effect.getWriterGenerationId())
+                || !command.controllerInventoryDigest()
+                .equals(effect.getControllerInventoryDigest())
+                || !command.effectClaim().equals(effect.getEffectClaim())) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_EFFECT_AUTHORIZATION_CLAIM_MISMATCH");
+        }
+        effect.setProofId(command.proofId());
         effect.setEffectAuthorizationProofVersion(Long.toString(proof.getProofVersion()));
         effect.setAuthorizedAt(now);
         effect.setEffectState("EFFECT_STARTED");
@@ -91,22 +137,55 @@ public class WriterExclusivityProofService {
 
     public boolean mayReleaseProof(String proofId) {
         return references.countByProofIdAndReleasedAtIsNull(proofId) == 0
-                && outbox.countByEffectStateNot("COMPLETED") == 0;
+                && outbox.countUnfinishedByProofId(proofId) == 0;
     }
 
     private LifecycleWriterProofEntity activeProof(String proofId, LocalDateTime now) {
         LifecycleWriterProofEntity proof = proofs.findForUpdate(proofId)
                 .orElseThrow(() -> new IllegalStateException("LIFECYCLE_PROOF_NOT_FOUND"));
+        requireActive(proof, now);
+        return proof;
+    }
+
+    private void requireActive(
+            LifecycleWriterProofEntity proof, LocalDateTime now) {
         if (!"ACTIVE".equals(proof.getStatus())
                 || !proof.getExpiresAt().isAfter(now)) {
             throw new IllegalStateException("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
         }
-        return proof;
     }
 
     public record EffectAuthorization(
             boolean providerCallAuthorized,
             boolean alreadyStarted,
             String safeReasonCode) {
+    }
+
+    public record EffectAuthorizationCommand(
+            String effectId,
+            String proofId,
+            String aggregateReferenceId,
+            ProofAggregateType aggregateType,
+            String aggregateId,
+            String writerGenerationId,
+            String controllerInventoryDigest,
+            String effectClaim) {
+    }
+
+    private boolean aggregateReleaseSatisfied(
+            LifecycleWriterProofReferenceEntity reference) {
+        return switch (ProofAggregateType.valueOf(reference.getAggregateType())) {
+            case TASK -> taskSnapshots.findById(reference.getAggregateId())
+                    .map(task -> TaskCanonicalPhase.TERMINAL.name()
+                            .equals(task.getCanonicalPhase())
+                            && TaskCleanupState.COMPLETED.name()
+                            .equals(task.getCleanupState()))
+                    .orElse(false);
+            case SESSION -> sessionSnapshots.findById(reference.getAggregateId())
+                    .map(session -> "CLOSED".equals(session.getCanonicalPhase())
+                            && "FREE".equals(session.getForegroundLaneState()))
+                    .orElse(false);
+            case WORKER -> false;
+        };
     }
 }

@@ -54,7 +54,8 @@ public class BusinessTaskTerminalTombstoneParticipant
     private String compatibilityStatus(String terminalOutcome) {
         return switch (terminalOutcome) {
             case "CANCELLED" -> "ABORTED";
-            case "COMPLETED", "FAILED" -> terminalOutcome;
+            case "SUCCEEDED", "COMPLETED" -> "COMPLETED";
+            case "FAILED" -> "FAILED";
             default -> throw new IllegalArgumentException(
                     "LIFECYCLE_TERMINAL_OUTCOME_UNSUPPORTED");
         };

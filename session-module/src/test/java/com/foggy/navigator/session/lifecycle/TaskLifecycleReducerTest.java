@@ -1,5 +1,6 @@
 package com.foggy.navigator.session.lifecycle;
 
+import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -12,6 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TaskLifecycleReducerTest {
 
     private final TaskLifecycleReducer reducer = new TaskLifecycleReducer();
+    private final TaskLifecycleBinding binding = new TaskLifecycleBinding(
+            "session-1", "worker-1", "generation-1", "epoch-1",
+            LifecycleOwnershipMode.ENFORCED, "dispatch-1", "operation-1",
+            "sha256:binding-1", "provider-task-1");
 
     @Test
     void incrementalAndFullRecomputeAreEquivalentForOutOfOrderFacts() {
@@ -55,6 +60,61 @@ class TaskLifecycleReducerTest {
         assertEquals(LifecycleAvailability.OFFLINE_FROZEN, decision.snapshot().availability());
         assertFalse(decision.snapshot().canonicalTerminal());
         assertTrue(decision.requiredEffects().isEmpty());
+    }
+
+    @Test
+    void conflictingExactTerminalEvidenceIsAuthorityQuarantinedWithoutTerminalEffect() {
+        TaskLifecycleDecision decision = reducer.recompute(
+                "task-conflict",
+                List.of(
+                        TaskLifecycleFact.workerTerminal(
+                                "terminal-1", 10, TaskTerminalOutcome.COMPLETED, binding),
+                        TaskLifecycleFact.workerTerminal(
+                                "terminal-2", 11, TaskTerminalOutcome.FAILED, binding)),
+                Set.of(),
+                binding,
+                "policy-v1");
+
+        assertEquals(TaskCanonicalPhase.OPEN, decision.snapshot().canonicalPhase());
+        assertEquals(LifecycleAvailability.AUTHORITY_QUARANTINED,
+                decision.snapshot().availability());
+        assertTrue(decision.snapshot().activeBlockers()
+                .contains(LifecycleBlocker.EVIDENCE_CONFLICT));
+        assertTrue(decision.requiredEffects().isEmpty());
+    }
+
+    @Test
+    void unboundTerminalTextCannotBecomeTerminalAuthority() {
+        TaskLifecycleDecision decision = reducer.recompute(
+                "task-unbound",
+                List.of(TaskLifecycleFact.terminal(
+                        "diagnostic-terminal", 10, TaskTerminalOutcome.COMPLETED)),
+                Set.of(),
+                binding,
+                "policy-v1");
+
+        assertEquals(TaskCanonicalPhase.OPEN, decision.snapshot().canonicalPhase());
+        assertEquals(LifecycleAvailability.AUTHORITY_QUARANTINED,
+                decision.snapshot().availability());
+        assertTrue(decision.requiredEffects().isEmpty());
+    }
+
+    @Test
+    void exactWorkerTerminalEvidenceCreatesOneCanonicalFence() {
+        TaskLifecycleDecision decision = reducer.recompute(
+                "task-terminal",
+                List.of(TaskLifecycleFact.workerTerminal(
+                        "terminal-1", 10, TaskTerminalOutcome.CANCELLED, binding)),
+                Set.of(),
+                binding,
+                "policy-v1");
+
+        assertEquals(TaskCanonicalPhase.TERMINAL, decision.snapshot().canonicalPhase());
+        assertEquals(TaskTerminalOutcome.CANCELLED, decision.snapshot().terminalOutcome());
+        assertEquals(TaskTerminalSource.WORKER_EVIDENCE,
+                decision.snapshot().terminalSource());
+        assertEquals(1, decision.requiredEffects().size());
+        assertFalse(decision.requiredEffects().get(0).executionSuppressed());
     }
 
     @Test

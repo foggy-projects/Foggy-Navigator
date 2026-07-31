@@ -63,6 +63,13 @@ public class TaskTerminalCommitService {
     private TaskTerminalTombstoneEntity tombstone(TerminalCommitCommand command) {
         TaskTerminalTombstoneEntity entity = new TaskTerminalTombstoneEntity();
         entity.setTaskId(command.taskId());
+        entity.setSessionId(command.tombstoneContext().sessionId());
+        entity.setProviderType(command.tombstoneContext().providerType());
+        entity.setTenantId(command.tombstoneContext().tenantId());
+        entity.setProviderTaskId(command.tombstoneContext().providerTaskId());
+        entity.setProviderTaskUserId(command.tombstoneContext().providerTaskUserId());
+        entity.setSourceAgentId(command.tombstoneContext().sourceAgentId());
+        entity.setOperationId(command.tombstoneContext().operationId());
         entity.setTerminalOutcome(command.outcome().name());
         entity.setTerminalSource(command.source().name());
         entity.setTerminalFactId(command.terminalFactId());
@@ -76,14 +83,20 @@ public class TaskTerminalCommitService {
         entity.setId(new TaskTerminalCleanupPlanId(taskId, entry.participant().name()));
         entity.setApplicability(entry.applicability().name());
         entity.setNotApplicableReason(entry.reasonCode());
-        entity.setCheckpointState(entry.applicability() == CleanupApplicability.NOT_APPLICABLE
-                ? "COMPLETED" : "PENDING");
+        entity.setCheckpointState(
+                entry.applicability() == CleanupApplicability.NOT_APPLICABLE
+                        || entry.participant() == TerminalCleanupParticipant.TERMINAL_TOMBSTONE
+                        ? "COMPLETED" : "PENDING");
+        if (entry.participant() == TerminalCleanupParticipant.TERMINAL_TOMBSTONE) {
+            entity.setCheckpointFactId("terminal-fence:" + taskId);
+        }
         return entity;
     }
 
     private TaskLifecycleSnapshotEntity terminalSnapshot(TerminalCommitCommand command) {
-        TaskLifecycleSnapshotEntity entity = new TaskLifecycleSnapshotEntity();
-        entity.setTaskId(command.taskId());
+        TaskLifecycleSnapshotEntity entity = snapshots.findForUpdate(command.taskId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_TASK_BINDING_REQUIRED_BEFORE_TERMINAL"));
         entity.setOwnershipMode("ENFORCED");
         entity.setCanonicalPhase(TaskCanonicalPhase.TERMINAL.name());
         entity.setTerminalOutcome(command.outcome().name());
@@ -91,9 +104,8 @@ public class TaskTerminalCommitService {
         entity.setAvailability(LifecycleAvailability.READY.name());
         entity.setConflictState(LifecycleConflictState.NONE.name());
         entity.setCleanupState(TaskCleanupState.PENDING.name());
-        entity.setFactCursor(0L);
+        if (entity.getFactCursor() == null) entity.setFactCursor(0L);
         entity.setPolicyVersion("ARCH-001-MVP-A");
-        entity.setSnapshotJson("{}");
         entity.setWriterGenerationId(command.writerGenerationId());
         return entity;
     }

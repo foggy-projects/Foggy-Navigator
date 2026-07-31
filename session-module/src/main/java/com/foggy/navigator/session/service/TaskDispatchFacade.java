@@ -15,6 +15,7 @@ import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.lifecycle.SessionForegroundLaneService;
+import com.foggy.navigator.session.lifecycle.LifecycleIngressGate;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -109,6 +110,10 @@ public class TaskDispatchFacade {
     @Nullable
     private SessionForegroundLaneService lifecycleLaneService;
 
+    @Autowired(required = false)
+    @Nullable
+    private LifecycleIngressGate lifecycleIngressGate;
+
     @Value("${navigator.lifecycle.shadow-enabled:false}")
     private boolean lifecycleShadowEnabled;
 
@@ -178,7 +183,16 @@ public class TaskDispatchFacade {
         if (target.directProviderRoute()) {
             validateSessionProviderBeforeDispatch(request.getSessionId(), target.providerType());
             rejectBusyContextContinuationIfNeeded(target.providerType(), request, context);
-            return createTaskDirect(target.providerType(), request, context);
+            LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
+            try {
+                DispatchTaskDTO dto =
+                        createTaskDirect(target.providerType(), request, context);
+                confirmReservation(permit, dto);
+                return dto;
+            } catch (RuntimeException failure) {
+                releaseFailedReservation(permit);
+                throw failure;
+            }
         }
 
         TaskCreateTargetResolver.AgentLookup lookup = target.agentLookup();
@@ -202,15 +216,23 @@ public class TaskDispatchFacade {
         // 构造 A2aMessage
         A2aMessage message = buildMessage(request);
 
-        // 执行
-        A2aTask a2aTask = agent.sendTask(message);
+        LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
+        A2aTask a2aTask;
+        try {
+            // Provider effect is authorized only after the durable ingress
+            // reservation and offline preflight above.
+            a2aTask = agent.sendTask(message);
+        } catch (RuntimeException failure) {
+            releaseFailedReservation(permit);
+            throw failure;
+        }
         log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
                 agentId, providerType, a2aTask.getId());
 
         DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
-        observeLifecycleLane(dto);
+        confirmReservation(permit, dto);
         return dto;
     }
 
@@ -356,11 +378,17 @@ public class TaskDispatchFacade {
      * 恢复任务（resume）—— 续接已有会话。
      */
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
-        DispatchTaskDTO dto = operationRouter().resumeTask(request, context);
-        persistTaskRequestFields(dto.getTaskId(), request);
-        persistContextBinding(dto, request, context, dto.getProviderType());
-        observeLifecycleLane(dto);
-        return dto;
+        LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
+        try {
+            DispatchTaskDTO dto = operationRouter().resumeTask(request, context);
+            persistTaskRequestFields(dto.getTaskId(), request);
+            persistContextBinding(dto, request, context, dto.getProviderType());
+            confirmReservation(permit, dto);
+            return dto;
+        } catch (RuntimeException failure) {
+            releaseFailedReservation(permit);
+            throw failure;
+        }
     }
 
     /**
@@ -1028,8 +1056,28 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = operationRouter().createTaskDirect(providerType, request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
-        observeLifecycleLane(dto);
         return dto;
+    }
+
+    private LifecycleIngressGate.IngressPermit reserveBeforeEffect(
+            TaskDispatchRequest request) {
+        if (lifecycleIngressGate == null || request == null) return null;
+        return lifecycleIngressGate.reserveBeforeEffect(
+                request.getSessionId(), request.getWorkerId());
+    }
+
+    private void confirmReservation(
+            LifecycleIngressGate.IngressPermit permit, DispatchTaskDTO dto) {
+        if (lifecycleIngressGate != null && permit != null && dto != null) {
+            lifecycleIngressGate.confirm(permit, dto.getTaskId());
+        }
+    }
+
+    private void releaseFailedReservation(
+            LifecycleIngressGate.IngressPermit permit) {
+        if (lifecycleIngressGate != null && permit != null) {
+            lifecycleIngressGate.releaseFailed(permit);
+        }
     }
 
     private void observeLifecycleLane(DispatchTaskDTO dto) {

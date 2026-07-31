@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: REJECTED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -32,6 +32,8 @@ replan_review_status: approved-after-round-7
 execution_start_authorized: true
 decision_stage: approved-source-slices-authorized-activation-separate
 implementation_completed_at: 2026-07-31
+remediation_completed_at: 2026-07-31
+remediation_status: READY_FOR_SIGNOFF
 independent_signoff_at: 2026-07-31
 independent_signoff_verdict: REJECTED
 acceptance_record: ../evidence/ARCH-001-independent-signoff-2026-07-31.md
@@ -54,9 +56,10 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: `REJECTED`；implementation session 提交的 Source Slice 0–8
-  completion claim 未通过 2026-07-31 独立签收。真实 controller/process、首次非
-  fixture `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
+- execution_status: `READY_FOR_SIGNOFF`；2026-07-31 独立拒签发现的 B1–B6 已完成
+  remediation implementation 和 repo-owned 验证，等待新的独立签收。原
+  `REJECTED` verdict 与 evidence 保留；真实 controller/process、首次非 fixture
+  `ENFORCED` aggregate、live SIM、部署和发布继续需要单独授权。
 
 ## Independent Review Disposition
 
@@ -3621,6 +3624,175 @@ Minimum regression scenarios include:
     业务数据。
 - readiness: `READY_FOR_SIGNOFF`
 
+## Remediation Implementation Result (2026-07-31)
+
+### Disposition and Contract Boundaries
+
+- remediation_status: `READY_FOR_SIGNOFF`
+- rejected_implementation_commit:
+  `fac98161d5e59b54d8f605061af1adae6f4b6415`
+- independent_rejection_commit:
+  `297c79160657d0413b608ba2f4f5386486e14837`
+- original_baseline:
+  `d3eb7f76d31d6dfd2a78009d30caff9f8307284d`
+- independent_signoff_history: preserved; the prior `REJECTED` verdict and
+  `ARCH-001-independent-signoff-2026-07-31.md` remain authoritative history until a new
+  independent signoff is performed.
+- deviations: none. Approved authority、Worker-v1 wire、public compatibility、additive
+  migration strategy and activation boundary were not changed.
+- activation_gate: closed. No real controller/process, non-fixture `ENFORCED` aggregate,
+  live SIM, deployment, restart, release or production/shared database was used.
+
+### B1–B6 Remediation Status
+
+- `ARCH-001-B1-owner-vertical-chain-not-integrated`: **CLOSED IN SOURCE**.
+  `TaskDispatchFacade` now performs foreground lane reservation and offline admission before
+  provider effect. The production lifecycle owner connects Sentinel inventory/events/ACK,
+  normalized facts, exact binding validation, reducer, snapshot, terminal commit, cleanup and
+  typed projection. Normalized facts preserve physical Worker ID, generation, epoch, ownership
+  mode, dispatch/operation IDs, binding digest and provider Task identity. `SHADOW` remains
+  observation-only.
+- `ARCH-001-B2-receipt-admission-not-recoverable`: **CLOSED IN SOURCE**.
+  Exact Task/provider/Worker/enrollment/precondition validation precedes acceptance. Receipt,
+  owner operation/fact, exact binding and effect outbox commit atomically. The real idempotent
+  outbox dispatcher resumes commit-before-dispatch delivery and prevents a second provider
+  termination after effect authorization or response loss. Persistence failure fails closed.
+  Receipt-disabled repeated same-ID HTTP calls retain two one-shot provider attempts and the
+  published disabled reconciliation matrix.
+- `ARCH-001-B3-terminal-authority-and-cleanup-incomplete`: **CLOSED IN SOURCE**.
+  Only exact validated Worker/runtime facts or approved exact sources can become terminal
+  candidates. Conflicting evidence enters authority quarantine without canonical terminal,
+  tombstone or terminal effect. Canonical Task terminal, authorization tombstone and frozen
+  cleanup applicability plan commit together. Restart-safe checkpoint actions implement token
+  revoke, compatibility projection, receipt checkpoint, registration deactivation and final
+  foreground lane release. Typed `TERMINAL` requires both canonical lifecycle terminal and
+  canonical Task terminal status.
+- `ARCH-001-B4-worker-v1-cross-runtime-contract-broken`: **CLOSED IN SOURCE**.
+  Java and Node now agree on mode-first fences, headers, binding digest, response envelope and
+  PUT ACK route. The Java port implements probe, inventory/events, ACK, dispatch status and
+  command context. Node query/create/resume/abort uses durable
+  `PREPARED → EFFECT_STARTED → RESULT_OBSERVED`/terminal-fact transitions; only
+  `EFFECT_STARTED` authorizes provider invocation, PREPARED can safely continue, and later
+  duplicates cannot repeat the effect. A real Java adapter-to-Node router test and exact
+  codex-biz-worker readiness/termination/reconciliation test cover the executable contract.
+- `ARCH-001-B5-writer-proof-and-enforced-fixture-not-representative`: **CLOSED IN SOURCE**.
+  Authorization locks proof → exact reference → outbox and verifies proof generation, inventory
+  digest, aggregate reference, effect class and claim. Release is derived from durable aggregate
+  references and proof-specific unfinished outbox state. Real concurrent transactions cover
+  loss-first and authorization-first orderings. Slice 8 uses production entities, repositories,
+  services and Worker route without touching a real controller/process or non-fixture
+  `ENFORCED` aggregate.
+- `ARCH-001-B6-schema-validation-obligation-not-met`: **CLOSED IN SOURCE**.
+  The repo-owned Testcontainers fixture applies forward SQL to MySQL 8.0.44, reapplies it for
+  compatibility, performs Hibernate/JPA validation, verifies critical unique/index/nullability/
+  length contracts, confirms rollback with no enforced aggregate, and confirms fail-closed
+  rollback with enforcement markers/references/outbox. Production schema remains pre-apply;
+  the warning-only migration runner is not treated as readiness evidence.
+
+### Changed Paths
+
+- lifecycle SPI:
+  `navigator-spi/src/main/java/com/foggy/navigator/spi/lifecycle/**`
+- lifecycle owner, persistence, reducer, ingress, Sentinel, cleanup, writer proof and tests:
+  `session-module/src/main/java/com/foggy/navigator/session/lifecycle/**`,
+  `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java`,
+  `session-module/src/test/java/com/foggy/navigator/session/lifecycle/**`,
+  `session-module/pom.xml`
+- terminal cleanup participant and tests:
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/lifecycle/**`,
+  `business-agent-module/src/test/java/com/foggy/navigator/business/agent/lifecycle/**`
+- receipt admission, durable delivery and typed contract tests:
+  `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/**`,
+  `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/service/**`
+- Codex Java lifecycle/client/service and executable Node contract tests:
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/**`,
+  `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/**`
+- Codex Worker lifecycle state machine/routes/tests:
+  `tools/codex-agent-worker/src/lifecycle/store.ts`,
+  `tools/codex-agent-worker/src/routes/query.ts`,
+  `tools/codex-agent-worker/src/routes/tasks.ts`,
+  `tools/codex-agent-worker/tests/lifecycle-contract.test.ts`,
+  `tools/codex-agent-worker/tests/fixtures/lifecycle-router-server.ts`
+- additive forward/rollback schema:
+  `docs/migration/2026-07-30-arch-001-lifecycle-owner.sql`,
+  `docs/migration/2026-07-30-arch-001-lifecycle-owner-rollback.sql`
+
+### Failure-first Red/Green Evidence
+
+- vertical owner integration initially committed terminal state while cleanup checkpoints remained
+  `PENDING`; transaction-boundary correction moved after-commit work to independent transactions.
+  The green test now proves Worker fact → reducer → canonical terminal → tombstone → cleanup →
+  typed `TERMINAL`, including token revocation and registration deactivation.
+- termination recovery initially failed when a restart path bypassed the proxied transaction;
+  the green test exercises the production acceptance/outbox dispatcher through the transactional
+  proxy and covers commit-before-dispatch crash, response loss, same-ID recovery and persistence
+  failure.
+- Codex full tests first exposed four failures and four errors caused by sending new lifecycle
+  command context on legacy `SHADOW` wire paths. The final implementation retains the legacy
+  overload in `SHADOW` and requires the v1 context in `ENFORCED`; focused and full suites are
+  green.
+- the MySQL fixture first failed on an assertion mismatch for the direct rollback-gate
+  `SQLException`; the corrected assertion verifies the actual fail-closed database error and the
+  complete fixture is green.
+- business cleanup coverage first failed compilation because the test used non-record accessor
+  names; corrected typed accessors then proved terminal tombstone/token cleanup behavior.
+- new reducer/vertical/Worker tests also prove conflicting terminal evidence produces no terminal
+  effect and that ACCEPTED, ACK, diagnostic text, disconnect and timeout do not independently
+  establish terminal authority.
+
+### Verification Results
+
+- `mvn -q -pl session-module -am -Dtest=TaskLifecycleOwnerVerticalIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 2 tests.
+- `mvn -pl session-module -am test`
+  — exit 0; Session Module 482 tests, 0 failures/errors, 1 skipped. The opt-in MySQL
+  fixture is run separately below.
+- `mvn -pl business-agent-module -am test`
+  — exit 0; Business Agent Module 739 tests, 0 failures/errors.
+- `mvn -q -pl addons/claude-worker-agent -am -Dtest=RuntimeTaskTypedContractServiceTest,RuntimeTaskClosureServiceTest,RuntimeTerminationDeliveryRecoveryTest,RuntimeTerminationAcceptanceCoordinatorTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; focused typed admission/recovery tests passed.
+- `mvn -pl addons/claude-worker-agent -am test`
+  — exit 0; Claude Worker Addon 461 tests, 0 failures/errors.
+- `mvn -q -pl addons/codex-worker-agent -am -Dtest=CodexWorkerLifecycleHttpAdapterTest,CodexWorkerLifecycleNodeContractIntegrationTest,CodexTaskServiceTest#exactCodexBizWorkerRunsReadinessTerminationAndSameRequestReplay -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; Java adapter/Node router and exact codex-biz-worker contract passed.
+- `mvn -q -pl addons/codex-worker-agent -Dtest=CodexStreamRelayTest,CodexTaskServiceTest test`
+  — exit 0; 194 focused tests.
+- `mvn -q -pl addons/codex-worker-agent test`
+  — exit 0; 495 tests, 0 failures/errors.
+- `cd tools/codex-agent-worker && npm run typecheck && npm test`
+  — exit 0; typecheck passed; 264 tests, 262 passed, 2 skipped, 0 failed.
+- `mvn -pl navigator-open-sdk -am test`
+  — exit 0; Open SDK 203 tests, 0 failures/errors.
+- `mvn test -pl launcher -am`
+  — exit 0; all 14 reactor modules succeeded; Launcher 19 tests, 0 failures/errors,
+  2 skipped. Surefire emitted a post-success fork-JVM shutdown warning without changing the
+  successful result.
+- `mvn -q -pl session-module -am -Darch001.mysql.integration=true -Dtest=LifecycleMigrationMySqlIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 1 MySQL 8.0.44 forward/JPA/rollback-floor integration test.
+- `mvn -pl addons/claude-worker-agent,addons/codex-worker-agent -am -DskipTests test-compile`
+  — exit 0; affected Java test sources compiled.
+- `mvn -pl addons/codex-worker-agent -am -Dmaven.test.skip=true install`
+  — final exit 0 after a single-module diagnostic first exposed stale local snapshot
+  dependencies and then a real static method-reference compile error; the source error was fixed
+  before all Codex tests passed.
+- `git diff --check`
+  — exit 0 before documentation update; repeated after documentation and staging.
+
+### Compatibility, Unrun Items and Residual Risks
+
+- public compatibility: unchanged. No public SDK request/response wire changed; Open SDK tests
+  pass. Receipt-disabled same-request behavior remains two one-shot provider attempts and disabled
+  reconciliation. `SHADOW` retains legacy Codex provider wire and zero lifecycle-owner effect.
+- not run by boundary: production/shared database pre-apply or rollback, real controller
+  inventory/disable/late-relaunch, real process stop/start, live SIM, deployment, first
+  non-fixture `ENFORCED`, release and production activation.
+- residual risks: executable evidence is repo-owned ephemeral fixture evidence. A later authorized
+  deployment still needs production schema pre-apply/readiness, controlled Navigator and Codex
+  Worker rollout/restart, and independent signoff before activation.
+- SDK/CLI publication: not required; no public SDK/CLI wire changed.
+- runtime restart: required only when a later authorized deployment activates these Navigator Java
+  and Codex Worker changes; none was performed during remediation.
+
 ## Acceptance Status
 
 - acceptance_status: rejected
@@ -3636,6 +3808,10 @@ Minimum regression scenarios include:
   `ARCH-001-B4-worker-v1-cross-runtime-contract-broken`,
   `ARCH-001-B5-writer-proof-and-enforced-fixture-not-representative`,
   `ARCH-001-B6-schema-validation-obligation-not-met`
+- remediation_disposition: all six blocker implementations are closed in current source and
+  pending a new independent signoff
+- remediation_follow_up_status: ready-for-independent-resignoff
+- historical_rejection_preserved: true
 - follow_up_required: yes
 
 ## References

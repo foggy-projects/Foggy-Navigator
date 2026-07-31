@@ -32,6 +32,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
+import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -97,6 +100,10 @@ public class CodexStreamRelay {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final SessionEventListener sessionEventListener;
+
+    @Autowired(required = false)
+    @Nullable
+    private TaskLifecycleSnapshotRepository lifecycleSnapshots;
 
     /** Fixed stripes avoid an unbounded per-task lock registry. */
     private final ReentrantLock[] streamOperationLocks = createStreamOperationLocks(1024);
@@ -233,13 +240,54 @@ public class CodexStreamRelay {
                 initialAckSeq = task.getLastAckedSeq() != null ? task.getLastAckedSeq() : 0;
                 sseFlux = client.subscribeToTask(workerTaskId, initialAckSeq);
             } else {
-                sseFlux = client.streamQuery(
+                Map<String, Object> requestBody = client.buildTaskRequest(
                         event.getPrompt(), event.getCwd(),
                         codexThreadId, event.getModel(),
-                        event.getMaxTurns(), images, attachments, event.getApiKey(), baseUrl, extraEnvVars,
-                        codexHomeKey, developerInstructions, outputSchema, codexConfig,
-                        sandboxMode, approvalPolicy, networkAccessEnabled, webSearchMode,
+                        event.getMaxTurns(), images, attachments, event.getApiKey(),
+                        baseUrl, extraEnvVars, codexHomeKey, developerInstructions,
+                        outputSchema, codexConfig, sandboxMode, approvalPolicy,
+                        networkAccessEnabled, webSearchMode,
                         businessRuntimeContext, additionalDirectories);
+                String ownershipMode = lifecycleSnapshots == null
+                        ? "SHADOW"
+                        : lifecycleSnapshots.findById(taskId)
+                        .map(value -> value.getOwnershipMode())
+                        .orElse("SHADOW");
+                Mono<Map<String, Object>> lifecycleContextRequest =
+                        client.lifecycleContext(
+                                workerId,
+                                ownershipMode,
+                                codexThreadId == null
+                                        ? "TASK_CREATE" : "TASK_RESUME",
+                                taskId,
+                                "dispatch-" + taskId,
+                                1,
+                                null);
+                Map<String, Object> lifecycleContext =
+                        lifecycleContextRequest == null
+                                ? null
+                                : lifecycleContextRequest
+                                .onErrorResume(error -> Mono.empty())
+                                .block(Duration.ofSeconds(12));
+                if (lifecycleContext == null && "ENFORCED".equals(ownershipMode)) {
+                    throw new IllegalStateException(
+                            "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE");
+                }
+                if (lifecycleContext != null) {
+                    requestBody.put("lifecycle_context", lifecycleContext);
+                    sseFlux = client.streamQuery(requestBody);
+                } else {
+                    sseFlux = client.streamQuery(
+                            event.getPrompt(), event.getCwd(),
+                            codexThreadId, event.getModel(),
+                            event.getMaxTurns(), images, attachments,
+                            event.getApiKey(), baseUrl, extraEnvVars,
+                            codexHomeKey, developerInstructions,
+                            outputSchema, codexConfig,
+                            sandboxMode, approvalPolicy,
+                            networkAccessEnabled, webSearchMode,
+                            businessRuntimeContext, additionalDirectories);
+                }
             }
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,

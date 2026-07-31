@@ -10,6 +10,7 @@ public record NormalizedLifecycleFact(
         String aggregateId,
         String sessionId,
         String taskId,
+        String providerTaskId,
         String operationId,
         WorkerLifecycleIdentity workerIdentity,
         LifecycleOwnershipMode ownershipMode,
@@ -20,6 +21,7 @@ public record NormalizedLifecycleFact(
         String idempotencyKey,
         Instant observedAt,
         Instant recordedAt,
-        String safeReasonCode
+        String safeReasonCode,
+        String terminalOutcome
 ) {
 }

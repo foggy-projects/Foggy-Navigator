@@ -25,6 +25,9 @@ public class LifecycleWriterProofReferenceEntity {
     private String releaseReason;
 
     public String getReferenceId() { return referenceId; }
+    public String getProofId() { return proofId; }
+    public String getAggregateType() { return aggregateType; }
+    public String getAggregateId() { return aggregateId; }
     public LocalDateTime getReleasedAt() { return releasedAt; }
     public void setReferenceId(String value) { referenceId = value; }
     public void setProofId(String value) { proofId = value; }

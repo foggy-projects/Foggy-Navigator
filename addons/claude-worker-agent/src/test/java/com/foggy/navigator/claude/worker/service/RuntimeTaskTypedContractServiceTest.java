@@ -52,6 +52,10 @@ class RuntimeTaskTypedContractServiceTest {
                 stateAuditService, List.of(provider), requestAuditService);
         lenient().when(requestAuditService.terminationRequestReceiptEnabled())
                 .thenReturn(true);
+        lenient().when(provider.supports("OPENAI_CODEX")).thenReturn(true);
+        lenient().when(provider.inspect("task-a", "worker-a")).thenReturn(
+                new RuntimeTaskClosureProvider.TerminationReadiness(
+                        true, true, true, true, true, true, null));
     }
 
     @Test
@@ -136,6 +140,7 @@ class RuntimeTaskTypedContractServiceTest {
 
     @Test
     void receiptPersistenceFailureRejectsBeforeProviderEffect() {
+        owned("RUNNING", false);
         when(requestAuditService.beginTaskOperationIdempotent(
                 REQUEST_ID,
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
@@ -155,7 +160,9 @@ class RuntimeTaskTypedContractServiceTest {
         assertTrue(result.getTerminationRequestReceiptEnabled());
         assertFalse(result.getTerminationRequestReceiptPersisted());
         assertFalse(result.getRequestReconciliationAvailable());
-        verifyNoInteractions(provider);
+        verify(provider, never()).terminate(
+                eq("task-a"), eq("owner-a"), eq("tenant-a"), eq("worker-a"),
+                eq("operator-request"), eq(REQUEST_ID), eq(false));
     }
 
     @Test
@@ -223,7 +230,6 @@ class RuntimeTaskTypedContractServiceTest {
 
     @Test
     void terminateDistinguishesRejectedAndAlreadyTerminal() {
-        newOperation();
         owned("RUNNING", false);
         when(provider.supports("OPENAI_CODEX")).thenReturn(false);
         when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
@@ -250,7 +256,7 @@ class RuntimeTaskTypedContractServiceTest {
                 .thenReturn(new RuntimeTaskClosureProvider.TerminationResult(
                         true, false, false, false, "CANCELLED", null, null));
         when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
-                .thenReturn(audit("CANCELLED", true));
+                .thenReturn(audit("RUNNING", false), audit("CANCELLED", true));
 
         RuntimeTaskClosureDTO terminal = service.terminate(
                 "key", "secret", "user-a", secondId, "task-a", "worker-a",
@@ -263,6 +269,7 @@ class RuntimeTaskTypedContractServiceTest {
 
     @Test
     void duplicateAcceptedRequestReturnsIdempotentOutcomeWithoutProviderCall() {
+        owned("RUNNING", false);
         when(requestAuditService.beginTaskOperationIdempotent(
                 REQUEST_ID, RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
                 "key", "secret", null, "user-a", "task-a"))
@@ -282,7 +289,9 @@ class RuntimeTaskTypedContractServiceTest {
         assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED, result.getOutcome());
         assertTrue(result.getIdempotentReplay());
         assertFalse(result.getCanonicalTerminal());
-        verifyNoInteractions(provider);
+        verify(provider, never()).terminate(
+                eq("task-a"), eq("owner-a"), eq("tenant-a"), eq("worker-a"),
+                eq("operator-request"), eq(REQUEST_ID), eq(false));
     }
 
     @Test
@@ -334,6 +343,7 @@ class RuntimeTaskTypedContractServiceTest {
 
     @Test
     void concurrentlyRegisteredDuplicateReplaysWinningReceiptWithoutProviderCall() {
+        owned("RUNNING", false);
         when(requestAuditService.beginTaskOperationIdempotent(
                 REQUEST_ID, RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
                 "key", "secret", null, "user-a", "task-a"))
@@ -351,7 +361,9 @@ class RuntimeTaskTypedContractServiceTest {
         assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED, result.getOutcome());
         assertTrue(result.getIdempotentReplay());
         assertFalse(result.getCanonicalTerminal());
-        verifyNoInteractions(provider);
+        verify(provider, never()).terminate(
+                eq("task-a"), eq("owner-a"), eq("tenant-a"), eq("worker-a"),
+                eq("operator-request"), eq(REQUEST_ID), eq(false));
     }
 
     @Test

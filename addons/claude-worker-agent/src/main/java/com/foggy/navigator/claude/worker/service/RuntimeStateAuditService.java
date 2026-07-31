@@ -441,7 +441,8 @@ public class RuntimeStateAuditService {
         requireTaskOwnership(owner, upstreamUserId.trim(), task, token);
         TaskAttemptCounts counts = resolveAttemptCounts(task);
         return new OwnedRuntimeTask(
-                task.getTaskId(), task.getUserId(), task.getTenantId(), task.getProviderType(),
+                task.getTaskId(), task.getSessionId(), task.getProviderTaskId(),
+                task.getUserId(), task.getTenantId(), task.getProviderType(),
                 task.getWorkerId(), normalizedStatus(task.getStatus()),
                 TERMINAL_STATUSES.contains(normalizedStatus(task.getStatus())) || terminal.isPresent(),
                 counts.dispatchCount());
@@ -449,6 +450,8 @@ public class RuntimeStateAuditService {
 
     public record OwnedRuntimeTask(
             String taskId,
+            String sessionId,
+            String providerTaskId,
             String ownerUserId,
             String tenantId,
             String providerType,
@@ -456,6 +459,18 @@ public class RuntimeStateAuditService {
             String status,
             boolean terminal,
             int dispatchCount) {
+        public OwnedRuntimeTask(
+                String taskId,
+                String ownerUserId,
+                String tenantId,
+                String providerType,
+                String physicalWorkerId,
+                String status,
+                boolean terminal,
+                int dispatchCount) {
+            this(taskId, null, null, ownerUserId, tenantId, providerType,
+                    physicalWorkerId, status, terminal, dispatchCount);
+        }
     }
 
     private RuntimeAuditSideEffectsDTO noAuditSideEffects() {

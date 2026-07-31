@@ -59,6 +59,90 @@ class WorkerLifecycleSentinelTest {
         assertThat(second.facts()).isEmpty();
     }
 
+    @Test
+    void expiredLeaseCanBeTakenOverByAnotherSentinel() {
+        AtomicInteger attempts = new AtomicInteger();
+        SentinelLeaseStore leases = (worker, holder, now, duration) ->
+                attempts.incrementAndGet() == 1
+                        ? Optional.empty()
+                        : Optional.of(new SentinelLease(worker, holder, 2));
+        AtomicInteger calls = new AtomicInteger();
+
+        assertThat(sentinel(leases).reconcile(
+                "worker-fixture", SentinelTrigger.TIMER,
+                port(calls, ID, 1, 1)).state())
+                .isEqualTo(SentinelReconcileState.LEASE_NOT_ACQUIRED);
+        assertThat(sentinel(leases).reconcile(
+                "worker-fixture", SentinelTrigger.TIMER,
+                port(calls, ID, 1, 1)).state())
+                .isEqualTo(SentinelReconcileState.READY);
+        assertThat(calls).hasValue(3);
+    }
+
+    @Test
+    void generationAndEpochMismatchFailClosedBeforeAck() {
+        AtomicInteger calls = new AtomicInteger();
+        WorkerLifecycleSentinel generationSentinel = sentinel(acquired());
+        generationSentinel.reconcile(
+                "worker-fixture", SentinelTrigger.STARTUP,
+                port(calls, ID, 1, 1));
+        SentinelReconcileResult generation = generationSentinel.reconcile(
+                "worker-fixture", SentinelTrigger.TIMER,
+                port(calls, new WorkerLifecycleIdentity(
+                        "worker-fixture", "generation-2", "epoch-1"), 2, 2));
+        assertThat(generation.state())
+                .isEqualTo(SentinelReconcileState.STATE_GENERATION_RESET);
+
+        WorkerLifecycleSentinel epochSentinel = sentinel(acquired());
+        epochSentinel.reconcile(
+                "worker-fixture", SentinelTrigger.STARTUP,
+                port(calls, ID, 1, 1));
+        int beforeEpochMismatch = calls.get();
+        SentinelReconcileResult epoch = epochSentinel.reconcile(
+                "worker-fixture", SentinelTrigger.TIMER,
+                port(calls, new WorkerLifecycleIdentity(
+                        "worker-fixture", "generation-1", "epoch-2"), 2, 2));
+        assertThat(epoch.state()).isEqualTo(SentinelReconcileState.IDENTITY_CHANGED);
+        assertThat(calls.get() - beforeEpochMismatch).isEqualTo(2);
+    }
+
+    @Test
+    void incompleteInventoryIsCoverageGapAndIsNeverAcknowledged() {
+        AtomicInteger calls = new AtomicInteger();
+        WorkerLifecyclePort incomplete = new WorkerLifecyclePort() {
+            @Override
+            public WorkerLifecycleReadiness probe(String worker) {
+                calls.incrementAndGet();
+                return new WorkerLifecycleReadiness(
+                        true, ID, Set.of("INVENTORY_V1"), List.of());
+            }
+
+            @Override
+            public WorkerLifecycleSnapshot inventory(
+                    WorkerLifecycleIdentity expected, long after) {
+                calls.incrementAndGet();
+                return new WorkerLifecycleSnapshot(
+                        ID, 1, 1, false, List.of(), List.of());
+            }
+
+            @Override
+            public long acknowledge(
+                    WorkerLifecycleIdentity expected, long sequence) {
+                calls.incrementAndGet();
+                return sequence;
+            }
+        };
+        SentinelReconcileResult result = sentinel(acquired()).reconcile(
+                "worker-fixture", SentinelTrigger.TIMER, incomplete);
+        assertThat(result.state()).isEqualTo(SentinelReconcileState.COVERAGE_GAP);
+        assertThat(calls).hasValue(2);
+    }
+
+    private SentinelLeaseStore acquired() {
+        return (worker, holder, now, duration) ->
+                Optional.of(new SentinelLease(worker, holder, 1));
+    }
+
     private WorkerLifecycleSentinel sentinel(SentinelLeaseStore leases) {
         return new WorkerLifecycleSentinel(
                 "fixture-owner", leases,

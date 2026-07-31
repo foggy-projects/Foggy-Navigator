@@ -8,6 +8,7 @@ import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePort;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleReadiness;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleSnapshot;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleTask;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleDispatchStatus;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -25,6 +26,10 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
 
     static final String EXPECTED_WORKER = "X-Navigator-Expected-Physical-Worker-Id";
     static final String EXPECTED_GENERATION = "X-Navigator-Expected-State-Generation";
+    static final String EXPECTED_MODE = "X-Navigator-Expected-Ownership-Mode";
+    static final String EXPECTED_DIGEST_VERSION =
+            "X-Navigator-Expected-Safe-Binding-Digest-Version";
+    static final String EXPECTED_DIGEST = "X-Navigator-Expected-Safe-Binding-Digest";
 
     private final String physicalWorkerId;
     private final WebClient client;
@@ -41,6 +46,11 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + lifecycleCredential)
                 .build();
+    }
+
+    @Override
+    public String physicalWorkerId() {
+        return physicalWorkerId;
     }
 
     @Override
@@ -63,6 +73,50 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
             return new WorkerLifecycleReadiness(
                     false, null, Set.of(), List.of("LIFECYCLE_WORKER_UNAVAILABLE"));
         }
+    }
+
+    @Override
+    public WorkerLifecycleSnapshot events(
+            WorkerLifecycleIdentity expectedIdentity, long afterSequence) {
+        requireWorker(expectedIdentity.physicalWorkerId());
+        String body = client.get()
+                .uri(uri -> uri.path("/api/v1/lifecycle/events")
+                        .queryParam("after_sequence", afterSequence).build())
+                .headers(headers -> fence(headers, expectedIdentity))
+                .retrieve()
+                .bodyToMono(String.class)
+                .block(Duration.ofSeconds(15));
+        if (body == null) throw new IllegalStateException("LIFECYCLE_EVENTS_EMPTY");
+        Map<?, ?> checkpoint = null;
+        java.util.ArrayList<Map<?, ?>> facts = new java.util.ArrayList<>();
+        for (String line : body.split("\\R")) {
+            if (!line.startsWith("data:")) continue;
+            try {
+                Map<?, ?> decoded = objectMapper.readValue(
+                        line.substring("data:".length()).trim(), Map.class);
+                if (decoded.containsKey("through_sequence")) {
+                    checkpoint = decoded;
+                } else if (decoded.containsKey("fact_id")) {
+                    facts.add(decoded);
+                }
+            } catch (Exception invalid) {
+                throw new IllegalStateException("LIFECYCLE_EVENTS_ENVELOPE_INVALID", invalid);
+            }
+        }
+        if (checkpoint == null) {
+            throw new IllegalStateException("LIFECYCLE_EVENTS_CHECKPOINT_MISSING");
+        }
+        WorkerLifecycleIdentity actual = identity(checkpoint);
+        if (!expectedIdentity.equals(actual)) {
+            throw new IllegalStateException("LIFECYCLE_IDENTITY_FENCE_REJECTED");
+        }
+        return new WorkerLifecycleSnapshot(
+                actual,
+                number(checkpoint.get("min_available_sequence")),
+                number(checkpoint.get("through_sequence")),
+                "COMPLETE".equals(checkpoint.get("coverage")),
+                List.of(),
+                facts(facts, actual));
     }
 
     @Override
@@ -94,7 +148,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
     public long acknowledge(
             WorkerLifecycleIdentity expectedIdentity, long throughSequence) {
         requireWorker(expectedIdentity.physicalWorkerId());
-        Map<?, ?> body = client.post().uri("/api/v1/lifecycle/ack")
+        Map<?, ?> body = client.put().uri("/api/v1/lifecycle/ack")
                 .headers(headers -> fence(headers, expectedIdentity))
                 .bodyValue(Map.of(
                         "schema", "NAVIGATOR_WORKER_LIFECYCLE_V1",
@@ -105,6 +159,50 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                 .bodyToMono(Map.class)
                 .block(Duration.ofSeconds(10));
         return body == null ? -1 : number(body.get("acked_through_sequence"));
+    }
+
+    @Override
+    public WorkerLifecycleDispatchStatus dispatchStatus(
+            WorkerLifecycleIdentity expectedIdentity,
+            LifecycleOwnershipMode expectedMode,
+            String dispatchId,
+            String safeBindingDigestVersion,
+            String safeBindingDigest) {
+        requireWorker(expectedIdentity.physicalWorkerId());
+        Map<?, ?> body = client.get()
+                .uri("/api/v1/lifecycle/dispatches/{dispatchId}", dispatchId)
+                .headers(headers -> {
+                    fence(headers, expectedIdentity);
+                    headers.set(EXPECTED_MODE, expectedMode.name());
+                    headers.set(EXPECTED_DIGEST_VERSION, safeBindingDigestVersion);
+                    headers.set(EXPECTED_DIGEST, safeBindingDigest);
+                })
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(10));
+        if (body == null) {
+            throw new IllegalStateException("LIFECYCLE_DISPATCH_STATUS_EMPTY");
+        }
+        WorkerLifecycleIdentity actual = identity(body);
+        if (!expectedIdentity.equals(actual)
+                || expectedMode != LifecycleOwnershipMode.valueOf(
+                string(body.get("ownership_mode")))) {
+            throw new IllegalStateException("LIFECYCLE_DISPATCH_STATUS_FENCE_REJECTED");
+        }
+        return new WorkerLifecycleDispatchStatus(
+                actual,
+                expectedMode,
+                string(body.get("navigator_task_id")),
+                string(body.get("provider_task_id")),
+                string(body.get("dispatch_id")),
+                string(body.get("termination_operation_id")),
+                string(body.get("safe_binding_digest_version")),
+                string(body.get("safe_binding_digest")),
+                string(body.get("effect_phase")),
+                number(body.get("disposition_version")),
+                Boolean.TRUE.equals(body.get("duplicate")),
+                Boolean.TRUE.equals(body.get("provider_effect_started")),
+                Boolean.TRUE.equals(body.get("reconcile_required")));
     }
 
     private void fence(HttpHeaders headers, WorkerLifecycleIdentity identity) {
@@ -161,6 +259,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                             string(fact.get("aggregate_id")),
                             string(fact.get("session_id")),
                             string(fact.get("navigator_task_id")),
+                            string(fact.get("provider_task_id")),
                             string(fact.get("operation_id")),
                             identity,
                             mode == null ? LifecycleOwnershipMode.SHADOW
@@ -172,7 +271,8 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                             string(fact.get("idempotency_key")),
                             recordedAt,
                             recordedAt,
-                            string(fact.get("safe_reason_code")));
+                            string(fact.get("safe_reason_code")),
+                            string(fact.get("terminal_outcome")));
                 }).toList();
     }
 

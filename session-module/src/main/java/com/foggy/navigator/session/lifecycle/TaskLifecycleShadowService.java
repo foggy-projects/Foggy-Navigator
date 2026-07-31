@@ -117,6 +117,7 @@ public class TaskLifecycleShadowService {
     private LifecycleEffectOutboxEntity toEntity(LifecycleEffect effect, String effectId) {
         LifecycleEffectOutboxEntity entity = new LifecycleEffectOutboxEntity();
         entity.setEffectId(effectId);
+        entity.setAggregateType("TASK");
         entity.setAggregateId(effect.aggregateId());
         entity.setEffectType(effect.effectType());
         entity.setEffectClass("LOCAL_IDEMPOTENT");

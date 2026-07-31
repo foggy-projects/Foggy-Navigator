@@ -1,23 +1,37 @@
 package com.foggy.navigator.session.lifecycle;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.session.lifecycle.persistence.LifecycleEffectOutboxEntity;
+import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofEntity;
+import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofReferenceEntity;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofReferenceRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.Statement;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Repo-owned ephemeral Slice 8 fixture. It creates its own in-memory database,
- * fake controller evidence and aggregate identifiers; it opens no shared port.
+ * Repo-owned Slice 8 fixture using production JPA entities, proof/reference/
+ * outbox authorization, enrollment gate, and the real Node Worker router.
  */
+@SpringJUnitConfig(classes = {
+        TaskLifecycleOwnerVerticalIntegrationTest.Config.class,
+        WriterExclusivityProofService.class
+})
 class IsolatedEnforcedLifecycleContractTest {
-
     private static final Set<String> CAPABILITIES = Set.of(
             "AUTHENTICATED_LIFECYCLE_V1",
             "FENCED_INVENTORY_V1",
@@ -26,85 +40,140 @@ class IsolatedEnforcedLifecycleContractTest {
             "EXACT_DISPATCH_DEDUPE_V1",
             "DURABLE_PROVIDER_TASK_ID_V1",
             "TERMINATION_ATOMIC_CAPABILITY_V1");
+    private static final LocalDateTime NOW =
+            LocalDateTime.parse("2026-07-31T12:00:00");
+
+    @org.springframework.beans.factory.annotation.Autowired
+    WriterExclusivityProofService writer;
+    @org.springframework.beans.factory.annotation.Autowired
+    LifecycleWriterProofRepository proofs;
+    @org.springframework.beans.factory.annotation.Autowired
+    LifecycleWriterProofReferenceRepository references;
+    @org.springframework.beans.factory.annotation.Autowired
+    LifecycleEffectOutboxRepository outbox;
 
     @Test
-    void enforcedFixtureQuarantinesOnProofLossAndConvergesAfterRecovery()
+    void enforcedFixtureUsesWorkerRouteAndProductionFencingChain()
             throws Exception {
-        String suffix = UUID.randomUUID().toString().replace("-", "");
-        try (Connection db = DriverManager.getConnection(
-                "jdbc:h2:mem:arch001_" + suffix + ";DB_CLOSE_DELAY=-1");
-             Statement sql = db.createStatement()) {
-            sql.execute("create table fixture_proof("
-                    + "proof_id varchar(96) primary key, status varchar(24), refs int, "
-                    + "unfinished_outbox int)");
-            sql.execute("insert into fixture_proof values('proof-fixture','ACTIVE',3,1)");
+        Process worker = startWorkerFixture();
+        try {
+            Map<?, ?> started = new ObjectMapper()
+                    .readValue(worker.inputReader().readLine(), Map.class);
+            String baseUrl = (String) started.get("baseUrl");
+            String generation = (String) started.get("stateGeneration");
+            HttpResponse<String> inventory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create(
+                                    baseUrl
+                                            + "/api/v1/lifecycle/inventory?after_sequence=0"))
+                            .header("Authorization",
+                                    "Bearer arch001-java-node-fixture-token")
+                            .header("X-Navigator-Expected-Physical-Worker-Id",
+                                    "arch001-java-node-worker")
+                            .header("X-Navigator-Expected-State-Generation",
+                                    generation)
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(inventory.statusCode()).isEqualTo(200);
+            assertThat(inventory.body()).contains(
+                    "\"schema\":\"NAVIGATOR_WORKER_LIFECYCLE_V1\"");
 
-            FakeController controller = new FakeController(true, true);
-            LocalDateTime now = LocalDateTime.parse("2026-07-30T12:00:00");
-            LifecycleEnrollmentGate gate = new LifecycleEnrollmentGate();
-            LifecycleEnrollmentGate.EnrollmentRequest request =
-                    request(controller, now, true, now.plusMinutes(2));
-            assertThat(gate.evaluate(request).enrolled()).isTrue();
+            persistFence();
+            LifecycleEnrollmentGate.EnrollmentDecision enrollment =
+                    new LifecycleEnrollmentGate().evaluate(request(true));
+            assertThat(enrollment.enrolled()).isTrue();
 
-            controller.exclusive = false;
-            sql.execute("update fixture_proof set status='QUARANTINED'");
-            assertThat(gate.evaluate(request(controller, now, false, now.minusSeconds(1)))
-                    .safeReasonCode()).isEqualTo("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
-
-            controller.exclusive = true;
-            sql.execute("update fixture_proof set status='ACTIVE', "
-                    + "refs=0, unfinished_outbox=0");
-            assertThat(gate.evaluate(request(
-                    controller, now.plusSeconds(5), true, now.plusMinutes(2))).enrolled())
-                    .isTrue();
-            ResultSet remaining = sql.executeQuery(
-                    "select refs, unfinished_outbox from fixture_proof");
-            assertThat(remaining.next()).isTrue();
-            assertThat(remaining.getInt(1)).isZero();
-            assertThat(remaining.getInt(2)).isZero();
+            var authorization = writer.authorizeEffect(command(), NOW);
+            assertThat(authorization.providerCallAuthorized()).isTrue();
+            writer.quarantine("proof-slice8");
+            assertThat(writer.authorizeEffect(command(), NOW.plusSeconds(1))
+                    .alreadyStarted()).isTrue();
+            assertThat(outbox.findById("effect-slice8").orElseThrow()
+                    .getEffectState()).isEqualTo("EFFECT_STARTED");
+            assertThat(references
+                    .countByProofIdAndReleasedAtIsNull("proof-slice8"))
+                    .isEqualTo(1);
+            assertThat(writer.mayReleaseProof("proof-slice8")).isFalse();
+        } finally {
+            worker.destroy();
+            if (!worker.waitFor(10, TimeUnit.SECONDS)) worker.destroyForcibly();
         }
     }
 
     @Test
     void nonFixtureEnrollmentRemainsDisabledWithoutRealActivationEvidence() {
-        LocalDateTime now = LocalDateTime.parse("2026-07-30T12:00:00");
         LifecycleEnrollmentGate.EnrollmentRequest request =
                 new LifecycleEnrollmentGate.EnrollmentRequest(
                         "codex-biz-worker", true, false, false, true, true, true,
                         true, true, true, CAPABILITIES, true,
-                        now.plusMinutes(1), now);
+                        NOW.plusMinutes(1), NOW);
         assertThat(new LifecycleEnrollmentGate().evaluate(request).safeReasonCode())
                 .isEqualTo(LifecycleSchemaReadiness.ACTIVATION_DISABLED);
     }
 
-    private LifecycleEnrollmentGate.EnrollmentRequest request(
-            FakeController controller,
-            LocalDateTime now,
-            boolean proofActive,
-            LocalDateTime expires) {
-        return new LifecycleEnrollmentGate.EnrollmentRequest(
-                "codex-biz-worker",
-                controller.targetBinaryHomogeneous,
-                true,
-                false,
-                true,
-                true,
-                true,
-                true,
-                true,
-                true,
-                CAPABILITIES,
-                proofActive && controller.exclusive,
-                expires,
-                now);
+    private void persistFence() {
+        outbox.deleteAll();
+        references.deleteAll();
+        proofs.deleteAll();
+        LifecycleWriterProofEntity proof = new LifecycleWriterProofEntity();
+        proof.setProofId("proof-slice8");
+        proof.setGenerationId("generation-slice8");
+        proof.setControllerInventoryDigest("inventory-slice8");
+        proof.setHolderInstanceId("instance-slice8");
+        proof.setProofVersion(1);
+        proof.setStatus("ACTIVE");
+        proof.setAcquiredAt(NOW);
+        proof.setLastVerifiedAt(NOW);
+        proof.setExpiresAt(NOW.plusMinutes(5));
+        proofs.saveAndFlush(proof);
+
+        String referenceId = writer.acquireReference(
+                "proof-slice8", ProofAggregateType.TASK,
+                "task-slice8", NOW);
+
+        LifecycleEffectOutboxEntity effect = new LifecycleEffectOutboxEntity();
+        effect.setEffectId("effect-slice8");
+        effect.setAggregateType("TASK");
+        effect.setAggregateId("task-slice8");
+        effect.setEffectType("TASK_CREATE");
+        effect.setEffectClass("EXTERNAL_PROVIDER_ONCE");
+        effect.setEffectState("CLAIMED");
+        effect.setIdempotencyKey("slice8-effect");
+        effect.setAggregateReferenceId(referenceId);
+        effect.setWriterGenerationId("generation-slice8");
+        effect.setControllerInventoryDigest("inventory-slice8");
+        effect.setEffectClaim("TASK_CREATE_PROVIDER_CALL");
+        effect.setContentFreePayloadJson("{}");
+        outbox.saveAndFlush(effect);
     }
 
-    private static final class FakeController {
-        private final boolean targetBinaryHomogeneous;
-        private boolean exclusive;
-        private FakeController(boolean homogeneous, boolean exclusive) {
-            this.targetBinaryHomogeneous = homogeneous;
-            this.exclusive = exclusive;
+    private WriterExclusivityProofService.EffectAuthorizationCommand command() {
+        return new WriterExclusivityProofService.EffectAuthorizationCommand(
+                "effect-slice8", "proof-slice8",
+                "proof-slice8:TASK:task-slice8",
+                ProofAggregateType.TASK, "task-slice8", "generation-slice8",
+                "inventory-slice8", "TASK_CREATE_PROVIDER_CALL");
+    }
+
+    private LifecycleEnrollmentGate.EnrollmentRequest request(boolean proofActive) {
+        return new LifecycleEnrollmentGate.EnrollmentRequest(
+                "codex-biz-worker", true, true, false, true, true, true,
+                true, true, true, CAPABILITIES, proofActive,
+                NOW.plusMinutes(2), NOW);
+    }
+
+    private Process startWorkerFixture() throws Exception {
+        Path cursor = Path.of("").toAbsolutePath();
+        while (cursor != null
+                && !Files.isRegularFile(cursor.resolve(
+                "tools/codex-agent-worker/package.json"))) {
+            cursor = cursor.getParent();
         }
+        if (cursor == null) throw new IllegalStateException("WORKER_FIXTURE_NOT_FOUND");
+        return new ProcessBuilder(
+                "node", "--import", "tsx",
+                "tests/fixtures/lifecycle-router-server.ts")
+                .directory(cursor.resolve("tools/codex-agent-worker").toFile())
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
+                .start();
     }
 }

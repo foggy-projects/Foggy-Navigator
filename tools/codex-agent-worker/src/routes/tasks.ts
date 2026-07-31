@@ -469,7 +469,8 @@ router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
       return
     }
     if (lifecycleDisposition.duplicate
-        && lifecycle.context.ownership_mode === 'ENFORCED') {
+        && lifecycle.context.ownership_mode === 'ENFORCED'
+        && lifecycleDisposition.effect_phase !== 'PREPARED') {
       res.status(202).json({
         ...lifecycleDisposition,
         ...taskStatusPayload(entry),
@@ -501,6 +502,18 @@ router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
       ...taskStatusPayload(entry),
     })
     return
+  }
+
+  if (lifecycleDisposition
+      && lifecycle?.context.ownership_mode === 'ENFORCED'
+      && isTaskTerminal(requested.status)) {
+    lifecycleDisposition = lifecycle.store.markResultObserved(
+      lifecycle.context.dispatch_id,
+      'TASK_PROVIDER_TERMINAL_OBSERVED',
+      requested.status === 'aborted' ? 'CANCELLED'
+        : requested.status === 'completed' ? 'COMPLETED' : 'FAILED',
+      'TERMINATION_PROVIDER_RESULT_OBSERVED',
+    )
   }
 
   res.status(202).json({

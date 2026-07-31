@@ -74,6 +74,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -287,6 +288,87 @@ class CodexTaskServiceTest {
         assertEquals("RUNTIME_COMPLETION_READINESS_UNSUPPORTED",
                 observed.sanitizedErrorCode());
         verifyNoInteractions(workerClient);
+    }
+
+    @Test
+    void exactCodexBizWorkerRunsReadinessTerminationAndSameRequestReplay() {
+        CodexTaskEntity task = createTask(
+                "task-biz-lifecycle", "session-biz-lifecycle", "worker-1",
+                "dir-1", "RUNNING", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        task.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        task.setWorkerTaskId("provider-task-biz");
+        when(taskRepository.findByTaskId("task-biz-lifecycle"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdForUpdate("task-biz-lifecycle"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://worker.example")
+                        .authToken("fixture-secret").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "fixture-secret"))
+                .thenReturn(workerClient);
+        when(workerClient.healthCheck()).thenReturn(Mono.just(Map.of(
+                "termination_auth_configured", true,
+                "termination_worker_id_configured", true,
+                "termination_ready", true)));
+        when(workerClient.getTaskStatus("provider-task-biz"))
+                .thenReturn(Mono.just(Map.of("status", "running")));
+        when(workerClient.getTaskCompletionReadiness("provider-task-biz"))
+                .thenReturn(Mono.just(completionObservation(
+                        "worker-1", "provider-task-biz", 1)));
+        when(terminationOperationService.find("rt_bizrequest1"))
+                .thenReturn(null)
+                .thenReturn(terminationOperation(
+                        "rt_bizrequest1", "task-biz-lifecycle",
+                        "provider-task-biz", "worker-1",
+                        "REMOTE_CANCEL", "CANCEL_REQUESTED"));
+        when(terminationOperationService.accept(
+                any(TerminationOperationService.CreateCommand.class),
+                eq("rt_bizrequest1")))
+                .thenReturn(terminationOperation(
+                        "rt_bizrequest1", "task-biz-lifecycle",
+                        "provider-task-biz", "worker-1",
+                        "REMOTE_CANCEL", "ACCEPTED"));
+        when(workerClient.terminationSigningSecret())
+                .thenReturn("fixture-signing-secret");
+        when(workerClient.lifecycleContext(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyInt(), anyString()))
+                .thenReturn(Mono.just(Map.of(
+                        "schema_version", "worker-lifecycle-v1")));
+        when(workerClient.abortTask(
+                eq("provider-task-biz"),
+                any(TerminationOperationCapability.class),
+                any()))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "provider-task-biz",
+                        "status", "cancel_requested")));
+        ReflectionTestUtils.setField(
+                service, "terminationOperationService",
+                terminationOperationService);
+
+        var readiness = service.inspectRuntimeCompletionReadiness(
+                "task-biz-lifecycle", "worker-1", 1);
+        var first = service.terminateRuntimeTask(
+                "task-biz-lifecycle", "user-1", "tenant-1", "worker-1",
+                "operator-request", "biz-request-1", false);
+        var replay = service.terminateRuntimeTask(
+                "task-biz-lifecycle", "user-1", "tenant-1", "worker-1",
+                "operator-request", "biz-request-1", false);
+
+        assertTrue(readiness.identityVerified());
+        assertTrue(readiness.resultRecoverable());
+        assertTrue(first.terminationDispatched());
+        assertTrue(replay.idempotentReplay());
+        verify(workerClient, times(1)).abortTask(
+                eq("provider-task-biz"),
+                any(TerminationOperationCapability.class),
+                any());
     }
 
     @Test
