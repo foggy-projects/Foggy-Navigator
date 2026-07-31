@@ -39,8 +39,10 @@ class WriterExclusivityProofServiceTest {
 
         WriterExclusivityProofService service =
                 service(proofs, refs, outbox);
-        assertThatThrownBy(() -> service.authorizeEffect(command(), NOW))
-                .hasMessage("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        var authorization = service.authorizeEffect(command(), NOW);
+        assertThat(authorization.providerCallAuthorized()).isFalse();
+        assertThat(authorization.safeReasonCode())
+                .isEqualTo("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
         verify(outbox, never()).save(effect);
     }
 
@@ -115,6 +117,8 @@ class WriterExclusivityProofServiceTest {
         return new WriterExclusivityProofService(
                 proofs, refs, outbox,
                 mock(TaskLifecycleSnapshotRepository.class),
-                mock(SessionLifecycleSnapshotRepository.class));
+                mock(SessionLifecycleSnapshotRepository.class),
+                mock(com.foggy.navigator.session.lifecycle.repository
+                        .WorkerLifecycleSnapshotRepository.class));
     }
 }

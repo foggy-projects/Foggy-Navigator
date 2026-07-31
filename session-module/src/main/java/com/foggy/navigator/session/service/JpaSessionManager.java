@@ -10,6 +10,7 @@ import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
+import com.foggy.navigator.spi.lifecycle.LifecycleEnrollmentRetirementPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
@@ -36,6 +37,10 @@ public class JpaSessionManager implements SessionManager {
     private final ObjectMapper objectMapper;
     @Nullable
     private final AgentContextStore contextStore;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @Nullable
+    private LifecycleEnrollmentRetirementPort lifecycleRetirement;
 
     @Override
     @Transactional
@@ -189,6 +194,9 @@ public class JpaSessionManager implements SessionManager {
     @Transactional
     public void closeSession(String sessionId) {
         updateStatus(sessionId, SessionStatus.COMPLETED);
+        if (lifecycleRetirement != null) {
+            lifecycleRetirement.sessionClosed(sessionId);
+        }
     }
 
     @Override

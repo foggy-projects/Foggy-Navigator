@@ -61,6 +61,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
 
 /**
  * Codex Worker SSE → AgentMessage 桥接
@@ -260,7 +261,10 @@ public class CodexStreamRelay {
                                 codexThreadId == null
                                         ? "TASK_CREATE" : "TASK_RESUME",
                                 taskId,
-                                "dispatch-" + taskId,
+                                stableLifecycleDispatchId(
+                                        codexThreadId == null
+                                                ? "TASK_CREATE" : "TASK_RESUME",
+                                        taskId),
                                 1,
                                 null);
                 Map<String, Object> lifecycleContext =
@@ -957,6 +961,10 @@ public class CodexStreamRelay {
         if (data == null || data.isEmpty()) return;
 
         try {
+            if ("lifecycle_disposition".equals(sse.event())) {
+                persistLifecycleDisposition(taskId, data);
+                return;
+            }
             WorkerEvent event = objectMapper.readValue(data, WorkerEvent.class);
 
             CodexTaskEntity currentTask = taskRepository.findByTaskId(taskId).orElse(null);
@@ -1172,6 +1180,54 @@ public class CodexStreamRelay {
                     taskId, stableFailureCode(e, "CODEX_WORKER_EVENT_PROCESSING_FAILED"), exceptionType(e));
             throw new WorkerEventProcessingException(taskId, e);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void persistLifecycleDisposition(String taskId, String data)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        Map<String, Object> disposition = objectMapper.readValue(data, Map.class);
+        if (!"NAVIGATOR_WORKER_LIFECYCLE_V1".equals(
+                stringField(disposition, "schema"))
+                || !taskId.equals(stringField(
+                disposition, "navigator_task_id"))
+                || !"ACCEPTED".equals(stringField(
+                disposition, "acceptance_disposition"))) {
+            throw new IllegalStateException(
+                    "CODEX_LIFECYCLE_DISPOSITION_BINDING_MISMATCH");
+        }
+        String providerTaskId = stringField(disposition, "provider_task_id");
+        String commandKind = stringField(disposition, "command_kind");
+        String dispatchId = stringField(disposition, "dispatch_id");
+        if (providerTaskId == null
+                || !stableLifecycleDispatchId(commandKind, taskId)
+                .equals(dispatchId)) {
+            throw new IllegalStateException(
+                    "CODEX_LIFECYCLE_DISPOSITION_BINDING_MISMATCH");
+        }
+        if ("ENFORCED".equals(stringField(
+                disposition, "ownership_mode"))
+                && !"EFFECT_STARTED".equals(stringField(
+                disposition, "effect_phase"))) {
+            throw new IllegalStateException(
+                    "CODEX_LIFECYCLE_EFFECT_NOT_AUTHORIZED");
+        }
+        taskService.recordWorkerProgress(
+                taskId, providerTaskId, null, null,
+                null, false, false);
+    }
+
+    static String stableLifecycleDispatchId(
+            String commandKind, String taskOrOperationId) {
+        if (!List.of("TASK_CREATE", "TASK_RESUME", "TERMINATION_CANCEL")
+                .contains(commandKind)
+                || taskOrOperationId == null
+                || taskOrOperationId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "CODEX_LIFECYCLE_DISPATCH_INPUT_INVALID");
+        }
+        return UUID.nameUUIDFromBytes(
+                ("codex-lifecycle:" + commandKind + ":" + taskOrOperationId)
+                        .getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     private void handleNativeSubtaskUpdate(WorkerEvent event, String taskId, String sessionId,

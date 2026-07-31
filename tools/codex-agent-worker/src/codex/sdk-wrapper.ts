@@ -22,6 +22,7 @@ import {
   type TerminationOperationSummary,
   type WorkerEvent,
 } from '../models.js'
+import { lifecycleStore } from '../lifecycle/runtime.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { safeSdkError } from '../diagnostics.js'
 import { EventBroadcast } from '../persistence/event-store.js'
@@ -1000,6 +1001,14 @@ function finalizeTask(
   }
   releaseCodexThreadReservationsForTask(entry.taskId)
   lifecycleEvent(entry, 'lifecycle_terminal', result ?? toTaskLifecycleState(status))
+  lifecycleStore()?.markProviderTaskTerminal(
+    entry.taskId,
+    status === 'completed' ? 'COMPLETED'
+      : status === 'aborted' ? 'CANCELLED' : 'FAILED',
+    entry.terminationOperation
+      ? 'TERMINATION_PROVIDER_TERMINAL_OBSERVED'
+      : 'PROVIDER_RESULT_OBSERVED',
+  )
 }
 
 type CancellationProcessDependencies = Pick<

@@ -77,6 +77,21 @@ class LifecycleMigrationMySqlIntegrationTest {
                     "uk_lf_idempotency", false)).isTrue();
             assertThat(indexExists(connection, "lifecycle_effect_outbox",
                     "uk_leo_idempotency", false)).isTrue();
+            assertThat(indexExists(connection, "lifecycle_effect_outbox",
+                    "idx_leo_state", true)).isTrue();
+            assertThat(indexExists(connection,
+                    "lifecycle_writer_exclusivity_references",
+                    "uk_lwer_active", false)).isTrue();
+            assertColumn(connection, "lifecycle_effect_outbox",
+                    "aggregate_reference_id", true, 160);
+            assertColumn(connection, "lifecycle_effect_outbox",
+                    "controller_inventory_digest", true, 128);
+            assertColumn(connection,
+                    "lifecycle_writer_exclusivity_references",
+                    "reference_id", false, 160);
+            assertColumn(connection,
+                    "lifecycle_writer_exclusivity_proofs",
+                    "controller_inventory_digest", false, 128);
             validateJpa(mysql);
 
             execute(connection, ROLLBACK);
@@ -87,21 +102,94 @@ class LifecycleMigrationMySqlIntegrationTest {
                     "select marker from arch001_legacy_sentinel where id=1"))
                     .isEqualTo("legacy-untouched");
 
-            execute(connection, FORWARD);
-            connection.createStatement().execute("""
+            assertRollbackBlocked(mysql, "worker_marker", """
+                    insert into worker_lifecycle_snapshots(
+                      physical_worker_id,ownership_mode,availability,
+                      conflict_state,fact_cursor,policy_version,snapshot_json,
+                      row_version,updated_at)
+                    values('fixture-worker','ENFORCED','READY','NONE',0,
+                      'fixture','{}',0,now(6))
+                    """);
+            assertRollbackBlocked(mysql, "session_marker", """
+                    insert into session_lifecycle_snapshots(
+                      session_id,ownership_mode,canonical_phase,
+                      foreground_lane_state,availability,conflict_state,
+                      row_version,updated_at)
+                    values('fixture-session','ENFORCED','OPEN','FREE',
+                      'READY','NONE',0,now(6))
+                    """);
+            assertRollbackBlocked(mysql, "task_marker", """
                     insert into task_lifecycle_snapshots(
-                      task_id, ownership_mode, canonical_phase, availability,
-                      conflict_state, cleanup_state, fact_cursor, policy_version,
-                      snapshot_json, row_version, updated_at)
+                      task_id,ownership_mode,canonical_phase,availability,
+                      conflict_state,cleanup_state,fact_cursor,policy_version,
+                      snapshot_json,row_version,updated_at)
                     values('fixture-task','ENFORCED','OPEN','READY','NONE',
                       'NOT_REQUIRED',0,'fixture','{}',0,now(6))
                     """);
+            assertRollbackBlocked(mysql, "writer_active", """
+                    insert into lifecycle_writer_generations(
+                      generation_id,minimum_owner_protocol,target_commit,
+                      status,row_version)
+                    values('fixture-generation',1,'fixture','ACTIVE',0)
+                    """);
+            assertRollbackBlocked(mysql, "writer_enforced", """
+                    insert into lifecycle_writer_generations(
+                      generation_id,minimum_owner_protocol,target_commit,
+                      status,row_version)
+                    values('fixture-generation',1,'fixture','ENFORCED',0)
+                    """);
+            assertRollbackBlocked(mysql, "unreleased_reference", """
+                    insert into lifecycle_writer_exclusivity_references(
+                      reference_id,proof_id,aggregate_type,aggregate_id,
+                      acquired_at)
+                    values('fixture-reference','fixture-proof','TASK',
+                      'fixture-task',now(6))
+                    """);
+            for (String state : List.of(
+                    "PREPARED", "CLAIMED", "EFFECT_STARTED")) {
+                assertRollbackBlocked(
+                        mysql, "outbox_" + state.toLowerCase(),
+                        """
+                        insert into lifecycle_effect_outbox(
+                          effect_id,aggregate_type,aggregate_id,effect_type,
+                          effect_class,effect_state,idempotency_key,
+                          content_free_payload_json,created_at,row_version)
+                        values('fixture-effect','TASK','fixture-task',
+                          'TERMINATION_REQUEST','EXTERNAL_PROVIDER_ONCE','%s',
+                          'fixture-key','{}',now(6),0)
+                        """.formatted(state));
+            }
+        } finally {
+            mysql.stop();
+        }
+    }
+
+    private void assertRollbackBlocked(
+            MySQLContainer<?> mysql,
+            String databaseSuffix,
+            String markerSql) throws Exception {
+        String database = "arch001_" + databaseSuffix;
+        String administrationUrl = mysql.getJdbcUrl().replaceFirst(
+                "/[^/?]+([?].*)?$", "/mysql");
+        try (Connection root = DriverManager.getConnection(
+                administrationUrl, "root", mysql.getPassword())) {
+            root.createStatement().execute(
+                    "create database `" + database + "`");
+            root.createStatement().execute(
+                    "grant all privileges on `" + database
+                            + "`.* to '" + mysql.getUsername() + "'@'%'");
+        }
+        String url = mysql.getJdbcUrl().replaceFirst(
+                "/[^/?]+([?].*)?$", "/" + database);
+        try (Connection connection = DriverManager.getConnection(
+                url, mysql.getUsername(), mysql.getPassword())) {
+            execute(connection, FORWARD);
+            connection.createStatement().execute(markerSql);
             assertThatThrownBy(() -> execute(connection, ROLLBACK))
                     .hasMessage(
                             "ARCH001_ROLLBACK_BLOCKED_ENFORCEMENT_FLOOR");
-            assertThat(tableExists(connection, "task_lifecycle_snapshots")).isTrue();
-        } finally {
-            mysql.stop();
+            assertThat(tableExists(connection,
+                    "lifecycle_effect_outbox")).isTrue();
         }
     }
 

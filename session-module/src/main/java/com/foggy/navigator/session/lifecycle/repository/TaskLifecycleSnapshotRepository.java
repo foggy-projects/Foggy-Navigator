@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import jakarta.persistence.LockModeType;
 import java.util.Optional;
+import java.util.List;
 
 public interface TaskLifecycleSnapshotRepository
         extends JpaRepository<TaskLifecycleSnapshotEntity, String> {
@@ -14,4 +15,8 @@ public interface TaskLifecycleSnapshotRepository
     @Query("select snapshot from TaskLifecycleSnapshotEntity snapshot "
             + "where snapshot.taskId = :taskId")
     Optional<TaskLifecycleSnapshotEntity> findForUpdate(@Param("taskId") String taskId);
+
+    List<TaskLifecycleSnapshotEntity>
+    findByPhysicalWorkerIdAndOwnershipMode(
+            String physicalWorkerId, String ownershipMode);
 }

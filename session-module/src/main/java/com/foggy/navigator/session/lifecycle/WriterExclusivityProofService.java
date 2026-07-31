@@ -8,10 +8,12 @@ import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRefe
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.WorkerLifecycleSnapshotRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 
 @Service
 public class WriterExclusivityProofService {
@@ -21,18 +23,21 @@ public class WriterExclusivityProofService {
     private final LifecycleEffectOutboxRepository outbox;
     private final TaskLifecycleSnapshotRepository taskSnapshots;
     private final SessionLifecycleSnapshotRepository sessionSnapshots;
+    private final WorkerLifecycleSnapshotRepository workerSnapshots;
 
     public WriterExclusivityProofService(
             LifecycleWriterProofRepository proofs,
             LifecycleWriterProofReferenceRepository references,
             LifecycleEffectOutboxRepository outbox,
             TaskLifecycleSnapshotRepository taskSnapshots,
-            SessionLifecycleSnapshotRepository sessionSnapshots) {
+            SessionLifecycleSnapshotRepository sessionSnapshots,
+            WorkerLifecycleSnapshotRepository workerSnapshots) {
         this.proofs = proofs;
         this.references = references;
         this.outbox = outbox;
         this.taskSnapshots = taskSnapshots;
         this.sessionSnapshots = sessionSnapshots;
+        this.workerSnapshots = workerSnapshots;
     }
 
     @Transactional
@@ -86,10 +91,15 @@ public class WriterExclusivityProofService {
                 .equals(command.controllerInventoryDigest())) {
             throw new IllegalStateException("LIFECYCLE_PROOF_BINDING_MISMATCH");
         }
-        LifecycleWriterProofReferenceEntity reference = references
-                .findForUpdate(command.aggregateReferenceId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "LIFECYCLE_AGGREGATE_REFERENCE_NOT_FOUND"));
+        lockRequiredReference(
+                command.workerReferenceId(), command.proofId(),
+                ProofAggregateType.WORKER, command.physicalWorkerId());
+        lockRequiredReference(
+                command.sessionReferenceId(), command.proofId(),
+                ProofAggregateType.SESSION, command.sessionId());
+        LifecycleWriterProofReferenceEntity reference = lockRequiredReference(
+                command.aggregateReferenceId(), command.proofId(),
+                command.aggregateType(), command.aggregateId());
         if (reference.getReleasedAt() != null
                 || !reference.getProofId().equals(command.proofId())
                 || !reference.getAggregateType().equals(command.aggregateType().name())
@@ -104,8 +114,12 @@ public class WriterExclusivityProofService {
                 || "COMPLETED".equals(effect.getEffectState())) {
             return new EffectAuthorization(false, true, "EFFECT_ALREADY_STARTED");
         }
-        requireActive(proof, now);
-        if (!"CLAIMED".equals(effect.getEffectState())
+        if (!active(proof, now)) {
+            quarantineLocked(proof);
+            return new EffectAuthorization(
+                    false, false, "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        }
+        if (!Set.of("PREPARED", "CLAIMED").contains(effect.getEffectState())
                 || !"EXTERNAL_PROVIDER_ONCE".equals(effect.getEffectClass())
                 || !command.aggregateType().name().equals(effect.getAggregateType())
                 || !command.aggregateId().equals(effect.getAggregateId())
@@ -119,6 +133,7 @@ public class WriterExclusivityProofService {
             throw new IllegalStateException(
                     "LIFECYCLE_EFFECT_AUTHORIZATION_CLAIM_MISMATCH");
         }
+        effect.setEffectState("CLAIMED");
         effect.setProofId(command.proofId());
         effect.setEffectAuthorizationProofVersion(Long.toString(proof.getProofVersion()));
         effect.setAuthorizedAt(now);
@@ -131,8 +146,7 @@ public class WriterExclusivityProofService {
     public void quarantine(String proofId) {
         LifecycleWriterProofEntity proof = proofs.findForUpdate(proofId)
                 .orElseThrow(() -> new IllegalStateException("LIFECYCLE_PROOF_NOT_FOUND"));
-        proof.setStatus("QUARANTINED");
-        proofs.save(proof);
+        quarantineLocked(proof);
     }
 
     public boolean mayReleaseProof(String proofId) {
@@ -149,9 +163,76 @@ public class WriterExclusivityProofService {
 
     private void requireActive(
             LifecycleWriterProofEntity proof, LocalDateTime now) {
-        if (!"ACTIVE".equals(proof.getStatus())
-                || !proof.getExpiresAt().isAfter(now)) {
+        if (!active(proof, now)) {
             throw new IllegalStateException("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        }
+    }
+
+    private boolean active(
+            LifecycleWriterProofEntity proof, LocalDateTime now) {
+        return "ACTIVE".equals(proof.getStatus())
+                && proof.getExpiresAt().isAfter(now);
+    }
+
+    private LifecycleWriterProofReferenceEntity lockRequiredReference(
+            String referenceId,
+            String proofId,
+            ProofAggregateType type,
+            String aggregateId) {
+        if (referenceId == null) {
+            if (type == ProofAggregateType.TASK) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_AGGREGATE_REFERENCE_NOT_FOUND");
+            }
+            return null;
+        }
+        LifecycleWriterProofReferenceEntity reference = references
+                .findForUpdate(referenceId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_AGGREGATE_REFERENCE_NOT_FOUND"));
+        if (reference.getReleasedAt() != null
+                || !proofId.equals(reference.getProofId())
+                || !type.name().equals(reference.getAggregateType())
+                || !aggregateId.equals(reference.getAggregateId())) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_AGGREGATE_REFERENCE_MISMATCH");
+        }
+        return reference;
+    }
+
+    private void quarantineLocked(LifecycleWriterProofEntity proof) {
+        proof.setStatus("QUARANTINED");
+        proofs.save(proof);
+        for (LifecycleWriterProofReferenceEntity reference :
+                references
+                        .findByProofIdAndReleasedAtIsNullOrderByAggregateTypeAscAggregateIdAsc(
+                                proof.getProofId())) {
+            switch (ProofAggregateType.valueOf(reference.getAggregateType())) {
+                case WORKER -> workerSnapshots.findById(
+                        reference.getAggregateId()).ifPresent(snapshot -> {
+                    snapshot.setAvailability(
+                            LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+                    snapshot.setConflictState(
+                            LifecycleConflictState.LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+                    workerSnapshots.save(snapshot);
+                });
+                case SESSION -> sessionSnapshots.findById(
+                        reference.getAggregateId()).ifPresent(snapshot -> {
+                    snapshot.setAvailability(
+                            LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+                    snapshot.setConflictState(
+                            LifecycleConflictState.LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+                    sessionSnapshots.save(snapshot);
+                });
+                case TASK -> taskSnapshots.findById(
+                        reference.getAggregateId()).ifPresent(snapshot -> {
+                    snapshot.setAvailability(
+                            LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+                    snapshot.setConflictState(
+                            LifecycleConflictState.LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+                    taskSnapshots.save(snapshot);
+                });
+            }
         }
     }
 
@@ -169,7 +250,25 @@ public class WriterExclusivityProofService {
             String aggregateId,
             String writerGenerationId,
             String controllerInventoryDigest,
-            String effectClaim) {
+            String effectClaim,
+            String workerReferenceId,
+            String physicalWorkerId,
+            String sessionReferenceId,
+            String sessionId) {
+        public EffectAuthorizationCommand(
+                String effectId,
+                String proofId,
+                String aggregateReferenceId,
+                ProofAggregateType aggregateType,
+                String aggregateId,
+                String writerGenerationId,
+                String controllerInventoryDigest,
+                String effectClaim) {
+            this(effectId, proofId, aggregateReferenceId, aggregateType,
+                    aggregateId, writerGenerationId,
+                    controllerInventoryDigest, effectClaim,
+                    null, null, null, null);
+        }
     }
 
     private boolean aggregateReleaseSatisfied(
@@ -185,7 +284,12 @@ public class WriterExclusivityProofService {
                     .map(session -> "CLOSED".equals(session.getCanonicalPhase())
                             && "FREE".equals(session.getForegroundLaneState()))
                     .orElse(false);
-            case WORKER -> false;
+            case WORKER -> workerSnapshots.findById(
+                            reference.getAggregateId())
+                    .map(worker -> "SHADOW".equals(
+                            worker.getOwnershipMode())
+                            && worker.getWriterGenerationId() == null)
+                    .orElse(false);
         };
     }
 }

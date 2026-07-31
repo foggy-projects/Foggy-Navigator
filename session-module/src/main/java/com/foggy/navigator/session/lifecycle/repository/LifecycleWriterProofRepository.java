@@ -7,10 +7,14 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
 import java.util.Optional;
+import java.util.List;
 
 public interface LifecycleWriterProofRepository
         extends JpaRepository<LifecycleWriterProofEntity, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from LifecycleWriterProofEntity p where p.proofId = :proofId")
     Optional<LifecycleWriterProofEntity> findForUpdate(String proofId);
+
+    List<LifecycleWriterProofEntity> findByGenerationIdAndStatus(
+            String generationId, String status);
 }

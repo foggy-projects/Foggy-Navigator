@@ -6,6 +6,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.TreeSet;
 
 /**
  * Real product scheduler. Only already-enrolled lifecycle Workers are polled;
@@ -29,14 +30,22 @@ public class WorkerLifecycleSentinelScheduler {
     @Scheduled(fixedDelayString =
             "${navigator.lifecycle.sentinel.fixed-delay-ms:15000}")
     public void reconcileEnrolledWorkers() {
-        for (var worker : workers.findAll()) {
+        TreeSet<String> candidates = new TreeSet<>();
+        workers.findAll().forEach(
+                worker -> candidates.add(worker.getPhysicalWorkerId()));
+        resolvers.forEach(
+                resolver -> candidates.addAll(resolver.discoverShadowWorkers()));
+        for (String physicalWorkerId : candidates) {
             for (var resolver : resolvers) {
-                var port = resolver.resolve(worker.getPhysicalWorkerId());
+                var port = resolver.resolve(physicalWorkerId);
                 if (port.isPresent()) {
-                    sentinel.reconcile(
-                            worker.getPhysicalWorkerId(),
-                            SentinelTrigger.TIMER,
-                            port.get());
+                    try {
+                        sentinel.reconcile(
+                                physicalWorkerId, SentinelTrigger.TIMER, port.get());
+                    } catch (RuntimeException isolatedWorkerFailure) {
+                        // One unavailable/malformed runtime must not prevent the
+                        // scheduled scan from reconciling other configured Workers.
+                    }
                     break;
                 }
             }

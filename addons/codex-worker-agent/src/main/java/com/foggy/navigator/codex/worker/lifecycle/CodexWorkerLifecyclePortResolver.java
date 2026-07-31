@@ -8,6 +8,7 @@ import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
+import java.util.Set;
 
 @Component
 public class CodexWorkerLifecyclePortResolver
@@ -32,6 +33,11 @@ public class CodexWorkerLifecyclePortResolver
                 config.getBaseUrl(),
                 config.getAuthToken(),
                 objectMapper));
+    }
+
+    @Override
+    public Set<String> discoverShadowWorkers() {
+        return workers.listConfiguredCodexLifecycleWorkerIds();
     }
 
     private boolean blank(String value) {

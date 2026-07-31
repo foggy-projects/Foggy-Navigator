@@ -11,6 +11,7 @@ import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.spi.lifecycle.LifecycleEnrollmentRetirementPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Worker CRUD + 加密服务
@@ -32,6 +35,30 @@ public class ClaudeWorkerService {
     private final ClaudeWorkerRepository workerRepository;
     private final ClaudeWorkerClientFactory clientFactory;
     private final CredentialEncryptor credentialEncryptor;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LifecycleEnrollmentRetirementPort lifecycleRetirement;
+
+    @Transactional(readOnly = true)
+    public Set<String> listConfiguredCodexLifecycleWorkerIds() {
+        Set<String> ids = new TreeSet<>();
+        for (ClaudeWorkerEntity worker : workerRepository.findAll()) {
+            CodexConfig codex = getDecryptedCodexConfig(worker);
+            boolean dedicated = codex != null
+                    && hasText(codex.getBaseUrl())
+                    && hasText(codex.getAuthToken());
+            boolean legacy = hasText(worker.getBaseUrl())
+                    && hasText(getDecryptedToken(worker));
+            if ((dedicated || legacy) && hasText(worker.getWorkerId())) {
+                ids.add(worker.getWorkerId());
+            }
+        }
+        return Set.copyOf(ids);
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
 
     /**
      * 注册 Worker
@@ -168,6 +195,9 @@ public class ClaudeWorkerService {
     public void deleteWorker(String userId, String workerId) {
         workerRepository.findByWorkerIdAndUserId(workerId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Worker not found: " + workerId));
+        if (lifecycleRetirement != null) {
+            lifecycleRetirement.workerRetired(workerId);
+        }
         workerRepository.deleteByWorkerIdAndUserId(workerId, userId);
         clientFactory.remove(workerId);
         log.info("Worker deleted: workerId={}, userId={}", workerId, userId);

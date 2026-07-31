@@ -35,6 +35,8 @@ public class RuntimeTerminationAcceptanceCoordinator {
             String physicalWorkerId,
             String providerTaskId) {
         return transactions.execute(status -> {
+            String operationId = operationId(
+                    providerType, clientRequestId);
             RuntimeRequestAuditService.TaskOperationRegistration registration =
                     audits.beginTaskOperationIdempotentAtomic(
                             clientRequestId,
@@ -53,7 +55,8 @@ public class RuntimeTerminationAcceptanceCoordinator {
                             providerType,
                             physicalWorkerId,
                             providerTaskId,
-                            operationId(clientRequestId),
+                            dispatchId(operationId),
+                            operationId,
                             bindingDigest(taskId, providerType, physicalWorkerId,
                                     providerTaskId, clientRequestId)));
                 }
@@ -72,6 +75,11 @@ public class RuntimeTerminationAcceptanceCoordinator {
         return requiredPort().find(clientRequestId);
     }
 
+    public List<RuntimeTerminationIntentPort.RuntimeTerminationDelivery>
+    prepared(int limit) {
+        return requiredPort().findPrepared(limit);
+    }
+
     public void resultObserved(String clientRequestId, String safeResultCode) {
         requiredPort().resultObserved(clientRequestId, safeResultCode);
     }
@@ -84,10 +92,29 @@ public class RuntimeTerminationAcceptanceCoordinator {
         return intentPorts.get(0);
     }
 
-    private String operationId(String clientRequestId) {
+    private String operationId(
+            String providerType, String clientRequestId) {
+        if (providerType != null
+                && providerType.startsWith("codex-")) {
+            String compact = clientRequestId.replaceAll(
+                    "[^A-Za-z0-9]", "");
+            if (compact.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "CLIENT_REQUEST_ID_INVALID");
+            }
+            return "rt_" + compact.substring(
+                    0, Math.min(56, compact.length()));
+        }
         return java.util.UUID.nameUUIDFromBytes(
                 ("termination-operation:" + clientRequestId)
                         .getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    private String dispatchId(String operationId) {
+        return java.util.UUID.nameUUIDFromBytes(
+                ("codex-lifecycle:TERMINATION_CANCEL:" + operationId)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString();
     }
 
     private String bindingDigest(

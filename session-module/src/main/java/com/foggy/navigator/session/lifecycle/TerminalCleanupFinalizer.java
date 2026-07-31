@@ -2,6 +2,7 @@ package com.foggy.navigator.session.lifecycle;
 
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskTerminalTombstoneRepository;
+import com.foggy.navigator.spi.lifecycle.LifecycleEnrollmentRetirementPort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,14 +12,17 @@ public class TerminalCleanupFinalizer {
     private final TaskLifecycleSnapshotRepository snapshots;
     private final TaskTerminalTombstoneRepository tombstones;
     private final SessionForegroundLaneService lanes;
+    private final LifecycleEnrollmentRetirementPort retirement;
 
     public TerminalCleanupFinalizer(
             TaskLifecycleSnapshotRepository snapshots,
             TaskTerminalTombstoneRepository tombstones,
-            SessionForegroundLaneService lanes) {
+            SessionForegroundLaneService lanes,
+            LifecycleEnrollmentRetirementPort retirement) {
         this.snapshots = snapshots;
         this.tombstones = tombstones;
         this.lanes = lanes;
+        this.retirement = retirement;
     }
 
     /*
@@ -34,5 +38,6 @@ public class TerminalCleanupFinalizer {
         snapshot.setCleanupState(TaskCleanupState.COMPLETED.name());
         snapshots.save(snapshot);
         lanes.observeReleaseAfterCleanup(tombstone.getSessionId(), taskId);
+        retirement.taskCleanupCompleted(taskId);
     }
 }

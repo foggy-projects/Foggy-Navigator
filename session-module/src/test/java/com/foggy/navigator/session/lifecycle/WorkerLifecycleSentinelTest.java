@@ -44,7 +44,7 @@ class WorkerLifecycleSentinelTest {
                 port(calls, ID, 1, 3));
         assertThat(result.state()).isEqualTo(SentinelReconcileState.READY);
         assertThat(result.canonicalMutationSuppressed()).isTrue();
-        assertThat(calls).hasValue(3);
+        assertThat(calls).hasValue(4);
     }
 
     @Test
@@ -76,11 +76,11 @@ class WorkerLifecycleSentinelTest {
                 "worker-fixture", SentinelTrigger.TIMER,
                 port(calls, ID, 1, 1)).state())
                 .isEqualTo(SentinelReconcileState.READY);
-        assertThat(calls).hasValue(3);
+        assertThat(calls).hasValue(4);
     }
 
     @Test
-    void generationAndEpochMismatchFailClosedBeforeAck() {
+    void generationResetFailsClosedButNewEpochRebindsAndConsumesEvents() {
         AtomicInteger calls = new AtomicInteger();
         WorkerLifecycleSentinel generationSentinel = sentinel(acquired());
         generationSentinel.reconcile(
@@ -102,8 +102,9 @@ class WorkerLifecycleSentinelTest {
                 "worker-fixture", SentinelTrigger.TIMER,
                 port(calls, new WorkerLifecycleIdentity(
                         "worker-fixture", "generation-1", "epoch-2"), 2, 2));
-        assertThat(epoch.state()).isEqualTo(SentinelReconcileState.IDENTITY_CHANGED);
-        assertThat(calls.get() - beforeEpochMismatch).isEqualTo(2);
+        assertThat(epoch.state()).isEqualTo(SentinelReconcileState.READY);
+        assertThat(epoch.identity().instanceEpoch()).isEqualTo("epoch-2");
+        assertThat(calls.get() - beforeEpochMismatch).isEqualTo(4);
     }
 
     @Test
@@ -161,6 +162,13 @@ class WorkerLifecycleSentinelTest {
                 return new WorkerLifecycleReadiness(true, identity, Set.of("INVENTORY_V1"), List.of());
             }
             public WorkerLifecycleSnapshot inventory(
+                    WorkerLifecycleIdentity expected, long after) {
+                calls.incrementAndGet();
+                return new WorkerLifecycleSnapshot(
+                        identity, min, through, true, List.of(),
+                        List.<NormalizedLifecycleFact>of());
+            }
+            public WorkerLifecycleSnapshot events(
                     WorkerLifecycleIdentity expected, long after) {
                 calls.incrementAndGet();
                 return new WorkerLifecycleSnapshot(

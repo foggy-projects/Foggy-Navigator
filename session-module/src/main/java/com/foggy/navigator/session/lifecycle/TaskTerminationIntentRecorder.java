@@ -3,7 +3,13 @@ package com.foggy.navigator.session.lifecycle;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleEffectOutboxEntity;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.WorkerLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofReferenceRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleCommandAuthorizationPort;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,24 +17,46 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Set;
 
 @Component
-public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPort {
+public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPort,
+        WorkerLifecycleCommandAuthorizationPort {
     private final LifecycleEffectOutboxRepository outbox;
     private final TaskLifecycleSnapshotRepository snapshots;
+    private final WorkerLifecycleSnapshotRepository workers;
+    private final SessionLifecycleSnapshotRepository sessions;
+    private final LifecycleWriterProofRepository proofs;
+    private final LifecycleWriterProofReferenceRepository references;
+    private final SessionTaskRepository canonicalTasks;
+    private final WriterExclusivityProofService writerProofs;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public TaskTerminationIntentRecorder(
             LifecycleEffectOutboxRepository outbox,
-            TaskLifecycleSnapshotRepository snapshots) {
+            TaskLifecycleSnapshotRepository snapshots,
+            WorkerLifecycleSnapshotRepository workers,
+            SessionLifecycleSnapshotRepository sessions,
+            LifecycleWriterProofRepository proofs,
+            LifecycleWriterProofReferenceRepository references,
+            SessionTaskRepository canonicalTasks,
+            WriterExclusivityProofService writerProofs) {
         this.outbox = outbox;
         this.snapshots = snapshots;
+        this.workers = workers;
+        this.sessions = sessions;
+        this.proofs = proofs;
+        this.references = references;
+        this.canonicalTasks = canonicalTasks;
+        this.writerProofs = writerProofs;
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public RuntimeTerminationDelivery recordIntent(RuntimeTerminationIntent intent) {
         requireIntent(intent);
-        intent = bindOwnerOperation(intent);
+        AdmissionFence fence = requireOwnerAdmission(intent);
         String key = key(intent.clientRequestId());
         String id = UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
         if (outbox.existsById(id)) {
@@ -47,10 +75,15 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         entity.setProviderType(intent.providerType());
         entity.setPhysicalWorkerId(intent.physicalWorkerId());
         entity.setProviderTaskId(intent.providerTaskId());
-        entity.setDispatchId(intent.operationId());
+        entity.setDispatchId(intent.dispatchId());
         entity.setOperationId(intent.operationId());
         entity.setBindingDigest(intent.bindingDigest());
-        entity.setEffectClaim("PUBLIC_TERMINATION_COMPATIBILITY");
+        entity.setEffectClaim("TERMINATION_PROVIDER_CALL");
+        entity.setProofId(fence.proofId());
+        entity.setAggregateReferenceId(fence.taskReferenceId());
+        entity.setWriterGenerationId(fence.writerGenerationId());
+        entity.setControllerInventoryDigest(
+                fence.controllerInventoryDigest());
         entity.setContentFreePayloadJson("{}");
         return delivery(outbox.save(entity));
     }
@@ -63,11 +96,21 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<RuntimeTerminationDelivery> findPrepared(int limit) {
+        if (limit < 1) return List.of();
+        return outbox
+                .findTop100ByEffectTypeAndEffectStateOrderByCreatedAtAsc(
+                        "TERMINATION_REQUEST", "PREPARED")
+                .stream().limit(Math.min(limit, 100))
+                .map(this::delivery).toList();
+    }
+
+    @Override
     @Transactional
     public RuntimeTerminationAuthorization authorizeEffect(String clientRequestId) {
         LifecycleEffectOutboxEntity entity = outbox.findByIdempotencyKey(
                         key(clientRequestId))
-                .flatMap(value -> outbox.findForUpdate(value.getEffectId()))
                 .orElseThrow(() -> new IllegalStateException(
                         "TERMINATION_DELIVERY_NOT_FOUND"));
         RuntimeTerminationDelivery delivery = delivery(entity);
@@ -80,14 +123,40 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
             return new RuntimeTerminationAuthorization(
                     delivery, false, true, false, "EFFECT_ALREADY_STARTED");
         }
-        if (!"PREPARED".equals(entity.getEffectState())) {
+        if (!Set.of("PREPARED", "CLAIMED").contains(
+                entity.getEffectState())) {
             throw new IllegalStateException("TERMINATION_DELIVERY_STATE_INVALID");
         }
-        entity.setEffectState("EFFECT_STARTED");
-        entity.setAuthorizedAt(LocalDateTime.now());
-        outbox.save(entity);
+        var snapshot = snapshots.findById(entity.getAggregateId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_TASK_NOT_ENROLLED"));
+        var proof = proofs.findById(entity.getProofId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_PROOF_NOT_FOUND"));
+        String workerReference = referenceId(
+                proof.getProofId(), ProofAggregateType.WORKER,
+                snapshot.getPhysicalWorkerId());
+        String sessionReference = referenceId(
+                proof.getProofId(), ProofAggregateType.SESSION,
+                snapshot.getSessionId());
+        var authorization = writerProofs.authorizeEffect(
+                new WriterExclusivityProofService.EffectAuthorizationCommand(
+                        entity.getEffectId(), proof.getProofId(),
+                        entity.getAggregateReferenceId(),
+                        ProofAggregateType.TASK, entity.getAggregateId(),
+                        entity.getWriterGenerationId(),
+                        entity.getControllerInventoryDigest(),
+                        entity.getEffectClaim(),
+                        workerReference, snapshot.getPhysicalWorkerId(),
+                        sessionReference, snapshot.getSessionId()),
+                LocalDateTime.now());
+        LifecycleEffectOutboxEntity authorized = outbox.findById(
+                entity.getEffectId()).orElseThrow();
         return new RuntimeTerminationAuthorization(
-                delivery(entity), true, false, false, "EFFECT_AUTHORIZED");
+                delivery(authorized),
+                authorization.providerCallAuthorized(),
+                authorization.alreadyStarted(), false,
+                authorization.safeReasonCode());
     }
 
     @Override
@@ -107,8 +176,163 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         outbox.save(entity);
     }
 
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public PreparedCommand prepare(WorkerLifecycleCommand command) {
+        requireCommand(command);
+        RuntimeTerminationIntent intent = new RuntimeTerminationIntent(
+                command.operationId(), command.taskId(), requireSessionId(command.taskId()),
+                command.providerType(), command.physicalWorkerId(),
+                command.providerTaskId(), command.dispatchId(),
+                command.operationId(), command.bindingDigest());
+        AdmissionFence fence = requireOwnerAdmission(intent);
+        LifecycleEffectOutboxEntity parent = outbox
+                .findByAggregateIdAndOperationId(
+                        command.taskId(), command.operationId()).stream()
+                .filter(value -> "TERMINATION_REQUEST".equals(value.getEffectType()))
+                .filter(value -> "EFFECT_STARTED".equals(value.getEffectState()))
+                .filter(value -> command.providerType().equals(value.getProviderType()))
+                .filter(value -> command.physicalWorkerId().equals(
+                        value.getPhysicalWorkerId()))
+                .filter(value -> command.providerTaskId().equals(
+                        value.getProviderTaskId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_PARENT_AUTHORIZATION_REQUIRED"));
+        if (!fence.proofId().equals(parent.getProofId())
+                || !fence.taskReferenceId().equals(
+                parent.getAggregateReferenceId())) {
+            throw new IllegalStateException(
+                    "TERMINATION_PARENT_PROOF_MISMATCH");
+        }
+
+        String idempotency = "worker-command:" + command.taskId() + ":"
+                + command.operationId() + ":" + command.dispatchId();
+        String effectId = UUID.nameUUIDFromBytes(
+                idempotency.getBytes(StandardCharsets.UTF_8)).toString();
+        LifecycleEffectOutboxEntity existing = outbox.findById(effectId)
+                .orElse(null);
+        if (existing != null) {
+            requireSameCommand(existing, command);
+            return prepared(existing);
+        }
+        LifecycleEffectOutboxEntity entity = new LifecycleEffectOutboxEntity();
+        entity.setEffectId(effectId);
+        entity.setAggregateType("TASK");
+        entity.setAggregateId(command.taskId());
+        entity.setEffectType("WORKER_LIFECYCLE_COMMAND");
+        entity.setEffectClass("EXTERNAL_PROVIDER_ONCE");
+        entity.setEffectState("PREPARED");
+        entity.setIdempotencyKey(idempotency);
+        entity.setProviderType(command.providerType());
+        entity.setPhysicalWorkerId(command.physicalWorkerId());
+        entity.setProviderTaskId(command.providerTaskId());
+        entity.setDispatchId(command.dispatchId());
+        entity.setOperationId(command.operationId());
+        entity.setBindingDigest(command.bindingDigest());
+        entity.setEffectClaim("CODEX_WORKER_TERMINATION_CALL");
+        entity.setProofId(fence.proofId());
+        entity.setAggregateReferenceId(fence.taskReferenceId());
+        entity.setWriterGenerationId(fence.writerGenerationId());
+        entity.setControllerInventoryDigest(
+                fence.controllerInventoryDigest());
+        entity.setContentFreePayloadJson("{}");
+        return prepared(outbox.save(entity));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Authorization authorize(String effectId) {
+        LifecycleEffectOutboxEntity entity = outbox.findForUpdate(effectId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "WORKER_COMMAND_OUTBOX_NOT_FOUND"));
+        if (!"WORKER_LIFECYCLE_COMMAND".equals(entity.getEffectType())) {
+            throw new IllegalStateException(
+                    "WORKER_COMMAND_OUTBOX_TYPE_INVALID");
+        }
+        if ("EFFECT_STARTED".equals(entity.getEffectState())
+                || "RESULT_OBSERVED".equals(entity.getEffectState())
+                || "COMPLETED".equals(entity.getEffectState())) {
+            return new Authorization(prepared(entity), false, true,
+                    "EFFECT_ALREADY_STARTED");
+        }
+        var snapshot = snapshots.findById(entity.getAggregateId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_TASK_NOT_ENROLLED"));
+        var proof = proofs.findById(entity.getProofId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_PROOF_NOT_FOUND"));
+        var result = writerProofs.authorizeEffect(
+                new WriterExclusivityProofService.EffectAuthorizationCommand(
+                        entity.getEffectId(), proof.getProofId(),
+                        entity.getAggregateReferenceId(),
+                        ProofAggregateType.TASK, entity.getAggregateId(),
+                        entity.getWriterGenerationId(),
+                        entity.getControllerInventoryDigest(),
+                        entity.getEffectClaim(),
+                        referenceId(proof.getProofId(),
+                                ProofAggregateType.WORKER,
+                                snapshot.getPhysicalWorkerId()),
+                        snapshot.getPhysicalWorkerId(),
+                        referenceId(proof.getProofId(),
+                                ProofAggregateType.SESSION,
+                                snapshot.getSessionId()),
+                        snapshot.getSessionId()),
+                LocalDateTime.now());
+        LifecycleEffectOutboxEntity authorized = outbox.findById(effectId)
+                .orElseThrow();
+        return new Authorization(prepared(authorized),
+                result.providerCallAuthorized(), result.alreadyStarted(),
+                result.safeReasonCode());
+    }
+
     private String key(String clientRequestId) {
         return "termination-intent:" + clientRequestId;
+    }
+
+    private String requireSessionId(String taskId) {
+        return snapshots.findById(taskId)
+                .map(value -> value.getSessionId())
+                .filter(value -> value != null && !value.isBlank())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_SESSION_BINDING_REQUIRED"));
+    }
+
+    private PreparedCommand prepared(LifecycleEffectOutboxEntity entity) {
+        return new PreparedCommand(entity.getEffectId(),
+                entity.getEffectState(), entity.getBindingDigest());
+    }
+
+    private void requireCommand(WorkerLifecycleCommand command) {
+        if (command == null) {
+            throw new IllegalArgumentException(
+                    "WORKER_LIFECYCLE_COMMAND_REQUIRED");
+        }
+        required(command.taskId(), "TASK_ID");
+        required(command.providerType(), "PROVIDER_TYPE");
+        required(command.physicalWorkerId(), "PHYSICAL_WORKER_ID");
+        required(command.providerTaskId(), "PROVIDER_TASK_ID");
+        required(command.dispatchId(), "DISPATCH_ID");
+        required(command.operationId(), "OPERATION_ID");
+        required(command.bindingDigest(), "BINDING_DIGEST");
+    }
+
+    private void requireSameCommand(
+            LifecycleEffectOutboxEntity existing,
+            WorkerLifecycleCommand command) {
+        if (!command.taskId().equals(existing.getAggregateId())
+                || !command.providerType().equals(existing.getProviderType())
+                || !command.physicalWorkerId().equals(
+                existing.getPhysicalWorkerId())
+                || !command.providerTaskId().equals(
+                existing.getProviderTaskId())
+                || !command.dispatchId().equals(existing.getDispatchId())
+                || !command.operationId().equals(existing.getOperationId())
+                || !command.bindingDigest().equals(
+                existing.getBindingDigest())) {
+            throw new IllegalStateException(
+                    "WORKER_COMMAND_BINDING_MISMATCH");
+        }
     }
 
     private RuntimeTerminationDelivery delivery(LifecycleEffectOutboxEntity entity) {
@@ -138,6 +362,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         required(intent.providerType(), "PROVIDER_TYPE");
         required(intent.physicalWorkerId(), "PHYSICAL_WORKER_ID");
         required(intent.providerTaskId(), "PROVIDER_TASK_ID");
+        required(intent.dispatchId(), "DISPATCH_ID");
         required(intent.operationId(), "OPERATION_ID");
         required(intent.bindingDigest(), "BINDING_DIGEST");
     }
@@ -149,6 +374,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 || !intent.providerType().equals(existing.getProviderType())
                 || !intent.physicalWorkerId().equals(existing.getPhysicalWorkerId())
                 || !intent.providerTaskId().equals(existing.getProviderTaskId())
+                || !intent.dispatchId().equals(existing.getDispatchId())
                 || !intent.operationId().equals(existing.getOperationId())
                 || !intent.bindingDigest().equals(existing.getBindingDigest())) {
             throw new IllegalStateException(
@@ -156,28 +382,87 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         }
     }
 
-    private RuntimeTerminationIntent bindOwnerOperation(
+    private AdmissionFence requireOwnerAdmission(
             RuntimeTerminationIntent intent) {
-        var snapshot = snapshots.findForUpdate(intent.taskId()).orElse(null);
-        if (snapshot == null) return intent;
-        if ("ENFORCED".equals(snapshot.getOwnershipMode())
-                && (!intent.sessionId().equals(snapshot.getSessionId())
+        var snapshot = snapshots.findForUpdate(intent.taskId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_OWNER_ENROLLMENT_REQUIRED"));
+        var canonical = canonicalTasks.findByTaskIdForUpdate(intent.taskId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_TASK_REQUIRED"));
+        var worker = workers.findForUpdate(intent.physicalWorkerId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_WORKER_ENROLLMENT_REQUIRED"));
+        var session = sessions.findForUpdate(intent.sessionId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_SESSION_ENROLLMENT_REQUIRED"));
+        if (!"ENFORCED".equals(snapshot.getOwnershipMode())
+                || !"ENFORCED".equals(worker.getOwnershipMode())
+                || !"ENFORCED".equals(session.getOwnershipMode())
+                || (!intent.sessionId().equals(snapshot.getSessionId())
                 || !intent.physicalWorkerId()
                 .equals(snapshot.getPhysicalWorkerId())
                 || !intent.providerTaskId()
-                .equals(snapshot.getProviderTaskId()))) {
+                .equals(snapshot.getProviderTaskId())
+                || !intent.providerType().equals(canonical.getProviderType())
+                || !intent.providerTaskId().equals(
+                canonical.getProviderTaskId())
+                || !snapshot.getStateGeneration().equals(
+                worker.getStateGeneration())
+                || !LifecycleAvailability.READY.name().equals(
+                snapshot.getAvailability())
+                || !LifecycleAvailability.READY.name().equals(
+                worker.getAvailability())
+                || !LifecycleConflictState.NONE.name().equals(
+                snapshot.getConflictState())
+                || !LifecycleConflictState.NONE.name().equals(
+                worker.getConflictState()))) {
             throw new IllegalStateException(
                     "TERMINATION_OWNER_BINDING_MISMATCH");
         }
-        snapshot.setOperationId(intent.operationId());
-        snapshots.save(snapshot);
-        String ownerDigest = snapshot.getSafeBindingDigest();
-        return new RuntimeTerminationIntent(
-                intent.clientRequestId(), intent.taskId(), intent.sessionId(),
-                intent.providerType(), intent.physicalWorkerId(),
-                intent.providerTaskId(), intent.operationId(),
-                ownerDigest == null || ownerDigest.isBlank()
-                        ? intent.bindingDigest() : ownerDigest);
+        var activeProofs = proofs.findByGenerationIdAndStatus(
+                snapshot.getWriterGenerationId(), "ACTIVE").stream()
+                .filter(proof -> proof.getExpiresAt().isAfter(
+                        LocalDateTime.now())).toList();
+        if (activeProofs.size() != 1) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        }
+        var proof = activeProofs.get(0);
+        String workerReference = referenceId(
+                proof.getProofId(), ProofAggregateType.WORKER,
+                intent.physicalWorkerId());
+        String sessionReference = referenceId(
+                proof.getProofId(), ProofAggregateType.SESSION,
+                intent.sessionId());
+        String taskReference = referenceId(
+                proof.getProofId(), ProofAggregateType.TASK,
+                intent.taskId());
+        for (String reference : List.of(
+                workerReference, sessionReference, taskReference)) {
+            var value = references.findById(reference).orElseThrow(() ->
+                    new IllegalStateException(
+                            "LIFECYCLE_AGGREGATE_REFERENCE_NOT_FOUND"));
+            if (value.getReleasedAt() != null) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_AGGREGATE_REFERENCE_RELEASED");
+            }
+        }
+        return new AdmissionFence(
+                proof.getProofId(), snapshot.getWriterGenerationId(),
+                proof.getControllerInventoryDigest(), taskReference);
+    }
+
+    private String referenceId(
+            String proofId, ProofAggregateType type, String aggregateId) {
+        return proofId + ":" + type.name() + ":" + aggregateId;
+    }
+
+    private record AdmissionFence(
+            String proofId,
+            String writerGenerationId,
+            String controllerInventoryDigest,
+            String taskReferenceId) {
     }
 
     private static void required(String value, String field) {

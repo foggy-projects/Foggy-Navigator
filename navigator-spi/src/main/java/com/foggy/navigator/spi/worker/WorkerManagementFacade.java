@@ -5,6 +5,7 @@ import com.foggy.navigator.common.model.GeminiConfig;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Worker 管理门面接口 —— Agent 无关的 Worker / Directory 管理能力。
@@ -90,6 +91,14 @@ public interface WorkerManagementFacade {
      */
     default CodexConfig getCodexConfig(String workerId) {
         return null;
+    }
+
+    /**
+     * Content-free registry view used by the lifecycle Sentinel to bootstrap
+     * configured Codex runtimes in SHADOW only.
+     */
+    default Set<String> listConfiguredCodexLifecycleWorkerIds() {
+        return Set.of();
     }
 
     /**

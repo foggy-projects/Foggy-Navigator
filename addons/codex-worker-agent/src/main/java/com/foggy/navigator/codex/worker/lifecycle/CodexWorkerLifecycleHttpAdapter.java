@@ -107,7 +107,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
             throw new IllegalStateException("LIFECYCLE_EVENTS_CHECKPOINT_MISSING");
         }
         WorkerLifecycleIdentity actual = identity(checkpoint);
-        if (!expectedIdentity.equals(actual)) {
+        if (!sameGeneration(expectedIdentity, actual)) {
             throw new IllegalStateException("LIFECYCLE_IDENTITY_FENCE_REJECTED");
         }
         return new WorkerLifecycleSnapshot(
@@ -132,7 +132,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                 .block(Duration.ofSeconds(15));
         if (body == null) throw new IllegalStateException("LIFECYCLE_INVENTORY_EMPTY");
         WorkerLifecycleIdentity actual = identity(body);
-        if (!expectedIdentity.equals(actual)) {
+        if (!sameGeneration(expectedIdentity, actual)) {
             throw new IllegalStateException("LIFECYCLE_IDENTITY_FENCE_REJECTED");
         }
         return new WorkerLifecycleSnapshot(
@@ -184,7 +184,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
             throw new IllegalStateException("LIFECYCLE_DISPATCH_STATUS_EMPTY");
         }
         WorkerLifecycleIdentity actual = identity(body);
-        if (!expectedIdentity.equals(actual)
+        if (!sameGeneration(expectedIdentity, actual)
                 || expectedMode != LifecycleOwnershipMode.valueOf(
                 string(body.get("ownership_mode")))) {
             throw new IllegalStateException("LIFECYCLE_DISPATCH_STATUS_FENCE_REJECTED");
@@ -251,6 +251,15 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                 .map(fact -> {
                     Instant recordedAt = Instant.parse(string(fact.get("recorded_at")));
                     String mode = string(fact.get("ownership_mode"));
+                    WorkerLifecycleIdentity sourceIdentity =
+                            new WorkerLifecycleIdentity(
+                                    string(fact.get("physical_worker_id")),
+                                    string(fact.get("state_generation")),
+                                    string(fact.get("instance_epoch")));
+                    if (!sameGeneration(identity, sourceIdentity)) {
+                        throw new IllegalStateException(
+                                "LIFECYCLE_FACT_IDENTITY_MISMATCH");
+                    }
                     return new NormalizedLifecycleFact(
                             string(fact.get("fact_id")),
                             string(fact.get("fact_type")),
@@ -261,7 +270,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                             string(fact.get("navigator_task_id")),
                             string(fact.get("provider_task_id")),
                             string(fact.get("operation_id")),
-                            identity,
+                            sourceIdentity,
                             mode == null ? LifecycleOwnershipMode.SHADOW
                                     : LifecycleOwnershipMode.valueOf(mode),
                             string(fact.get("dispatch_id")),
@@ -274,6 +283,13 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                             string(fact.get("safe_reason_code")),
                             string(fact.get("terminal_outcome")));
                 }).toList();
+    }
+
+    private boolean sameGeneration(
+            WorkerLifecycleIdentity expected,
+            WorkerLifecycleIdentity actual) {
+        return expected.physicalWorkerId().equals(actual.physicalWorkerId())
+                && expected.stateGeneration().equals(actual.stateGeneration());
     }
 
     private long number(Object value) {

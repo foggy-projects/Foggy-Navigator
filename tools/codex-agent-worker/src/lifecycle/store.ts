@@ -515,6 +515,33 @@ export class LifecycleStore {
     return next
   }
 
+  /**
+   * Converges every authorized lifecycle dispatch for the same provider task.
+   * A normal asynchronous cancellation is first acknowledged as
+   * CANCEL_REQUESTED by the abort route and becomes terminal later in the SDK
+   * completion path.  Persisting both the initial query disposition and the
+   * termination disposition here keeps their immutable bindings separate
+   * while emitting an exact terminal fact for each authorized command.
+   */
+  markProviderTaskTerminal(
+    providerTaskId: string,
+    terminalOutcome: 'COMPLETED' | 'FAILED' | 'CANCELLED',
+    safeReasonCode = 'PROVIDER_RESULT_OBSERVED',
+  ): LifecycleDisposition[] {
+    const matching = Object.values(this.state.dispatches)
+      .filter(disposition => (
+        disposition.provider_task_id === providerTaskId
+        && disposition.effect_phase === 'EFFECT_STARTED'
+      ))
+      .sort((left, right) => left.dispatch_id.localeCompare(right.dispatch_id))
+    return matching.map(disposition => this.markResultObserved(
+      disposition.dispatch_id,
+      'TASK_PROVIDER_TERMINAL_OBSERVED',
+      terminalOutcome,
+      safeReasonCode,
+    ))
+  }
+
   getDispatch(
     dispatchId: string,
     expectedMode: LifecycleOwnershipMode,

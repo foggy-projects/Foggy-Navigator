@@ -150,6 +150,7 @@ public class LifecycleEffectOutboxEntity {
     public String getAggregateReferenceId() { return aggregateReferenceId; }
     public String getWriterGenerationId() { return writerGenerationId; }
     public String getControllerInventoryDigest() { return controllerInventoryDigest; }
+    public String getEffectType() { return effectType; }
     public String getIdempotencyKey() { return idempotencyKey; }
     public String getContentFreePayloadJson() { return contentFreePayloadJson; }
     public String getEffectState() { return effectState; }

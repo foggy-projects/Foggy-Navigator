@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.util.List;
 
 public interface SessionLifecycleSnapshotRepository
         extends JpaRepository<SessionLifecycleSnapshotEntity, String> {
@@ -15,4 +16,8 @@ public interface SessionLifecycleSnapshotRepository
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from SessionLifecycleSnapshotEntity s where s.sessionId = :sessionId")
     Optional<SessionLifecycleSnapshotEntity> findForUpdate(@Param("sessionId") String sessionId);
+
+    List<SessionLifecycleSnapshotEntity>
+    findByPhysicalWorkerIdAndOwnershipMode(
+            String physicalWorkerId, String ownershipMode);
 }

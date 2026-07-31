@@ -70,6 +70,7 @@ public class TaskTerminalTombstoneEntity {
     public String getSourceAgentId() { return sourceAgentId; }
     public String getOperationId() { return operationId; }
     public String getTerminalOutcome() { return terminalOutcome; }
+    public String getTerminalFactId() { return terminalFactId; }
 
     public void setSessionId(String value) { sessionId = value; }
     public void setProviderType(String value) { providerType = value; }

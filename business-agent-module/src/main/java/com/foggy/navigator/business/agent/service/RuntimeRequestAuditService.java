@@ -388,6 +388,20 @@ public class RuntimeRequestAuditService {
                 terminationConvergenceTimedOut(entity, now)));
     }
 
+    @Transactional(readOnly = true)
+    public boolean hasDurableTaskOperationReceipt(
+            String taskId, String operation) {
+        if (!StringUtils.hasText(taskId)
+                || !Set.of(OPERATION_TASK_TERMINATE,
+                OPERATION_TASK_RECONCILE).contains(operation)) {
+            return false;
+        }
+        return auditRepository
+                .findTopByTaskIdAndOperationOrderByReceivedAtDesc(
+                        taskId.trim(), operation)
+                .isPresent();
+    }
+
     public boolean terminationRequestReceiptEnabled() {
         return properties.isTerminationReceiptEnabled();
     }

@@ -7,7 +7,11 @@ import com.foggy.navigator.session.lifecycle.persistence.TaskTerminalTombstoneEn
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskTerminalCleanupPlanRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskTerminalTombstoneRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
+import com.foggy.navigator.spi.lifecycle.TerminalCleanupContext;
+import com.foggy.navigator.spi.lifecycle.TerminalCleanupPort;
 import com.foggy.navigator.spi.lifecycle.TerminalTombstoneParticipant;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,25 +25,42 @@ public class TaskTerminalCommitService {
     private final TaskLifecycleSnapshotRepository snapshots;
     private final List<TerminalTombstoneParticipant> participants;
     private final TerminalCleanupPlanFactory planFactory;
+    private final List<TerminalCleanupPort> cleanupPorts;
+    private final LifecycleEffectOutboxRepository effectOutbox;
 
+    @Autowired
     public TaskTerminalCommitService(
             TaskTerminalTombstoneRepository tombstones,
             TaskTerminalCleanupPlanRepository cleanupPlans,
             TaskLifecycleSnapshotRepository snapshots,
             List<TerminalTombstoneParticipant> participants,
-            TerminalCleanupPlanFactory planFactory) {
+            TerminalCleanupPlanFactory planFactory,
+            List<TerminalCleanupPort> cleanupPorts,
+            LifecycleEffectOutboxRepository effectOutbox) {
         this.tombstones = tombstones;
         this.cleanupPlans = cleanupPlans;
         this.snapshots = snapshots;
         this.participants = List.copyOf(participants);
         this.planFactory = planFactory;
+        this.cleanupPorts = List.copyOf(cleanupPorts);
+        this.effectOutbox = effectOutbox;
+    }
+
+    TaskTerminalCommitService(
+            TaskTerminalTombstoneRepository tombstones,
+            TaskTerminalCleanupPlanRepository cleanupPlans,
+            TaskLifecycleSnapshotRepository snapshots,
+            List<TerminalTombstoneParticipant> participants,
+            TerminalCleanupPlanFactory planFactory) {
+        this(tombstones, cleanupPlans, snapshots, participants, planFactory,
+                List.of(), null);
     }
 
     @Transactional
     public void commit(TerminalCommitCommand command) {
         if (tombstones.existsById(command.taskId())) return;
         List<TerminalCleanupPlanEntry> frozenPlan =
-                planFactory.freeze(command.cleanupResources());
+                planFactory.freeze(resolveCleanupResources(command));
         String idempotencyKey = "terminal-fence:" + command.taskId();
 
         for (TerminalTombstoneParticipant participant : participants) {
@@ -58,6 +79,49 @@ public class TaskTerminalCommitService {
                 .map(entry -> cleanup(command.taskId(), entry))
                 .toList());
         snapshots.save(terminalSnapshot(command));
+    }
+
+    private TerminalCleanupResources resolveCleanupResources(
+            TerminalCommitCommand command) {
+        if (effectOutbox == null) {
+            return command.cleanupResources();
+        }
+        TerminalCleanupContext context = new TerminalCleanupContext(
+                command.tombstoneContext().taskId(),
+                command.tombstoneContext().sessionId(),
+                command.tombstoneContext().providerType(),
+                command.tombstoneContext().tenantId(),
+                command.tombstoneContext().providerTaskId(),
+                command.tombstoneContext().providerTaskUserId(),
+                command.tombstoneContext().sourceAgentId(),
+                command.tombstoneContext().operationId(),
+                command.outcome().name());
+        boolean tokenIssued = resourcePresent(
+                TerminalCleanupParticipant.PHYSICAL_TOKEN_REVOKE, context);
+        boolean receiptPersisted = resourcePresent(
+                TerminalCleanupParticipant.TERMINATION_COMPAT_RECEIPT, context);
+        boolean terminationAccepted =
+                context.operationId() != null
+                && effectOutbox.findByAggregateIdAndOperationId(
+                        command.taskId(), context.operationId()).stream()
+                .anyMatch(effect -> !"REJECTED".equals(
+                        effect.getEffectState()));
+        boolean capabilitySupported = participants.stream()
+                .anyMatch(participant -> participant
+                        .applicability(command.tombstoneContext())
+                        .capabilityDomainSupported());
+        return new TerminalCleanupResources(
+                tokenIssued, terminationAccepted,
+                receiptPersisted, capabilitySupported);
+    }
+
+    private boolean resourcePresent(
+            TerminalCleanupParticipant participant,
+            TerminalCleanupContext context) {
+        return cleanupPorts.stream()
+                .filter(port -> port.supports(participant.name(), context))
+                .anyMatch(port -> port.resourcePresent(
+                        participant.name(), context));
     }
 
     private TaskTerminalTombstoneEntity tombstone(TerminalCommitCommand command) {

@@ -6,6 +6,7 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import java.util.Optional;
+import java.util.List;
 
 public interface LifecycleWriterProofReferenceRepository
         extends JpaRepository<LifecycleWriterProofReferenceEntity, String> {
@@ -15,4 +16,12 @@ public interface LifecycleWriterProofReferenceRepository
     @Query("select reference from LifecycleWriterProofReferenceEntity reference "
             + "where reference.referenceId = :referenceId")
     Optional<LifecycleWriterProofReferenceEntity> findForUpdate(String referenceId);
+
+    List<LifecycleWriterProofReferenceEntity>
+    findByProofIdAndReleasedAtIsNullOrderByAggregateTypeAscAggregateIdAsc(
+            String proofId);
+
+    List<LifecycleWriterProofReferenceEntity>
+    findByAggregateTypeAndAggregateIdAndReleasedAtIsNull(
+            String aggregateType, String aggregateId);
 }

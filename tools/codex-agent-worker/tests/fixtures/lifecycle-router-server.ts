@@ -3,17 +3,24 @@ import os from 'node:os'
 import path from 'node:path'
 import express from 'express'
 import { createLifecycleRouter } from '../../src/routes/lifecycle.js'
-import { LifecycleStore } from '../../src/lifecycle/store.js'
+import queryRouter from '../../src/routes/query.js'
+import { createTasksRouter } from '../../src/routes/tasks.js'
+import { config } from '../../src/config.js'
+import {
+  lifecycleStore,
+  resetLifecycleRuntimeForTest,
+} from '../../src/lifecycle/runtime.js'
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'arch001-java-node-'))
 const workerId = 'arch001-java-node-worker'
 const token = 'arch001-java-node-fixture-token'
-const store = LifecycleStore.open({
-  directory,
-  physicalWorkerId: workerId,
-  workerToken: token,
-  instanceEpoch: 'arch001-java-node-epoch',
-})
+config.workerToken = token
+config.navigatorWorkerId = workerId
+config.lifecycleStoreDir = directory
+config.terminationOperationLedgerDir = path.join(directory, 'termination')
+resetLifecycleRuntimeForTest()
+const store = lifecycleStore()
+if (!store) throw new Error('FIXTURE_LIFECYCLE_STORE_UNAVAILABLE')
 store.appendFact({
   fact_type: 'WORKER_HEARTBEAT_OBSERVED',
   aggregate_type: 'WORKER',
@@ -32,6 +39,10 @@ app.get('/health', (_req, res) => {
   })
 })
 app.use(createLifecycleRouter({ store, workerToken: token }))
+// These are the production routers.  The fixture only exercises bounded
+// pre-effect/404 paths and never starts a Codex process.
+app.use(queryRouter)
+app.use(createTasksRouter({ listProcesses: async () => [] }))
 const server = app.listen(0, '127.0.0.1', () => {
   const address = server.address()
   if (!address || typeof address === 'string') process.exit(2)

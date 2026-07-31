@@ -35,10 +35,8 @@ public record TaskLifecycleBinding(
         return other != null
                 && physicalWorkerId.equals(other.physicalWorkerId)
                 && stateGeneration.equals(other.stateGeneration)
-                && instanceEpoch.equals(other.instanceEpoch)
                 && ownershipMode == other.ownershipMode
                 && dispatchId.equals(other.dispatchId)
-                && operationId.equals(other.operationId)
                 && bindingDigest.equals(other.bindingDigest)
                 && providerTaskId.equals(other.providerTaskId)
                 && sessionId.equals(other.sessionId);

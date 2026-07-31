@@ -89,7 +89,8 @@ class WriterExclusivityProofConcurrencyIntegrationTest {
             throws Exception {
         CountDownLatch proofLocked = new CountDownLatch(1);
         CountDownLatch authorizationStarted = new CountDownLatch(1);
-        AtomicReference<Throwable> authorizationFailure = new AtomicReference<>();
+        AtomicReference<WriterExclusivityProofService.EffectAuthorization>
+                authorizationDecision = new AtomicReference<>();
         var executor = Executors.newFixedThreadPool(2);
         try {
             var loss = executor.submit(() -> new TransactionTemplate(transactionManager)
@@ -103,19 +104,18 @@ class WriterExclusivityProofConcurrencyIntegrationTest {
             var authorization = executor.submit(() -> {
                 await(proofLocked);
                 authorizationStarted.countDown();
-                try {
-                    authorizeProviderOnce();
-                } catch (Throwable failure) {
-                    authorizationFailure.set(failure);
-                }
+                authorizationDecision.set(authorizeProviderOnce());
             });
             loss.get(10, TimeUnit.SECONDS);
             authorization.get(10, TimeUnit.SECONDS);
         } finally {
             executor.shutdownNow();
         }
-        assertThat(authorizationFailure.get())
-                .hasMessage("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        assertThat(authorizationDecision.get()).isNotNull();
+        assertThat(authorizationDecision.get().providerCallAuthorized()).isFalse();
+        assertThat(authorizationDecision.get().alreadyStarted()).isFalse();
+        assertThat(authorizationDecision.get().safeReasonCode())
+                .isEqualTo("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
         assertThat(providerCalls).hasValue(0);
         assertThat(outbox.findById("effect-1").orElseThrow().getEffectState())
                 .isEqualTo("CLAIMED");
@@ -155,9 +155,11 @@ class WriterExclusivityProofConcurrencyIntegrationTest {
         assertThat(providerCalls).hasValue(1);
     }
 
-    private void authorizeProviderOnce() {
+    private WriterExclusivityProofService.EffectAuthorization
+            authorizeProviderOnce() {
         var decision = service.authorizeEffect(command(), NOW);
         if (decision.providerCallAuthorized()) providerCalls.incrementAndGet();
+        return decision;
     }
 
     private WriterExclusivityProofService.EffectAuthorizationCommand command() {

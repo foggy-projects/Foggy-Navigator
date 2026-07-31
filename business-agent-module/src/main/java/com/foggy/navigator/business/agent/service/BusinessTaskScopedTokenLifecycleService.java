@@ -242,6 +242,14 @@ public class BusinessTaskScopedTokenLifecycleService {
                 reason);
     }
 
+    @Transactional(readOnly = true)
+    public boolean hasTaskScopedToken(String tenantId, String taskId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(taskId, "taskId is required");
+        return !tokenRepository.findByTaskIdAndTenantId(
+                taskId.trim(), tenantId.trim()).isEmpty();
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int revokeTaskScopedTokensForWorkerTask(
             String tenantId, String workerTaskId, String revokedBy, String reason) {

@@ -239,21 +239,24 @@ public class RuntimeTaskClosureService {
                 return receiptPersistenceFailure(
                         appKey, appSecret, upstreamUserId, clientRequestId, taskId);
             }
-            if (acceptanceCoordinator != null) {
+            if (acceptanceCoordinator != null
+                    && !outboxDispatcher.recoveryCapable()) {
                 try {
                     var authorization =
                             outboxDispatcher.authorize(clientRequestId);
                     if (!authorization.providerCallAuthorized()) {
                         return replayTermination(
-                                appKey, appSecret, upstreamUserId, clientRequestId,
-                                taskId, expectedPhysicalWorkerId);
+                                appKey, appSecret, upstreamUserId,
+                                clientRequestId, taskId,
+                                expectedPhysicalWorkerId);
                     }
                 } catch (RuntimeException persistenceFailure) {
                     return receiptPersistenceFailure(
                             appKey, appSecret, upstreamUserId,
                             clientRequestId, taskId);
                 }
-            } else if (registration.existing()) {
+            } else if (acceptanceCoordinator == null
+                    && registration.existing()) {
                 return replayTermination(
                         appKey, appSecret, upstreamUserId, clientRequestId, taskId,
                         expectedPhysicalWorkerId);
@@ -264,18 +267,37 @@ public class RuntimeTaskClosureService {
                 registration != null ? registration.handle() : null;
         RuntimeTaskClosureProvider.TerminationResult providerResult = null;
         try {
-            providerResult = selectedProvider.terminate(
-                    taskId, owned.ownerUserId(), owned.tenantId(), owned.physicalWorkerId(),
-                    reason.trim(), clientRequestId, false);
             if (acceptanceCoordinator != null
-                    && requestAuditService.terminationRequestReceiptEnabled()) {
-                outboxDispatcher.resultObserved(
-                        clientRequestId,
-                        providerResult.terminationDispatched()
-                                ? "TERMINATION_DISPATCHED"
-                                : providerResult.alreadyTerminal()
-                                ? "TASK_ALREADY_TERMINAL"
-                                : "TERMINATION_RESULT_OBSERVED");
+                    && requestAuditService
+                    .terminationRequestReceiptEnabled()
+                    && outboxDispatcher.recoveryCapable()) {
+                providerResult = outboxDispatcher.dispatch(
+                        clientRequestId, reason.trim());
+                if (providerResult == null) {
+                    return replayTermination(
+                            appKey, appSecret, upstreamUserId,
+                            clientRequestId, taskId,
+                            expectedPhysicalWorkerId);
+                }
+            } else {
+                // BUG-035 compatibility: receipt-disabled requests never enter
+                // owner dedupe and each HTTP request remains one provider
+                // attempt even when the client request id is repeated.
+                providerResult = selectedProvider.terminate(
+                        taskId, owned.ownerUserId(), owned.tenantId(),
+                        owned.physicalWorkerId(), reason.trim(),
+                        clientRequestId, false);
+                if (acceptanceCoordinator != null
+                        && requestAuditService
+                        .terminationRequestReceiptEnabled()) {
+                    outboxDispatcher.resultObserved(
+                            clientRequestId,
+                            providerResult.terminationDispatched()
+                                    ? "TERMINATION_DISPATCHED"
+                                    : providerResult.alreadyTerminal()
+                                    ? "TASK_ALREADY_TERMINAL"
+                                    : "TERMINATION_RESULT_OBSERVED");
+                }
             }
             audit = safeAudit(
                     appKey, appSecret, upstreamUserId, taskId);

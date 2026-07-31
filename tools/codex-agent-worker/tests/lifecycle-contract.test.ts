@@ -167,8 +167,8 @@ test('query create/resume and abort phases survive restart without a second prov
       {
         name: 'abort',
         command_kind: 'TERMINATION_CANCEL' as const,
-        httpMethod: 'PUT',
-        routeTemplate: '/api/v1/tasks/:taskId/abort',
+        httpMethod: 'POST',
+        routeTemplate: '/api/v1/tasks/{providerTaskId}/abort',
         providerTaskId: 'provider-task-abort',
         terminationOperationId: 'operation-abort',
         terminalOutcome: 'CANCELLED' as const,
@@ -261,6 +261,71 @@ test('query create/resume and abort phases survive restart without a second prov
       const facts = afterSecondRestart.inventory(0).facts
       assert.equal(facts.at(-1)?.terminal_outcome, command.terminalOutcome)
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('asynchronous provider terminal converges query and termination dispatch facts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-lifecycle-terminal-'))
+  try {
+    const store = LifecycleStore.open({
+      directory: dir,
+      physicalWorkerId: workerId,
+      workerToken: token,
+      instanceEpoch: 'terminal-epoch',
+    })
+    const queryContext: LifecycleContext = {
+      ...context('ENFORCED'),
+      navigator_task_id: 'navigator-terminal-task',
+      dispatch_id: 'query-terminal-dispatch',
+      expected_state_generation: store.identity.state_generation,
+    }
+    const queryBinding = computeSafeBindingDigest({
+      context: queryContext,
+      httpMethod: 'POST',
+      routeTemplate: '/api/v1/query',
+      bodyWithoutLifecycleContext: { prompt: 'fixture' },
+      providerTaskId: null,
+      capabilityPayload: null,
+    })
+    store.prepareAcceptedDispatch(
+      queryContext, queryBinding, () => 'provider-terminal-task',
+    )
+    store.markEffectStarted(queryContext.dispatch_id)
+
+    const terminationContext: LifecycleContext = {
+      ...queryContext,
+      command_kind: 'TERMINATION_CANCEL',
+      dispatch_id: 'termination-terminal-dispatch',
+      termination_operation_id: 'termination-operation',
+    }
+    const terminationBinding = computeSafeBindingDigest({
+      context: terminationContext,
+      httpMethod: 'POST',
+      routeTemplate: '/api/v1/tasks/{providerTaskId}/abort',
+      bodyWithoutLifecycleContext: {},
+      providerTaskId: 'provider-terminal-task',
+      capabilityPayload: 'termination-capability',
+    })
+    store.prepareAcceptedTerminationDispatch(
+      terminationContext, terminationBinding, 'provider-terminal-task',
+    )
+    store.markEffectStarted(terminationContext.dispatch_id)
+
+    const observed = store.markProviderTaskTerminal(
+      'provider-terminal-task', 'CANCELLED',
+      'TERMINATION_PROVIDER_TERMINAL_OBSERVED',
+    )
+    assert.equal(observed.length, 2)
+    const inventory = store.inventory(0)
+    assert.equal(inventory.facts.filter(fact => (
+      fact.fact_type === 'TASK_PROVIDER_TERMINAL_OBSERVED'
+      && fact.provider_task_id === 'provider-terminal-task'
+    )).length, 2)
+    assert.equal(inventory.dispatches.every(disposition => (
+      disposition.effect_phase === 'RESULT_OBSERVED'
+    )), true)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

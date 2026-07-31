@@ -28,6 +28,7 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.termination.TerminationOperationCapability;
+import com.foggy.navigator.codex.worker.lifecycle.CodexLifecycleBindingDigest;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.common.util.ProviderStateCodec;
@@ -43,6 +44,7 @@ import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import com.foggy.navigator.spi.task.RuntimeTaskCompletionReadinessProvider;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleCommandAuthorizationPort;
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.session.service.TerminationOperationService;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
@@ -195,6 +197,15 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Autowired(required = false)
     @Nullable
     private CodexRuntimeRegistryService runtimeRegistryService;
+
+    @Autowired(required = false)
+    @Nullable
+    private WorkerLifecycleCommandAuthorizationPort
+            lifecycleCommandAuthorization;
+
+    @Autowired(required = false)
+    @Nullable
+    private CodexLifecycleBindingDigest lifecycleBindingDigest;
 
     /**
      * 创建并启动 Codex 任务
@@ -1935,13 +1946,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                     : lifecycleSnapshots.findById(reservation.taskId())
                     .map(value -> value.getOwnershipMode())
                     .orElse("SHADOW");
-            String lifecycleDispatchId = lifecycleSnapshots == null
-                    ? "termination-" + reservation.operation().getOperationId()
-                    : lifecycleSnapshots.findById(reservation.taskId())
-                    .map(value -> value.getDispatchId())
-                    .filter(CodexTaskService::hasNonBlank)
-                    .orElse("termination-"
-                            + reservation.operation().getOperationId());
+            String lifecycleDispatchId =
+                    CodexStreamRelay.stableLifecycleDispatchId(
+                            "TERMINATION_CANCEL",
+                            reservation.operation().getOperationId());
             reactor.core.publisher.Mono<Map<String, Object>>
                     lifecycleContextRequest = client.lifecycleContext(
                     current.getWorkerId(),
@@ -1961,6 +1969,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             if (lifecycleContext == null && "ENFORCED".equals(ownershipMode)) {
                 throw new TerminationDispatchException(
                         "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE", true);
+            }
+            if ("ENFORCED".equals(ownershipMode)) {
+                authorizeEnforcedTerminationCommand(
+                        current, reservation, lifecycleDispatchId,
+                        lifecycleContext, capability);
             }
             reactor.core.publisher.Mono<Map<String, Object>>
                     acknowledgementRequest = lifecycleContext == null
@@ -1995,6 +2008,36 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                         reservation.taskId(), reservation.operation().getOperationId(), error.getClass().getSimpleName());
                 throw new TerminationDispatchException(safeCode, true, error);
             }
+        }
+    }
+
+    private void authorizeEnforcedTerminationCommand(
+            CodexTaskEntity task,
+            RemoteTerminationReservation reservation,
+            String lifecycleDispatchId,
+            Map<String, Object> lifecycleContext,
+            TerminationOperationCapability capability) {
+        if (lifecycleCommandAuthorization == null
+                || lifecycleBindingDigest == null) {
+            throw new TerminationDispatchException(
+                    "ENFORCED_LIFECYCLE_AUTHORIZATION_UNAVAILABLE", true);
+        }
+        String digest = lifecycleBindingDigest.termination(
+                lifecycleContext, reservation.providerTaskId(), capability);
+        var prepared = lifecycleCommandAuthorization.prepare(
+                new WorkerLifecycleCommandAuthorizationPort
+                        .WorkerLifecycleCommand(
+                        reservation.taskId(), resolveProviderType(task),
+                        task.getWorkerId(),
+                        reservation.providerTaskId(),
+                        lifecycleDispatchId,
+                        reservation.operation().getOperationId(),
+                        digest));
+        var authorization = lifecycleCommandAuthorization.authorize(
+                prepared.effectId());
+        if (!authorization.providerCallAuthorized()) {
+            throw new TerminationDispatchException(
+                    authorization.safeReasonCode(), true);
         }
     }
 

@@ -42,6 +42,8 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
             TaskTerminalCommitService.class,
             TerminalCleanupHandler.class,
             TerminalCleanupFinalizer.class,
+            LifecycleEnrollmentRetirementService.class,
+            WriterExclusivityProofService.class,
             TerminalCleanupStepExecutor.class,
             CompatibilityTaskProjectionCleanupAction.class,
             PhysicalTokenCleanupAction.class,
@@ -161,6 +163,26 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
                 .isEqualTo("RUNNING");
     }
 
+    @Test
+    void exactDurableNeverAcceptedFactUsesSameTerminalCleanupAndLaneRelease() {
+        TaskLifecycleDecision decision = owner.ingestNormalizedBatch(
+                "task-1", List.of(preEffectRejection("fact-never-accepted", 2)));
+
+        assertThat(decision.snapshot().canonicalTerminal()).isTrue();
+        assertThat(decision.snapshot().terminalOutcome())
+                .isEqualTo(TaskTerminalOutcome.FAILED);
+        assertThat(decision.snapshot().terminalSource())
+                .isEqualTo(TaskTerminalSource.WORKER_PRE_EFFECT_REJECTION);
+        assertThat(decision.snapshot().executionObservation())
+                .isEqualTo(TaskExecutionObservation.NOT_STARTED);
+        assertThat(tombstones.findById("task-1").orElseThrow().getTerminalFactId())
+                .isEqualTo("fact-never-accepted");
+        assertThat(snapshots.findById("task-1").orElseThrow().getCleanupState())
+                .isEqualTo("COMPLETED");
+        assertThat(sessions.findById("session-1").orElseThrow()
+                .getForegroundLaneState()).isEqualTo("FREE");
+    }
+
     private NormalizedLifecycleFact terminal(
             String factId, long sequence, String outcome) {
         Instant now = Instant.parse("2026-07-31T00:00:00Z");
@@ -185,5 +207,31 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
                 now,
                 "PROVIDER_RESULT_OBSERVED",
                 outcome);
+    }
+
+    private NormalizedLifecycleFact preEffectRejection(
+            String factId, long sequence) {
+        Instant now = Instant.parse("2026-07-31T00:00:00Z");
+        return new NormalizedLifecycleFact(
+                factId,
+                "TASK_NEVER_ACCEPTED_CONFIRMED",
+                1,
+                "TASK",
+                "task-1",
+                "session-1",
+                "task-1",
+                "provider-task-1",
+                null,
+                identity,
+                LifecycleOwnershipMode.ENFORCED,
+                "dispatch-1",
+                "JCS_SHA256_V1",
+                "binding-digest-1",
+                sequence,
+                "generation-1:" + sequence,
+                now,
+                now,
+                "WORKER_TASK_ADMISSION_CAPACITY_REJECTED",
+                null);
     }
 }

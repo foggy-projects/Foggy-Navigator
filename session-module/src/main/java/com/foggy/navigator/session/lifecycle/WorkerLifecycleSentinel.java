@@ -7,6 +7,7 @@ import com.foggy.navigator.spi.lifecycle.WorkerLifecycleSnapshot;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -79,12 +80,10 @@ public final class WorkerLifecycleSentinel {
                     SentinelReconcileState.STATE_GENERATION_RESET,
                     "LIFECYCLE_STATE_GENERATION_RESET");
         }
-        if (!physicalWorkerId.equals(inventory.identity().physicalWorkerId())
-                || (prior != null && !prior.identity().instanceEpoch()
-                .equals(inventory.identity().instanceEpoch()))) {
+        if (!physicalWorkerId.equals(inventory.identity().physicalWorkerId())) {
             return SentinelReconcileResult.blocked(
                     SentinelReconcileState.IDENTITY_CHANGED,
-                    "LIFECYCLE_INSTANCE_IDENTITY_CHANGED");
+                    "LIFECYCLE_PHYSICAL_WORKER_IDENTITY_CHANGED");
         }
         if (!inventory.completeActiveTaskSet()) {
             return SentinelReconcileResult.blocked(
@@ -96,19 +95,44 @@ public final class WorkerLifecycleSentinel {
                     SentinelReconcileState.COVERAGE_GAP,
                     "LIFECYCLE_CURSOR_COVERAGE_GAP");
         }
-        beforeAcknowledge.accept(inventory);
-        long ack = port.acknowledge(inventory.identity(), inventory.throughSequence());
-        if (ack < inventory.throughSequence()) {
+        WorkerLifecycleSnapshot events;
+        try {
+            events = port.events(
+                    inventory.identity(), prior == null ? 0 : prior.throughSequence());
+        } catch (IllegalStateException rejected) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.IDENTITY_CHANGED,
+                    "LIFECYCLE_EVENTS_IDENTITY_FENCE_REJECTED");
+        }
+        if (!sameRuntimeGeneration(inventory.identity(), events.identity())
+                || !inventory.identity().instanceEpoch()
+                .equals(events.identity().instanceEpoch())) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.IDENTITY_CHANGED,
+                    "LIFECYCLE_EVENTS_IDENTITY_CHANGED");
+        }
+        if (!events.completeActiveTaskSet()
+                || (prior != null
+                && events.minAvailableSequence() > prior.throughSequence() + 1)) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.COVERAGE_GAP,
+                    "LIFECYCLE_EVENTS_COVERAGE_GAP");
+        }
+        WorkerLifecycleSnapshot committed = merge(inventory, events);
+        beforeAcknowledge.accept(committed);
+        long ack = port.acknowledge(
+                committed.identity(), committed.throughSequence());
+        if (ack < committed.throughSequence()) {
             return SentinelReconcileResult.blocked(
                     SentinelReconcileState.COVERAGE_GAP,
                     "LIFECYCLE_ACK_NOT_MONOTONIC");
         }
-        cursors.put(physicalWorkerId, new Cursor(inventory.identity(), ack));
+        cursors.put(physicalWorkerId, new Cursor(committed.identity(), ack));
         return new SentinelReconcileResult(
                 SentinelReconcileState.READY,
-                inventory.identity(),
+                committed.identity(),
                 ack,
-                inventory.facts(),
+                committed.facts(),
                 true,
                 "SHADOW_RECONCILE_" + trigger.name());
     }
@@ -123,5 +147,29 @@ public final class WorkerLifecycleSentinel {
     }
 
     private record Cursor(WorkerLifecycleIdentity identity, long throughSequence) {
+    }
+
+    private boolean sameRuntimeGeneration(
+            WorkerLifecycleIdentity left, WorkerLifecycleIdentity right) {
+        return left.physicalWorkerId().equals(right.physicalWorkerId())
+                && left.stateGeneration().equals(right.stateGeneration());
+    }
+
+    private WorkerLifecycleSnapshot merge(
+            WorkerLifecycleSnapshot inventory,
+            WorkerLifecycleSnapshot events) {
+        Map<String, com.foggy.navigator.spi.lifecycle.NormalizedLifecycleFact> facts =
+                new LinkedHashMap<>();
+        inventory.facts().forEach(fact -> facts.putIfAbsent(fact.factId(), fact));
+        events.facts().forEach(fact -> facts.putIfAbsent(fact.factId(), fact));
+        return new WorkerLifecycleSnapshot(
+                inventory.identity(),
+                Math.min(inventory.minAvailableSequence(),
+                        events.minAvailableSequence()),
+                Math.max(inventory.throughSequence(),
+                        events.throughSequence()),
+                inventory.completeActiveTaskSet() && events.completeActiveTaskSet(),
+                inventory.tasks(),
+                java.util.List.copyOf(facts.values()));
     }
 }

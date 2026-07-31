@@ -625,6 +625,11 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         return null;
     }
 
+    @Override
+    public Set<String> listConfiguredCodexLifecycleWorkerIds() {
+        return workerService.listConfiguredCodexLifecycleWorkerIds();
+    }
+
     private Map<String, Object> workerToMap(WorkerDTO dto) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("workerId", dto.getWorkerId());

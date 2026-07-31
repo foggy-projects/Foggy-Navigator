@@ -33,6 +33,19 @@ public class BusinessTerminalCleanupPort implements TerminalCleanupPort {
     }
 
     @Override
+    public boolean resourcePresent(
+            String participant, TerminalCleanupContext context) {
+        if (!supports(participant, context)) return false;
+        if (TOKEN.equals(participant)) {
+            return tokens.hasTaskScopedToken(
+                    context.tenantId(), context.taskId());
+        }
+        return audits.hasDurableTaskOperationReceipt(
+                context.taskId(),
+                RuntimeRequestAuditService.OPERATION_TASK_TERMINATE);
+    }
+
+    @Override
     public String execute(
             String participant,
             TerminalCleanupContext context,

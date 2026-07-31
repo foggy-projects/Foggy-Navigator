@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: REJECTED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -33,7 +33,8 @@ execution_start_authorized: true
 decision_stage: approved-source-slices-authorized-activation-separate
 implementation_completed_at: 2026-07-31
 remediation_completed_at: 2026-07-31
-remediation_status: REJECTED_AT_INDEPENDENT_RESIGNOFF
+remediation_status: READY_FOR_SIGNOFF
+ready_for_signoff_at: 2026-07-31
 independent_signoff_at: 2026-07-31
 independent_signoff_verdict: REJECTED
 original_independent_signoff_record: ../evidence/ARCH-001-independent-signoff-2026-07-31.md
@@ -59,11 +60,11 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: `REJECTED`；2026-07-31 独立复签确认 B1–B6 仍存在生产调用点、
-  durable delivery、terminal authority、Worker-v1 command chain 和 writer-proof
-  representative evidence blocker，以及 migration rollback reference/outbox 分支未实跑。
-  原独立拒签 verdict 与 evidence 保留；真实 controller/process、首次非 fixture
-  `ENFORCED` aggregate、live SIM、部署和发布继续禁止，activation gate 保持关闭。
+- execution_status: `READY_FOR_SIGNOFF`；2026-07-31 第二轮拒签 remediation 已按用户
+  明确授权完成实现和 must-pass 回归，等待新的独立复签。原独立拒签与复签
+  verdict/evidence 保留；真实
+  controller/process、首次非 fixture `ENFORCED` aggregate、live SIM、部署和发布继续
+  禁止，activation gate 保持关闭。
 
 ## Independent Review Disposition
 
@@ -3780,7 +3781,7 @@ Minimum regression scenarios include:
   dependencies and then a real static method-reference compile error; the source error was fixed
   before all Codex tests passed.
 - `git diff --check`
-  — exit 0 before documentation update; repeated after documentation and staging.
+  — exit 0 before documentation update; repeated after the final documentation update.
 
 ### Compatibility, Unrun Items and Residual Risks
 
@@ -3863,6 +3864,223 @@ Minimum regression scenarios include:
 - historical_rejection_preserved: true
 - follow_up_required: yes
 
+## Second-round Rejection Remediation Execution (2026-07-31)
+
+- execution_status: `READY_FOR_SIGNOFF`
+- remediation_status: `READY_FOR_SIGNOFF`
+- authorized_scope: close the latest independent resignoff B1–B6 implementation and executable
+  evidence gaps without changing approved authority, Worker-v1 wire, public compatibility,
+  additive migration strategy, security boundary or activation boundary.
+- baseline_head: `ce3e5022ed06be601e89c5ae4251796b0c859e0b`
+- baseline_branch: `main`
+- baseline_worktree: clean
+- historical_evidence_preserved:
+  - `docs/version-tracker/1.4.3-SNAPSHOT/evidence/ARCH-001-independent-signoff-2026-07-31.md`
+  - `docs/version-tracker/1.4.3-SNAPSHOT/evidence/ARCH-001-independent-resignoff-2026-07-31.md`
+- implementation_order:
+  1. regression-first production lifecycle/Sentinel vertical chain and exact binding;
+  2. receipt admission, durable outbox dispatcher and writer-proof authorization;
+  3. exact terminal authority, durable-resource cleanup applicability and restart recovery;
+  4. Java/Node query/abort/disposition/fact command chain;
+  5. connected isolated Slice 8 proof/reference/provider chain;
+  6. complete MySQL forward/JPA/rollback runtime branches.
+- validation_budget: focused first, affected modules second, one final launcher reactor only after
+  all focused/module/Node/MySQL lanes pass.
+- public_compatibility: frozen; receipt-disabled BUG-035 and SHADOW legacy Codex wire must remain
+  unchanged.
+- activation_gate: `CLOSED`
+- first_non_fixture_enforced_aggregate: prohibited
+- sdk_cli_publication_required: false
+- runtime_restart_performed: false
+- acceptance_authority: none in this implementation session; this section cannot mark
+  `ACCEPTED`.
+
+### Second-round Implementation Summary
+
+- B1 lifecycle owner vertical chain:
+  - scheduled Sentinel now discovers configured SHADOW Workers without requiring a pre-existing
+    snapshot and executes authenticated probe → fenced inventory → fenced events/coverage →
+    transactional owner commit → monotonic ACK;
+  - stable `stateGeneration` with a new `instanceEpoch` performs controlled rebinding, while
+    generation reset, stale identity and coverage gaps remain fail closed;
+  - normalized facts retain physical Worker, generation, epoch, ownership mode, dispatch,
+    operation, binding digest and provider Task identity;
+  - initial dispatch binding remains immutable and termination uses a separate exact durable
+    operation binding;
+  - production enrollment establishes Worker/Session/Task proof references. The first non-fixture
+    ENFORCED transition remains blocked by the activation gate.
+- B2/B5 receipt admission, outbox and writer proof:
+  - the public termination transaction locks and checks the exact Task, Session, Worker, provider,
+    provider Task, ownership mode, generation, epoch, binding, enrollment/readiness and active
+    proof/reference set before committing receipt, owner operation/fact, exact binding and
+    PREPARED outbox;
+  - `RuntimeTerminationOutboxDispatcher` is a scheduled repository claimer/dispatcher and is
+    independent of the originating HTTP thread;
+  - proof → Worker reference → Session reference → Task reference → outbox is the production lock
+    order, and `EFFECT_STARTED` is the only provider-call authorization point;
+  - proof loss quarantines the proof and every referenced Worker/Session/Task aggregate; proof
+    release requires all three reference classes released and no proof-specific unfinished
+    outbox;
+  - real transaction/CAS tests cover loss-first provider count zero, authorization-first at most
+    one and redelivery no second effect.
+- B3 terminal authority and cleanup:
+  - exact durable `TASK_NEVER_ACCEPTED_CONFIRMED` is authoritative only for the allowlisted fenced
+    pre-effect rejection reasons and converges to
+    `FAILED/WORKER_PRE_EFFECT_REJECTION/NOT_STARTED`;
+  - conflicting exact terminal facts quarantine authority and create no canonical terminal,
+    tombstone or terminal effect;
+  - canonical terminal, authorization tombstone and cleanup applicability are committed together;
+    applicability comes from exact token, accepted receipt, compatibility projection,
+    registration and lane state rather than provider or operation-name inference;
+  - cleanup checkpoints are durable/restartable, and typed TERMINAL still requires canonical
+    terminal, canonical Task terminal state and completed cleanup.
+- B4 Codex Java/Node lifecycle v1:
+  - Java and Node agree on POST abort/query/status routes, headers, mode-first fence, canonical
+    binding digest and response/SSE envelopes;
+  - Java persists `lifecycle_disposition` and the unique provider Task before business SSE, with
+    distinct stable create/resume/termination dispatch IDs;
+  - PREPARED plus provider Task identity is durable before `EFFECT_STARTED`; duplicates continue
+    only from PREPARED, while EFFECT_STARTED and later phases are read-only;
+  - query results and normal asynchronous abort terminal outcomes write durable facts against the
+    original termination dispatch, and the Sentinel consumes them through real inventory/events
+    routes.
+- B5 connected Slice 8:
+  - repo-owned fixture evidence traverses production enrollment/readiness → three proof references
+    → owner/outbox → proof authorization → Java adapter → mounted Node query/POST abort/status
+    routes → durable disposition/facts → Sentinel → reducer/terminal/cleanup;
+  - no real controller/process or non-fixture ENFORCED aggregate was accessed or created.
+- B6 MySQL runtime:
+  - the Testcontainers fixture applies forward SQL fresh and repeatedly, preserves legacy
+    table/data, performs Hibernate schema validation and checks required metadata;
+  - rollback succeeds without ENFORCED state and independently fails closed for ENFORCED
+    Worker/Session/Task markers, active/enforced writer generation, unreleased reference, and
+    PREPARED/CLAIMED/EFFECT_STARTED outbox state;
+  - production schema still requires explicit pre-apply; warning-only startup migration remains
+    insufficient for readiness.
+
+### Second-round Changed Paths
+
+- provider-neutral contracts:
+  `navigator-spi/src/main/java/com/foggy/navigator/spi/lifecycle/`,
+  `navigator-spi/src/main/java/com/foggy/navigator/spi/worker/WorkerManagementFacade.java`
+- lifecycle owner, enrollment/retirement, Sentinel, proof/outbox, terminal state and repositories:
+  `session-module/src/main/java/com/foggy/navigator/session/lifecycle/`,
+  `session-module/src/main/java/com/foggy/navigator/session/service/JpaSessionManager.java`,
+  `session-module/src/test/java/com/foggy/navigator/session/lifecycle/`
+- exact business cleanup/token/receipt resource checks:
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/lifecycle/`,
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/`
+- public receipt admission and autonomous delivery:
+  `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/`,
+  `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/spi/`,
+  `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/service/BusinessLifecycleTerminalVerticalIntegrationTest.java`,
+  `addons/claude-worker-agent/pom.xml`
+- Codex Java lifecycle/binding/SSE/termination:
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/lifecycle/`,
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/`,
+  corresponding tests under `addons/codex-worker-agent/src/test/java/`
+- Codex Node durable facts and mounted command fixture:
+  `tools/codex-agent-worker/src/codex/sdk-wrapper.ts`,
+  `tools/codex-agent-worker/src/lifecycle/store.ts`,
+  `tools/codex-agent-worker/tests/lifecycle-contract.test.ts`,
+  `tools/codex-agent-worker/tests/fixtures/lifecycle-router-server.ts`
+- MySQL executable evidence:
+  `session-module/src/test/java/com/foggy/navigator/session/lifecycle/LifecycleMigrationMySqlIntegrationTest.java`
+  (forward/rollback production SQL is unchanged).
+- delivery record: this canonical work item only; both historical rejection evidence files are
+  unchanged.
+
+### Second-round Regression-first Evidence
+
+- Sentinel regression started red with stable-generation/new-epoch reported as
+  `IDENTITY_CHANGED` and no events route; the production Sentinel/port/fixture changes made the
+  six Sentinel tests and the vertical fixture green.
+- the never-accepted vertical regression initially produced no canonical terminal; allowlisted
+  normalization, reducer and terminal commit support made the exact pre-effect path green.
+- the real business/dispatcher vertical initially exposed missing H2 test runtime, JDK proxy
+  injection, dispatcher constructor ambiguity and an invalid test request ID; test wiring and the
+  production constructor were corrected before the three real JPA vertical tests passed.
+- the MySQL fixture initially exposed missing grants for per-scenario databases; root provisioning
+  plus explicit test-user grants made all forward/JPA/rollback branches pass.
+- the first full session run exposed that loss-first proof loss returns a typed deny decision
+  rather than throwing. The test now asserts
+  `LIFECYCLE_WRITER_EXCLUSIVITY_LOST`, no authorization and provider count zero; the rerun passed
+  484 tests.
+
+### Second-round Verification Results
+
+- `mvn -q -pl addons/codex-worker-agent,addons/claude-worker-agent -am -DskipTests compile`
+  — exit 0.
+- `mvn -q -pl session-module -am -Dtest=WorkerLifecycleSentinelTest,TaskLifecycleOwnerVerticalIntegrationTest,TaskTerminationIntentRecorderIntegrationTest,WriterExclusivityProofServiceTest,IsolatedEnforcedLifecycleContractTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 17 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -q -pl session-module -am -Dtest=WriterExclusivityProofConcurrencyIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 2 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -q -pl business-agent-module -am -Dtest=BusinessTerminalCleanupPortTest,BusinessTaskScopedTokenLifecycleJpaTest,BusinessTaskScopedTokenTerminalListenerTest,BusinessTaskScopedTokenLifecycleServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 62 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -q -pl addons/claude-worker-agent -am -Dtest=BusinessLifecycleTerminalVerticalIntegrationTest,RuntimeTerminationDeliveryRecoveryTest,RuntimeTaskTypedContractServiceTest,RuntimeTerminationAcceptanceCoordinatorTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 25 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -q -pl addons/codex-worker-agent -am -Dtest=CodexStreamRelayTest,CodexTaskServiceTest,CodexLifecycleBindingDigestTest,CodexWorkerLifecycleNodeContractIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 196 executed tests, 0 failures, 0 errors, 0 skipped.
+- `cd tools/codex-agent-worker && npm run typecheck && npm test`
+  — exit 0; typecheck passed; 265 tests, 263 passed, 0 failed, 2 skipped.
+- `cd tools/codex-agent-worker && npm run build`
+  — exit 0.
+- `mvn -q -pl session-module -am -Darch001.mysql.integration=true -Dtest=LifecycleMigrationMySqlIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+  — exit 0; 1 MySQL 8.0.44 Testcontainers test, 0 failures, 0 errors, 0 skipped;
+  the test executes every isolated forward/JPA/rollback scenario listed under B6.
+- `mvn -pl session-module -am test`
+  — exit 0; Session Module 484 tests, 0 failures, 0 errors, 1 skipped
+  (the opt-in MySQL test).
+- `mvn -pl business-agent-module -am test`
+  — exit 0; Business Agent Module 739 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -pl addons/claude-worker-agent -am test`
+  — exit 0; Claude Worker Agent 464 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -pl addons/codex-worker-agent -am test`
+  — exit 0; Codex Worker Agent 496 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -pl navigator-open-sdk -am test`
+  — exit 0; Open SDK 203 tests, 0 failures, 0 errors, 0 skipped.
+- `mvn -pl session-module,business-agent-module,addons/claude-worker-agent,addons/codex-worker-agent,navigator-open-sdk -am test`
+  — exit 0; all 10 reactor modules passed; 2,901 tests, 0 failures, 0 errors,
+  4 skipped.
+- `mvn test -pl launcher -am`
+  — executed exactly once after all prerequisites passed; exit 0; all 14 reactor modules passed.
+  Aggregated Surefire XML: 3,030 tests, 0 failures, 0 errors, 6 skipped; Launcher itself:
+  19 tests, 0 failures, 0 errors, 2 skipped. Surefire emitted a post-success fork-JVM shutdown
+  warning without changing exit status or `BUILD SUCCESS`.
+- `git diff --check`
+  — exit 0 before this final canonical-record update and repeated after it.
+
+### Second-round Deviations, Compatibility and Residual Risk
+
+- implementation deviations: none. Approved authority, lifecycle v1 wire, public compatibility,
+  additive migration strategy, security boundary and activation boundary are unchanged; no
+  `NEEDS_REPLAN` condition was encountered.
+- validation-order deviation: the separately reportable business terminal/token focused command
+  was recorded after the already-green business, affected and launcher reactors. It changed no
+  source or test input, passed all 62 selected tests, and the launcher reactor was not repeated.
+- public compatibility:
+  - `navigator-open-sdk` public DTO/wire is unchanged and its 203 tests pass;
+  - receipt-disabled BUG-035 still makes two one-shot provider attempts for the same request ID,
+    returns `AMBIGUOUS`, sets `requestReconciliationAvailable=false` and keeps replay flags fail
+    closed;
+  - SHADOW Codex retains legacy provider wire and zero lifecycle-owner provider effect;
+  - no bulk migration or historical aggregate repair is performed.
+- not run by the approved boundary: real/shared database pre-apply or rollback, Task
+  `20260730-0e01`, business data, real controller/process, sibling repositories, live SIM,
+  deployment, Worker/Navigator stop/start/restart/upgrade, first non-fixture ENFORCED aggregate,
+  push, tag and release.
+- residual risk: evidence is repo-owned ephemeral fixture evidence. A later separately authorized
+  deployment must pre-apply and validate the production schema, roll out the Java and Codex Node
+  changes, restart the affected runtimes under their ownership rules, and obtain independent
+  signoff before activation.
+- SDK/CLI publication: not required; no public SDK/CLI contract changed.
+- runtime restart: not performed. It is required only as part of a later authorized deployment of
+  these Java and Node runtime changes.
+- activation gate: `CLOSED`; first non-fixture ENFORCED aggregate remains prohibited.
+- final disposition: B1–B6 implementation and approved must-pass validation are complete in the
+  current worktree. This implementation session marks only `READY_FOR_SIGNOFF`; a new independent
+  `foggy-delivery-signoff` session must decide acceptance.
+
 ## References
 
 - source incident/fix:
@@ -3875,6 +4093,7 @@ Minimum regression scenarios include:
 - implementation baselines inspected during replan:
   - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/event/BusinessTaskScopedTokenTerminalListener.java`
   - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenLifecycleService.java`
+
   - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/RuntimeStateAuditService.java`
   - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/RuntimeTaskClosureService.java`
   - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/service/RuntimeTaskTypedContractServiceTest.java`
@@ -3890,3 +4109,25 @@ Minimum regression scenarios include:
   - `tools/codex-agent-worker/src/codex/sdk-wrapper.ts`
   - `session-module/pom.xml`, `navigator-spi/pom.xml`,
     `business-agent-module/pom.xml`, `addons/codex-worker-agent/pom.xml`
+
+## Independent Second-remediation Resignoff Marker (2026-07-31)
+
+- canonical_status: `REJECTED`
+- acceptance_status: `rejected`
+- acceptance_decision: `rejected`
+- assurance_level: `elevated`
+- signed_off_by: `independent-reviewer-codex`
+- acceptance_record:
+  `../evidence/ARCH-001-independent-second-remediation-resignoff-2026-07-31.md`
+- blocking_items:
+  `ARCH001-R3-B1-VERTICAL-CHAIN-NOT-EXECUTED`,
+  `ARCH001-R3-B2-ADMISSION-FENCE-INCOMPLETE`,
+  `ARCH001-R3-B3-NEVER-ACCEPTED-AUTHORITY-NOT-PRODUCIBLE`,
+  `ARCH001-R3-B4-REAL-CODEX-COMMAND-CONTRACT-NOT-EXECUTED`,
+  `ARCH001-R3-B5-SLICE8-NOT-CONNECTED`
+- B6: `pass`; public compatibility: `pass`
+- activation_gate: `CLOSED`
+- first_non_fixture_enforced_aggregate: `not-created`
+- SDK/CLI publication: `not-required`
+- runtime_restart_or_deployment: `not-performed`
+- follow_up_required: `yes`

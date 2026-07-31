@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.util.List;
 
 public interface LifecycleEffectOutboxRepository
         extends JpaRepository<LifecycleEffectOutboxEntity, String> {
@@ -18,6 +19,13 @@ public interface LifecycleEffectOutboxRepository
     Optional<LifecycleEffectOutboxEntity> findForUpdate(String effectId);
 
     Optional<LifecycleEffectOutboxEntity> findByIdempotencyKey(String idempotencyKey);
+
+    List<LifecycleEffectOutboxEntity> findByAggregateIdAndOperationId(
+            String aggregateId, String operationId);
+
+    List<LifecycleEffectOutboxEntity>
+    findTop100ByEffectTypeAndEffectStateOrderByCreatedAtAsc(
+            String effectType, String effectState);
 
     @Query("select count(e) from LifecycleEffectOutboxEntity e "
             + "where e.proofId = :proofId "

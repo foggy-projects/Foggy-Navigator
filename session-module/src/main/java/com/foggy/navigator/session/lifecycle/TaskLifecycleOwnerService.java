@@ -7,6 +7,7 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleFactEntity;
 import com.foggy.navigator.session.lifecycle.persistence.TaskLifecycleSnapshotEntity;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleFactRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.NormalizedLifecycleFact;
@@ -32,6 +33,7 @@ public class TaskLifecycleOwnerService {
     private static final String POLICY = "ARCH-001-MVP-A";
 
     private final LifecycleFactRepository facts;
+    private final LifecycleEffectOutboxRepository outbox;
     private final TaskLifecycleSnapshotRepository snapshots;
     private final SessionTaskRepository canonicalTasks;
     private final TaskTerminalCommitService terminalCommit;
@@ -41,12 +43,14 @@ public class TaskLifecycleOwnerService {
 
     public TaskLifecycleOwnerService(
             LifecycleFactRepository facts,
+            LifecycleEffectOutboxRepository outbox,
             TaskLifecycleSnapshotRepository snapshots,
             SessionTaskRepository canonicalTasks,
             TaskTerminalCommitService terminalCommit,
             TerminalCleanupHandler cleanup,
             ObjectMapper objectMapper) {
         this.facts = facts;
+        this.outbox = outbox;
         this.snapshots = snapshots;
         this.canonicalTasks = canonicalTasks;
         this.terminalCommit = terminalCommit;
@@ -80,6 +84,10 @@ public class TaskLifecycleOwnerService {
                 .findForUpdate(workerTask.navigatorTaskId()).orElse(null);
         if (current != null) {
             requireExact(current, binding);
+            if (!identity.instanceEpoch().equals(current.getInstanceEpoch())) {
+                current.setInstanceEpoch(identity.instanceEpoch());
+                snapshots.save(current);
+            }
             return;
         }
         TaskLifecycleSnapshotEntity created = new TaskLifecycleSnapshotEntity();
@@ -117,6 +125,7 @@ public class TaskLifecycleOwnerService {
             if (!facts.existsById(fact.factId())) {
                 facts.save(factEntity(taskId, fact, normalized));
             }
+            observeAuthorizedEffectResult(normalized, fact);
         }
         List<TaskLifecycleFact> aggregateFacts = facts
                 .findByAggregateTypeAndAggregateIdOrderBySourceSequenceAsc("TASK", taskId)
@@ -132,9 +141,17 @@ public class TaskLifecycleOwnerService {
                     .orElseThrow();
             TaskLifecycleFact authority = aggregateFacts.stream()
                     .filter(candidate -> candidate.type()
-                            == TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED)
+                            == TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED
+                            || candidate.type()
+                            == TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED)
                     .filter(TaskLifecycleFact::exactTerminalAuthority)
                     .findFirst().orElseThrow();
+            String terminalOperationId = facts.findById(
+                            authority.factId())
+                    .map(LifecycleFactEntity::getOperationId)
+                    .filter(operation -> !operation.equals(
+                            expected.dispatchId()))
+                    .orElse(null);
             terminalCommit.commit(new TerminalCommitCommand(
                     new TerminalTombstoneContext(
                             taskId,
@@ -144,8 +161,7 @@ public class TaskLifecycleOwnerService {
                             expected.providerTaskId(),
                             canonical.getUserId(),
                             canonical.getAgentId(),
-                            expected.operationId().equals(expected.dispatchId())
-                                    ? null : expected.operationId()),
+                            terminalOperationId),
                     authority.factId(),
                     required(enrolled.getWriterGenerationId(),
                             "LIFECYCLE_WRITER_GENERATION_REQUIRED"),
@@ -162,29 +178,66 @@ public class TaskLifecycleOwnerService {
         return decision;
     }
 
+    private void observeAuthorizedEffectResult(
+            NormalizedLifecycleFact normalized,
+            TaskLifecycleFact fact) {
+        if (fact.type()
+                != TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED) {
+            return;
+        }
+        String operation = normalized.operationId() == null
+                ? normalized.dispatchId() : normalized.operationId();
+        for (var effect : outbox.findByAggregateIdAndOperationId(
+                normalized.taskId(), operation)) {
+            if ("EFFECT_STARTED".equals(effect.getEffectState())) {
+                effect.setEffectState("RESULT_OBSERVED");
+                outbox.save(effect);
+            }
+        }
+    }
+
     private TaskLifecycleFact normalizedFact(
             NormalizedLifecycleFact value, TaskLifecycleBinding expected) {
         if (!expected.physicalWorkerId().equals(value.workerIdentity().physicalWorkerId())
                 || !expected.stateGeneration().equals(value.workerIdentity().stateGeneration())
-                || !expected.instanceEpoch().equals(value.workerIdentity().instanceEpoch())
                 || expected.ownershipMode() != value.ownershipMode()
-                || !expected.dispatchId().equals(value.dispatchId())
-                || !expected.bindingDigest().equals(value.safeBindingDigest())
                 || !expected.providerTaskId().equals(value.providerTaskId())) {
             throw new IllegalStateException("LIFECYCLE_NORMALIZED_FACT_BINDING_MISMATCH");
         }
         String operation = value.operationId() == null
                 ? value.dispatchId() : value.operationId();
-        TaskLifecycleBinding factBinding = new TaskLifecycleBinding(
-                expected.sessionId(),
-                value.workerIdentity().physicalWorkerId(),
-                value.workerIdentity().stateGeneration(),
-                value.workerIdentity().instanceEpoch(),
-                value.ownershipMode(),
-                value.dispatchId(),
-                operation,
-                value.safeBindingDigest(),
-                value.providerTaskId());
+        boolean initialDispatch = expected.dispatchId().equals(
+                value.dispatchId());
+        if (initialDispatch) {
+            if (!expected.bindingDigest().equals(value.safeBindingDigest())
+                    || !operation.equals(expected.dispatchId())) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_NORMALIZED_FACT_BINDING_MISMATCH");
+            }
+        } else {
+            boolean authorizedTermination = outbox
+                    .findByAggregateIdAndOperationId(
+                            value.taskId(), operation).stream()
+                    .anyMatch(effect ->
+                            value.dispatchId().equals(effect.getDispatchId())
+                            && value.safeBindingDigest().equals(
+                            effect.getBindingDigest())
+                            && expected.physicalWorkerId().equals(
+                            effect.getPhysicalWorkerId())
+                            && expected.providerTaskId().equals(
+                            effect.getProviderTaskId())
+                            && Set.of("EFFECT_STARTED", "RESULT_OBSERVED",
+                            "COMPLETED").contains(effect.getEffectState()));
+            if (!authorizedTermination) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_TERMINATION_FACT_NOT_AUTHORIZED");
+            }
+        }
+        // The durable entity below retains the normalized dispatch,
+        // operation, digest and epoch verbatim.  The reducer receives the
+        // immutable initial aggregate binding only after the ingress checks
+        // above proved the alternate termination binding through its outbox.
+        TaskLifecycleBinding factBinding = expected;
         TaskLifecycleFactType type;
         try {
             type = TaskLifecycleFactType.valueOf(value.factType());
@@ -204,6 +257,18 @@ public class TaskLifecycleOwnerService {
             return TaskLifecycleFact.workerTerminal(
                     value.factId(), value.sourceSequence(), outcome, factBinding);
         }
+        if (type == TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED) {
+            if (!Set.of(
+                    "WORKER_TASK_ADMISSION_CAPACITY_REJECTED",
+                    "WORKER_TASK_ADMISSION_THREAD_CONFLICT",
+                    "WORKER_TASK_RESUME_TARGET_NOT_FOUND")
+                    .contains(value.safeReasonCode())) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_NEVER_ACCEPTED_REASON_NOT_ALLOWLISTED");
+            }
+            return TaskLifecycleFact.exactPreEffectRejection(
+                    value.factId(), value.sourceSequence(), factBinding);
+        }
         return new TaskLifecycleFact(
                 value.factId(), type, value.sourceSequence(), null,
                 factBinding, false);
@@ -219,15 +284,19 @@ public class TaskLifecycleOwnerService {
         entity.setAggregateId(taskId);
         entity.setTaskId(taskId);
         entity.setSessionId(fact.binding().sessionId());
-        entity.setOperationId(fact.binding().operationId());
-        entity.setPhysicalWorkerId(fact.binding().physicalWorkerId());
-        entity.setStateGeneration(fact.binding().stateGeneration());
-        entity.setInstanceEpoch(fact.binding().instanceEpoch());
-        entity.setProviderTaskId(fact.binding().providerTaskId());
-        entity.setDispatchId(fact.binding().dispatchId());
+        entity.setOperationId(normalized.operationId() == null
+                ? normalized.dispatchId() : normalized.operationId());
+        entity.setPhysicalWorkerId(
+                normalized.workerIdentity().physicalWorkerId());
+        entity.setStateGeneration(
+                normalized.workerIdentity().stateGeneration());
+        entity.setInstanceEpoch(
+                normalized.workerIdentity().instanceEpoch());
+        entity.setProviderTaskId(normalized.providerTaskId());
+        entity.setDispatchId(normalized.dispatchId());
         entity.setSafeBindingDigestVersion(normalized.safeBindingDigestVersion());
-        entity.setSafeBindingDigest(fact.binding().bindingDigest());
-        entity.setOwnershipMode(fact.binding().ownershipMode().name());
+        entity.setSafeBindingDigest(normalized.safeBindingDigest());
+        entity.setOwnershipMode(normalized.ownershipMode().name());
         entity.setSourceSequence(fact.sourceSequence());
         entity.setIdempotencyKey(normalized.idempotencyKey());
         entity.setSafeReasonCode(normalized.safeReasonCode());
