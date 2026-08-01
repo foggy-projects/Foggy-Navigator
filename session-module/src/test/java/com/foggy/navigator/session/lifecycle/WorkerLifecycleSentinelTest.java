@@ -164,6 +164,7 @@ class WorkerLifecycleSentinelTest {
             public WorkerLifecycleSnapshot inventory(
                     WorkerLifecycleIdentity expected, long after) {
                 calls.incrementAndGet();
+                requireExpectedIdentity(expected, identity);
                 return new WorkerLifecycleSnapshot(
                         identity, min, through, true, List.of(),
                         List.<NormalizedLifecycleFact>of());
@@ -171,6 +172,7 @@ class WorkerLifecycleSentinelTest {
             public WorkerLifecycleSnapshot events(
                     WorkerLifecycleIdentity expected, long after) {
                 calls.incrementAndGet();
+                requireExpectedIdentity(expected, identity);
                 return new WorkerLifecycleSnapshot(
                         identity, min, through, true, List.of(),
                         List.<NormalizedLifecycleFact>of());
@@ -180,5 +182,13 @@ class WorkerLifecycleSentinelTest {
                 return sequence;
             }
         };
+    }
+
+    private void requireExpectedIdentity(
+            WorkerLifecycleIdentity expected,
+            WorkerLifecycleIdentity actual) {
+        if (!actual.equals(expected)) {
+            throw new IllegalStateException("LIFECYCLE_IDENTITY_FENCE_REJECTED");
+        }
     }
 }

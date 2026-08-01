@@ -402,6 +402,24 @@ public class RuntimeRequestAuditService {
                 .isPresent();
     }
 
+    @Transactional(readOnly = true)
+    public boolean hasDurableTaskOperationReceipt(
+            String clientRequestId,
+            String taskId,
+            String operation) {
+        if (!StringUtils.hasText(clientRequestId)
+                || !StringUtils.hasText(taskId)
+                || !Set.of(OPERATION_TASK_TERMINATE,
+                OPERATION_TASK_RECONCILE).contains(operation)) {
+            return false;
+        }
+        return auditRepository.findByClientRequestId(
+                        clientRequestId.trim())
+                .filter(entity -> taskId.trim().equals(entity.getTaskId()))
+                .filter(entity -> operation.equals(entity.getOperation()))
+                .isPresent();
+    }
+
     public boolean terminationRequestReceiptEnabled() {
         return properties.isTerminationReceiptEnabled();
     }
@@ -551,6 +569,58 @@ public class RuntimeRequestAuditService {
         if (entity == null || !Boolean.TRUE.equals(entity.getTerminal())) {
             return;
         }
+        Instant now = Instant.now();
+        applyTaskEvidence(entity, evidence);
+        String result = clean(evidence.result(), entity.getResult());
+        entity.setTerminal(true);
+        entity.setCompletedAt(now);
+        entity.setResult(result);
+        entity.setStatus(clean(evidence.taskStatus(), entity.getStatus()));
+        entity.setSafeErrorSummary(null);
+        auditRepository.save(entity);
+        if (OPERATION_TASK_TERMINATE.equals(normalizedOperation)
+                && Boolean.TRUE.equals(evidence.taskTerminal())) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TERMINATION_EVIDENCE_OBSERVED, "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_RECONCILE.equals(normalizedOperation)) {
+            appendStageOnce(entity.getClientRequestId(),
+                    "RECONCILIATION_CHANGED".equals(result)
+                            ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED
+                            : STAGE_RECONCILIATION_NO_CHANGE,
+                    "SUCCEEDED", null, now);
+        }
+        if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+        }
+        appendStageOnce(entity.getClientRequestId(),
+                STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void refreshCompletedTaskOperation(
+            String clientRequestId,
+            String taskId,
+            String operation,
+            TaskEvidence evidence) {
+        String normalizedOperation = normalizeOperation(operation);
+        RuntimeRequestAuditEntity entity = auditRepository
+                .findByClientRequestId(requireRequestId(clientRequestId))
+                .orElse(null);
+        if (entity == null
+                || !taskId.equals(entity.getTaskId())
+                || !normalizedOperation.equals(entity.getOperation())
+                || !Boolean.TRUE.equals(entity.getTerminal())) {
+            return;
+        }
+        refreshCompletedTaskOperationEntity(
+                entity, normalizedOperation, evidence);
+    }
+
+    private void refreshCompletedTaskOperationEntity(
+            RuntimeRequestAuditEntity entity,
+            String normalizedOperation,
+            TaskEvidence evidence) {
         Instant now = Instant.now();
         applyTaskEvidence(entity, evidence);
         String result = clean(evidence.result(), entity.getResult());

@@ -1,0 +1,34 @@
+services:
+  mysql:
+    image: mysql:8.0.44
+    restart: "no"
+    env_file:
+      - __TARGET_ROOT__/database.env
+    ports:
+      - "127.0.0.1:__MYSQL_PORT__:3306"
+    labels:
+      com.foggy.navigator.activation.run-id: __RUN_ID__
+      com.foggy.navigator.activation.target-id: __TARGET_ID__
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u root --password="$${MYSQL_ROOT_PASSWORD}"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - activation_mysql_data:/var/lib/mysql
+    networks:
+      - activation_network
+
+volumes:
+  activation_mysql_data:
+    labels:
+      com.foggy.navigator.activation.run-id: __RUN_ID__
+      com.foggy.navigator.activation.target-id: __TARGET_ID__
+
+networks:
+  activation_network:
+    labels:
+      com.foggy.navigator.activation.run-id: __RUN_ID__
+      com.foggy.navigator.activation.target-id: __TARGET_ID__

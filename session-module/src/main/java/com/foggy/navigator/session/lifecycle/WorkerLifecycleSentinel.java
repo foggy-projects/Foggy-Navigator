@@ -64,7 +64,24 @@ public final class WorkerLifecycleSentinel {
         }
 
         Cursor prior = cursors.get(physicalWorkerId);
-        WorkerLifecycleIdentity expected = prior == null ? readiness.identity() : prior.identity();
+        WorkerLifecycleIdentity observed = readiness.identity();
+        if (observed == null
+                || !physicalWorkerId.equals(observed.physicalWorkerId())) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.IDENTITY_CHANGED,
+                    "LIFECYCLE_PHYSICAL_WORKER_IDENTITY_CHANGED");
+        }
+        if (prior != null && !prior.identity().stateGeneration()
+                .equals(observed.stateGeneration())) {
+            return SentinelReconcileResult.blocked(
+                    SentinelReconcileState.STATE_GENERATION_RESET,
+                    "LIFECYCLE_STATE_GENERATION_RESET");
+        }
+        // A clean Worker process restart keeps durable stateGeneration but
+        // rotates instanceEpoch. The readiness response is the current fenced
+        // identity, so using the persisted/in-memory old epoch would make the
+        // real Worker reject inventory before the Sentinel can rebind.
+        WorkerLifecycleIdentity expected = observed;
         WorkerLifecycleSnapshot inventory;
         try {
             inventory = port.inventory(expected, prior == null ? 0 : prior.throughSequence());

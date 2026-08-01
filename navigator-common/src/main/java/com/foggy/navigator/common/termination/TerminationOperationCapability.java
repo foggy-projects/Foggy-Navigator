@@ -28,6 +28,39 @@ public record TerminationOperationCapability(String encodedOperation, String sig
 
     public static TerminationOperationCapability issue(TerminationOperationEntity operation,
                                                        String workerToken) {
+        return issueAt(operation, workerToken, Instant.now());
+    }
+
+    /**
+     * Recreates byte-identical capability claims for a persisted operation so
+     * receipt admission and the later Worker command share one exact binding.
+     */
+    public static TerminationOperationCapability issueStable(
+            TerminationOperationEntity operation,
+            String workerToken) {
+        if (operation == null || operation.getRequestedAt() == null) {
+            throw new IllegalStateException(
+                    "TERMINATION_OPERATION_REQUESTED_AT_REQUIRED");
+        }
+        return issueAt(operation, workerToken, persistedPrecision(
+                operation.getRequestedAt())
+                .atZone(java.time.ZoneId.systemDefault()).toInstant());
+    }
+
+    /**
+     * The operation schema persists timestamps as MySQL DATETIME(6). Normalize
+     * before signing so the just-inserted entity and a later database reload
+     * produce byte-identical capability claims.
+     */
+    private static java.time.LocalDateTime persistedPrecision(
+            java.time.LocalDateTime value) {
+        return value.withNano((value.getNano() / 1_000) * 1_000);
+    }
+
+    private static TerminationOperationCapability issueAt(
+            TerminationOperationEntity operation,
+            String workerToken,
+            Instant issuedAt) {
         if (operation == null) throw new IllegalArgumentException("termination operation is required");
         if (workerToken == null || workerToken.isBlank()) {
             throw new IllegalStateException("TERMINATION_WORKER_TOKEN_REQUIRED");
@@ -38,7 +71,6 @@ public record TerminationOperationCapability(String encodedOperation, String sig
         if (operation.getWorkerId() == null || operation.getWorkerId().isBlank()) {
             throw new IllegalStateException("TERMINATION_WORKER_ID_REQUIRED");
         }
-        Instant issuedAt = Instant.now();
         Instant expiry = issuedAt.plus(MAX_LIFETIME);
         if (operation.getExpiresAt() != null) {
             Instant operationExpiry = operation.getExpiresAt()

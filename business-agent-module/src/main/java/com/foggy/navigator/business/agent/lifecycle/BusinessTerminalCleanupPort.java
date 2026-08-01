@@ -29,6 +29,7 @@ public class BusinessTerminalCleanupPort implements TerminalCleanupPort {
         }
         return RECEIPT.equals(participant)
                 && text(context.operationId())
+                && text(context.clientRequestId())
                 && text(context.taskId());
     }
 
@@ -41,6 +42,7 @@ public class BusinessTerminalCleanupPort implements TerminalCleanupPort {
                     context.tenantId(), context.taskId());
         }
         return audits.hasDurableTaskOperationReceipt(
+                context.clientRequestId(),
                 context.taskId(),
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE);
     }
@@ -62,6 +64,7 @@ public class BusinessTerminalCleanupPort implements TerminalCleanupPort {
                     "canonical task terminal");
         } else if (RECEIPT.equals(participant)) {
             audits.refreshCompletedTaskOperation(
+                    context.clientRequestId(),
                     context.taskId(),
                     RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
                     new RuntimeRequestAuditService.TaskEvidence(

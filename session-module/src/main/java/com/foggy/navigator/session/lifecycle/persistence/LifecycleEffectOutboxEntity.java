@@ -45,6 +45,18 @@ public class LifecycleEffectOutboxEntity {
     @Column(length = 128)
     private String bindingDigest;
 
+    @Column(length = 16)
+    private String ownershipMode;
+
+    @Column(length = 128)
+    private String stateGeneration;
+
+    @Column(length = 128)
+    private String instanceEpoch;
+
+    @Column(length = 32)
+    private String bindingDigestVersion;
+
     @Column(length = 64)
     private String effectClaim;
 
@@ -109,6 +121,12 @@ public class LifecycleEffectOutboxEntity {
     public void setDispatchId(String value) { dispatchId = value; }
     public void setOperationId(String value) { operationId = value; }
     public void setBindingDigest(String value) { bindingDigest = value; }
+    public void setOwnershipMode(String value) { ownershipMode = value; }
+    public void setStateGeneration(String value) { stateGeneration = value; }
+    public void setInstanceEpoch(String value) { instanceEpoch = value; }
+    public void setBindingDigestVersion(String value) {
+        bindingDigestVersion = value;
+    }
     public void setEffectClaim(String value) { effectClaim = value; }
     public void setAggregateReferenceId(String value) { aggregateReferenceId = value; }
     public void setWriterGenerationId(String value) { writerGenerationId = value; }
@@ -145,6 +163,10 @@ public class LifecycleEffectOutboxEntity {
     public String getDispatchId() { return dispatchId; }
     public String getOperationId() { return operationId; }
     public String getBindingDigest() { return bindingDigest; }
+    public String getOwnershipMode() { return ownershipMode; }
+    public String getStateGeneration() { return stateGeneration; }
+    public String getInstanceEpoch() { return instanceEpoch; }
+    public String getBindingDigestVersion() { return bindingDigestVersion; }
     public String getEffectClass() { return effectClass; }
     public String getEffectClaim() { return effectClaim; }
     public String getAggregateReferenceId() { return aggregateReferenceId; }

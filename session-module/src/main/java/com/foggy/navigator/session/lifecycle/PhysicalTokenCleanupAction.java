@@ -41,6 +41,7 @@ public class PhysicalTokenCleanupAction implements TerminalCleanupAction {
                 value.getTaskId(), value.getSessionId(), value.getProviderType(),
                 value.getTenantId(), value.getProviderTaskId(),
                 value.getProviderTaskUserId(), value.getSourceAgentId(),
-                value.getOperationId(), value.getTerminalOutcome());
+                value.getOperationId(), value.getClientRequestId(),
+                value.getTerminalOutcome());
     }
 }

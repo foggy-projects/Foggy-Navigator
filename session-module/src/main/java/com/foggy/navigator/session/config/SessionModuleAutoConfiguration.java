@@ -35,7 +35,10 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
     "com.foggy.navigator.session.repository",
     "com.foggy.navigator.session.lifecycle.repository"
 })
-@EnableConfigurationProperties(ErrorDiagnosticProperties.class)
+@EnableConfigurationProperties({
+        ErrorDiagnosticProperties.class,
+        com.foggy.navigator.session.lifecycle.LifecycleActivationProperties.class
+})
 @EnableAsync
 @EnableScheduling
 public class SessionModuleAutoConfiguration {

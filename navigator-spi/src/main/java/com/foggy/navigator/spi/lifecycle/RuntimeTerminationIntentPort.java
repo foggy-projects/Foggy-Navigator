@@ -29,6 +29,10 @@ public interface RuntimeTerminationIntentPort {
             String providerTaskId,
             String dispatchId,
             String operationId,
+            String ownershipMode,
+            String stateGeneration,
+            String instanceEpoch,
+            String bindingDigestVersion,
             String bindingDigest) {
         public RuntimeTerminationIntent(
                 String clientRequestId,
@@ -41,7 +45,8 @@ public interface RuntimeTerminationIntentPort {
                 String bindingDigest) {
             this(clientRequestId, taskId, sessionId, providerType,
                     physicalWorkerId, providerTaskId, operationId,
-                    operationId, bindingDigest);
+                    operationId, "ENFORCED", null, null,
+                    "JCS_SHA256_V1", bindingDigest);
         }
     }
 
@@ -53,6 +58,10 @@ public interface RuntimeTerminationIntentPort {
             String physicalWorkerId,
             String providerTaskId,
             String operationId,
+            String ownershipMode,
+            String stateGeneration,
+            String instanceEpoch,
+            String bindingDigestVersion,
             String bindingDigest,
             String effectState) {
     }

@@ -218,7 +218,7 @@ class IsolatedEnforcedLifecycleContractTest {
                         true, true, true, CAPABILITIES, true,
                         NOW.plusMinutes(1), NOW);
         assertThat(new LifecycleEnrollmentGate().evaluate(request).safeReasonCode())
-                .isEqualTo(LifecycleSchemaReadiness.ACTIVATION_DISABLED);
+                .isEqualTo(LifecycleActivationReason.AUTHORITY_REQUIRED);
     }
 
     private void persistCanonicalTaskAndProof() {

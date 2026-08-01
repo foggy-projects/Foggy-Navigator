@@ -48,6 +48,7 @@ import com.foggy.navigator.spi.lifecycle.WorkerLifecycleCommandAuthorizationPort
 import com.foggy.navigator.session.service.ErrorDiagnosticService;
 import com.foggy.navigator.session.service.TerminationOperationService;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -63,9 +64,13 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -206,6 +211,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Autowired(required = false)
     @Nullable
     private CodexLifecycleBindingDigest lifecycleBindingDigest;
+
+    @Autowired(required = false)
+    @Nullable
+    private LifecycleProductionAdmissionService lifecycleProductionAdmission;
 
     /**
      * 创建并启动 Codex 任务
@@ -838,7 +847,31 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 form.getWorkerId(), entity.getModel(), effectiveProviderType, taskId, existingSessionId,
                 runtimeRequirements(form, effectiveProviderType), form.isInitializeRuntimeAffinity()));
 
+        if (lifecycleProductionAdmission != null) {
+            lifecycleProductionAdmission.reserveProductionAdmission(
+                    new LifecycleProductionAdmissionService
+                            .ProductionAdmissionRequest(
+                            effectiveProviderType,
+                            tenantId,
+                            userId,
+                            form.getWorkerId(),
+                            sessionId,
+                            taskId,
+                            effectiveModelConfigId,
+                            entity.getModel(),
+                            existingSessionId,
+                            sha256Hex(form.getPrompt()),
+                            form.getCodexHomeKey(),
+                            cwd,
+                            form.getBusinessRuntimeContext(),
+                            form.getAdditionalDirectories(),
+                            form.getNetworkAccessEnabled(),
+                            form.getWebSearchMode(),
+                            form.getDeveloperInstructions()));
+        }
+
         persistTask(entity);
+        persistTaskModelConfig(taskId, effectiveModelConfigId);
         log.info("Created Codex task: taskId={}, providerType={}, workerId={}, sessionId={}",
                 taskId, effectiveProviderType, form.getWorkerId(), sessionId);
 
@@ -900,6 +933,28 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .build());
 
         return toDispatchDTO(entity);
+    }
+
+    private void persistTaskModelConfig(
+            String taskId, String modelConfigId) {
+        if (sessionTaskRepository == null || modelConfigId == null
+                || modelConfigId.isBlank()) {
+            return;
+        }
+        sessionTaskRepository.findByTaskIdForUpdate(taskId).ifPresent(task -> {
+            task.setModelConfigId(modelConfigId);
+            sessionTaskRepository.save(task);
+        });
+    }
+
+    private String sha256Hex(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(
+                            value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     /**
@@ -1521,10 +1576,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                     || !Objects.equals(existing.getWorkerId(), expectedPhysicalWorkerId)) {
                 throw new TerminationDispatchException("CLIENT_REQUEST_ID_OPERATION_MISMATCH", false);
             }
-            CodexTaskEntity replayed = taskRepository.findByTaskId(taskId).orElse(observed);
-            return new RuntimeTaskClosureProvider.TerminationResult(
-                    isTerminalStatus(replayed.getStatus()), false, true,
-                    !isTerminalStatus(replayed.getStatus()), replayed.getStatus(), operationId, null);
+            if (!"PENDING".equals(existing.getDispatchState())) {
+                CodexTaskEntity replayed = taskRepository.findByTaskId(taskId).orElse(observed);
+                return new RuntimeTaskClosureProvider.TerminationResult(
+                        isTerminalStatus(replayed.getStatus()), false, true,
+                        !isTerminalStatus(replayed.getStatus()), replayed.getStatus(),
+                        operationId, null);
+            }
         }
 
         RemoteTerminationReservation reservation = reserveRuntimeTermination(
@@ -1540,6 +1598,74 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return new RuntimeTaskClosureProvider.TerminationResult(
                 isTerminalStatus(current.getStatus()), true, false,
                 !isTerminalStatus(current.getStatus()), current.getStatus(), operationId, null);
+    }
+
+    @Transactional(propagation =
+            org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public RuntimeTaskClosureProvider.TerminationAdmission
+    prepareRuntimeTerminationAdmission(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            String reason,
+            String clientRequestId) {
+        CodexTaskEntity task = taskRepository.findByTaskIdForUpdate(taskId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "RUNTIME_TASK_NOT_FOUND"));
+        if (!matchesStaleTurnCleanupOwnerScope(task, ownerUserId, tenantId)) {
+            throw new SecurityException("RUNTIME_TASK_TERMINATION_FORBIDDEN");
+        }
+        if (!Objects.equals(task.getWorkerId(), expectedPhysicalWorkerId)) {
+            throw new IllegalArgumentException(
+                    "EXPECTED_PHYSICAL_WORKER_MISMATCH");
+        }
+        if (!hasNonBlank(task.getWorkerTaskId())) {
+            throw new IllegalStateException(
+                    "TERMINATION_REMOTE_TASK_UNAVAILABLE");
+        }
+        if (terminationOperationService == null
+                || lifecycleSnapshots == null
+                || lifecycleBindingDigest == null) {
+            throw new IllegalStateException(
+                    "ENFORCED_LIFECYCLE_AUTHORIZATION_UNAVAILABLE");
+        }
+        var snapshot = lifecycleSnapshots.findById(taskId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_OWNER_ENROLLMENT_REQUIRED"));
+        if (!"ENFORCED".equals(snapshot.getOwnershipMode())) {
+            throw new IllegalStateException(
+                    "TERMINATION_OWNER_BINDING_MISMATCH");
+        }
+        String operationId = runtimeTerminationOperationId(clientRequestId);
+        TerminationOperationEntity operation =
+                terminationOperationService.find(operationId);
+        if (operation == null) {
+            operation = terminationOperationService.accept(
+                    runtimeTerminationCreateCommand(
+                            task, reason, clientRequestId),
+                    operationId);
+        } else if (!Objects.equals(operation.getTaskId(), taskId)
+                || !Objects.equals(operation.getProviderTaskId(),
+                task.getWorkerTaskId())
+                || !Objects.equals(operation.getWorkerId(),
+                expectedPhysicalWorkerId)) {
+            throw new IllegalStateException(
+                    "CLIENT_REQUEST_ID_OPERATION_MISMATCH");
+        }
+        String dispatchId = CodexStreamRelay.stableLifecycleDispatchId(
+                "TERMINATION_CANCEL", operationId);
+        Map<String, Object> lifecycleContext = localLifecycleContext(
+                snapshot, taskId, dispatchId, operationId);
+        TerminationOperationCapability capability =
+                TerminationOperationCapability.issueStable(
+                        operation, terminationSigningSecret(task));
+        String binding = lifecycleBindingDigest.termination(
+                lifecycleContext, task.getWorkerTaskId(), capability);
+        return new RuntimeTaskClosureProvider.TerminationAdmission(
+                operationId, dispatchId, snapshot.getOwnershipMode(),
+                snapshot.getStateGeneration(), snapshot.getInstanceEpoch(),
+                "JCS_SHA256_V1", binding);
     }
 
     public RuntimeTaskClosureProvider.ReconciliationResult reconcileRuntimeTask(
@@ -1811,17 +1937,22 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             if (terminationOperationService == null) {
                 throw new IllegalStateException("TERMINATION_AUDIT_UNAVAILABLE");
             }
-            TerminationOperationEntity operation = terminationOperationService.accept(
-                    new TerminationOperationService.CreateCommand(
-                            entity.getTaskId(), entity.getWorkerTaskId(), entity.getSessionId(),
-                            entity.getUserId(), entity.getTenantId(), resolveProviderType(entity),
-                            entity.getWorkerId(), "REMOTE_CANCEL", "UPSTREAM_USER",
-                            entity.getUserId(), "RUNTIME_CLIENT",
-                            "runtime-closure:" + clientRequestId,
-                            firstNonBlank(reason, "operator-stuck-task-termination"),
-                            "runtime-task-terminate:" + clientRequestId,
-                            null, null, 300),
-                    operationId);
+            TerminationOperationEntity operation =
+                    terminationOperationService.find(operationId);
+            if (operation == null) {
+                operation = terminationOperationService.accept(
+                        runtimeTerminationCreateCommand(
+                                entity, reason, clientRequestId),
+                        operationId);
+            } else if (!Objects.equals(operation.getTaskId(), entity.getTaskId())
+                    || !Objects.equals(operation.getProviderTaskId(),
+                    entity.getWorkerTaskId())
+                    || !Objects.equals(operation.getWorkerId(),
+                    entity.getWorkerId())
+                    || !"REMOTE_CANCEL".equals(operation.getKind())) {
+                throw new IllegalStateException(
+                        "CLIENT_REQUEST_ID_OPERATION_MISMATCH");
+            }
             String previousStatus = entity.getStatus();
             String previousRuntimeAcceptanceState = entity.getRuntimeAcceptanceState();
             entity.setStatus("CANCEL_REQUESTED");
@@ -1832,6 +1963,24 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                     entity.getTaskId(), entity.getWorkerTaskId(), previousStatus,
                     previousRuntimeAcceptanceState, operation);
         });
+    }
+
+    private TerminationOperationService.CreateCommand
+    runtimeTerminationCreateCommand(
+            CodexTaskEntity entity,
+            String reason,
+            String clientRequestId) {
+        return new TerminationOperationService.CreateCommand(
+                entity.getTaskId(), entity.getWorkerTaskId(),
+                entity.getSessionId(), entity.getUserId(),
+                entity.getTenantId(), resolveProviderType(entity),
+                entity.getWorkerId(), "REMOTE_CANCEL", "UPSTREAM_USER",
+                entity.getUserId(), "RUNTIME_CLIENT",
+                "runtime-closure:" + clientRequestId,
+                firstNonBlank(reason,
+                        "operator-stuck-task-termination"),
+                "runtime-task-terminate:" + clientRequestId,
+                null, null, 300);
     }
 
     private String runtimeTerminationOperationId(String clientRequestId) {
@@ -1923,6 +2072,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private void dispatchAuthorizedAbort(RemoteTerminationReservation reservation) {
         if (reservation == null) return;
+        if (TransactionSynchronizationManager
+                .isActualTransactionActive()) {
+            throw new TerminationDispatchException(
+                    "PROVIDER_CALL_INSIDE_DATABASE_TRANSACTION", true);
+        }
         if (reservation.failureCode() != null) {
             throw new TerminationDispatchException(reservation.failureCode(), true);
         }
@@ -1939,8 +2093,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         try {
             terminationOperationService.markDispatchStarted(reservation.operation().getOperationId());
             CodexWorkerClient client = terminationClient(current);
-            TerminationOperationCapability capability = TerminationOperationCapability.issue(
-                    reservation.operation(), client.terminationSigningSecret());
             String ownershipMode = lifecycleSnapshots == null
                     ? "SHADOW"
                     : lifecycleSnapshots.findById(reservation.taskId())
@@ -1950,22 +2102,40 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                     CodexStreamRelay.stableLifecycleDispatchId(
                             "TERMINATION_CANCEL",
                             reservation.operation().getOperationId());
-            reactor.core.publisher.Mono<Map<String, Object>>
-                    lifecycleContextRequest = client.lifecycleContext(
-                    current.getWorkerId(),
-                    ownershipMode,
-                    "TERMINATION_CANCEL",
-                    reservation.taskId(),
-                    lifecycleDispatchId,
-                    1,
-                    reservation.operation().getOperationId());
-            Map<String, Object> lifecycleContext =
-                    lifecycleContextRequest == null
-                            ? null
-                            : lifecycleContextRequest
-                            .onErrorResume(error ->
-                                    reactor.core.publisher.Mono.empty())
-                            .block(Duration.ofSeconds(12));
+            TerminationOperationCapability capability;
+            Map<String, Object> lifecycleContext;
+            if ("ENFORCED".equals(ownershipMode)) {
+                var lifecycle = lifecycleSnapshots
+                        .findById(reservation.taskId())
+                        .orElseThrow(() -> new TerminationDispatchException(
+                                "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE", true));
+                capability = TerminationOperationCapability.issueStable(
+                        reservation.operation(),
+                        client.terminationSigningSecret());
+                lifecycleContext = localLifecycleContext(
+                        lifecycle, reservation.taskId(),
+                        lifecycleDispatchId,
+                        reservation.operation().getOperationId());
+            } else {
+                capability = TerminationOperationCapability.issue(
+                        reservation.operation(),
+                        client.terminationSigningSecret());
+                reactor.core.publisher.Mono<Map<String, Object>>
+                        lifecycleContextRequest = client.lifecycleContext(
+                        current.getWorkerId(),
+                        ownershipMode,
+                        "TERMINATION_CANCEL",
+                        reservation.taskId(),
+                        lifecycleDispatchId,
+                        1,
+                        reservation.operation().getOperationId());
+                lifecycleContext = lifecycleContextRequest == null
+                        ? null
+                        : lifecycleContextRequest
+                        .onErrorResume(error ->
+                                reactor.core.publisher.Mono.empty())
+                        .block(Duration.ofSeconds(12));
+            }
             if (lifecycleContext == null && "ENFORCED".equals(ownershipMode)) {
                 throw new TerminationDispatchException(
                         "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE", true);
@@ -2009,6 +2179,48 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 throw new TerminationDispatchException(safeCode, true, error);
             }
         }
+    }
+
+    private Map<String, Object> localLifecycleContext(
+            com.foggy.navigator.session.lifecycle.persistence
+                    .TaskLifecycleSnapshotEntity snapshot,
+            String taskId,
+            String dispatchId,
+            String operationId) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("schema", "NAVIGATOR_WORKER_LIFECYCLE_V1");
+        context.put("ownership_mode", snapshot.getOwnershipMode());
+        context.put("command_kind", "TERMINATION_CANCEL");
+        context.put("navigator_task_id", taskId);
+        context.put("dispatch_id", dispatchId);
+        context.put("delivery_attempt", 1);
+        context.put("expected_physical_worker_id",
+                snapshot.getPhysicalWorkerId());
+        context.put("expected_state_generation",
+                snapshot.getStateGeneration());
+        context.put("termination_operation_id", operationId);
+        return context;
+    }
+
+    private String terminationSigningSecret(CodexTaskEntity task) {
+        if (CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType())) {
+            if (runtimeRegistryService == null) {
+                throw new IllegalStateException(
+                        "CODEX_RUNTIME_REGISTRY_UNAVAILABLE");
+            }
+            CodexRuntimeBinding binding =
+                    runtimeRegistryService.resolveBoundRuntime(
+                            task.getRuntimeId(), task.getRuntimeRevision(),
+                            task.getWorkerId(), task.getRuntimeInstanceId());
+            return binding.getAuthToken();
+        }
+        CodexConfig config =
+                workerManagementFacade.getCodexConfig(task.getWorkerId());
+        if (config == null || !hasNonBlank(config.getAuthToken())) {
+            throw new IllegalStateException(
+                    "TERMINATION_WORKER_TOKEN_REQUIRED");
+        }
+        return config.getAuthToken();
     }
 
     private void authorizeEnforcedTerminationCommand(

@@ -5,6 +5,7 @@ import com.foggy.navigator.session.lifecycle.repository.WorkerLifecycleSnapshotR
 import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePort;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class WorkerLifecycleSentinelService {
@@ -13,7 +14,7 @@ public class WorkerLifecycleSentinelService {
     private final WorkerLifecycleReconciliationCommitService commits;
 
     public WorkerLifecycleSentinelService(
-            JpaSentinelLeaseStore leases,
+            SentinelLeaseStore leases,
             WorkerLifecycleSnapshotRepository snapshots,
             WorkerLifecycleReconciliationCommitService commits) {
         this.sentinel = new WorkerLifecycleSentinel(
@@ -29,6 +30,11 @@ public class WorkerLifecycleSentinelService {
             String physicalWorkerId,
             SentinelTrigger trigger,
             WorkerLifecyclePort port) {
+        if (TransactionSynchronizationManager
+                .isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "WORKER_LIFECYCLE_CALL_INSIDE_DATABASE_TRANSACTION");
+        }
         WorkerLifecycleSnapshotEntity prior = snapshots.findById(physicalWorkerId)
                 .orElse(null);
         if (prior != null && prior.getStateGeneration() != null

@@ -7,6 +7,24 @@ public interface WorkerLifecyclePort {
 
     WorkerLifecycleReadiness probe(String physicalWorkerId);
 
+    default WorkerLifecycleActivationReadiness activationReadiness(
+            String physicalWorkerId) {
+        WorkerLifecycleReadiness readiness = probe(physicalWorkerId);
+        return new WorkerLifecycleActivationReadiness(
+                readiness.ready(),
+                readiness.ready(),
+                "NAVIGATOR_WORKER_LIFECYCLE_V1",
+                0,
+                readiness.identity(),
+                readiness.capabilities(),
+                null,
+                false,
+                false,
+                false,
+                java.util.List.of(
+                        "LIFECYCLE_ACTIVATION_READINESS_UNAVAILABLE"));
+    }
+
     WorkerLifecycleSnapshot inventory(
             WorkerLifecycleIdentity expectedIdentity,
             long afterSequence);

@@ -2,6 +2,8 @@ package com.foggy.navigator.session.lifecycle;
 
 import com.foggy.navigator.session.lifecycle.repository.WorkerLifecycleSnapshotRepository;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePortResolver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +16,8 @@ import java.util.TreeSet;
  */
 @Service
 public class WorkerLifecycleSentinelScheduler {
+    private static final Logger log =
+            LoggerFactory.getLogger(WorkerLifecycleSentinelScheduler.class);
     private final WorkerLifecycleSnapshotRepository workers;
     private final WorkerLifecycleSentinelService sentinel;
     private final List<WorkerLifecyclePortResolver> resolvers;
@@ -45,10 +49,21 @@ public class WorkerLifecycleSentinelScheduler {
                     } catch (RuntimeException isolatedWorkerFailure) {
                         // One unavailable/malformed runtime must not prevent the
                         // scheduled scan from reconciling other configured Workers.
+                        log.warn(
+                                "Lifecycle Sentinel reconciliation failed: workerId={}, error={}",
+                                physicalWorkerId,
+                                safeError(isolatedWorkerFailure));
                     }
                     break;
                 }
             }
         }
+    }
+
+    private String safeError(RuntimeException failure) {
+        String message = failure.getMessage();
+        return message != null && message.matches("[A-Z0-9_]{1,96}")
+                ? message
+                : failure.getClass().getSimpleName();
     }
 }

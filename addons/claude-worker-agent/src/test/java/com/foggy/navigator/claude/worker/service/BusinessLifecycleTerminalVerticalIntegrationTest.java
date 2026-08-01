@@ -425,10 +425,34 @@ class BusinessLifecycleTerminalVerticalIntegrationTest {
                 String taskId, String ownerUserId, String tenantId,
                 String expectedPhysicalWorkerId, String reason,
                 String clientRequestId, boolean dryRun) {
+            if (org.springframework.transaction.support
+                    .TransactionSynchronizationManager
+                    .isActualTransactionActive()) {
+                throw new IllegalStateException(
+                        "FIXTURE_PROVIDER_CALLED_INSIDE_TRANSACTION");
+            }
             invocations++;
             return new TerminationResult(
                     false, true, false, true,
                     "CANCEL_REQUESTED", "rt_requestbusiness1", null);
+        }
+
+        @Override
+        public TerminationAdmission prepareTerminationAdmission(
+                String taskId, String ownerUserId, String tenantId,
+                String expectedPhysicalWorkerId, String reason,
+                String clientRequestId) {
+            if (!org.springframework.transaction.support
+                    .TransactionSynchronizationManager
+                    .isActualTransactionActive()) {
+                throw new IllegalStateException(
+                        "FIXTURE_ADMISSION_NOT_TRANSACTIONAL");
+            }
+            return new TerminationAdmission(
+                    "rt_" + clientRequestId.replace("-", ""),
+                    "termination-dispatch-business", "ENFORCED",
+                    "generation-business", "epoch-business",
+                    "JCS_SHA256_V1", "termination-binding-business");
         }
 
         @Override

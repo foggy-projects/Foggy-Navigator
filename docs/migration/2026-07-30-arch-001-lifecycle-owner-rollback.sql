@@ -23,6 +23,9 @@ BEGIN
         SELECT 1 FROM lifecycle_effect_outbox
         WHERE effect_state NOT IN ('RESULT_OBSERVED', 'COMPLETED', 'REJECTED')
         LIMIT 1
+    ) OR EXISTS (
+        SELECT 1 FROM lifecycle_activation_targets
+        WHERE status NOT IN ('CLOSED', 'DESTROYED') LIMIT 1
     ) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
@@ -35,6 +38,7 @@ CALL arch001_assert_rollback_floor();
 DROP PROCEDURE arch001_assert_rollback_floor;
 
 DROP TABLE IF EXISTS worker_lifecycle_sentinel_leases;
+DROP TABLE IF EXISTS lifecycle_activation_targets;
 DROP TABLE IF EXISTS lifecycle_writer_exclusivity_references;
 DROP TABLE IF EXISTS lifecycle_writer_exclusivity_proofs;
 DROP TABLE IF EXISTS lifecycle_writer_instance_registrations;

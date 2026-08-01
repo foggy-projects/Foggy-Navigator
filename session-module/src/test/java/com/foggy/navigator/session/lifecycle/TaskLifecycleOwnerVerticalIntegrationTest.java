@@ -3,11 +3,14 @@ package com.foggy.navigator.session.lifecycle;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.session.lifecycle.persistence.LifecycleFactEntity;
 import com.foggy.navigator.session.lifecycle.persistence.SessionLifecycleSnapshotEntity;
 import com.foggy.navigator.session.lifecycle.repository.*;
 import com.foggy.navigator.spi.lifecycle.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
@@ -22,6 +25,7 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringJUnitConfig(TaskLifecycleOwnerVerticalIntegrationTest.Config.class)
 class TaskLifecycleOwnerVerticalIntegrationTest {
@@ -148,6 +152,63 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
     }
 
     @Test
+    void terminalFactConvergesWithContentFreeAdmissionFacts() {
+        facts.saveAndFlush(contentFreeAdmissionFact(
+                "fact-reserved", TaskLifecycleFactType.TASK_DISPATCH_RESERVED, 0));
+        facts.saveAndFlush(contentFreeAdmissionFact(
+                "fact-dispatched", TaskLifecycleFactType.TASK_DISPATCHED, 1));
+
+        TaskLifecycleDecision decision = owner.ingestNormalizedBatch(
+                "task-1", List.of(terminal(
+                        "fact-terminal-after-admission", 2, "COMPLETED")));
+
+        assertThat(decision.snapshot().canonicalTerminal()).isTrue();
+        assertThat(decision.snapshot().dispatchState())
+                .isEqualTo(TaskDispatchState.DISPATCHED);
+        assertThat(tasks.findByTaskId("task-1").orElseThrow().getStatus())
+                .isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void unsupportedEmptyFactPayloadRemainsFailClosed() {
+        facts.saveAndFlush(contentFreeAdmissionFact(
+                "fact-diagnostic", TaskLifecycleFactType.DIAGNOSTIC_TEXT, 1));
+
+        assertThatThrownBy(() -> owner.ingestNormalizedBatch(
+                "task-1", List.of(terminal(
+                        "fact-terminal-after-invalid", 2, "COMPLETED"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("LIFECYCLE_FACT_PAYLOAD_INVALID")
+                .hasRootCauseMessage("LIFECYCLE_EMPTY_FACT_PAYLOAD_NOT_SUPPORTED");
+
+        assertThat(facts.findById("fact-terminal-after-invalid")).isEmpty();
+    }
+
+    @Test
+    void terminalSafetyCommitDoesNotClearWriterProofQuarantine() {
+        var snapshot = snapshots.findById("task-1").orElseThrow();
+        snapshot.setAvailability(
+                LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+        snapshot.setConflictState(LifecycleConflictState
+                .LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+        snapshots.saveAndFlush(snapshot);
+
+        TaskLifecycleDecision decision = owner.ingestNormalizedBatch(
+                "task-1", List.of(terminal(
+                        "fact-terminal-after-proof-loss", 2, "CANCELLED")));
+
+        assertThat(decision.snapshot().canonicalTerminal()).isTrue();
+        assertThat(snapshots.findById("task-1").orElseThrow())
+                .satisfies(committed -> {
+                    assertThat(committed.getAvailability()).isEqualTo(
+                            LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+                    assertThat(committed.getConflictState()).isEqualTo(
+                            LifecycleConflictState
+                                    .LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+                });
+    }
+
+    @Test
     void conflictingTerminalFactsQuarantineWithoutTombstoneOrEffect() {
         TaskLifecycleDecision decision = owner.ingestNormalizedBatch(
                 "task-1", List.of(
@@ -163,10 +224,17 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
                 .isEqualTo("RUNNING");
     }
 
-    @Test
-    void exactDurableNeverAcceptedFactUsesSameTerminalCleanupAndLaneRelease() {
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "WORKER_TASK_ADMISSION_CAPACITY_REJECTED",
+            "WORKER_TASK_ADMISSION_THREAD_CONFLICT",
+            "WORKER_TASK_RESUME_TARGET_NOT_FOUND"
+    })
+    void exactDurableNeverAcceptedFactUsesSameTerminalCleanupAndLaneRelease(
+            String reason) {
         TaskLifecycleDecision decision = owner.ingestNormalizedBatch(
-                "task-1", List.of(preEffectRejection("fact-never-accepted", 2)));
+                "task-1", List.of(preEffectRejection(
+                        "fact-never-accepted", 2, reason)));
 
         assertThat(decision.snapshot().canonicalTerminal()).isTrue();
         assertThat(decision.snapshot().terminalOutcome())
@@ -209,8 +277,35 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
                 outcome);
     }
 
+    private LifecycleFactEntity contentFreeAdmissionFact(
+            String factId, TaskLifecycleFactType type, long sequence) {
+        LifecycleFactEntity fact = new LifecycleFactEntity();
+        fact.setFactId(factId);
+        fact.setFactType(type.name());
+        fact.setSchemaVersion(1);
+        fact.setAggregateType("TASK");
+        fact.setAggregateId("task-1");
+        fact.setTaskId("task-1");
+        fact.setSessionId("session-1");
+        fact.setOperationId("dispatch-1");
+        fact.setPhysicalWorkerId("worker-1");
+        fact.setStateGeneration("generation-1");
+        fact.setInstanceEpoch("epoch-1");
+        fact.setProviderTaskId(type == TaskLifecycleFactType.TASK_DISPATCHED
+                ? "provider-task-1" : null);
+        fact.setDispatchId("dispatch-1");
+        fact.setSafeBindingDigestVersion("JCS_SHA256_V1");
+        fact.setSafeBindingDigest("binding-digest-1");
+        fact.setOwnershipMode(LifecycleOwnershipMode.ENFORCED.name());
+        fact.setSourceSequence(sequence);
+        fact.setIdempotencyKey("admission:" + factId);
+        fact.setSafeReasonCode(type.name());
+        fact.setContentFreePayloadJson("{}");
+        return fact;
+    }
+
     private NormalizedLifecycleFact preEffectRejection(
-            String factId, long sequence) {
+            String factId, long sequence, String reason) {
         Instant now = Instant.parse("2026-07-31T00:00:00Z");
         return new NormalizedLifecycleFact(
                 factId,
@@ -220,7 +315,7 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
                 "task-1",
                 "session-1",
                 "task-1",
-                "provider-task-1",
+                null,
                 null,
                 identity,
                 LifecycleOwnershipMode.ENFORCED,
@@ -231,7 +326,11 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
                 "generation-1:" + sequence,
                 now,
                 now,
-                "WORKER_TASK_ADMISSION_CAPACITY_REJECTED",
-                null);
+                reason,
+                null,
+                "REJECTED",
+                "PRE_EFFECT",
+                true,
+                1L);
     }
 }

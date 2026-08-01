@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 @Component
@@ -77,6 +78,10 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         entity.setProviderTaskId(intent.providerTaskId());
         entity.setDispatchId(intent.dispatchId());
         entity.setOperationId(intent.operationId());
+        entity.setOwnershipMode(intent.ownershipMode());
+        entity.setStateGeneration(intent.stateGeneration());
+        entity.setInstanceEpoch(intent.instanceEpoch());
+        entity.setBindingDigestVersion(intent.bindingDigestVersion());
         entity.setBindingDigest(intent.bindingDigest());
         entity.setEffectClaim("TERMINATION_PROVIDER_CALL");
         entity.setProofId(fence.proofId());
@@ -180,11 +185,16 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public PreparedCommand prepare(WorkerLifecycleCommand command) {
         requireCommand(command);
+        var lifecycle = snapshots.findById(command.taskId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_TASK_NOT_ENROLLED"));
         RuntimeTerminationIntent intent = new RuntimeTerminationIntent(
                 command.operationId(), command.taskId(), requireSessionId(command.taskId()),
                 command.providerType(), command.physicalWorkerId(),
                 command.providerTaskId(), command.dispatchId(),
-                command.operationId(), command.bindingDigest());
+                command.operationId(), lifecycle.getOwnershipMode(),
+                lifecycle.getStateGeneration(), lifecycle.getInstanceEpoch(),
+                "JCS_SHA256_V1", command.bindingDigest());
         AdmissionFence fence = requireOwnerAdmission(intent);
         LifecycleEffectOutboxEntity parent = outbox
                 .findByAggregateIdAndOperationId(
@@ -229,6 +239,10 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         entity.setProviderTaskId(command.providerTaskId());
         entity.setDispatchId(command.dispatchId());
         entity.setOperationId(command.operationId());
+        entity.setOwnershipMode(intent.ownershipMode());
+        entity.setStateGeneration(intent.stateGeneration());
+        entity.setInstanceEpoch(intent.instanceEpoch());
+        entity.setBindingDigestVersion(intent.bindingDigestVersion());
         entity.setBindingDigest(command.bindingDigest());
         entity.setEffectClaim("CODEX_WORKER_TERMINATION_CALL");
         entity.setProofId(fence.proofId());
@@ -344,6 +358,10 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 entity.getPhysicalWorkerId(),
                 entity.getProviderTaskId(),
                 entity.getOperationId(),
+                entity.getOwnershipMode(),
+                entity.getStateGeneration(),
+                entity.getInstanceEpoch(),
+                entity.getBindingDigestVersion(),
                 entity.getBindingDigest(),
                 entity.getEffectState());
     }
@@ -364,7 +382,19 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         required(intent.providerTaskId(), "PROVIDER_TASK_ID");
         required(intent.dispatchId(), "DISPATCH_ID");
         required(intent.operationId(), "OPERATION_ID");
+        required(intent.ownershipMode(), "OWNERSHIP_MODE");
+        required(intent.stateGeneration(), "STATE_GENERATION");
+        required(intent.instanceEpoch(), "INSTANCE_EPOCH");
+        required(intent.bindingDigestVersion(), "BINDING_DIGEST_VERSION");
         required(intent.bindingDigest(), "BINDING_DIGEST");
+        if (!"ENFORCED".equals(intent.ownershipMode())) {
+            throw new IllegalArgumentException(
+                    "TERMINATION_OWNERSHIP_MODE_NOT_ENFORCED");
+        }
+        if (!"JCS_SHA256_V1".equals(intent.bindingDigestVersion())) {
+            throw new IllegalArgumentException(
+                    "TERMINATION_BINDING_DIGEST_VERSION_UNSUPPORTED");
+        }
     }
 
     private void requireSameIntent(
@@ -376,6 +406,11 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 || !intent.providerTaskId().equals(existing.getProviderTaskId())
                 || !intent.dispatchId().equals(existing.getDispatchId())
                 || !intent.operationId().equals(existing.getOperationId())
+                || !intent.ownershipMode().equals(existing.getOwnershipMode())
+                || !intent.stateGeneration().equals(existing.getStateGeneration())
+                || !intent.instanceEpoch().equals(existing.getInstanceEpoch())
+                || !intent.bindingDigestVersion().equals(
+                existing.getBindingDigestVersion())
                 || !intent.bindingDigest().equals(existing.getBindingDigest())) {
             throw new IllegalStateException(
                     "TERMINATION_DELIVERY_BINDING_MISMATCH");
@@ -396,27 +431,43 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         var session = sessions.findForUpdate(intent.sessionId())
                 .orElseThrow(() -> new IllegalStateException(
                         "TERMINATION_SESSION_ENROLLMENT_REQUIRED"));
-        if (!"ENFORCED".equals(snapshot.getOwnershipMode())
-                || !"ENFORCED".equals(worker.getOwnershipMode())
-                || !"ENFORCED".equals(session.getOwnershipMode())
+        if (!intent.ownershipMode().equals(snapshot.getOwnershipMode())
+                || !intent.ownershipMode().equals(worker.getOwnershipMode())
+                || !intent.ownershipMode().equals(session.getOwnershipMode())
                 || (!intent.sessionId().equals(snapshot.getSessionId())
                 || !intent.physicalWorkerId()
                 .equals(snapshot.getPhysicalWorkerId())
+                || !intent.physicalWorkerId()
+                .equals(session.getPhysicalWorkerId())
                 || !intent.providerTaskId()
                 .equals(snapshot.getProviderTaskId())
                 || !intent.providerType().equals(canonical.getProviderType())
+                || !intent.sessionId().equals(canonical.getSessionId())
                 || !intent.providerTaskId().equals(
                 canonical.getProviderTaskId())
-                || !snapshot.getStateGeneration().equals(
+                || !intent.physicalWorkerId().equals(canonical.getWorkerId())
+                || !intent.stateGeneration().equals(
+                snapshot.getStateGeneration())
+                || !intent.stateGeneration().equals(
                 worker.getStateGeneration())
+                || !intent.instanceEpoch().equals(snapshot.getInstanceEpoch())
+                || !intent.instanceEpoch().equals(worker.getInstanceEpoch())
                 || !LifecycleAvailability.READY.name().equals(
                 snapshot.getAvailability())
                 || !LifecycleAvailability.READY.name().equals(
                 worker.getAvailability())
+                || !LifecycleAvailability.READY.name().equals(
+                session.getAvailability())
                 || !LifecycleConflictState.NONE.name().equals(
                 snapshot.getConflictState())
                 || !LifecycleConflictState.NONE.name().equals(
-                worker.getConflictState()))) {
+                worker.getConflictState())
+                || !LifecycleConflictState.NONE.name().equals(
+                session.getConflictState())
+                || !Objects.equals(snapshot.getWriterGenerationId(),
+                worker.getWriterGenerationId())
+                || !Objects.equals(snapshot.getWriterGenerationId(),
+                session.getWriterGenerationId()))) {
             throw new IllegalStateException(
                     "TERMINATION_OWNER_BINDING_MISMATCH");
         }
@@ -438,14 +489,25 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         String taskReference = referenceId(
                 proof.getProofId(), ProofAggregateType.TASK,
                 intent.taskId());
-        for (String reference : List.of(
-                workerReference, sessionReference, taskReference)) {
-            var value = references.findById(reference).orElseThrow(() ->
+        for (ExpectedReference expected : List.of(
+                new ExpectedReference(workerReference,
+                        ProofAggregateType.WORKER,
+                        intent.physicalWorkerId()),
+                new ExpectedReference(sessionReference,
+                        ProofAggregateType.SESSION, intent.sessionId()),
+                new ExpectedReference(taskReference,
+                        ProofAggregateType.TASK, intent.taskId()))) {
+            var value = references.findById(expected.referenceId())
+                    .orElseThrow(() ->
                     new IllegalStateException(
                             "LIFECYCLE_AGGREGATE_REFERENCE_NOT_FOUND"));
-            if (value.getReleasedAt() != null) {
+            if (!proof.getProofId().equals(value.getProofId())
+                    || !expected.type().name().equals(
+                    value.getAggregateType())
+                    || !expected.aggregateId().equals(value.getAggregateId())
+                    || value.getReleasedAt() != null) {
                 throw new IllegalStateException(
-                        "LIFECYCLE_AGGREGATE_REFERENCE_RELEASED");
+                        "LIFECYCLE_AGGREGATE_REFERENCE_INVALID");
             }
         }
         return new AdmissionFence(
@@ -463,6 +525,12 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
             String writerGenerationId,
             String controllerInventoryDigest,
             String taskReferenceId) {
+    }
+
+    private record ExpectedReference(
+            String referenceId,
+            ProofAggregateType type,
+            String aggregateId) {
     }
 
     private static void required(String value, String field) {

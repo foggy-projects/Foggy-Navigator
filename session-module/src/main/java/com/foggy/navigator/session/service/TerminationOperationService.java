@@ -40,7 +40,10 @@ public class TerminationOperationService {
     @Transactional
     public TerminationOperationEntity accept(CreateCommand command, String requestedOperationId) {
         validateCreate(command);
-        LocalDateTime now = LocalDateTime.now();
+        // The migration uses MySQL DATETIME(6). Persist the same value that is
+        // later signed into the stable Worker capability; otherwise JDBC
+        // rounding of nanoseconds can change the exact JCS binding after reload.
+        LocalDateTime now = mysqlDatetime6(LocalDateTime.now());
         TerminationOperationEntity entity = new TerminationOperationEntity();
         entity.setOperationId(hasText(requestedOperationId)
                 ? requestedOperationId.trim()
@@ -68,6 +71,10 @@ public class TerminationOperationService {
         int ttlSeconds = command.ttlSeconds() == null ? DEFAULT_TTL_SECONDS : command.ttlSeconds();
         entity.setExpiresAt(now.plusSeconds(Math.min(DEFAULT_TTL_SECONDS, Math.max(1, ttlSeconds))));
         return repository.saveAndFlush(entity);
+    }
+
+    private LocalDateTime mysqlDatetime6(LocalDateTime value) {
+        return value.withNano((value.getNano() / 1_000) * 1_000);
     }
 
     @Transactional(readOnly = true)

@@ -3,6 +3,7 @@ package com.foggy.navigator.codex.worker.client;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
 import com.foggy.navigator.common.termination.TerminationOperationCapability;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -351,6 +352,22 @@ public class CodexWorkerClient {
             String dispatchId,
             int deliveryAttempt,
             String terminationOperationId) {
+        return lifecycleContextEvidence(
+                expectedPhysicalWorkerId, ownershipMode, commandKind,
+                navigatorTaskId, dispatchId, deliveryAttempt,
+                terminationOperationId)
+                .map(LifecycleContextEvidence::wireContext);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Mono<LifecycleContextEvidence> lifecycleContextEvidence(
+            String expectedPhysicalWorkerId,
+            String ownershipMode,
+            String commandKind,
+            String navigatorTaskId,
+            String dispatchId,
+            int deliveryAttempt,
+            String terminationOperationId) {
         return webClient.get().uri("/health")
                 .retrieve()
                 .bodyToMono(Map.class)
@@ -364,8 +381,10 @@ public class CodexWorkerClient {
                             lifecycle.get("physical_worker_id"), null);
                     String generation = stringValue(
                             lifecycle.get("state_generation"), null);
+                    String instanceEpoch = stringValue(
+                            lifecycle.get("instance_epoch"), null);
                     if (!expectedPhysicalWorkerId.equals(worker)
-                            || generation == null) {
+                            || generation == null || instanceEpoch == null) {
                         return Mono.error(new IllegalStateException(
                                 "LIFECYCLE_IDENTITY_MISMATCH"));
                     }
@@ -380,9 +399,82 @@ public class CodexWorkerClient {
                     context.put("expected_state_generation", generation);
                     context.put("termination_operation_id",
                             terminationOperationId);
-                    return Mono.just(context);
+                    Set<String> capabilities = lifecycle.get("capabilities")
+                            instanceof List<?> values
+                            ? values.stream()
+                            .filter(String.class::isInstance)
+                            .map(String.class::cast)
+                            .filter(value -> !value.isBlank())
+                            .collect(java.util.stream.Collectors.toUnmodifiableSet())
+                            : Set.of();
+                    int protocol = lifecycle.get("version") instanceof Number number
+                            ? number.intValue() : -1;
+                    return Mono.just(new LifecycleContextEvidence(
+                            java.util.Collections.unmodifiableMap(
+                                    new LinkedHashMap<>(context)),
+                            new WorkerLifecycleIdentity(
+                                    worker, generation, instanceEpoch),
+                            stringValue(lifecycle.get("schema"), null),
+                            protocol,
+                            capabilities,
+                            stringValue(body.get("version"), null),
+                            Boolean.TRUE.equals(body.get("ready")),
+                            Boolean.TRUE.equals(body.get("termination_ready")),
+                            Boolean.TRUE.equals(body.get("codex_auth_configured"))));
                 })
                 .timeout(Duration.ofSeconds(10));
+    }
+
+    public record LifecycleContextEvidence(
+            Map<String, Object> wireContext,
+            WorkerLifecycleIdentity identity,
+            String lifecycleSchema,
+            int lifecycleProtocol,
+            Set<String> capabilities,
+            String workerVersion,
+            boolean workerReady,
+            boolean terminationReady,
+            boolean providerCredentialConfigured) {
+        public LifecycleContextEvidence {
+            wireContext = java.util.Collections.unmodifiableMap(
+                    new LinkedHashMap<>(wireContext));
+            capabilities = Set.copyOf(capabilities);
+        }
+    }
+
+    /**
+     * Reads the raw, content-free lifecycle inventory using the exact worker
+     * generation fence. The provider-neutral lifecycle adapter intentionally
+     * normalizes disposition rows away; this client view is retained for
+     * integration evidence and operational reconciliation that must inspect
+     * durable dispatch disposition metadata.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> lifecycleInventory(
+            String expectedPhysicalWorkerId,
+            String expectedStateGeneration,
+            long afterSequence) {
+        if (expectedPhysicalWorkerId == null || expectedPhysicalWorkerId.isBlank()) {
+            return Mono.error(new IllegalArgumentException(
+                    "expectedPhysicalWorkerId is required"));
+        }
+        if (expectedStateGeneration == null || expectedStateGeneration.isBlank()) {
+            return Mono.error(new IllegalArgumentException(
+                    "expectedStateGeneration is required"));
+        }
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/lifecycle/inventory")
+                        .queryParam("after_sequence", afterSequence)
+                        .build())
+                .header("X-Navigator-Expected-Physical-Worker-Id",
+                        expectedPhysicalWorkerId)
+                .header("X-Navigator-Expected-State-Generation",
+                        expectedStateGeneration)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(body -> (Map<String, Object>) body)
+                .timeout(Duration.ofSeconds(15));
     }
 
     private static String stringValue(Object value, String fallback) {

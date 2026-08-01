@@ -2,12 +2,12 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
+import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
-import java.util.Objects;
 
 @Service
 public class RuntimeTerminationAcceptanceCoordinator {
@@ -33,10 +33,20 @@ public class RuntimeTerminationAcceptanceCoordinator {
             String sessionId,
             String providerType,
             String physicalWorkerId,
-            String providerTaskId) {
+            String providerTaskId,
+            String ownerUserId,
+            String tenantId,
+            String reason,
+            RuntimeTaskClosureProvider provider) {
         return transactions.execute(status -> {
-            String operationId = operationId(
-                    providerType, clientRequestId);
+            RuntimeTaskClosureProvider.TerminationAdmission admission =
+                    provider.prepareTerminationAdmission(
+                            taskId, ownerUserId, tenantId,
+                            physicalWorkerId, reason, clientRequestId);
+            if (admission == null) {
+                throw new IllegalStateException(
+                        "TERMINATION_EXACT_ADMISSION_UNAVAILABLE");
+            }
             RuntimeRequestAuditService.TaskOperationRegistration registration =
                     audits.beginTaskOperationIdempotentAtomic(
                             clientRequestId,
@@ -55,10 +65,13 @@ public class RuntimeTerminationAcceptanceCoordinator {
                             providerType,
                             physicalWorkerId,
                             providerTaskId,
-                            dispatchId(operationId),
-                            operationId,
-                            bindingDigest(taskId, providerType, physicalWorkerId,
-                                    providerTaskId, clientRequestId)));
+                            admission.dispatchId(),
+                            admission.operationId(),
+                            admission.ownershipMode(),
+                            admission.stateGeneration(),
+                            admission.instanceEpoch(),
+                            admission.bindingDigestVersion(),
+                            admission.bindingDigest()));
                 }
             }
             return registration;
@@ -92,50 +105,4 @@ public class RuntimeTerminationAcceptanceCoordinator {
         return intentPorts.get(0);
     }
 
-    private String operationId(
-            String providerType, String clientRequestId) {
-        if (providerType != null
-                && providerType.startsWith("codex-")) {
-            String compact = clientRequestId.replaceAll(
-                    "[^A-Za-z0-9]", "");
-            if (compact.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "CLIENT_REQUEST_ID_INVALID");
-            }
-            return "rt_" + compact.substring(
-                    0, Math.min(56, compact.length()));
-        }
-        return java.util.UUID.nameUUIDFromBytes(
-                ("termination-operation:" + clientRequestId)
-                        .getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
-    }
-
-    private String dispatchId(String operationId) {
-        return java.util.UUID.nameUUIDFromBytes(
-                ("codex-lifecycle:TERMINATION_CANCEL:" + operationId)
-                        .getBytes(java.nio.charset.StandardCharsets.UTF_8))
-                .toString();
-    }
-
-    private String bindingDigest(
-            String taskId,
-            String providerType,
-            String workerId,
-            String providerTaskId,
-            String clientRequestId) {
-        String material = String.join("\n",
-                Objects.toString(taskId, ""),
-                Objects.toString(providerType, ""),
-                Objects.toString(workerId, ""),
-                Objects.toString(providerTaskId, ""),
-                Objects.toString(clientRequestId, ""));
-        try {
-            return java.util.HexFormat.of().formatHex(
-                    java.security.MessageDigest.getInstance("SHA-256")
-                            .digest(material.getBytes(
-                                    java.nio.charset.StandardCharsets.UTF_8)));
-        } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException(impossible);
-        }
-    }
 }

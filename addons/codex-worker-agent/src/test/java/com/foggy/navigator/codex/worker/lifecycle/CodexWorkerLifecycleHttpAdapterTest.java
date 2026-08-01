@@ -21,10 +21,14 @@ class CodexWorkerLifecycleHttpAdapterTest {
         HttpServer fixture = HttpServer.create(
                 new InetSocketAddress("127.0.0.1", 0), 0);
         fixture.createContext("/health", exchange -> json(exchange, """
-                {"lifecycle_contract":{"ready":true,
+                {"ready":true,"version":"source-candidate",
+                "termination_ready":true,"codex_auth_configured":true,
+                "lifecycle_contract":{"ready":true,
+                "schema":"NAVIGATOR_WORKER_LIFECYCLE_V1","version":1,
                 "physical_worker_id":"worker-fixture",
                 "state_generation":"generation-fixture",
-                "instance_epoch":"epoch-fixture"}}"""));
+                "instance_epoch":"epoch-fixture",
+                "capabilities":["AUTHENTICATED_LIFECYCLE_V1"]}}"""));
         fixture.createContext("/api/v1/lifecycle/inventory", exchange -> {
             assertFence(exchange);
             fencedCalls.incrementAndGet();
@@ -51,9 +55,12 @@ class CodexWorkerLifecycleHttpAdapterTest {
                             new ObjectMapper());
             WorkerLifecycleIdentity identity =
                     adapter.probe("worker-fixture").identity();
+            var activation = adapter.activationReadiness("worker-fixture");
+            assertThat(activation.lifecycleCredentialAuthenticated()).isTrue();
+            assertThat(activation.workerVersion()).isEqualTo("source-candidate");
             assertThat(adapter.inventory(identity, 0).throughSequence()).isEqualTo(2);
             assertThat(adapter.acknowledge(identity, 2)).isEqualTo(2);
-            assertThat(fencedCalls).hasValue(2);
+            assertThat(fencedCalls).hasValue(3);
         } finally {
             fixture.stop(0);
         }

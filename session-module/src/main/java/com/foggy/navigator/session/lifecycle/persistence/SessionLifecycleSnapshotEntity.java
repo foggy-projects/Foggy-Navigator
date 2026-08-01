@@ -51,6 +51,9 @@ public class SessionLifecycleSnapshotEntity {
     public String getOwnershipMode() { return ownershipMode; }
     public String getPhysicalWorkerId() { return physicalWorkerId; }
     public String getCanonicalPhase() { return canonicalPhase; }
+    public String getAvailability() { return availability; }
+    public String getConflictState() { return conflictState; }
+    public String getWriterGenerationId() { return writerGenerationId; }
     public void setSessionId(String value) { sessionId = value; }
     public void setPhysicalWorkerId(String value) { physicalWorkerId = value; }
     public void setOwnershipMode(String value) { ownershipMode = value; }

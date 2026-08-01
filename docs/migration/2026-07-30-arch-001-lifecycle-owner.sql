@@ -94,6 +94,10 @@ CREATE TABLE IF NOT EXISTS lifecycle_effect_outbox (
     provider_task_id VARCHAR(128) NULL,
     dispatch_id VARCHAR(96) NULL,
     operation_id VARCHAR(64) NULL,
+    ownership_mode VARCHAR(16) NULL,
+    state_generation VARCHAR(128) NULL,
+    instance_epoch VARCHAR(128) NULL,
+    binding_digest_version VARCHAR(32) NULL,
     binding_digest VARCHAR(128) NULL,
     effect_claim VARCHAR(64) NULL,
     aggregate_reference_id VARCHAR(160) NULL,
@@ -122,6 +126,7 @@ CREATE TABLE IF NOT EXISTS task_terminal_tombstones (
     provider_task_user_id VARCHAR(64) NULL,
     source_agent_id VARCHAR(64) NULL,
     operation_id VARCHAR(64) NULL,
+    client_request_id VARCHAR(96) NULL,
     terminal_outcome VARCHAR(32) NOT NULL,
     terminal_source VARCHAR(48) NOT NULL,
     terminal_fact_id VARCHAR(96) NOT NULL,
@@ -170,6 +175,7 @@ CREATE TABLE IF NOT EXISTS lifecycle_writer_exclusivity_proofs (
     acquired_at DATETIME(6) NOT NULL,
     last_verified_at DATETIME(6) NOT NULL,
     expires_at DATETIME(6) NOT NULL,
+    quarantine_cursor VARCHAR(160) NULL,
     row_version BIGINT NOT NULL,
     KEY idx_lwep_generation_status (generation_id, status)
 ) ENGINE=InnoDB;

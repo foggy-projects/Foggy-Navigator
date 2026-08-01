@@ -5,8 +5,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 import java.util.List;
+import org.springframework.data.domain.Pageable;
 
 public interface LifecycleWriterProofReferenceRepository
         extends JpaRepository<LifecycleWriterProofReferenceEntity, String> {
@@ -20,6 +22,17 @@ public interface LifecycleWriterProofReferenceRepository
     List<LifecycleWriterProofReferenceEntity>
     findByProofIdAndReleasedAtIsNullOrderByAggregateTypeAscAggregateIdAsc(
             String proofId);
+
+    @Query("select reference from LifecycleWriterProofReferenceEntity reference "
+            + "where reference.proofId = :proofId "
+            + "and reference.releasedAt is null "
+            + "and (:cursor is null or reference.referenceId > :cursor) "
+            + "order by reference.referenceId asc")
+    List<LifecycleWriterProofReferenceEntity>
+    findQuarantineBatch(
+            @Param("proofId") String proofId,
+            @Param("cursor") String cursor,
+            Pageable pageable);
 
     List<LifecycleWriterProofReferenceEntity>
     findByAggregateTypeAndAggregateIdAndReleasedAtIsNull(

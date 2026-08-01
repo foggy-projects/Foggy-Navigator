@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: ARCH-001
-status: READY_FOR_SIGNOFF
+status: ACCEPTED
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -33,7 +33,7 @@ execution_start_authorized: true
 decision_stage: approved-source-slices-authorized-activation-separate
 implementation_completed_at: 2026-07-31
 remediation_completed_at: 2026-07-31
-remediation_status: READY_FOR_SIGNOFF
+remediation_status: ACCEPTED
 ready_for_signoff_at: 2026-07-31
 independent_signoff_at: 2026-07-31
 independent_signoff_verdict: REJECTED
@@ -41,6 +41,26 @@ original_independent_signoff_record: ../evidence/ARCH-001-independent-signoff-20
 independent_resignoff_at: 2026-07-31
 independent_resignoff_verdict: REJECTED
 acceptance_record: ../evidence/ARCH-001-independent-resignoff-2026-07-31.md
+independent_third_remediation_resignoff_at: 2026-07-31
+independent_third_remediation_resignoff_verdict: REJECTED
+third_remediation_acceptance_record: ../evidence/ARCH-001-independent-third-remediation-resignoff-2026-07-31.md
+current_remediation_round: 5
+current_remediation_status: ACCEPTED
+fourth_remediation_approved_by: project-owner-user
+fourth_remediation_approved_at: 2026-07-31
+fourth_remediation_ready_for_signoff_at: 2026-07-31
+fourth_remediation_independent_signoff_at: 2026-07-31
+fourth_remediation_independent_signoff_verdict: REJECTED
+fourth_remediation_acceptance_record: ../evidence/ARCH-001-independent-fourth-remediation-signoff-2026-07-31.md
+fifth_remediation_approved_by: project-owner-user
+fifth_remediation_approved_at: 2026-07-31
+fifth_remediation_ready_for_signoff_at: 2026-07-31
+fifth_remediation_independent_signoff_at: 2026-08-01
+fifth_remediation_independent_signoff_verdict: ACCEPTED
+fifth_remediation_acceptance_record: ../evidence/ARCH-001-independent-fifth-remediation-signoff-2026-07-31.md
+final_acceptance_status: ACCEPTED
+final_acceptance_at: 2026-08-01
+final_acceptance_record: ../evidence/ARCH-001-independent-fifth-remediation-signoff-2026-07-31.md
 open_questions: []
 deferred_topics:
   - worker-generated-physical-id-claim-and-recovery
@@ -60,9 +80,9 @@ deferred_topics:
   active registration projection 设计冻结为第一阶段可执行交付契约。
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
-- execution_status: `READY_FOR_SIGNOFF`；2026-07-31 第二轮拒签 remediation 已按用户
-  明确授权完成实现和 must-pass 回归，等待新的独立复签。原独立拒签与复签
-  verdict/evidence 保留；真实
+- execution_status: `ACCEPTED`；2026-08-01 第五轮 bounded remediation 独立复签确认
+  blocked reconciliation 清除 proof quarantine 的 blocker 已关闭。历史 verdict/evidence
+  保留；真实
   controller/process、首次非 fixture `ENFORCED` aggregate、live SIM、部署和发布继续
   禁止，activation gate 保持关闭。
 
@@ -4135,12 +4155,12 @@ Minimum regression scenarios include:
 ## Third-round Remediation Delivery Contract (2026-07-31)
 
 - remediation_round: `3`
-- status: `APPROVED`
+- status: `READY_FOR_SIGNOFF`
 - execution_mode: `ultra`
 - assurance_level: `elevated`
 - approved_by: `project-owner-user`
 - approved_at: `2026-07-31`
-- baseline_head: `6ec3f32165a209238387ef8d07925bc8b45072cb`
+- baseline_head: `fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00`
 - open_questions: `[]`
 - canonical_path:
   `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
@@ -4194,35 +4214,35 @@ Minimum regression scenarios include:
 
 ### Acceptance Criteria
 
-- [ ] R3-AC1: B1 production vertical executes scheduler/Sentinel, production
+- [x] R3-AC1: B1 production vertical executes scheduler/Sentinel, production
   `WorkerLifecyclePort`, repository, reducer, snapshot, terminal, tombstone, real cleanup, lane
   release and typed projection.
-- [ ] R3-AC2: B2 receipt admission rejects every independent mode/generation/epoch,
+- [x] R3-AC2: B2 receipt admission rejects every independent mode/generation/epoch,
   Worker/Session/Task readiness/conflict, binding, enrollment and proof-reference mismatch before
   provider count can increase.
-- [ ] R3-AC3: receipt, owner operation/fact, exact binding and PREPARED outbox commit atomically;
+- [x] R3-AC3: receipt, owner operation/fact, exact binding and PREPARED outbox commit atomically;
   failure returns the existing typed rejection with provider count zero.
-- [ ] R3-AC4: proof authorization locks exact Worker, Session, Task and outbox references;
+- [x] R3-AC4: proof authorization locks exact Worker, Session, Task and outbox references;
   loss-first and authorization-first tests execute the real repository dispatcher/handler with
   real concurrent transactions/CAS.
-- [ ] R3-AC5: Node durably produces and Sentinel ingests exact never-accepted evidence; Java
+- [x] R3-AC5: Node durably produces and Sentinel ingests exact never-accepted evidence; Java
   validates `REJECTED`, `PRE_EFFECT`, proof, fence and allowlisted reason before terminal commit.
-- [ ] R3-AC6: terminal cleanup applicability and mutation use the exact operation/client-request
+- [x] R3-AC6: terminal cleanup applicability and mutation use the exact operation/client-request
   receipt; a different receipt for the same Task cannot satisfy the plan.
-- [ ] R3-AC7: exact codex-biz test executes successful real Node query/create, resume, POST abort
+- [x] R3-AC7: exact codex-biz test executes successful real Node query/create, resume, POST abort
   and dispatch status through the production Java client, proving PREPARED, unique provider Task,
   EFFECT_STARTED, RESULT_OBSERVED and durable terminal fact behavior.
-- [ ] R3-AC8: one connected Slice 8 executes
+- [x] R3-AC8: one connected Slice 8 executes
   enrollment/readiness → proof references → receipt/owner/outbox → proof authorization →
   dispatcher → Java client → real Node route → durable disposition/fact → scheduled Sentinel →
   reducer/terminal/business cleanup.
-- [ ] R3-AC9: receipt-disabled same request ID still performs two one-shot provider attempts,
+- [x] R3-AC9: receipt-disabled same request ID still performs two one-shot provider attempts,
   reconciliation remains AMBIGUOUS/unavailable and all replay flags remain fail closed; SHADOW
   provider effect and public SDK wire remain unchanged.
-- [ ] R3-AC10: no Worker/provider/network call occurs while a MySQL transaction is active; the
+- [x] R3-AC10: no Worker/provider/network call occurs while a MySQL transaction is active; the
   reconciliation and proof-quarantine paths have reviewable bounded/chunked transaction behavior
   with restart-safe continuation and concurrency regression coverage.
-- [ ] R3-AC11: activation gate remains CLOSED and no non-fixture ENFORCED aggregate is created.
+- [x] R3-AC11: activation gate remains CLOSED and no non-fixture ENFORCED aggregate is created.
 
 ### Validation Budget and Evidence Sufficiency
 
@@ -4268,3 +4288,706 @@ Minimum regression scenarios include:
 - record changed paths, exact commands, exit codes, test/failure/error/skip counts, deviations,
   transaction-boundary evidence and residual risks in this section;
 - finish at `READY_FOR_SIGNOFF`; do not mark `ACCEPTED`.
+
+### Third-round Remediation Execution Record
+
+- execution_completed_at: `2026-07-31`
+- candidate_head: `fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00`
+- candidate_branch: `main`
+- status: `READY_FOR_SIGNOFF`
+- independent_signoff_required: `true`
+- historical_rejection_evidence: `preserved-unchanged`
+- activation_gate: `CLOSED`
+- first_non_fixture_enforced_aggregate: `not-created`
+- deployment_restart_publish_push_tag_release: `not-performed`
+
+#### Implemented Closure and Acceptance Mapping
+
+| Acceptance | Implemented production behavior and executed evidence |
+|---|---|
+| R3-AC1, R3-AC8 | `Arch001ThirdRemediationSlice8IntegrationTest` executes the public `RuntimeTaskClosureService`, production coordinator, persisted receipt/outbox, proof authorization, real dispatcher, production Codex Java client, mounted real Node router, durable disposition/fact, scheduled Sentinel, production owner/reducer, terminal+tombstone, business token cleanup, lane release and typed projection as one continuous fixture chain. No lifecycle port/coordinator/client/provider-effect mock and no manual outbox/proof-reference seed is used. |
+| R3-AC2, R3-AC3 | `TaskTerminationIntentRecorder` locks and validates exact Worker/Session/Task mode, generation, epoch, readiness/conflict, canonical binding, enrollment and all three proof references. Receipt, accepted operation/fact and parent+child PREPARED outboxes share Worker-v1 JCS binding fields and commit before provider dispatch. Independent negative cases prove provider count remains zero. |
+| R3-AC4 | Proof authorization locks the exact Worker, Session, Task and outbox references. `WriterExclusivityProofConcurrencyIntegrationTest` executes loss-first and authorization-first concurrent transactions and durable quarantine recovery with 120 references in `50/50/20` batches. |
+| R3-AC5 | Node atomically persists `REJECTED + PRE_EFFECT + never_accepted_proof=true` and exact `TASK_NEVER_ACCEPTED_CONFIRMED` facts for the three allowlisted reasons, including restart replay. Java merges durable dispatch metadata and rejects wrong disposition, phase, proof, fence or reason before terminal commit. |
+| R3-AC6 | Tombstone and cleanup contexts carry the exact client request. Business cleanup queries the exact `(clientRequestId, taskId, operationType)` receipt; a newer same-type receipt for the same Task cannot authorize cleanup. |
+| R3-AC7 | `CodexWorkerLifecycleNodeContractIntegrationTest` uses production `CodexWorkerClient` and the real mounted Node query/task/lifecycle routers for query/create, resume, POST abort and dispatch status. It waits for the actual Node provider process binding and proves PREPARED, unique provider Task identity, EFFECT_STARTED, RESULT_OBSERVED and durable terminal fact behavior. |
+| R3-AC9 | Receipt-disabled BUG-035 and SHADOW legacy Codex provider paths were not changed. Their existing fail-closed/retry compatibility coverage re-executed in the affected Claude, Codex, Session and final launcher reactors. `navigator-open-sdk` has no changed path. |
+| R3-AC10 | Provider/network calls are guarded from active transactions. Admission+receipt+outbox authorization commits first; provider effect executes after the transaction returns; result observation uses a later transaction. Reconciliation processes per-Task fact chunks capped at 50 with checkpoint transactions. Proof quarantine persists `QUARANTINING` plus a durable cursor and updates at most 50 references per transaction, with scheduled restart recovery and concurrency regressions. |
+| R3-AC11 | Activation configuration and boundary are unchanged. `IsolatedEnforcedLifecycleContractTest` confirms non-fixture enrollment remains disabled; all new ENFORCED executions are isolated fixtures. |
+
+#### Changed Paths
+
+- SPI and shared capability:
+  `navigator-spi/src/main/java/com/foggy/navigator/spi/lifecycle/{NormalizedLifecycleFact,RuntimeTerminationIntentPort,TerminalCleanupContext,TerminalTombstoneContext}.java`,
+  `navigator-spi/src/main/java/com/foggy/navigator/spi/task/RuntimeTaskClosureProvider.java`,
+  `navigator-common/src/main/java/com/foggy/navigator/common/termination/TerminationOperationCapability.java`.
+- lifecycle owner, persistence and transaction control:
+  `session-module/src/main/java/com/foggy/navigator/session/lifecycle/`,
+  `session-module/src/main/java/com/foggy/navigator/session/service/TerminationOperationService.java`,
+  the affected lifecycle entities/repositories under
+  `session-module/src/main/java/com/foggy/navigator/session/lifecycle/{persistence,repository}/`,
+  and corresponding tests under `session-module/src/test/java/com/foggy/navigator/session/lifecycle/`.
+- receipt/coordinator/dispatch and cleanup:
+  `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/{RuntimeTaskClosureService,RuntimeTerminationAcceptanceCoordinator,RuntimeTerminationOutboxDispatcher}.java`,
+  their affected tests,
+  `business-agent-module/src/main/java/com/foggy/navigator/business/agent/{lifecycle/BusinessTerminalCleanupPort.java,service/RuntimeRequestAuditService.java}`,
+  and corresponding Business tests.
+- Codex Java and real Node contract:
+  `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/{lifecycle/CodexWorkerLifecycleHttpAdapter.java,service/CodexTaskService.java,spi/CodexWorkerFacadeImpl.java}`,
+  the affected Codex tests,
+  `tools/codex-agent-worker/src/{codex/sdk-wrapper.ts,lifecycle/store.ts,routes/query.ts}`,
+  `tools/codex-agent-worker/tests/{lifecycle-contract.test.ts,fixtures/lifecycle-router-server.ts,fixtures/codex}`.
+- continuous Slice 8 and additive schema:
+  `launcher/src/test/java/com/foggy/navigator/launcher/Arch001ThirdRemediationSlice8IntegrationTest.java`,
+  `docs/migration/2026-07-30-arch-001-lifecycle-owner.sql`,
+  `docs/migration/2026-07-31-arch-001-third-remediation.sql`.
+- delivery record:
+  this canonical work item only; both historical rejection evidence files are unchanged.
+
+#### Exact Validation Commands and Results
+
+All raw stdout/stderr logs and explicit exit-code files are retained under
+`temp/test-artifacts/ARCH-001-third-remediation/`.
+
+| Command | Result |
+|---|---|
+| `pnpm --dir tools/codex-agent-worker test -- --test-name-pattern='asynchronous provider terminal converges'` | exit 0; Node runner executed the complete 266-test set because the package script forwards the pattern after its glob; 264 passed, 0 failed, 2 skipped. |
+| `pnpm --dir tools/codex-agent-worker typecheck` | exit 0. |
+| `pnpm --dir tools/codex-agent-worker build` | exit 0. |
+| `mvn -pl session-module -am -Dtest=WriterExclusivityProofConcurrencyIntegrationTest,LifecycleMigrationContractTest,IsolatedEnforcedLifecycleContractTest,WriterExclusivityProofServiceTest,TaskLifecycleOwnerVerticalIntegrationTest,TaskTerminationIntentRecorderIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 16 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl business-agent-module -am -Dtest=BusinessTerminalCleanupPortTest,RuntimeRequestAuditServiceTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 22 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl addons/claude-worker-agent -am -Dtest=BusinessLifecycleTerminalVerticalIntegrationTest,RuntimeTerminationAcceptanceCoordinatorTest,RuntimeTerminationDeliveryRecoveryTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 8 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl addons/codex-worker-agent -am -Dtest=CodexTaskServiceTest,CodexLifecycleBindingDigestTest,CodexWorkerLifecycleNodeContractIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 152 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl addons/codex-worker-agent -am -Dtest=CodexWorkerLifecycleNodeContractIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 2 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl launcher -am -Dtest=Arch001ThirdRemediationSlice8IntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 1 test, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl session-module -am -Dtest=LifecycleMigrationMySqlIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; MySQL Testcontainers reports `8.0.44`; delta applied twice; 1 test, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl session-module -am test` | exit 0; Session module 486 tests, 0 failures, 0 errors, 1 skipped. |
+| `mvn -pl business-agent-module -am test` | exit 0; Business module 740 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl addons/claude-worker-agent -am test` | exit 0; Claude module 464 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn -pl addons/codex-worker-agent -am test` | exit 0; Codex module 498 tests, 0 failures, 0 errors, 0 skipped. |
+| `mvn test -pl launcher -am` | exit 0; 14/14 reactor modules succeeded; launcher 20 tests, 0 failures, 0 errors, 2 environment-gated skips; total 4m46s. This was the single final-candidate launcher reactor. |
+| `git diff --check` | exit 0. |
+
+Regression-first evidence is preserved alongside the green logs. The initial Node B3 regression
+failed before the durable rejection producer existed. Intermediate Slice 8 failures exposed and
+then closed proxy injection, MySQL `DATETIME(6)` binding normalization, termination-disposition
+inventory duplication and provider-process binding races. Two pre-final Codex module runs exposed
+the last process-binding race; the test now waits for the actual Node PID before abort, the focused
+real-Node contract passed, and the subsequent complete Codex module and final launcher reactors
+both passed.
+
+#### Transaction-boundary Evidence
+
+- `RuntimeTerminationAcceptanceCoordinator` uses one bounded transaction for admission,
+  operation/audit and exact parent+child PREPARED outboxes; it calls the provider only after that
+  transaction has returned.
+- `CodexTaskService` performs ENFORCED admission from locked local lifecycle state without HTTP,
+  reuses the committed stable operation capability, and rejects provider dispatch if an actual
+  transaction is active. The outbox dispatcher likewise authorizes in a committed transaction,
+  performs provider effect outside it, and records observation afterward.
+- `WorkerLifecycleReconciliationCommitService` no longer wraps arbitrary Worker inventory in one
+  transaction: bootstrap, each enrollment, each maximum-50 fact chunk and checkpoint are separate
+  bounded transactions. Owner ingestion also caps an incoming fact batch at 50.
+- `WriterExclusivityProofService` persists fail-closed `QUARANTINING` state and a durable
+  `quarantineCursor`, mutates at most 50 references per transaction and resumes unfinished proof
+  loss from the scheduled recovery lane. The 120-reference and real concurrent-CAS tests passed.
+
+#### Deviations and Residual Risks
+
+- approved authority, Worker lifecycle v1 wire, `navigator-open-sdk` public DTO/wire,
+  receipt-disabled BUG-035, SHADOW legacy Codex provider wire, security boundary, additive
+  migration strategy and activation boundary: `no deviation`.
+- the Slice 8 persistence fixture uses H2 to keep the production chain isolated; MySQL DDL,
+  entity precision and idempotent additive migration are independently covered on exact MySQL
+  `8.0.44`.
+- no authority/replay/rehearsal/full-chain command expected to exceed 30 minutes was run, per the
+  approved validation budget.
+- no real controller/process, live SIM, business data, sibling repository or Task
+  `20260730-0e01` was touched. No deployment, restart, publish, push, tag or release occurred.
+- independent signoff remains mandatory; this implementation record does not mark the work item
+  `ACCEPTED`.
+
+## Fourth-round Remediation Delivery Contract (2026-07-31)
+
+- remediation_round: `4`
+- delivery_type: `bug / cross-module`
+- status: `READY_FOR_SIGNOFF`
+- execution_mode: `ultra`
+- assurance_level: `elevated`
+- approved_by: `project-owner-user`
+- approved_at: `2026-07-31`
+- open_questions: `[]`
+- canonical_path:
+  `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
+- rejection_input:
+  `../evidence/ARCH-001-independent-third-remediation-resignoff-2026-07-31.md`
+- candidate_baseline: current dirty worktree at handoff; preserve all existing candidate changes and
+  the new independent evidence. Do not clean, revert, commit or rebase before implementation.
+
+### Goal and Success Boundary
+
+- close exactly the three remaining independent-signoff blockers:
+  - `ARCH001-R3-B3-RESUME-NEVER-ACCEPTED-PRODUCER-NOT-WIRED`;
+  - `ARCH001-R3-B5-CONCURRENT-DISPATCHER-PROOF-NOT-EXECUTED`;
+  - `ARCH001-R3-MYSQL-QUARANTINE-CHECKPOINT-LOST-UPDATE`;
+- make proof-loss authority monotonic across bounded reconciliation/quarantine transactions;
+- prove all frozen never-accepted reasons through production Node route behavior rather than a
+  direct lifecycle-store test;
+- prove loss-first and authorization-first through the production repository dispatcher/handler
+  and real Node provider fixture rather than a direct proof-service call or provider counter;
+- retain the already-closed B1, B2 and B4 outcomes, public compatibility and activation boundary;
+- success is sufficient when every R4R acceptance criterion has current-candidate source plus
+  actually executed evidence and no non-waivable guard is waived.
+
+### Scope
+
+- in_scope:
+  - Codex Node query/resume admission, lifecycle disposition/fact persistence and route-level
+    contract tests needed to produce exact resume-target-not-found pre-effect authority;
+  - provider-neutral proof authorization/quarantine, Worker reconciliation checkpoint semantics
+    and repository transaction ordering needed for monotonic fail-closed authority;
+  - production termination outbox dispatcher/handler, Codex Java client/adapter and mounted Node
+    fixture wiring needed for real concurrent loss-first/authorization-first evidence;
+  - narrow internal persistence or additive lifecycle metadata only if it is strictly required to
+    preserve monotonic authority across transactions;
+  - focused regression, exact MySQL 8.0.44 concurrency, affected module/Node lanes, connected
+    Slice 8 and one final-candidate launcher reactor.
+- affected_modules:
+  - `session-module` lifecycle owner, reconciliation, proof/outbox persistence and tests;
+  - `addons/claude-worker-agent` termination dispatcher/handler and focused tests when touched;
+  - `addons/codex-worker-agent` production Java client/lifecycle adapter and real-Node contract
+    fixture when touched;
+  - `tools/codex-agent-worker` production query/lifecycle store and route-level tests;
+  - `launcher` only for the existing connected Slice 8 integration evidence;
+  - lifecycle migration/tests only if a narrow additive internal field is required.
+- dependency_direction: preserve current SPI/common → owner/service → addon/provider direction;
+  do not move business orchestration into launcher or a deployment shell.
+
+### Non-goals and Do-not-touch Boundary
+
+- do not change `navigator-open-sdk` public DTO or wire behavior;
+- do not change receipt-disabled BUG-035 semantics, SHADOW legacy provider behavior, approved
+  lifecycle authority, security boundary or Worker v1 identity/binding contract;
+- do not remove an allowlisted never-accepted reason merely to make tests pass;
+- do not infer never-accepted authority from HTTP status, timeout, absence, ACK or an SDK failure
+  observed after provider effect started;
+- do not introduce destructive migration, bulk repair or historical aggregate backfill;
+- do not create the first non-fixture `ENFORCED` aggregate;
+- do not touch Task `20260730-0e01`, sibling repositories, live business data or historical
+  evidence files;
+- do not deploy, restart, publish, push, tag or release;
+- do not start real controller/process, live SIM or any authority/replay/rehearsal/source-seal
+  chain without separate explicit user approval.
+
+### Confirmed Decisions
+
+| Decision | Rationale | Compatibility / Constraint |
+|---|---|---|
+| `AUTHORITY_QUARANTINED` / proof-loss conflict has monotonic precedence over a normal Sentinel `READY/NONE` checkpoint. | A later ordinary reconciliation commit must not reactivate an aggregate whose writer proof is lost. | Locks and `@Version` may serialize transactions but are insufficient unless the commit logic enforces semantic precedence. |
+| Both legal orderings must converge fail-closed: quarantine-before-checkpoint and checkpoint-before-quarantine. | The outcome must not depend on transaction scheduling. | Preserve bounded transactions, maximum-50 batches and restart-safe cursor continuation. |
+| `WORKER_TASK_RESUME_TARGET_NOT_FOUND` remains a frozen production pre-effect reason. | The third-round claim covered three allowlisted reasons; deleting or downgrading the reason would change the approved contract. | It must originate through production `/api/v1/query` resume behavior before `PREPARED/EFFECT_STARTED` provider effect. Direct store invocation is supporting evidence only. |
+| If the real SDK/runtime has no reliable way to establish resume-target absence before effect, implementation must set `NEEDS_REPLAN`. | Post-effect SDK failure cannot be relabeled as never accepted. | Ultra must not silently change the allowlist, evidence semantics or provider-effect boundary. |
+| Proof-loss concurrency evidence must execute the production repository dispatcher/handler and mounted real Node route. | Direct `authorizeEffect()` plus `AtomicInteger` was the rejected topology. | Provider invocation/absence is proven from real Node durable disposition, status or inventory facts; a synthetic provider counter is not decisive evidence. |
+| Internal schema changes, if unavoidable, remain narrow, additive and idempotent. | Preserve the approved migration and rollback strategy. | Any destructive/bulk/public-contract migration requires `NEEDS_REPLAN`. |
+| Activation remains a separate owner gate. | Source remediation is not rollout authorization. | Activation gate remains `CLOSED` throughout implementation and signoff. |
+
+### Acceptance Criteria
+
+- [x] R4R-AC1: each of the three frozen never-accepted reason codes is exercised through the
+  production Node query route and atomically persists an exact
+  `REJECTED/PRE_EFFECT/never_accepted_proof=true` disposition plus
+  `TASK_NEVER_ACCEPTED_CONFIRMED`; restart/redelivery returns the same durable authority without
+  provider effect.
+- [x] R4R-AC2: the resume-target-not-found route establishes absence before `PREPARED` and
+  `EFFECT_STARTED`; Java/Sentinel ingestion accepts the exact matching disposition/fact and still
+  rejects wrong reason, proof, phase, fence or binding.
+- [x] R4R-AC3: loss-first and authorization-first tests execute real concurrent database
+  transactions through the production repository outbox dispatcher/handler and mounted real Node
+  provider route. Loss-first produces no Node provider dispatch; authorization-first produces at
+  most one durable Node effect and quarantine prevents redelivery.
+- [x] R4R-AC4: exact MySQL 8.0.44 integration evidence executes both
+  quarantine-before-checkpoint and checkpoint-before-quarantine orderings. Final proof/reference
+  and Worker/Session/Task authority remain fail-closed, and no ordinary reconciliation checkpoint
+  can write `READY/NONE` over proof-loss quarantine.
+- [x] R4R-AC5: reconciliation and quarantine remain bounded; no provider/network call occurs in an
+  active MySQL transaction; proof quarantine retains durable `QUARANTINING`/cursor recovery and
+  maximum-50 reference batches without semantic lost update.
+- [x] R4R-AC6: existing connected Slice 8, real Codex create/resume/abort/status, exact receipt
+  admission/cleanup, receipt-disabled behavior and SHADOW/public compatibility remain green for
+  every input affected by this remediation.
+- [x] R4R-AC7: activation gate remains `CLOSED`; tests use isolated fixtures only; no deployment,
+  restart, non-fixture ENFORCED aggregate, push, tag or release occurs.
+
+### Contract, Data and Security Constraints
+
+- API/event contract: preserve Worker lifecycle v1 and public SDK wire. Exact never-accepted
+  disposition/fact fields retain their frozen names and meanings.
+- data/migration: existing lifecycle rows must remain valid. Any new internal column must use an
+  idempotent additive MySQL migration and exact entity/schema validation; no destructive rollback
+  or bulk data mutation.
+- compatibility: B1, B2, B4, B6, receipt-disabled and SHADOW conclusions may reuse prior evidence
+  only while their production inputs, tests and assumptions remain unchanged.
+- permissions/secrets: no new authority endpoint or permission surface; no credentials in tracked
+  files or retained logs.
+- transaction safety: network latency must never extend a database row-locking transaction;
+  authority conflict states are monotonic unless an explicit, separately approved recovery
+  protocol clears them.
+
+### Test and Evidence Obligations
+
+| Item | Classification | Risk | Required validation | Reusable evidence | Required evidence |
+|---|---|---|---|---|---|
+| R4R-AC1/2 | must-pass | critical | regression-first Node production-route integration for all three reasons, restart/redelivery, provider-effect absence; Java ingress focused tests | existing store atomicity and Java negative validation only as supporting evidence | raw command log, exit code and assertions showing route/disposition/fact/provider state |
+| R4R-AC3 | must-pass | critical | real concurrent repository dispatcher/handler + mounted Node tests for both orderings | existing Slice 8 proves non-concurrent dispatcher wiring only | durable Node inventory/status/fact evidence; no `AtomicInteger` substitute |
+| R4R-AC4/5 | must-pass | critical | exact MySQL 8.0.44 Testcontainers concurrency for both interleavings, normal-ready control, bounded cursor restart and active-transaction network guard | existing DDL/JPA migration result while schema inputs remain unchanged | raw MySQL log, explicit exit code and final row-state assertions |
+| R4R-AC6 | must-pass | major | affected focused/module lanes, real Node command contract, connected Slice 8; compatibility tests only where inputs changed | third-remediation green logs for unchanged inputs | exact commands, counts, exits and evidence-reuse rationale |
+| R4R-AC7 | must-pass | critical | source/config diff and fixture-boundary review | prior activation evidence | explicit gate marker and repository-state record |
+
+### Validation Budget and Evidence Sufficiency
+
+- assurance_level: `elevated`
+- artifact_directory: `temp/test-artifacts/ARCH-001-fourth-remediation/`
+- lightweight `<5m`:
+  - regression-first focused Node route, dispatcher/proof and reconciliation/quarantine tests;
+  - Node typecheck/build when Node source changes;
+  - `git diff --check` and candidate-state capture.
+- medium `5-30m`:
+  - exact MySQL 8.0.44 concurrency integration;
+  - affected Session, Claude and Codex module suites based on actual changed paths;
+  - complete Node suite when Node source changes;
+  - real Codex Node command contract and connected Slice 8;
+  - one `mvn test -pl launcher -am` after the final candidate stops changing.
+- validation_order: focused red/green → exact MySQL/real Node/connected Slice 8 → affected
+  module/Node lanes → one final launcher reactor.
+- expensive `>30m` or authority/replay/rehearsal/full-chain:
+  `prohibited-unless-user-approved`; current approval status is `not-requested/not-approved`.
+- full_chain_recommendation_trigger: none for this bounded remediation; the final launcher reactor
+  is the maximum approved cross-module lane.
+- maximum_attempts:
+  - focused and affected lanes may rerun after relevant code changes;
+  - exact MySQL final-candidate lane: one successful retained run;
+  - final launcher reactor: one successful final-candidate run;
+  - after two consecutive medium/expensive failures caused only by environment/tooling, set
+    `NEEDS_REPLAN` before another attempt.
+- reusable_evidence:
+  - third-remediation green evidence remains reusable only for unchanged code, test selection,
+    fixture identity and assumptions;
+  - none of the rejected B3/B5/MySQL conclusions may be closed by reusing the old green logs.
+- stop_when_evidence_is_sufficient:
+  - all R4R criteria map to current source and actually executed evidence;
+  - both concurrency orderings and all three route-level never-accepted reasons pass;
+  - affected lanes and the one final launcher reactor are green;
+  - deviations and residual risks are recorded.
+- validation_not_required:
+  live/shared database, production controller/process, live SIM, sibling projects, deployment,
+  restart, publication, activation, release, UI/Playwright and unrelated module suites whose inputs
+  did not change. Additional runs that cannot change independent signoff should not be started.
+
+### Waiver Policy
+
+- waivable_items: non-core evidence portability or tooling notes with bounded impact only.
+- authorized_role: project owner.
+- non_waivable_guards: all R4R must-pass criteria, never-accepted authority, proof-loss
+  fail-closed semantics, MySQL transaction correctness, public compatibility, permissions,
+  credentials and activation boundary.
+- required_risk_record: any owner waiver must identify exact scope, bounded impact and follow-up;
+  no waiver may rewrite a failed must-pass as passed.
+
+### Bug Context
+
+- bug_source: independent third-remediation signoff.
+- severity: critical.
+- environment: dirty-worktree source candidate at baseline HEAD
+  `fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00`; Node lifecycle fixture, Spring/JPA and MySQL
+  8.0.44 Testcontainers.
+- current_behavior:
+  - resume-target-not-found has no production pre-effect producer;
+  - proof concurrency test bypasses the real dispatcher/provider path;
+  - a later Sentinel checkpoint can overwrite proof-loss Worker quarantine with `READY/NONE`.
+- expected_behavior: production-route exact never-accepted authority, real dispatcher/provider
+  at-most-once evidence and transaction-order-independent fail-closed quarantine.
+- reproduction_status: confirmed by source/test-topology review and a valid transaction interleaving.
+- existing_evidence:
+  `../evidence/ARCH-001-independent-third-remediation-resignoff-2026-07-31.md`.
+- regression_protection: required; all three blockers are stable and automatable.
+
+### Risks and Stop Conditions
+
+- known_risks:
+  - provider SDK may expose resume-target absence only after provider effect begins;
+  - fixing transaction ordering without an explicit precedence rule can move rather than remove the
+    lost update;
+  - a test may mount production components yet still bypass the dispatcher or substitute provider
+    effect, repeating the rejected evidence topology.
+- `NEEDS_REPLAN` conditions:
+  - reliable resume-target absence cannot be established before provider effect;
+  - closure requires deleting/reinterpreting an allowlisted reason;
+  - closure requires changing public SDK/Worker v1 wire, authority, security or activation policy;
+  - closure requires destructive/bulk migration or touches historical business data;
+  - required real Node/MySQL topology cannot be made deterministic without weakening the
+    acceptance semantics.
+- open_questions: none.
+
+### Ultra Execution Contract
+
+- first read root `AGENTS.md`, relevant module instructions, this canonical section and the latest
+  independent rejection evidence;
+- set this current round to `ULTRA_EXECUTING` when implementation starts; preserve historical
+  execution and evidence sections;
+- within the approved scope, independently choose local files, classes and implementation
+  structure; do not treat the acceptance wording as a requirement to add parallel abstractions;
+- establish failing automated regression evidence before each fix where practical, then run the
+  same test green;
+- retain all raw logs and explicit exit-code files under the fourth-remediation artifact directory;
+- record exact changed paths, commands, counts, exits, evidence reuse, deviations, transaction
+  reasoning and residual risks in a new fourth-round execution record in this canonical item;
+- if any stop condition occurs, set `NEEDS_REPLAN` and stop the affected expansion;
+- after all must-pass evidence is sufficient, set status to `READY_FOR_SIGNOFF`; do not mark
+  `ACCEPTED` and do not update independent evidence.
+
+### Fourth-round Implementation Result
+
+- execution_status: `READY_FOR_SIGNOFF`
+- implementation_summary:
+  - production `/api/v1/query` now establishes resume-target presence from the exact configured
+    `CODEX_HOME` before any durable `PREPARED` or provider `EFFECT_STARTED`. It uses two stable,
+    symlink-rejecting catalog scans plus the in-memory registry. Exact absence durably produces
+    `WORKER_TASK_RESUME_TARGET_NOT_FOUND`; any catalog uncertainty returns the non-authoritative
+    `WORKER_TASK_RESUME_TARGET_VERIFICATION_UNAVAILABLE` 503 path;
+  - all three frozen reasons now use the same production route helper to atomically persist
+    `REJECTED/PRE_EFFECT/never_accepted_proof=true` plus
+    `TASK_NEVER_ACCEPTED_CONFIRMED`. A rejected redelivery rereads the durable disposition and
+    returns it as a duplicate without creating a provider task;
+  - ordinary Worker checkpoint and Task fact/terminal commits now preserve an already committed
+    authority conflict. They may advance coverage or local terminal safety state, but cannot
+    overwrite proof-loss quarantine with `READY/NONE`;
+  - the rejected synthetic B5 test was removed. Connected Slice 8 now executes loss-first and
+    authorization-first using the production acceptance coordinator, repository outbox
+    dispatcher, proof service, Codex provider/client and mounted production Node router. The
+    authorization-first synchronization point is the inner provider command's durable
+    `EFFECT_STARTED`, not the outer delivery claim;
+  - exact MySQL 8.0.44 now executes both transaction orderings, an ordinary checkpoint control
+    and restart-style 50/50/20 quarantine cursor continuation. The dispatcher active-transaction
+    guard is also executed against the connected production handler before any Node route call.
+- changed_paths:
+  - `tools/codex-agent-worker/src/codex/sdk-wrapper.ts`;
+  - `tools/codex-agent-worker/src/routes/query.ts`;
+  - `tools/codex-agent-worker/tests/query-route-paths.test.ts`;
+  - `tools/codex-agent-worker/tests/fixtures/lifecycle-router-server.ts`;
+  - `tools/codex-agent-worker/tests/fixtures/codex`;
+  - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/client/CodexWorkerClient.java`;
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/WorkerLifecycleReconciliationCommitService.java`;
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/TaskLifecycleOwnerService.java`;
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/TaskTerminalCommitService.java`;
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/WriterExclusivityProofConcurrencyIntegrationTest.java`;
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TaskLifecycleOwnerVerticalIntegrationTest.java`;
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/LifecycleMigrationMySqlIntegrationTest.java`;
+  - `launcher/src/test/java/com/foggy/navigator/launcher/Arch001ThirdRemediationSlice8IntegrationTest.java`;
+  - this canonical work item. The historical independent evidence file was not modified.
+- transaction_boundaries:
+  - termination acceptance and outer outbox authorization each commit in repository transactions
+    before the dispatcher resolves or invokes a provider. The production dispatcher throws
+    `PROVIDER_CALL_INSIDE_DATABASE_TRANSACTION` if a transaction is active;
+  - Codex ENFORCED termination prepares and authorizes its exact inner lifecycle command in the
+    repository before the Java client performs HTTP abort. Authorization-first evidence waits for
+    that inner `EFFECT_STARTED`; loss-first commits proof loss before outer authorization;
+  - proof quarantine retains `QUARANTINING` and a durable reference cursor, processes at most 50
+    references per transaction and resumes strictly after the last committed cursor. No
+    Worker/provider/network dependency is called by a quarantine transaction;
+  - reconciliation uses a short initial identity/bootstrap read, bounded Task fact batches of at
+    most 50, and a final locked checkpoint transaction. That final transaction rereads current
+    conflict state and gives quarantine monotonic precedence over an ordinary checkpoint.
+- exact_commands_and_results:
+  - `pnpm --dir tools/codex-agent-worker exec node --import tsx --test --test-name-pattern='production query route durably rejects' tests/query-route-paths.test.ts`
+    — exit 0; 1 production-router test, 3 reasons x 2 delivery attempts, no provider registry
+    change; final evidence `node-never-accepted-route-final.{log,exit}`;
+  - `mvn -q -pl session-module -am -Dtest=WriterExclusivityProofConcurrencyIntegrationTest,TaskLifecycleOwnerVerticalIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    — exit 0; 8 tests, 0 failures/errors/skips; evidence
+    `session-focused-green.{log,exit}`;
+  - `mvn -q -pl session-module -am -Darch001.mysql.integration=true -Dtest=LifecycleMigrationMySqlIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    — exit 0; exact MySQL 8.0.44, 1 test, both orderings fail closed, ordinary control
+    `READY/NONE`, cursor checkpoints `049/099/119`; evidence
+    `mysql-8.0.44-concurrency.{log,exit}`;
+  - `mvn -q -pl addons/codex-worker-agent -am -Dtest=CodexWorkerLifecycleNodeContractIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    — exit 0; 2 real-Node contract tests; evidence `codex-real-node-contract.{log,exit}`;
+  - `mvn -q -pl launcher -am -Dtest=Arch001ThirdRemediationSlice8IntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    — exit 0; 4 connected tests covering existing Slice 8, both B5 orderings and the
+    active-transaction network guard; evidence `connected-slice8.{log,exit}`;
+  - `pnpm --dir tools/codex-agent-worker typecheck`, `build`, and `test`
+    — all exit 0; final Node suite 267 tests, 265 passed, 2 skipped; evidence
+    `node-{typecheck,build,full-suite}-final.{log,exit}`;
+  - `mvn -q -pl session-module -am test` — exit 0; Session 488 tests, 0 failures/errors,
+    1 opt-in MySQL skip; evidence `session-module-full.{log,exit}`;
+  - `mvn -q -pl addons/codex-worker-agent -am test` — exit 0; Codex 498 tests,
+    0 failures/errors/skips; evidence `codex-module-full.{log,exit}`;
+  - `mvn test -pl launcher -am` — the single final-candidate launcher reactor, exit 0;
+    14/14 modules successful in 4m51s. Current-candidate totals include Session 488 (1 skip),
+    Business 740, Claude 464, Codex 498 and Launcher 23 (2 environment-gated skips), all with
+    0 failures/errors; evidence `launcher-final-reactor.{log,exit}`;
+  - `git diff --check` and the high-confidence non-version-tracker diff secret scan — exit 0;
+    HEAD remains `fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00`, branch remains `main`, and
+    `launcher` activation default remains
+    `${NAVIGATOR_LIFECYCLE_ACTIVATION_EVIDENCE_PRESENT:false}` with no config diff.
+- regression_first_evidence:
+  - `node-never-accepted-route-red.{log,exit}` — exit 1 (`200` observed instead of required
+    `409` before the resume producer was wired), followed by green/final exit 0;
+  - `quarantine-checkpoint-red.{log,exit}` — exit 1 (`READY` overwrote quarantine), followed by
+    `quarantine-checkpoint-green.{log,exit}` exit 0;
+  - `dispatcher-topology-red.{log,exit}` — exit 1 while the decisive test still contained
+    `AtomicInteger`/direct `authorizeEffect`; `dispatcher-topology-green.{log,exit}` is exit 0;
+  - `terminal-quarantine-red.{log,exit}` — exit 1 after the Task fact path cleared committed
+    quarantine; the focused Session green closes the additional monotonic regression.
+- intermediate_attempts:
+  - the first MySQL attempt completed the new ordering assertions but correctly failed the
+    pre-existing rollback-floor step because fixture ENFORCED rows were still present. Fixture
+    cleanup was added; `mysql-8.0.44-concurrency-attempt1-fail.{log,exit}` is retained and the
+    final exact lane is green;
+  - the first connected attempt exposed two test-topology issues: the transaction guard throws
+    directly rather than as a root cause, and authorization-first had synchronized on the outer
+    outbox instead of the inner provider command. Both assertions were corrected without changing
+    production authority; `connected-slice8-attempt1-fail.{log,exit}` is retained;
+  - one pre-red Node invocation incorrectly resolved the local CLI because its test-only binary
+    override was absent. Only those test subprocesses were terminated; no managed Worker was
+    stopped or restarted. That invalid run was not used as evidence and the retained red/green
+    runs use the isolated fixture binary.
+- reused_evidence:
+  - no third-remediation green log is used to close B3, B5 or the MySQL lost-update blocker;
+  - prior B1/B2, receipt-disabled, SHADOW, public SDK and Worker-v1 evidence remains supplementary
+    only where the relevant production input, test selection and assumptions did not change.
+    The final reactor re-executed the current Session, Business, Claude, Codex and Launcher lanes,
+    while the current real-Node contract and complete Node suite revalidated the affected Worker-v1
+    surface;
+  - public SDK DTO/wire, permissions, receipt-disabled policy and activation configuration have no
+    fourth-round changed path. The existing specialized evidence therefore remains valid, and the
+    current reactor supplies an additional compatibility check.
+- deviations: no approved goal, scope, public contract, authority, security, migration or
+  activation deviation. No new migration was required. Historical independent evidence was not
+  changed.
+- residual_risks:
+  - resume absence depends on the pinned Codex SDK/CLI 0.145.0 session-catalog contract. A future
+    SDK storage-layout change must revalidate this producer; unknown, unstable, inaccessible or
+    symlinked catalogs already fail closed as non-authoritative 503 rather than never-accepted;
+  - the two Launcher skips are environment-gated checks already disclosed by the reactor; they do
+    not cover any R4 must-pass path. No live/shared database, controller, Worker, SIM, sibling repo,
+    deployment, restart, publication or release validation was authorized or performed;
+  - activation remains `CLOSED`; all `ENFORCED` rows created by this round existed only inside
+    disposable H2/MySQL/Node fixtures.
+- omitted_validation_and_reason: no unapproved >30-minute authority/replay/rehearsal/source-seal
+  chain was run. Live/shared infrastructure, UI/Playwright and sibling-project validation are out
+  of scope and could not improve evidence for these three bounded blockers.
+- artifact_directory: `temp/test-artifacts/ARCH-001-fourth-remediation/`
+- readiness: `READY_FOR_SIGNOFF`
+- acceptance_boundary: implementation has not marked this work item `ACCEPTED` and has not run
+  `foggy-delivery-signoff`; an independent signoff is still required.
+
+## Fourth-round Acceptance Status (2026-07-31)
+
+- acceptance_status: `rejected`
+- acceptance_decision: `rejected`
+- signed_off_by: `independent-codex-reviewer`
+- signed_off_at: `2026-07-31`
+- acceptance_record:
+  `../evidence/ARCH-001-independent-fourth-remediation-signoff-2026-07-31.md`
+- blocking_items:
+  `ARCH001-R4-B1-BLOCKED-RECONCILIATION-CLEARS-PROOF-QUARANTINE`
+- closed_third_round_blockers:
+  `ARCH001-R3-B3-RESUME-NEVER-ACCEPTED-PRODUCER-NOT-WIRED`,
+  `ARCH001-R3-B5-CONCURRENT-DISPATCHER-PROOF-NOT-EXECUTED`
+- unresolved_third_round_blocker:
+  `ARCH001-R3-MYSQL-QUARANTINE-CHECKPOINT-LOST-UPDATE`
+- follow_up_required: yes
+- activation_gate: `CLOSED`
+- deployment_restart_publish_release: `not-performed`
+- non_fixture_enforced_activation: `not-performed`
+
+## Fifth-round Remediation Delivery Contract (2026-07-31)
+
+- remediation_round: `5`
+- delivery_type: `bug / bounded session-module remediation`
+- status: `READY_FOR_SIGNOFF`
+- execution_mode: `ultra`
+- assurance_level: `elevated`
+- approved_by: `project-owner-user`
+- approved_at: `2026-07-31`
+- open_questions: `[]`
+- canonical_path:
+  `docs/version-tracker/1.4.3-SNAPSHOT/workitems/ARCH-001-unified-session-task-lifecycle-owner.md`
+- rejection_input:
+  `../evidence/ARCH-001-independent-fourth-remediation-signoff-2026-07-31.md`
+- candidate_baseline: HEAD `fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00` plus the legal dirty
+  worktree containing third/fourth-round implementation, execution records and independent
+  evidence; preserve all existing changes and historical evidence without clean, reset, revert,
+  checkout, branch switch or commit.
+
+### Goal, Scope and Non-goals
+
+- close exactly
+  `ARCH001-R4-B1-BLOCKED-RECONCILIATION-CLEARS-PROOF-QUARANTINE` by making blocked
+  reconciliation and successful checkpoints preserve the frozen single-value precedence:
+  `LEGACY_WRITER_EXCLUSIVITY_LOST > WORKER_STATE_LOSS > EVIDENCE_CONFLICT > NONE`;
+- ordinary unavailable, identity, lease and readiness observations never clear an authority
+  conflict; incoming `WORKER_STATE_LOSS` upgrades `NONE`/`EVIDENCE_CONFLICT` but never writer
+  loss; no conflict is cleared without a separately approved recovery protocol;
+- prefer only `session-module` reconciliation/operational-state production logic and tests,
+  reusing `LifecycleOperationalReducer` and the canonical vocabulary;
+- do not change Node never-accepted routes, public SDK, Worker-v1 wire, receipt-disabled, SHADOW,
+  permissions/security, activation policy, B3/B5 design, migrations or persistence shape unless a
+  strictly necessary additive change is discovered;
+- do not create a non-fixture `ENFORCED` aggregate, touch Task `20260730-0e01`, real business data
+  or sibling repositories, modify historical independent evidence, or deploy/restart/publish/push/
+  tag/release. Activation remains `CLOSED`.
+
+### Confirmed Decisions and Acceptance Criteria
+
+| Decision | Constraint |
+|---|---|
+| Conflict precedence is the canonical single-value reducer rule. | Reconciliation must not add a second state machine or scattered proof-specific branches. |
+| Ordinary observations may change availability only when the retained conflict allows it. | `NONE + unavailable -> OFFLINE_FROZEN/NONE`; `NONE + successful checkpoint -> READY/NONE`. |
+| Authority conflict has no implicit recovery. | If frozen precedence and clear/reveal semantics cannot both be preserved by the existing reducer vocabulary, set `NEEDS_REPLAN`. |
+
+- [x] R5-AC1: after proof loss, `WORKER_UNAVAILABLE`, `IDENTITY_CHANGED` and
+  `LEASE_NOT_ACQUIRED` cannot lower the existing authority conflict.
+- [x] R5-AC2: after each blocked result and then a successful production checkpoint, Worker stays
+  `AUTHORITY_QUARANTINED/LEGACY_WRITER_EXCLUSIVITY_LOST`.
+- [x] R5-AC3: the full production sequence through `WorkerLifecycleSentinelService`,
+  `WorkerLifecycleReconciliationCommitService` and `LifecycleIngressGate` keeps ENFORCED ingress
+  fail closed with zero provider effect.
+- [x] R5-AC4: precedence controls hold: writer loss + state loss -> writer loss; evidence conflict
+  + state loss -> state loss; state loss + ordinary offline -> state loss; `NONE` + unavailable ->
+  `OFFLINE_FROZEN/NONE`; `NONE` + successful checkpoint -> `READY/NONE`.
+- [x] R5-AC5: exact MySQL 8.0.44 executes quarantine -> blocked reconciliation -> successful
+  checkpoint and ends with proof/reference plus Worker/Session/Task fail closed.
+- [x] R5-AC6: 50-row batch, durable cursor, active-transaction network guard, B3, B5, B1/B2/B4,
+  public SDK, receipt-disabled, SHADOW and activation `CLOSED` do not regress.
+
+### Test, Evidence and Validation Budget
+
+- regression protection is required: first retain a deterministic focused failing test, then run
+  the same production-topology test green; decisive coverage should execute production Sentinel,
+  reconciliation commit and ingress gate rather than direct setters alone;
+- artifact directory: `temp/test-artifacts/ARCH-001-fifth-remediation/`; every executed command
+  retains raw stdout/stderr and an explicit exit-code file;
+- lightweight `<5m`: reducer/commit focused controls, production-sequence regression, diff check,
+  activation/source audit;
+- medium `5-30m`: exact MySQL 8.0.44 targeted integration, Session focused tests, Session full
+  suite, and at most one final `mvn test -pl launcher -am` after candidate source stops changing;
+- validation order: focused red -> focused green -> exact MySQL -> Session full -> one final
+  launcher reactor;
+- connected Slice 8 reruns only if its relevant production inputs change. Node, Codex module and
+  real Node contract evidence are reused from fourth-round artifacts when their source/test inputs
+  remain unchanged;
+- reusable evidence: fourth-round green evidence remains valid for unchanged 50-row batching,
+  cursor, network guard, B3/B5, B1/B2/B4, public SDK, receipt-disabled, SHADOW and Worker-v1
+  inputs; the rejected conflict-clearing conclusion cannot reuse old green evidence;
+- evidence is sufficient when R5-AC1..6 map to current source plus executed focused/MySQL/Session/
+  reactor results, exact commands/counts/exits and reuse rationale are recorded, and no deviation
+  or blocker remains;
+- any authority/replay/rehearsal/source-seal/full-chain expected to exceed 30 minutes is
+  `prohibited / not approved / not run`; live/shared infrastructure and unrelated suites are not
+  required. After two consecutive medium-lane environment-only failures, set `NEEDS_REPLAN`
+  before another attempt.
+
+### Risks, Waivers and Execution Contract
+
+- risk: preserving the displayed conflict while letting a successful checkpoint restore
+  availability would still reopen ingress; availability must remain consistent with retained
+  authority conflict;
+- non-waivable: conflict precedence, fail-closed provider effect, exact MySQL sequence, activation
+  boundary, data/security correctness. Only non-core evidence portability notes are owner-waivable;
+- implementation may choose local structure inside the approved boundary, but must stop with
+  `NEEDS_REPLAN` for a new recovery protocol, public/wire/security/activation change, destructive
+  migration, or semantics not representable by the existing reducer;
+- on completion append one `Fifth-round Implementation Result` with changed paths, exact commands,
+  test counts, exits, evidence reuse, deviations and residual risks; final state may be only
+  `READY_FOR_SIGNOFF`, never `ACCEPTED`, and `foggy-delivery-signoff` must not be used.
+
+### Fifth-round Implementation Result
+
+- execution_completed_at: `2026-07-31`
+- candidate_head: `fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00`
+- candidate_branch: `main`
+- status: `READY_FOR_SIGNOFF`
+- blocker_closed:
+  `ARCH001-R4-B1-BLOCKED-RECONCILIATION-CLEARS-PROOF-QUARANTINE`
+- independent_signoff_required: `true`
+- historical_independent_evidence: `preserved-unchanged`
+- activation_gate: `CLOSED`
+
+#### Implemented Closure
+
+- `LifecycleOperationalReducer.reduceRetainingConflict(...)` converts the persisted single-value
+  conflict back into the existing blocker vocabulary, merges the reconciliation observation and
+  delegates to the canonical reducer. This preserves
+  `LEGACY_WRITER_EXCLUSIVITY_LOST > WORKER_STATE_LOSS > EVIDENCE_CONFLICT > NONE` without a
+  second state machine.
+- `WorkerLifecycleReconciliationCommitService.recordBlocked(...)` and successful `commit(...)`
+  now use that same path. Ordinary offline/identity/lease observations retain authority conflicts;
+  state loss may upgrade `NONE`/`EVIDENCE_CONFLICT` but cannot overwrite writer loss; a successful
+  checkpoint cannot clear a retained conflict or restore `READY` while it exists.
+- the new production-topology regression executes real proof quarantine, production Sentinel,
+  reconciliation commit and ingress gate for all three blocked results, followed by a successful
+  checkpoint. It proves Worker/Session/Task plus proof/references remain fail closed and provider
+  effect stays zero. Exact MySQL `8.0.44` executes the same three-phase sequence.
+
+#### Changed Paths
+
+- `session-module/src/main/java/com/foggy/navigator/session/lifecycle/LifecycleOperationalReducer.java`
+- `session-module/src/main/java/com/foggy/navigator/session/lifecycle/WorkerLifecycleReconciliationCommitService.java`
+- `session-module/src/test/java/com/foggy/navigator/session/lifecycle/WorkerLifecycleReconciliationConflictPrecedenceIntegrationTest.java`
+- `session-module/src/test/java/com/foggy/navigator/session/lifecycle/LifecycleMigrationMySqlIntegrationTest.java`
+- this canonical work item. No migration, persistence field, Node, public SDK, Worker-v1 wire,
+  security, permission or activation source changed in the fifth round.
+
+#### Exact Validation Commands and Results
+
+Raw stdout/stderr and explicit exit-code files are retained under
+`temp/test-artifacts/ARCH-001-fifth-remediation/`.
+
+| Command | Result / evidence |
+|---|---|
+| `mvn -pl session-module -am -Dtest=WorkerLifecycleReconciliationConflictPrecedenceIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` before the production fix | expected exit 1; 4 tests, 4 failures, 0 errors/skips. All three blocked variants lowered writer loss to `OFFLINE_FROZEN/NONE`; the state-loss control overwrote writer loss. `reconciliation-precedence-red.{log,exit}`. |
+| the same focused command after the fix | exit 0; 4 tests, 0 failures/errors/skips. `reconciliation-precedence-green.{log,exit}`. |
+| `mvn -pl session-module -am -Dtest=WorkerLifecycleReconciliationConflictPrecedenceIntegrationTest,TaskLifecycleReducerTest,WriterExclusivityProofConcurrencyIntegrationTest,LifecycleIngressGateIntegrationTest,WorkerLifecycleSentinelTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 21 tests, 0 failures/errors/skips. `session-focused.{log,exit}`. |
+| `mvn -pl session-module -am -Darch001.mysql.integration=true -Dtest=LifecycleMigrationMySqlIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; exact MySQL `8.0.44`; 1 test, 0 failures/errors/skips. Markers prove quarantine -> blocked -> success remains proof `QUARANTINED`, three references retained and Worker/Session/Task `AUTHORITY_QUARANTINED`; ordinary checkpoint remains `READY/NONE`; durable cursor batches remain `50/50/20`. `mysql-8.0.44-targeted.{log,exit}`. |
+| `mvn -pl launcher -am -Dtest=Arch001ThirdRemediationSlice8IntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` | exit 0; 4 tests, 0 failures/errors/skips. Rerun because the production reconciliation commit input changed; it revalidates connected B5 and the active-transaction network guard. `connected-slice8.{log,exit}`. |
+| `mvn -pl session-module -am test` | exit 0; Session 492 tests, 0 failures/errors, 1 opt-in MySQL skip; exact MySQL ran separately. `session-module-full.{log,exit}`. |
+| `mvn test -pl launcher -am` | exit 0; the single final-candidate reactor; 14/14 modules succeeded in 4m52s. Session 492/0/0/1, Business 740/0/0/0, Claude 464/0/0/0, Codex 498/0/0/0 and launcher 23/0/0/2. `launcher-final-reactor.{log,exit}`. |
+| `git diff --check` plus HEAD/branch/activation source audit | exit 0; HEAD and `main` unchanged, activation source remains closed. `candidate-audit.{log,exit}`. |
+
+#### Evidence Reuse, Deviations and Residual Risk
+
+- fifth-round Node/Codex/public/wire inputs are unchanged. The fourth-round Node full suite
+  (267 total, 265 passed, 2 skipped), real Node contract (2 tests), Codex module (498 tests) and
+  B3 evidence remain reusable. The current final Maven reactor independently reran Codex 498 and
+  the real Node contract; no separate Node package rerun was mechanically repeated.
+- B5 and its active-transaction guard were rerun through connected Slice 8. Unchanged B1/B2/B4,
+  public SDK, receipt-disabled, SHADOW and activation conclusions reuse fourth-round evidence and
+  are supplemented by the current Session/full reactor. The rejected conflict-clearing conclusion
+  was not reused.
+- approved scope and conflict semantics: `no deviation`; no new recovery protocol, migration,
+  field or parallel abstraction was needed. The separately known public SDK catalog risk remains
+  inherited and unchanged; no fifth-round core blocker or new residual implementation risk remains.
+- prohibited authority/replay/rehearsal/source-seal/full-chain commands over 30 minutes were not
+  run. Task `20260730-0e01`, real business data and sibling repositories were not touched.
+- activation remains `CLOSED`; no deployment, restart, publish, push, tag, release or real
+  non-fixture `ENFORCED` activation was performed. This record is `READY_FOR_SIGNOFF` only and does
+  not mark the work item `ACCEPTED`.
+
+### Fifth-round Independent Signoff Status (2026-08-01)
+
+- acceptance_status: `signed-off`
+- decision: `ACCEPTED`
+- signed_off_by: `independent-codex-reviewer`
+- signed_off_at: `2026-08-01`
+- acceptance_record:
+  `../evidence/ARCH-001-independent-fifth-remediation-signoff-2026-07-31.md`
+- closed_blocker:
+  `ARCH001-R4-B1-BLOCKED-RECONCILIATION-CLEARS-PROOF-QUARANTINE`
+- acceptance_mapping: R5-AC1～R5-AC6 all `pass`; no waiver and no open core blocker.
+- canonical_final_status: `ACCEPTED`
+- historical_independent_evidence: `preserved-unchanged`
+- activation_gate: `CLOSED`
+- deployment_or_release_authorized: `false`
+- real_enforced_activation_authorized: `false`
+- follow_up_required: `no` for fifth-round source signoff; any future recovery or activation
+  remains a separately approved protocol.

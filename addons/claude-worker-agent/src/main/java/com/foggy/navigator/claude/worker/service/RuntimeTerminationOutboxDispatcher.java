@@ -5,6 +5,7 @@ import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 
@@ -73,6 +74,11 @@ public class RuntimeTerminationOutboxDispatcher {
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
                         "RUNTIME_TASK_PROVIDER_UNSUPPORTED"));
+        if (TransactionSynchronizationManager
+                .isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "PROVIDER_CALL_INSIDE_DATABASE_TRANSACTION");
+        }
         RuntimeTaskClosureProvider.TerminationResult result =
                 provider.terminate(
                         delivery.taskId(), task.getUserId(),

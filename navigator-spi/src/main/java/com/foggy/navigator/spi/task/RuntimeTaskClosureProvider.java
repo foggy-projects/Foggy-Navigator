@@ -21,6 +21,21 @@ public interface RuntimeTaskClosureProvider {
             String clientRequestId,
             boolean dryRun);
 
+    /**
+     * Persists provider-side admission state used to derive the exact
+     * Worker-v1 command binding. It runs inside the public receipt transaction
+     * and therefore must never perform Worker/HTTP/SSE calls.
+     */
+    default TerminationAdmission prepareTerminationAdmission(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            String reason,
+            String clientRequestId) {
+        return null;
+    }
+
     ReconciliationResult reconcile(
             String taskId,
             String ownerUserId,
@@ -48,6 +63,16 @@ public interface RuntimeTaskClosureProvider {
             String providerStatus,
             String operationId,
             String sanitizedErrorCode) {
+    }
+
+    record TerminationAdmission(
+            String operationId,
+            String dispatchId,
+            String ownershipMode,
+            String stateGeneration,
+            String instanceEpoch,
+            String bindingDigestVersion,
+            String bindingDigest) {
     }
 
     record ReconciliationResult(

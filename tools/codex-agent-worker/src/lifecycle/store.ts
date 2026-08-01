@@ -99,6 +99,14 @@ export interface LifecycleFactRecord extends LifecycleFactInput {
   recorded_at: string
 }
 
+export const NEVER_ACCEPTED_REASON_CODES = [
+  'WORKER_TASK_ADMISSION_CAPACITY_REJECTED',
+  'WORKER_TASK_ADMISSION_THREAD_CONFLICT',
+  'WORKER_TASK_RESUME_TARGET_NOT_FOUND',
+] as const
+
+export type NeverAcceptedReasonCode = typeof NEVER_ACCEPTED_REASON_CODES[number]
+
 type DurableState = {
   schema_version: 1
   high_watermark: number
@@ -434,6 +442,97 @@ export class LifecycleStore {
     return disposition
   }
 
+  /**
+   * Atomically records a fail-closed admission rejection and the exact fact
+   * authorizing Navigator to prove that no provider effect was ever accepted.
+   */
+  rejectBeforeEffect(
+    context: LifecycleContext,
+    binding: SafeBinding,
+    reason: NeverAcceptedReasonCode,
+  ): LifecycleDisposition {
+    this.validateContext(context)
+    if (context.ownership_mode !== 'ENFORCED') {
+      throw new Error('LIFECYCLE_OWNERSHIP_MODE_MISMATCH')
+    }
+    if (!NEVER_ACCEPTED_REASON_CODES.includes(reason)) {
+      throw new Error('LIFECYCLE_NEVER_ACCEPTED_REASON_NOT_ALLOWED')
+    }
+    const prior = this.state.dispatches[context.dispatch_id]
+    if (prior) {
+      this.assertModeAndBinding(prior, context.ownership_mode, binding)
+      if (prior.acceptance_disposition !== 'REJECTED'
+          || prior.effect_phase !== 'PRE_EFFECT'
+          || prior.code !== reason
+          || !prior.never_accepted_proof) {
+        throw new Error('LIFECYCLE_DISPATCH_ALREADY_ACCEPTED')
+      }
+      return {
+        ...prior,
+        request_delivery_attempt: context.delivery_attempt,
+        duplicate: true,
+        instance_epoch: this.identity.instance_epoch,
+      }
+    }
+
+    const nextSequence = this.state.high_watermark + 1
+    const disposition: LifecycleDisposition = {
+      schema: LIFECYCLE_SCHEMA,
+      ownership_mode: context.ownership_mode,
+      physical_worker_id: this.identity.physical_worker_id,
+      state_generation: this.identity.state_generation,
+      instance_epoch: this.identity.instance_epoch,
+      navigator_task_id: context.navigator_task_id,
+      provider_task_id: null,
+      dispatch_id: context.dispatch_id,
+      request_delivery_attempt: context.delivery_attempt,
+      disposition_delivery_attempt: context.delivery_attempt,
+      command_kind: context.command_kind,
+      acceptance_disposition: 'REJECTED',
+      effect_phase: 'PRE_EFFECT',
+      disposition_version: 1,
+      duplicate: false,
+      accepted: false,
+      provider_effect_started: false,
+      reconcile_required: false,
+      safe_binding_digest_version: binding.version,
+      safe_binding_digest: binding.digest,
+      never_accepted_proof: true,
+      fact_cursor: nextSequence,
+      code: reason,
+    }
+    const fact: LifecycleFactRecord = {
+      fact_type: 'TASK_NEVER_ACCEPTED_CONFIRMED',
+      aggregate_type: 'TASK',
+      aggregate_id: context.navigator_task_id,
+      safe_reason_code: reason,
+      navigator_task_id: context.navigator_task_id,
+      ownership_mode: context.ownership_mode,
+      dispatch_id: context.dispatch_id,
+      safe_binding_digest_version: binding.version,
+      safe_binding_digest: binding.digest,
+      schema: LIFECYCLE_SCHEMA,
+      schema_version: 1,
+      fact_id: crypto.randomUUID(),
+      idempotency_key: `${this.identity.state_generation}:${nextSequence}`,
+      source_sequence: nextSequence,
+      physical_worker_id: this.identity.physical_worker_id,
+      state_generation: this.identity.state_generation,
+      instance_epoch: this.identity.instance_epoch,
+      recorded_at: new Date().toISOString(),
+    }
+    this.commit({
+      ...this.state,
+      high_watermark: nextSequence,
+      dispatches: {
+        ...this.state.dispatches,
+        [context.dispatch_id]: disposition,
+      },
+      facts: [...this.state.facts, fact],
+    })
+    return disposition
+  }
+
   markEffectStarted(dispatchId: string): LifecycleDisposition {
     const prior = this.state.dispatches[dispatchId]
     if (!prior) throw new Error('LIFECYCLE_DISPATCH_NOT_FOUND')
@@ -573,13 +672,25 @@ export class LifecycleStore {
       throw new Error('LIFECYCLE_CURSOR_INVALID')
     }
     const dispatches = Object.values(this.state.dispatches)
+    const taskDispositions = dispatches
+      .filter(disposition => (
+        disposition.provider_task_id !== null
+        && disposition.command_kind !== 'TERMINATION_CANCEL'
+      ))
+      .sort((left, right) => left.fact_cursor - right.fact_cursor)
+    const seenTasks = new Set<string>()
     return {
       min_available_sequence: 1,
       through_sequence: this.state.high_watermark,
       facts: this.state.facts.filter(fact => fact.source_sequence > afterSequence),
       dispatches,
-      tasks: dispatches
-        .filter(disposition => disposition.provider_task_id !== null)
+      tasks: taskDispositions
+        .filter(disposition => {
+          const identity = `${disposition.navigator_task_id}\u0000${disposition.provider_task_id}`
+          if (seenTasks.has(identity)) return false
+          seenTasks.add(identity)
+          return true
+        })
         .map(disposition => ({
           navigator_task_id: disposition.navigator_task_id,
           provider_task_id: disposition.provider_task_id as string,

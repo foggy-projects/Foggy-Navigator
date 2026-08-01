@@ -4,6 +4,8 @@ import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import express from 'express'
 import { config } from '../src/config.ts'
 import {
@@ -26,6 +28,10 @@ import {
   clearCodexThreadReservationsForTests,
   getCodexThreadReservations,
 } from '../src/codex/thread-reservations.ts'
+import {
+  lifecycleStore,
+  resetLifecycleRuntimeForTest,
+} from '../src/lifecycle/runtime.ts'
 
 const TEST_ALIASES = {
   'codex-latest': 'gpt-5.6-sol',
@@ -271,6 +277,179 @@ test('query route returns stable conflict details for an already reserved thread
     await new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve())
     })
+  }
+})
+
+test('production query route durably rejects every frozen never-accepted reason before provider effect', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arch001-r4-query-route-'))
+  const previous = {
+    workerToken: config.workerToken,
+    navigatorWorkerId: config.navigatorWorkerId,
+    lifecycleStoreDir: config.lifecycleStoreDir,
+    codexHome: config.codexHome,
+    maxConcurrentTasks: config.maxConcurrentTasks,
+    nodeEnv: process.env.NODE_ENV,
+    testCodexPath: process.env.CODEX_WORKER_TEST_CODEX_PATH_OVERRIDE,
+  }
+  config.workerToken = 'arch001-r4-route-token'
+  config.navigatorWorkerId = 'arch001-r4-route-worker'
+  config.lifecycleStoreDir = path.join(root, 'lifecycle')
+  config.codexHome = path.join(root, 'codex-home')
+  process.env.NODE_ENV = 'test'
+  process.env.CODEX_WORKER_TEST_CODEX_PATH_OVERRIDE = fileURLToPath(
+    new URL('./fixtures/codex', import.meta.url),
+  )
+  fs.mkdirSync(path.join(config.codexHome, 'sessions'), { recursive: true })
+  resetLifecycleRuntimeForTest()
+  clearCodexThreadReservationsForTests()
+
+  const app = express()
+  app.use(express.json())
+  app.use(queryRouter)
+  const server = app.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as AddressInfo
+  const baseUrl = `http://127.0.0.1:${address.port}`
+  const providerTaskBaseline = new Set(taskRegistry.keys())
+
+  const request = async (
+    reason: string,
+    commandKind: 'TASK_CREATE' | 'TASK_RESUME',
+    dispatchId: string,
+    deliveryAttempt: number,
+    sessionId?: string,
+  ) => {
+    const store = lifecycleStore()
+    assert.ok(store)
+    const response = await fetch(`${baseUrl}/api/v1/query`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.workerToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: `fixture-${reason}`,
+        cwd: process.cwd(),
+        model: 'gpt-5.6-sol',
+        ...(sessionId ? { session_id: sessionId } : {}),
+        lifecycle_context: {
+          schema: 'NAVIGATOR_WORKER_LIFECYCLE_V1',
+          ownership_mode: 'ENFORCED',
+          command_kind: commandKind,
+          navigator_task_id: `navigator-${reason}`,
+          dispatch_id: dispatchId,
+          delivery_attempt: deliveryAttempt,
+          expected_physical_worker_id: config.navigatorWorkerId,
+          expected_state_generation: store.identity.state_generation,
+          termination_operation_id: null,
+        },
+      }),
+    })
+    if (response.status !== 409) await response.body?.cancel()
+    assert.equal(response.status, 409)
+    const disposition = await response.json() as Record<string, unknown>
+    assert.equal(disposition.code, reason)
+    assert.equal(disposition.acceptance_disposition, 'REJECTED')
+    assert.equal(disposition.effect_phase, 'PRE_EFFECT')
+    assert.equal(disposition.never_accepted_proof, true)
+    assert.equal(disposition.provider_effect_started, false)
+    assert.equal(disposition.provider_task_id, null)
+    return disposition
+  }
+
+  try {
+    const missingThread = '019f7f67-9829-7e11-b25b-000000000404'
+    const activeThread = '019f7f67-9829-7e11-b25b-000000000409'
+    const activeDirectory = path.join(config.codexHome, 'sessions', '2026', '07', '31')
+    fs.mkdirSync(activeDirectory, { recursive: true })
+    fs.writeFileSync(
+      path.join(activeDirectory, `rollout-2026-07-31T00-00-00-${activeThread}.jsonl`),
+      `${JSON.stringify({ type: 'session_meta', payload: { id: activeThread } })}\n`,
+    )
+    const reservation = await acquireCodexThreadReservation(
+      activeThread,
+      'already-running-provider-task',
+      { listProcesses: async () => [] },
+    )
+    try {
+      const cases = [
+        {
+          reason: 'WORKER_TASK_RESUME_TARGET_NOT_FOUND',
+          kind: 'TASK_RESUME' as const,
+          dispatch: 'dispatch-resume-not-found',
+          sessionId: missingThread,
+          maxConcurrentTasks: 4,
+        },
+        {
+          reason: 'WORKER_TASK_ADMISSION_THREAD_CONFLICT',
+          kind: 'TASK_RESUME' as const,
+          dispatch: 'dispatch-thread-conflict',
+          sessionId: activeThread,
+          maxConcurrentTasks: 4,
+        },
+        {
+          reason: 'WORKER_TASK_ADMISSION_CAPACITY_REJECTED',
+          kind: 'TASK_CREATE' as const,
+          dispatch: 'dispatch-capacity',
+          maxConcurrentTasks: 0,
+        },
+      ]
+      for (const candidate of cases) {
+        config.maxConcurrentTasks = candidate.maxConcurrentTasks
+        const first = await request(
+          candidate.reason,
+          candidate.kind,
+          candidate.dispatch,
+          1,
+          candidate.sessionId,
+        )
+        resetLifecycleRuntimeForTest()
+        const replay = await request(
+          candidate.reason,
+          candidate.kind,
+          candidate.dispatch,
+          2,
+          candidate.sessionId,
+        )
+        assert.equal(replay.duplicate, true)
+        assert.equal(replay.disposition_version, first.disposition_version)
+      }
+    } finally {
+      reservation.release()
+    }
+
+    const inventory = lifecycleStore()?.inventory(0)
+    assert.ok(inventory)
+    assert.equal(inventory.dispatches.length, 3)
+    assert.equal(inventory.facts.length, 3)
+    assert.deepEqual(
+      new Set(inventory.facts.map(fact => fact.safe_reason_code)),
+      new Set([
+        'WORKER_TASK_RESUME_TARGET_NOT_FOUND',
+        'WORKER_TASK_ADMISSION_THREAD_CONFLICT',
+        'WORKER_TASK_ADMISSION_CAPACITY_REJECTED',
+      ]),
+    )
+    assert.deepEqual(new Set(taskRegistry.keys()), providerTaskBaseline)
+  } finally {
+    config.workerToken = previous.workerToken
+    config.navigatorWorkerId = previous.navigatorWorkerId
+    config.lifecycleStoreDir = previous.lifecycleStoreDir
+    config.codexHome = previous.codexHome
+    config.maxConcurrentTasks = previous.maxConcurrentTasks
+    if (previous.nodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previous.nodeEnv
+    if (previous.testCodexPath === undefined) {
+      delete process.env.CODEX_WORKER_TEST_CODEX_PATH_OVERRIDE
+    } else {
+      process.env.CODEX_WORKER_TEST_CODEX_PATH_OVERRIDE = previous.testCodexPath
+    }
+    resetLifecycleRuntimeForTest()
+    clearCodexThreadReservationsForTests()
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve())
+    })
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })
 

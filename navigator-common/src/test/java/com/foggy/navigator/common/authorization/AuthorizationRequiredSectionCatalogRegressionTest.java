@@ -160,7 +160,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         byte[] sourceBytes = Files.readAllBytes(source);
 
         assertArrayEquals(sourceBytes, Files.readAllBytes(evidence));
-        assertEquals(464, Files.readAllLines(source).size());
+        assertEquals(469, Files.readAllLines(source).size());
         assertEquals(AuthorizationRouteCatalog.EXPECTED_ENTRY_COUNT, sourceRows().size() - 1);
         assertEquals(AuthorizationRouteCatalog.EXPECTED_SHA_256, sha256(sourceBytes));
     }
@@ -201,7 +201,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
 
         assertEquals(6, entries.stream().filter(entry -> entry.requiredSections().isEmpty()).count(),
                 "public/framework rows must say NONE explicitly");
-        assertEquals(236, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
+        assertEquals(241, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
         assertEquals(125, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.PLATFORM_GRANT)).count());
         assertEquals(158, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.TENANT_AUTHORITY)).count());
         assertEquals(20, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION)).count());

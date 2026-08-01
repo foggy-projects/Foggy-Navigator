@@ -7,8 +7,19 @@ import org.hibernate.boot.registry.StandardServiceRegistry;
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.springframework.boot.test.util.TestPropertyValues;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
+import com.foggy.navigator.session.lifecycle.repository.*;
+import com.foggy.navigator.spi.lifecycle.NormalizedLifecycleFact;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePort;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleReadiness;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleSnapshot;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,6 +30,12 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.time.LocalDateTime;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -29,6 +46,10 @@ class LifecycleMigrationMySqlIntegrationTest {
             "docs/migration/2026-07-30-arch-001-lifecycle-owner.sql";
     private static final String ROLLBACK =
             "docs/migration/2026-07-30-arch-001-lifecycle-owner-rollback.sql";
+    private static final String THIRD_REMEDIATION =
+            "docs/migration/2026-07-31-arch-001-third-remediation.sql";
+    private static final String ACTIVATION_READINESS =
+            "docs/migration/2026-08-01-arch-001-activation-readiness.sql";
     private static final List<String> TABLES = List.of(
             "lifecycle_facts",
             "worker_lifecycle_snapshots",
@@ -41,16 +62,23 @@ class LifecycleMigrationMySqlIntegrationTest {
             "lifecycle_writer_instance_registrations",
             "lifecycle_writer_exclusivity_proofs",
             "lifecycle_writer_exclusivity_references",
-            "worker_lifecycle_sentinel_leases");
+            "worker_lifecycle_sentinel_leases",
+            "lifecycle_activation_targets");
 
     @Test
     void forwardJpaContractsAndRollbackFloorExecuteOnDisposableMySql()
             throws Exception {
         MySQLContainer<?> mysql = new MySQLContainer<>(
-                DockerImageName.parse("mysql:8.0"));
+                DockerImageName.parse("mysql:8.0.44"));
         mysql.start();
         try (Connection connection = DriverManager.getConnection(
                 mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())) {
+            assertThat(scalar(connection, "select version()"))
+                    .startsWith("8.0.44");
+            assertThat(connection.getCatalog()).isEqualTo(mysql.getDatabaseName());
+            System.out.println("ARCH001_ACTIVATION_MYSQL image="
+                    + mysql.getDockerImageName() + " database="
+                    + mysql.getDatabaseName() + " isolated_container=true");
             connection.createStatement().execute(
                     "create table arch001_legacy_sentinel "
                             + "(id bigint primary key, marker varchar(64) not null)");
@@ -59,6 +87,10 @@ class LifecycleMigrationMySqlIntegrationTest {
                             + "(1, 'legacy-untouched')");
             execute(connection, FORWARD);
             execute(connection, FORWARD);
+            execute(connection, THIRD_REMEDIATION);
+            execute(connection, THIRD_REMEDIATION);
+            execute(connection, ACTIVATION_READINESS);
+            execute(connection, ACTIVATION_READINESS);
             for (String table : TABLES) {
                 assertThat(tableExists(connection, table)).isTrue();
             }
@@ -86,13 +118,34 @@ class LifecycleMigrationMySqlIntegrationTest {
                     "aggregate_reference_id", true, 160);
             assertColumn(connection, "lifecycle_effect_outbox",
                     "controller_inventory_digest", true, 128);
+            assertColumn(connection, "lifecycle_effect_outbox",
+                    "binding_digest_version", true, 32);
+            assertColumn(connection, "lifecycle_effect_outbox",
+                    "instance_epoch", true, 128);
+            assertColumn(connection, "task_terminal_tombstones",
+                    "client_request_id", true, 96);
+            assertColumn(connection,
+                    "lifecycle_writer_exclusivity_proofs",
+                    "quarantine_cursor", true, 160);
             assertColumn(connection,
                     "lifecycle_writer_exclusivity_references",
                     "reference_id", false, 160);
             assertColumn(connection,
                     "lifecycle_writer_exclusivity_proofs",
                     "controller_inventory_digest", false, 128);
+            assertColumn(connection, "lifecycle_activation_targets",
+                    "manifest_digest", false, 128);
+            assertColumn(connection, "lifecycle_writer_generations",
+                    "active_slot", true, 16);
+            assertColumn(connection,
+                    "lifecycle_writer_instance_registrations",
+                    "expires_at", true, 0);
+            assertThat(indexExists(connection,
+                    "lifecycle_writer_generations",
+                    "uk_lwg_active_slot", false)).isTrue();
+            verifyActivationMetadataAndDestroyedCleanup(connection);
             validateJpa(mysql);
+            verifyExactMySqlQuarantinePrecedence(mysql);
 
             execute(connection, ROLLBACK);
             for (String table : TABLES) {
@@ -132,6 +185,25 @@ class LifecycleMigrationMySqlIntegrationTest {
                       status,row_version)
                     values('fixture-generation',1,'fixture','ACTIVE',0)
                     """);
+            assertRollbackBlocked(mysql, "activation_target", """
+                    insert into lifecycle_activation_targets(
+                      target_id,run_id,target_class,provider_evidence_lane,
+                      provider_type,tenant_id,user_id,physical_worker_id,
+                      model_config_id,model,codex_home_key,prompt_sha256,
+                      target_commit,candidate_patch_sha256,owner_protocol,
+                      worker_version,worker_protocol,
+                      required_capabilities_json,manifest_digest,
+                      controller_inventory_digest,generation_id,
+                      writer_instance_id,status,row_version,created_at,updated_at)
+                    values('fixture-target','fixture-run',
+                      'ISOLATED_LOCAL_NON_FIXTURE','REAL_CODEX_MODEL',
+                      'codex-biz-worker','synthetic-tenant','synthetic-user',
+                      'synthetic-worker','synthetic-model-config','fixture-model',
+                      'synthetic/home','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                      'fixture','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                      1,'fixture-worker',1,'[]','manifest','inventory',
+                      'fixture-generation','fixture-instance','READY',0,now(6),now(6))
+                    """);
             assertRollbackBlocked(mysql, "writer_enforced", """
                     insert into lifecycle_writer_generations(
                       generation_id,minimum_owner_protocol,target_commit,
@@ -164,6 +236,542 @@ class LifecycleMigrationMySqlIntegrationTest {
         }
     }
 
+    private void verifyActivationMetadataAndDestroyedCleanup(
+            Connection connection) throws Exception {
+        connection.createStatement().execute("""
+                insert into lifecycle_writer_generations(
+                  generation_id,minimum_owner_protocol,target_commit,status,
+                  target_id,run_id,controller_inventory_digest,active_slot,
+                  activated_at,row_version)
+                values('mysql-activation-generation',1,'candidate-head','ACTIVE',
+                  'mysql-activation-target','mysql-activation-run',
+                  'controller-digest','ACTIVE',current_timestamp(6),0)
+                """);
+        assertThatThrownBy(() -> connection.createStatement().execute("""
+                insert into lifecycle_writer_generations(
+                  generation_id,minimum_owner_protocol,target_commit,status,
+                  target_id,run_id,controller_inventory_digest,active_slot,
+                  activated_at,row_version)
+                values('mysql-second-generation',1,'candidate-head','ACTIVE',
+                  'mysql-second-target','mysql-second-run',
+                  'controller-digest','ACTIVE',current_timestamp(6),0)
+                """))
+                .isInstanceOf(SQLException.class);
+        connection.createStatement().execute("""
+                insert into lifecycle_writer_instance_registrations(
+                  instance_id,generation_id,owner_protocol,target_commit,
+                  target_id,run_id,controller_inventory_digest,status,
+                  registered_at,last_heartbeat_at,expires_at,row_version)
+                values('mysql-activation-instance','mysql-activation-generation',
+                  1,'candidate-head','mysql-activation-target',
+                  'mysql-activation-run','controller-digest','REGISTERED',
+                  current_timestamp(6),current_timestamp(6),
+                  timestampadd(second,30,current_timestamp(6)),0)
+                """);
+        connection.createStatement().execute("""
+                insert into lifecycle_writer_exclusivity_proofs(
+                  proof_id,generation_id,controller_inventory_digest,
+                  holder_instance_id,proof_version,status,acquired_at,
+                  last_verified_at,expires_at,row_version)
+                values('mysql-activation-proof','mysql-activation-generation',
+                  'controller-digest','mysql-activation-instance',1,'ACTIVE',
+                  current_timestamp(6),current_timestamp(6),
+                  timestampadd(second,30,current_timestamp(6)),0)
+                """);
+        connection.createStatement().execute("""
+                insert into lifecycle_activation_targets(
+                  target_id,run_id,target_class,provider_evidence_lane,
+                  provider_type,tenant_id,user_id,physical_worker_id,
+                  model_config_id,model,codex_home_key,prompt_sha256,
+                  target_commit,candidate_patch_sha256,owner_protocol,
+                  worker_version,worker_protocol,required_capabilities_json,
+                  manifest_digest,controller_inventory_digest,generation_id,
+                  writer_instance_id,proof_id,status,destroyed_at,row_version,
+                  created_at,updated_at)
+                values('mysql-activation-target','mysql-activation-run',
+                  'ISOLATED_LOCAL_NON_FIXTURE','REAL_CODEX_MODEL',
+                  'codex-biz-worker','synthetic-tenant','synthetic-user',
+                  'synthetic-worker','synthetic-model-config','fixture-model',
+                  'synthetic/home',repeat('a',64),'candidate-head',repeat('b',64),
+                  1,'fixture-worker',1,'[]','manifest-digest',
+                  'controller-digest','mysql-activation-generation',
+                  'mysql-activation-instance','mysql-activation-proof',
+                  'DESTROYED',current_timestamp(6),0,current_timestamp(6),
+                  current_timestamp(6))
+                """);
+        assertThat(scalar(connection, """
+                select count(*) from lifecycle_activation_targets
+                where target_id='mysql-activation-target'
+                  and status='DESTROYED'
+                """)).isEqualTo("1");
+        assertThat(scalar(connection, """
+                select count(*) from lifecycle_writer_exclusivity_proofs
+                where proof_id='mysql-activation-proof'
+                  and expires_at > last_verified_at
+                """)).isEqualTo("1");
+        connection.createStatement().execute("""
+                insert into lifecycle_writer_exclusivity_references(
+                  reference_id,proof_id,aggregate_type,aggregate_id,acquired_at)
+                values
+                  ('mysql-activation-proof:00:WORKER',
+                   'mysql-activation-proof','WORKER','synthetic-worker',
+                   current_timestamp(6)),
+                  ('mysql-activation-proof:01:SESSION',
+                   'mysql-activation-proof','SESSION','synthetic-session',
+                   current_timestamp(6)),
+                  ('mysql-activation-proof:02:TASK',
+                   'mysql-activation-proof','TASK','synthetic-task',
+                   current_timestamp(6))
+                """);
+        connection.createStatement().execute("""
+                insert into lifecycle_effect_outbox(
+                  effect_id,aggregate_type,aggregate_id,physical_worker_id,
+                  provider_type,provider_task_id,dispatch_id,operation_id,
+                  ownership_mode,state_generation,instance_epoch,
+                  binding_digest_version,binding_digest,effect_claim,
+                  aggregate_reference_id,writer_generation_id,
+                  controller_inventory_digest,effect_type,effect_class,
+                  effect_state,idempotency_key,proof_id,
+                  effect_authorization_proof_version,authorized_at,
+                  content_free_payload_json,created_at,row_version)
+                values(
+                  'mysql-activation-effect','TASK','synthetic-task',
+                  'synthetic-worker','codex-biz-worker','provider-task',
+                  'activation-dispatch','activation-dispatch','ENFORCED',
+                  'state-generation','instance-epoch','JCS_SHA256_V1',
+                  'binding-digest','binding-digest',
+                  'mysql-activation-proof:02:TASK',
+                  'mysql-activation-generation','controller-digest',
+                  'TASK_CREATE_DISPATCH','EXTERNAL_PROVIDER_ONCE','COMPLETED',
+                  'mysql-activation-effect-key','mysql-activation-proof','1',
+                  current_timestamp(6),'{}',current_timestamp(6),0)
+                """);
+        assertThat(scalar(connection, """
+                select count(*)
+                from lifecycle_writer_exclusivity_references r
+                join lifecycle_effect_outbox o
+                  on o.aggregate_reference_id=r.reference_id
+                where r.proof_id='mysql-activation-proof'
+                  and o.proof_id=r.proof_id
+                  and o.writer_generation_id='mysql-activation-generation'
+                  and o.effect_state='COMPLETED'
+                """)).isEqualTo("1");
+        assertThat(scalar(connection, """
+                select count(*) from lifecycle_writer_exclusivity_references
+                where proof_id='mysql-activation-proof' and released_at is null
+                """)).isEqualTo("3");
+
+        // Destroyed-target cleanup leaves no active command/reference/proof,
+        // generation or instance while preserving the DESTROYED target tombstone.
+        connection.createStatement().execute(
+                "delete from lifecycle_effect_outbox "
+                        + "where effect_id='mysql-activation-effect'");
+        connection.createStatement().execute(
+                "delete from lifecycle_writer_exclusivity_references "
+                        + "where proof_id='mysql-activation-proof'");
+        connection.createStatement().execute(
+                "delete from lifecycle_writer_exclusivity_proofs "
+                        + "where proof_id='mysql-activation-proof'");
+        connection.createStatement().execute(
+                "delete from lifecycle_writer_instance_registrations "
+                        + "where instance_id='mysql-activation-instance'");
+        connection.createStatement().execute("""
+                update lifecycle_writer_generations
+                set status='CLOSED',active_slot=null
+                where generation_id='mysql-activation-generation'
+                """);
+        connection.createStatement().execute(
+                "delete from lifecycle_writer_generations "
+                        + "where generation_id='mysql-activation-generation'");
+        System.out.println("ARCH001_ACTIVATION_MYSQL metadata=verified "
+                + "proof_reference_outbox=verified "
+                + "unique_active_generation=verified destroyed_cleanup=verified");
+    }
+
+    private void verifyExactMySqlQuarantinePrecedence(
+            MySQLContainer<?> mysql) throws Exception {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext()) {
+            TestPropertyValues.of(
+                    "spring.datasource.url=" + mysql.getJdbcUrl(),
+                    "spring.datasource.username=" + mysql.getUsername(),
+                    "spring.datasource.password=" + mysql.getPassword(),
+                    "spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver",
+                    "spring.jpa.hibernate.ddl-auto=none",
+                    "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect",
+                    "spring.jpa.open-in-view=false")
+                    .applyTo(context);
+            context.register(
+                    TaskLifecycleOwnerVerticalIntegrationTest.Config.class,
+                    WorkerLifecycleReconciliationCommitService.class);
+            context.refresh();
+
+            ExactMySqlFixture fixture = new ExactMySqlFixture(context);
+            quarantineBeforeCheckpoint(fixture, "quarantine-first");
+            checkpointBeforeQuarantine(fixture, "checkpoint-first");
+            blockedThenSuccessfulCheckpoint(fixture, "blocked-success");
+            ordinaryCheckpointControl(fixture, "ordinary-control");
+            boundedRestartContinuation(fixture);
+            fixture.clear();
+        }
+    }
+
+    private void quarantineBeforeCheckpoint(
+            ExactMySqlFixture fixture, String suffix) throws Exception {
+        AuthorityIds ids = fixture.seed(suffix);
+        fixture.proofService.quarantine(ids.proofId());
+
+        CountDownLatch quarantineLocked = new CountDownLatch(1);
+        CountDownLatch checkpointEntered = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var quarantine = executor.submit(() -> fixture.transactions
+                    .executeWithoutResult(status -> {
+                        WorkerLifecycleSnapshotEntity locked = fixture.workers
+                                .findForUpdate(ids.workerId()).orElseThrow();
+                        assertThat(locked.getConflictState()).isEqualTo(
+                                LifecycleConflictState
+                                        .LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+                        assertThat(TransactionSynchronizationManager
+                                .isActualTransactionActive()).isTrue();
+                        quarantineLocked.countDown();
+                        await(checkpointEntered);
+                    }));
+            var checkpoint = executor.submit(() -> {
+                await(quarantineLocked);
+                checkpointEntered.countDown();
+                fixture.reconciliation.commit(fixture.inventory(ids), null);
+            });
+            quarantine.get(10, TimeUnit.SECONDS);
+            checkpoint.get(10, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+        fixture.assertFailClosed(ids);
+        System.out.println("ARCH001_MYSQL_ORDER quarantine-before-checkpoint "
+                + "proof=QUARANTINED worker/session/task=AUTHORITY_QUARANTINED");
+    }
+
+    private void checkpointBeforeQuarantine(
+            ExactMySqlFixture fixture, String suffix) throws Exception {
+        AuthorityIds ids = fixture.seed(suffix);
+        CountDownLatch checkpointLocked = new CountDownLatch(1);
+        CountDownLatch quarantineEntered = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var checkpoint = executor.submit(() -> fixture.transactions
+                    .executeWithoutResult(status -> {
+                        WorkerLifecycleSnapshotEntity worker = fixture.workers
+                                .findForUpdate(ids.workerId()).orElseThrow();
+                        worker.setAvailability(LifecycleAvailability.READY.name());
+                        worker.setConflictState(LifecycleConflictState.NONE.name());
+                        fixture.workers.saveAndFlush(worker);
+                        assertThat(TransactionSynchronizationManager
+                                .isActualTransactionActive()).isTrue();
+                        checkpointLocked.countDown();
+                        await(quarantineEntered);
+                    }));
+            var quarantine = executor.submit(() -> {
+                await(checkpointLocked);
+                quarantineEntered.countDown();
+                fixture.proofService.quarantine(ids.proofId());
+            });
+            checkpoint.get(10, TimeUnit.SECONDS);
+            quarantine.get(10, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+        fixture.assertFailClosed(ids);
+        System.out.println("ARCH001_MYSQL_ORDER checkpoint-before-quarantine "
+                + "proof=QUARANTINED worker/session/task=AUTHORITY_QUARANTINED");
+    }
+
+    private void ordinaryCheckpointControl(
+            ExactMySqlFixture fixture, String suffix) {
+        AuthorityIds ids = fixture.seed(suffix);
+        fixture.reconciliation.commit(fixture.inventory(ids), null);
+        assertThat(fixture.workers.findById(ids.workerId()).orElseThrow()
+                .getAvailability()).isEqualTo(LifecycleAvailability.READY.name());
+        assertThat(fixture.workers.findById(ids.workerId()).orElseThrow()
+                .getConflictState()).isEqualTo(LifecycleConflictState.NONE.name());
+        assertThat(fixture.proofs.findById(ids.proofId()).orElseThrow()
+                .getStatus()).isEqualTo("ACTIVE");
+        System.out.println("ARCH001_MYSQL_CONTROL ordinary-checkpoint=READY/NONE");
+    }
+
+    private void blockedThenSuccessfulCheckpoint(
+            ExactMySqlFixture fixture, String suffix) {
+        AuthorityIds ids = fixture.seed(suffix);
+        fixture.proofService.quarantine(ids.proofId());
+
+        SentinelReconcileResult blocked = fixture.sentinel().reconcile(
+                ids.workerId(), SentinelTrigger.TIMER,
+                fixture.port(ids, false));
+        assertThat(blocked.state()).isEqualTo(
+                SentinelReconcileState.WORKER_UNAVAILABLE);
+        fixture.assertFailClosed(ids);
+
+        SentinelReconcileResult recovered = fixture.sentinel().reconcile(
+                ids.workerId(), SentinelTrigger.TIMER,
+                fixture.port(ids, true));
+        assertThat(recovered.state()).isEqualTo(
+                SentinelReconcileState.READY);
+        fixture.assertFailClosed(ids);
+        System.out.println("ARCH001_MYSQL_SEQUENCE quarantine-blocked-success "
+                + "proof=QUARANTINED references=3 "
+                + "worker/session/task=AUTHORITY_QUARANTINED");
+    }
+
+    private void boundedRestartContinuation(ExactMySqlFixture fixture) {
+        String proofId = "mysql-proof-bounded";
+        fixture.createProof(proofId, "QUARANTINING");
+        List<LifecycleWriterProofReferenceEntity> batch = new ArrayList<>();
+        for (int index = 0; index < 120; index++) {
+            LifecycleWriterProofReferenceEntity reference =
+                    new LifecycleWriterProofReferenceEntity();
+            reference.setReferenceId("mysql-bounded-%03d".formatted(index));
+            reference.setProofId(proofId);
+            reference.setAggregateType("TASK");
+            reference.setAggregateId("missing-task-%03d".formatted(index));
+            reference.setAcquiredAt(LocalDateTime.now());
+            batch.add(reference);
+        }
+        fixture.references.saveAllAndFlush(batch);
+
+        fixture.proofService.resumeQuarantines();
+        assertThat(fixture.proofs.findById(proofId).orElseThrow()
+                .getQuarantineCursor()).isEqualTo("mysql-bounded-049");
+        assertThat(fixture.proofs.findById(proofId).orElseThrow()
+                .getStatus()).isEqualTo("QUARANTINING");
+        fixture.proofService.resumeQuarantines();
+        assertThat(fixture.proofs.findById(proofId).orElseThrow()
+                .getQuarantineCursor()).isEqualTo("mysql-bounded-099");
+        assertThat(fixture.proofs.findById(proofId).orElseThrow()
+                .getStatus()).isEqualTo("QUARANTINING");
+        fixture.proofService.resumeQuarantines();
+        assertThat(fixture.proofs.findById(proofId).orElseThrow()
+                .getQuarantineCursor()).isEqualTo("mysql-bounded-119");
+        assertThat(fixture.proofs.findById(proofId).orElseThrow()
+                .getStatus()).isEqualTo("QUARANTINED");
+        System.out.println("ARCH001_MYSQL_BATCHES cursors=049,099,119 sizes=50,50,20");
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("MySQL transaction latch timed out");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+    }
+
+    private record AuthorityIds(
+            String proofId, String workerId, String sessionId, String taskId) {}
+
+    private static final class ExactMySqlFixture {
+        private final LifecycleWriterProofRepository proofs;
+        private final LifecycleWriterProofReferenceRepository references;
+        private final WorkerLifecycleSnapshotRepository workers;
+        private final SessionLifecycleSnapshotRepository sessions;
+        private final TaskLifecycleSnapshotRepository tasks;
+        private final WriterExclusivityProofService proofService;
+        private final WorkerLifecycleReconciliationCommitService reconciliation;
+        private final TransactionTemplate transactions;
+
+        private ExactMySqlFixture(AnnotationConfigApplicationContext context) {
+            proofs = context.getBean(LifecycleWriterProofRepository.class);
+            references = context.getBean(
+                    LifecycleWriterProofReferenceRepository.class);
+            workers = context.getBean(WorkerLifecycleSnapshotRepository.class);
+            sessions = context.getBean(SessionLifecycleSnapshotRepository.class);
+            tasks = context.getBean(TaskLifecycleSnapshotRepository.class);
+            proofService = context.getBean(WriterExclusivityProofService.class);
+            reconciliation = context.getBean(
+                    WorkerLifecycleReconciliationCommitService.class);
+            transactions = new TransactionTemplate(
+                    context.getBean(PlatformTransactionManager.class));
+        }
+
+        private AuthorityIds seed(String suffix) {
+            String proofId = "mysql-proof-" + suffix;
+            String workerId = "mysql-worker-" + suffix;
+            String sessionId = "mysql-session-" + suffix;
+            String taskId = "mysql-task-" + suffix;
+            createProof(proofId, "ACTIVE");
+
+            WorkerLifecycleSnapshotEntity worker =
+                    new WorkerLifecycleSnapshotEntity();
+            worker.setPhysicalWorkerId(workerId);
+            worker.setOwnershipMode("ENFORCED");
+            worker.setStateGeneration("mysql-state-" + suffix);
+            worker.setInstanceEpoch("mysql-epoch-" + suffix);
+            worker.setAvailability(LifecycleAvailability.READY.name());
+            worker.setConflictState(LifecycleConflictState.NONE.name());
+            worker.setFactCursor(0);
+            worker.setPolicyVersion("ARCH-001-MVP-A");
+            worker.setWriterGenerationId("mysql-generation");
+            worker.setSnapshotJson("{}");
+            workers.saveAndFlush(worker);
+
+            SessionLifecycleSnapshotEntity session =
+                    new SessionLifecycleSnapshotEntity();
+            session.setSessionId(sessionId);
+            session.setPhysicalWorkerId(workerId);
+            session.setOwnershipMode("ENFORCED");
+            session.setCanonicalPhase("OPEN");
+            session.setForegroundTaskId(taskId);
+            session.setForegroundLaneState("OCCUPIED");
+            session.setAvailability(LifecycleAvailability.READY.name());
+            session.setConflictState(LifecycleConflictState.NONE.name());
+            session.setWriterGenerationId("mysql-generation");
+            sessions.saveAndFlush(session);
+
+            TaskLifecycleSnapshotEntity task = new TaskLifecycleSnapshotEntity();
+            task.setTaskId(taskId);
+            task.setSessionId(sessionId);
+            task.setPhysicalWorkerId(workerId);
+            task.setStateGeneration("mysql-state-" + suffix);
+            task.setInstanceEpoch("mysql-epoch-" + suffix);
+            task.setProviderTaskId("mysql-provider-" + suffix);
+            task.setOwnershipMode("ENFORCED");
+            task.setCanonicalPhase("OPEN");
+            task.setAvailability(LifecycleAvailability.READY.name());
+            task.setConflictState(LifecycleConflictState.NONE.name());
+            task.setCleanupState("NOT_REQUIRED");
+            task.setFactCursor(0L);
+            task.setPolicyVersion("ARCH-001-MVP-A");
+            task.setWriterGenerationId("mysql-generation");
+            task.setSnapshotJson("{}");
+            tasks.saveAndFlush(task);
+
+            references.saveAllAndFlush(List.of(
+                    reference(proofId + ":00:WORKER", proofId,
+                            "WORKER", workerId),
+                    reference(proofId + ":01:SESSION", proofId,
+                            "SESSION", sessionId),
+                    reference(proofId + ":02:TASK", proofId,
+                            "TASK", taskId)));
+            return new AuthorityIds(proofId, workerId, sessionId, taskId);
+        }
+
+        private void createProof(String proofId, String status) {
+            LifecycleWriterProofEntity proof = new LifecycleWriterProofEntity();
+            proof.setProofId(proofId);
+            proof.setGenerationId("mysql-generation");
+            proof.setControllerInventoryDigest("mysql-inventory");
+            proof.setHolderInstanceId("mysql-fixture-holder");
+            proof.setProofVersion(1);
+            proof.setStatus(status);
+            proof.setAcquiredAt(LocalDateTime.now().minusMinutes(1));
+            proof.setLastVerifiedAt(LocalDateTime.now());
+            proof.setExpiresAt(LocalDateTime.now().plusMinutes(5));
+            proofs.saveAndFlush(proof);
+        }
+
+        private LifecycleWriterProofReferenceEntity reference(
+                String id, String proofId, String type, String aggregateId) {
+            LifecycleWriterProofReferenceEntity reference =
+                    new LifecycleWriterProofReferenceEntity();
+            reference.setReferenceId(id);
+            reference.setProofId(proofId);
+            reference.setAggregateType(type);
+            reference.setAggregateId(aggregateId);
+            reference.setAcquiredAt(LocalDateTime.now());
+            return reference;
+        }
+
+        private WorkerLifecycleSnapshot inventory(AuthorityIds ids) {
+            return new WorkerLifecycleSnapshot(
+                    new WorkerLifecycleIdentity(
+                            ids.workerId(),
+                            "mysql-state-" + ids.workerId()
+                                    .substring("mysql-worker-".length()),
+                            "mysql-epoch-" + ids.workerId()
+                                    .substring("mysql-worker-".length())),
+                    0, 1, true, List.of(), List.of());
+        }
+
+        private WorkerLifecycleSentinelService sentinel() {
+            SentinelLeaseStore leases = (worker, holder, now, duration) ->
+                    Optional.of(new SentinelLease(worker, holder, 1));
+            return new WorkerLifecycleSentinelService(
+                    leases, workers, reconciliation);
+        }
+
+        private WorkerLifecyclePort port(AuthorityIds ids, boolean ready) {
+            WorkerLifecycleSnapshot inventory = inventory(ids);
+            return new WorkerLifecyclePort() {
+                @Override
+                public WorkerLifecycleReadiness probe(String workerId) {
+                    return new WorkerLifecycleReadiness(
+                            ready, inventory.identity(),
+                            ready ? Set.of("INVENTORY_V1") : Set.of(),
+                            ready ? List.of()
+                                    : List.of("LIFECYCLE_WORKER_UNAVAILABLE"));
+                }
+
+                @Override
+                public WorkerLifecycleSnapshot inventory(
+                        WorkerLifecycleIdentity expectedIdentity,
+                        long afterSequence) {
+                    return inventory;
+                }
+
+                @Override
+                public WorkerLifecycleSnapshot events(
+                        WorkerLifecycleIdentity expectedIdentity,
+                        long afterSequence) {
+                    return new WorkerLifecycleSnapshot(
+                            inventory.identity(), 0, 1, true, List.of(),
+                            List.<NormalizedLifecycleFact>of());
+                }
+
+                @Override
+                public long acknowledge(
+                        WorkerLifecycleIdentity expectedIdentity,
+                        long throughSequence) {
+                    return throughSequence;
+                }
+            };
+        }
+
+        private void assertFailClosed(AuthorityIds ids) {
+            LifecycleWriterProofEntity proof = proofs.findById(ids.proofId())
+                    .orElseThrow();
+            assertThat(proof.getStatus()).isEqualTo("QUARANTINED");
+            assertThat(proof.getQuarantineCursor())
+                    .isEqualTo(ids.proofId() + ":02:TASK");
+            assertThat(references.countByProofIdAndReleasedAtIsNull(
+                    ids.proofId())).isEqualTo(3);
+            assertAuthority(workers.findById(ids.workerId()).orElseThrow()
+                    .getAvailability(), workers.findById(ids.workerId())
+                    .orElseThrow().getConflictState());
+            assertAuthority(sessions.findById(ids.sessionId()).orElseThrow()
+                    .getAvailability(), sessions.findById(ids.sessionId())
+                    .orElseThrow().getConflictState());
+            assertAuthority(tasks.findById(ids.taskId()).orElseThrow()
+                    .getAvailability(), tasks.findById(ids.taskId())
+                    .orElseThrow().getConflictState());
+        }
+
+        private void assertAuthority(String availability, String conflict) {
+            assertThat(availability).isEqualTo(
+                    LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+            assertThat(conflict).isEqualTo(LifecycleConflictState
+                    .LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+        }
+
+        private void clear() {
+            references.deleteAll();
+            tasks.deleteAll();
+            sessions.deleteAll();
+            workers.deleteAll();
+            proofs.deleteAll();
+        }
+    }
+
     private void assertRollbackBlocked(
             MySQLContainer<?> mysql,
             String databaseSuffix,
@@ -184,6 +792,7 @@ class LifecycleMigrationMySqlIntegrationTest {
         try (Connection connection = DriverManager.getConnection(
                 url, mysql.getUsername(), mysql.getPassword())) {
             execute(connection, FORWARD);
+            execute(connection, ACTIVATION_READINESS);
             connection.createStatement().execute(markerSql);
             assertThatThrownBy(() -> execute(connection, ROLLBACK))
                     .hasMessage(
@@ -219,6 +828,7 @@ class LifecycleMigrationMySqlIntegrationTest {
                     .addAnnotatedClass(LifecycleWriterProofEntity.class)
                     .addAnnotatedClass(LifecycleWriterProofReferenceEntity.class)
                     .addAnnotatedClass(WorkerLifecycleSentinelLeaseEntity.class)
+                    .addAnnotatedClass(LifecycleActivationTargetEntity.class)
                     .buildMetadata().buildSessionFactory();
             factory.close();
         } finally {

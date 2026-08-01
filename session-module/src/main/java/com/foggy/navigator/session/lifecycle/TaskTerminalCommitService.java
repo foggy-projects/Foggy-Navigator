@@ -95,6 +95,7 @@ public class TaskTerminalCommitService {
                 command.tombstoneContext().providerTaskUserId(),
                 command.tombstoneContext().sourceAgentId(),
                 command.tombstoneContext().operationId(),
+                command.tombstoneContext().clientRequestId(),
                 command.outcome().name());
         boolean tokenIssued = resourcePresent(
                 TerminalCleanupParticipant.PHYSICAL_TOKEN_REVOKE, context);
@@ -134,6 +135,8 @@ public class TaskTerminalCommitService {
         entity.setProviderTaskUserId(command.tombstoneContext().providerTaskUserId());
         entity.setSourceAgentId(command.tombstoneContext().sourceAgentId());
         entity.setOperationId(command.tombstoneContext().operationId());
+        entity.setClientRequestId(
+                command.tombstoneContext().clientRequestId());
         entity.setTerminalOutcome(command.outcome().name());
         entity.setTerminalSource(command.source().name());
         entity.setTerminalFactId(command.terminalFactId());
@@ -165,8 +168,17 @@ public class TaskTerminalCommitService {
         entity.setCanonicalPhase(TaskCanonicalPhase.TERMINAL.name());
         entity.setTerminalOutcome(command.outcome().name());
         entity.setTerminalSource(command.source().name());
-        entity.setAvailability(LifecycleAvailability.READY.name());
-        entity.setConflictState(LifecycleConflictState.NONE.name());
+        if (entity.getConflictState() == null
+                || LifecycleConflictState.NONE.name().equals(
+                entity.getConflictState())) {
+            entity.setAvailability(LifecycleAvailability.READY.name());
+            entity.setConflictState(LifecycleConflictState.NONE.name());
+        } else {
+            // Terminal+tombstone is a monotonic local safety action and may
+            // proceed after proof loss, but it never clears the quarantine.
+            entity.setAvailability(
+                    LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+        }
         entity.setCleanupState(TaskCleanupState.PENDING.name());
         if (entity.getFactCursor() == null) entity.setFactCursor(0L);
         entity.setPolicyVersion("ARCH-001-MVP-A");

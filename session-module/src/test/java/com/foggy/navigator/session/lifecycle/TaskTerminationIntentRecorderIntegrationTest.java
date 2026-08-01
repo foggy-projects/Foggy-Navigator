@@ -159,6 +159,184 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 .isEqualTo("termination-dispatch");
     }
 
+    @Test
+    void receiptAdmissionRejectsEveryOwnerFenceAndExactProofReferenceDrift() {
+        var task = snapshots.findById("task-delivery").orElseThrow();
+        task.setOwnershipMode("SHADOW");
+        snapshots.saveAndFlush(task);
+        assertAdmissionRejected("request-task-mode");
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setOwnershipMode("ENFORCED");
+        snapshots.saveAndFlush(task);
+
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setStateGeneration("stale-generation");
+        snapshots.saveAndFlush(task);
+        assertAdmissionRejected("request-task-generation");
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setStateGeneration("generation-delivery");
+        snapshots.saveAndFlush(task);
+
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setInstanceEpoch("stale-epoch");
+        snapshots.saveAndFlush(task);
+        assertAdmissionRejected("request-stale-epoch");
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setInstanceEpoch("epoch-delivery");
+        snapshots.saveAndFlush(task);
+
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setAvailability(LifecycleAvailability.OFFLINE_FROZEN.name());
+        snapshots.saveAndFlush(task);
+        assertAdmissionRejected("request-task-not-ready");
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setAvailability(LifecycleAvailability.READY.name());
+        snapshots.saveAndFlush(task);
+
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setConflictState(
+                LifecycleConflictState.EVIDENCE_CONFLICT.name());
+        snapshots.saveAndFlush(task);
+        assertAdmissionRejected("request-task-conflict");
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setConflictState(LifecycleConflictState.NONE.name());
+        snapshots.saveAndFlush(task);
+
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setProviderTaskId("different-provider-task");
+        snapshots.saveAndFlush(task);
+        assertAdmissionRejected("request-task-provider-binding");
+        task = snapshots.findById("task-delivery").orElseThrow();
+        task.setProviderTaskId("provider-task-delivery");
+        snapshots.saveAndFlush(task);
+
+        var worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setOwnershipMode("SHADOW");
+        workers.saveAndFlush(worker);
+        assertAdmissionRejected("request-worker-mode");
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setOwnershipMode("ENFORCED");
+        workers.saveAndFlush(worker);
+
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setStateGeneration("stale-generation");
+        workers.saveAndFlush(worker);
+        assertAdmissionRejected("request-stale-generation");
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setStateGeneration("generation-delivery");
+        workers.saveAndFlush(worker);
+
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setInstanceEpoch("stale-epoch");
+        workers.saveAndFlush(worker);
+        assertAdmissionRejected("request-worker-epoch");
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setInstanceEpoch("epoch-delivery");
+        workers.saveAndFlush(worker);
+
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setAvailability(LifecycleAvailability.OFFLINE_FROZEN.name());
+        workers.saveAndFlush(worker);
+        assertAdmissionRejected("request-worker-not-ready");
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setAvailability(LifecycleAvailability.READY.name());
+        workers.saveAndFlush(worker);
+
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setConflictState(
+                LifecycleConflictState.EVIDENCE_CONFLICT.name());
+        workers.saveAndFlush(worker);
+        assertAdmissionRejected("request-worker-conflict");
+        worker = workers.findById("worker-delivery").orElseThrow();
+        worker.setConflictState(LifecycleConflictState.NONE.name());
+        workers.saveAndFlush(worker);
+
+        var session = sessions.findById("session-delivery").orElseThrow();
+        session.setOwnershipMode("SHADOW");
+        sessions.saveAndFlush(session);
+        assertAdmissionRejected("request-session-mode");
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setOwnershipMode("ENFORCED");
+        sessions.saveAndFlush(session);
+
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setAvailability(
+                LifecycleAvailability.OFFLINE_FROZEN.name());
+        sessions.saveAndFlush(session);
+        assertAdmissionRejected("request-session-not-ready");
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setAvailability(LifecycleAvailability.READY.name());
+        sessions.saveAndFlush(session);
+
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setConflictState(
+                LifecycleConflictState.EVIDENCE_CONFLICT.name());
+        sessions.saveAndFlush(session);
+        assertAdmissionRejected("request-session-conflict");
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setConflictState(LifecycleConflictState.NONE.name());
+        sessions.saveAndFlush(session);
+
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setPhysicalWorkerId("different-worker");
+        sessions.saveAndFlush(session);
+        assertAdmissionRejected("request-session-binding");
+        session = sessions.findById("session-delivery").orElseThrow();
+        session.setPhysicalWorkerId("worker-delivery");
+        sessions.saveAndFlush(session);
+
+        var canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setProviderType("different-provider");
+        canonicalTasks.saveAndFlush(canonical);
+        assertAdmissionRejected("request-canonical-provider");
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setProviderType("codex-biz-worker");
+        canonicalTasks.saveAndFlush(canonical);
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setProviderTaskId("different-provider-task");
+        canonicalTasks.saveAndFlush(canonical);
+        assertAdmissionRejected("request-canonical-provider-task");
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setProviderTaskId("provider-task-delivery");
+        canonicalTasks.saveAndFlush(canonical);
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setWorkerId("different-worker");
+        canonicalTasks.saveAndFlush(canonical);
+        assertAdmissionRejected("request-canonical-worker");
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setWorkerId("worker-delivery");
+        canonicalTasks.saveAndFlush(canonical);
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setSessionId("different-session");
+        canonicalTasks.saveAndFlush(canonical);
+        assertAdmissionRejected("request-canonical-session");
+        canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setSessionId("session-delivery");
+        canonicalTasks.saveAndFlush(canonical);
+
+        var reference = references.findById(
+                "proof-delivery:SESSION:session-delivery").orElseThrow();
+        reference.setAggregateId("different-session");
+        references.saveAndFlush(reference);
+        assertAdmissionRejected("request-reference-drift");
+
+        assertThat(outbox.findAll()).isEmpty();
+    }
+
+    private void assertAdmissionRejected(String requestId) {
+        assertThatThrownBy(() -> transaction(() ->
+                recorder.recordIntent(intent(requestId))))
+                .isInstanceOf(RuntimeException.class);
+    }
+
     private void enrollFixture() {
         var identity = new com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity(
                 "worker-delivery", "generation-delivery", "epoch-delivery");
@@ -221,6 +399,11 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 "worker-delivery",
                 "provider-task-delivery",
                 "operation-delivery",
+                "operation-delivery",
+                "ENFORCED",
+                "generation-delivery",
+                "epoch-delivery",
+                "JCS_SHA256_V1",
                 "binding-delivery");
     }
 

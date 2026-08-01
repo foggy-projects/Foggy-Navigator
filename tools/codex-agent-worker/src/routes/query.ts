@@ -15,6 +15,7 @@ import {
   cleanupOldTasks,
   getTaskStatus,
   getRunningTaskCount,
+  inspectCodexResumeTarget,
   UnsupportedCodexModelError,
   UNSUPPORTED_CODEX_MODEL,
 } from '../codex/sdk-wrapper.js'
@@ -43,6 +44,7 @@ import {
 import { preflightLifecycleCommand } from '../lifecycle/command.js'
 import {
   LIFECYCLE_SCHEMA,
+  type NeverAcceptedReasonCode,
   type LifecycleDisposition,
 } from '../lifecycle/store.js'
 
@@ -107,6 +109,28 @@ export function resolveNavigatorBusinessMcpPreflightError(
 }
 
 const router = Router()
+
+function rejectEnforcedBeforeEffect(
+  res: Response,
+  lifecycle: NonNullable<ReturnType<typeof preflightLifecycleCommand>>,
+  reason: NeverAcceptedReasonCode,
+): boolean {
+  if (lifecycle.context.ownership_mode !== 'ENFORCED') return false
+  try {
+    const disposition = lifecycle.store.rejectBeforeEffect(
+      lifecycle.context,
+      lifecycle.binding,
+      reason,
+    )
+    res.status(409).json(disposition)
+  } catch {
+    res.status(503).json({
+      schema: LIFECYCLE_SCHEMA,
+      code: 'WORKER_LIFECYCLE_STORE_UNAVAILABLE',
+    })
+  }
+  return true
+}
 
 /**
  * POST /api/v1/query — Start a Codex query and stream results as SSE
@@ -224,6 +248,15 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     if (priorDisposition
         && lifecycle.context.ownership_mode === 'ENFORCED'
         && priorDisposition.effect_phase !== 'PREPARED') {
+      if (priorDisposition.acceptance_disposition === 'REJECTED'
+          && priorDisposition.effect_phase === 'PRE_EFFECT') {
+        res.status(409).json({
+          ...priorDisposition,
+          duplicate: true,
+          request_delivery_attempt: lifecycle.context.delivery_attempt,
+        })
+        return
+      }
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -235,6 +268,29 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
         request_delivery_attempt: lifecycle.context.delivery_attempt,
       })}\n\n`)
       res.end()
+      return
+    }
+  }
+
+  if (lifecycle?.context.ownership_mode === 'ENFORCED'
+      && lifecycle.context.command_kind === 'TASK_RESUME') {
+    const resumeTarget = await inspectCodexResumeTarget(
+      body.session_id as string,
+      body.codex_home_key,
+    )
+    if (resumeTarget === 'ABSENT') {
+      rejectEnforcedBeforeEffect(
+        res,
+        lifecycle,
+        'WORKER_TASK_RESUME_TARGET_NOT_FOUND',
+      )
+      return
+    }
+    if (resumeTarget !== 'PRESENT') {
+      res.status(503).json({
+        schema: LIFECYCLE_SCHEMA,
+        code: 'WORKER_TASK_RESUME_TARGET_VERIFICATION_UNAVAILABLE',
+      })
       return
     }
   }
@@ -253,6 +309,11 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       })
     } catch (error) {
       if (error instanceof CodexThreadActiveError) {
+        if (lifecycle && rejectEnforcedBeforeEffect(
+          res,
+          lifecycle,
+          'WORKER_TASK_ADMISSION_THREAD_CONFLICT',
+        )) return
         res.status(409).json({
           code: error.code,
           error: error.code,
@@ -271,6 +332,11 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
   const runningTasks = getRunningTaskCount()
   if (runningTasks >= config.maxConcurrentTasks) {
     threadReservation?.release()
+    if (lifecycle && rejectEnforcedBeforeEffect(
+      res,
+      lifecycle,
+      'WORKER_TASK_ADMISSION_CAPACITY_REJECTED',
+    )) return
     res.status(429).json({
       error: `Too many concurrent Codex tasks: ${runningTasks}/${config.maxConcurrentTasks}`,
       running_tasks: runningTasks,

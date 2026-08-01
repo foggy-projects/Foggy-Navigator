@@ -1,0 +1,131 @@
+{
+  "schema": "NAVIGATOR_ARCH001_PROVISIONING_TARGET_V1",
+  "lifecyclePhase": "PROVISIONING_CLOSED",
+  "targetId": "__TARGET_ID__",
+  "runId": "__RUN_ID__",
+  "targetClass": "ISOLATED_LOCAL_NON_FIXTURE",
+  "providerEvidenceLane": "REAL_CODEX_MODEL",
+  "candidate": {
+    "head": "__CANDIDATE_HEAD__",
+    "patchSha256": "__CANDIDATE_PATCH_SHA256__",
+    "ownerProtocol": 1
+  },
+  "exactTuple": {
+    "providerType": "codex-biz-worker",
+    "tenantId": "synthetic-arch001-tenant",
+    "userId": null,
+    "physicalWorkerId": null,
+    "modelConfigId": null,
+    "model": "__EXACT_MODEL__",
+    "codexHomeKey": "synthetic/arch001/canary",
+    "promptSha256": "__STATIC_PROMPT_SHA256__"
+  },
+  "target": {
+    "host": "127.0.0.1",
+    "navigatorPort": __NAVIGATOR_PORT__,
+    "workerPort": __WORKER_PORT__,
+    "mysqlPort": __MYSQL_PORT__,
+    "mysqlVersion": "8.0.44",
+    "database": "__DATABASE__",
+    "dockerProject": "__DOCKER_PROJECT__",
+    "root": "__TARGET_ROOT__",
+    "workdir": "__TARGET_WORKDIR__",
+    "workerHome": "__WORKER_HOME__",
+    "providerProfile": "__TARGET_ROOT__/provider.env",
+    "workerProfile": "__TARGET_ROOT__/worker.env",
+    "navigatorRuntimeProfile": "__TARGET_ROOT__/navigator-runtime.env",
+    "databaseProfile": "__TARGET_ROOT__/database.env",
+    "controlProfile": "__TARGET_ROOT__/activation-control.env",
+    "bootstrapProfile": "__TARGET_ROOT__/bootstrap.env",
+    "runtimeCredentialProfile": "__TARGET_ROOT__/runtime-credential.env",
+    "composeFile": "__TARGET_ROOT__/compose.mysql.yml",
+    "navigatorArtifact": "__TARGET_ROOT__/artifacts/launcher.jar",
+    "navigatorArtifactSha256": "__NAVIGATOR_ARTIFACT_SHA256__",
+    "schemaPlan": "__TARGET_ROOT__/schema-plan.json",
+    "schemaResult": "__TARGET_ROOT__/schema-result.json",
+    "provisioningProgress": "__TARGET_ROOT__/provisioning-progress.json",
+    "provisioningResult": "__TARGET_ROOT__/provisioning-result.json",
+    "workerReadinessResult": "__TARGET_ROOT__/worker-readiness-result.json",
+    "provisioningSeal": "__TARGET_ROOT__/provisioning-seal.json",
+    "evidenceDir": "__TARGET_ROOT__/evidence",
+    "navigatorPidFile": "__TARGET_ROOT__/navigator.pid",
+    "workerPidFile": "__TARGET_ROOT__/worker.pid",
+    "observationFile": "__TARGET_ROOT__/controller-observation.json"
+  },
+  "worker": {
+    "version": "__WORKER_BUILD_ID__",
+    "protocolVersion": 1,
+    "requiredCapabilities": [
+      "AUTHENTICATED_LIFECYCLE_V1",
+      "FENCED_INVENTORY_V1",
+      "DURABLE_LIFECYCLE_FACTS_V1",
+      "MONOTONIC_ACK_V1",
+      "EXACT_DISPATCH_DEDUPE_V1",
+      "DURABLE_PROVIDER_TASK_ID_V1",
+      "TERMINATION_ATOMIC_CAPABILITY_V1"
+    ]
+  },
+  "controllers": [
+    {
+      "kind": "process",
+      "id": "target-process-set",
+      "state": "DISABLED",
+      "restartPolicy": "NONE",
+      "ownershipRunId": "__RUN_ID__",
+      "source": "proc-cwd-scan",
+      "artifactCommit": "__CANDIDATE_HEAD__",
+      "cwd": "__TARGET_ROOT__"
+    },
+    {
+      "kind": "supervisor",
+      "id": "none",
+      "state": "NOT_APPLICABLE",
+      "restartPolicy": "NONE",
+      "ownershipRunId": "__RUN_ID__",
+      "source": "local-target-no-supervisor",
+      "artifactCommit": "__CANDIDATE_HEAD__",
+      "cwd": "__TARGET_ROOT__"
+    },
+    {
+      "kind": "manual_launcher",
+      "id": "target-pidfiles",
+      "state": "DISABLED",
+      "restartPolicy": "NONE",
+      "ownershipRunId": "__RUN_ID__",
+      "source": "target-pidfile-scan",
+      "artifactCommit": "__CANDIDATE_HEAD__",
+      "cwd": "__TARGET_ROOT__"
+    },
+    {
+      "kind": "ci",
+      "id": "none",
+      "state": "NOT_APPLICABLE",
+      "restartPolicy": "NONE",
+      "ownershipRunId": "__RUN_ID__",
+      "source": "local-target-no-ci",
+      "artifactCommit": "__CANDIDATE_HEAD__",
+      "cwd": "__TARGET_ROOT__"
+    },
+    {
+      "kind": "timer",
+      "id": "none",
+      "state": "NOT_APPLICABLE",
+      "restartPolicy": "NONE",
+      "ownershipRunId": "__RUN_ID__",
+      "source": "local-target-no-timer",
+      "artifactCommit": "__CANDIDATE_HEAD__",
+      "cwd": "__TARGET_ROOT__"
+    },
+    {
+      "kind": "docker",
+      "id": "mysql-compose",
+      "state": "DISABLED",
+      "restartPolicy": "NONE",
+      "ownershipRunId": "__RUN_ID__",
+      "source": "compose-label-scan",
+      "artifactCommit": "__CANDIDATE_HEAD__",
+      "cwd": "__TARGET_ROOT__"
+    }
+  ],
+  "controllerInventoryDigest": "__CONTROLLER_INVENTORY_SHA256__"
+}

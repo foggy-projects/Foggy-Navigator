@@ -1,0 +1,33 @@
+{
+  "schema": "NAVIGATOR_ARCH001_FRESH_SCHEMA_PLAN_V1",
+  "planId": "arch001-act001-current-schema-20260801",
+  "candidateHead": "fdef79c9c55e7de9a5b01822c3c9dc0c75ca2e00",
+  "mysqlVersion": "8.0.44",
+  "files": [
+    {
+      "order": 1,
+      "path": "docs/migration/2026-08-01-arch-001-current-schema-baseline.sql",
+      "sha256": "32ea7c98d959b8f121dbc9a8d386856a07eb47ee0f79cd35508abfb6d4c64d6d",
+      "role": "CURRENT_SCHEMA_BASELINE"
+    },
+    {
+      "order": 2,
+      "path": "docs/migration/2026-07-30-arch-001-lifecycle-owner.sql",
+      "sha256": "f9839cde1097a6f453ed1d835836f649a23cef6e615ff775bcfaca8ac83d4ac0",
+      "role": "FORWARD_MIGRATION"
+    },
+    {
+      "order": 3,
+      "path": "docs/migration/2026-07-31-arch-001-third-remediation.sql",
+      "sha256": "f910f37db228743abe10fa483e6328338b20db7f6ff28da09baf1d3e20075b92",
+      "role": "FORWARD_MIGRATION"
+    },
+    {
+      "order": 4,
+      "path": "docs/migration/2026-08-01-arch-001-activation-readiness.sql",
+      "sha256": "2c63a01cde964157036b25d5a697b63917f945dd7e2b380d9b8276db9da2ea89",
+      "role": "FORWARD_MIGRATION"
+    }
+  ],
+  "planDigest": "04dd9964a037a283fb39754594a6317125b3cfa7d550d8780d0dc7a06ef28a47"
+}

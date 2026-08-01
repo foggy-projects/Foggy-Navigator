@@ -93,9 +93,24 @@ navigator:
   lifecycle:
     # SHADOW projection is opt-in after the additive schema is pre-applied.
     shadow-enabled: ${NAVIGATOR_LIFECYCLE_SHADOW_ENABLED:false}
-    # Real activation is a separate authorization. Test-owned isolated
-    # fixtures may override this only inside their own application context.
-    activation-evidence-present: ${NAVIGATOR_LIFECYCLE_ACTIVATION_EVIDENCE_PRESENT:false}
+    activation:
+      # Neither switch is authority. Admission additionally requires an exact
+      # target manifest, fresh controller observation, active generation,
+      # registered instance, DB-time proof and matched Worker identity.
+      control-enabled: ${NAVIGATOR_LIFECYCLE_ACTIVATION_CONTROL_ENABLED:false}
+      admission-enabled: ${NAVIGATOR_LIFECYCLE_ACTIVATION_ADMISSION_ENABLED:false}
+      exact-target-id: ${NAVIGATOR_LIFECYCLE_ACTIVATION_EXACT_TARGET_ID:}
+      manifest-path: ${NAVIGATOR_LIFECYCLE_ACTIVATION_MANIFEST_PATH:}
+      observation-path: ${NAVIGATOR_LIFECYCLE_ACTIVATION_OBSERVATION_PATH:}
+      instance-id: ${NAVIGATOR_LIFECYCLE_ACTIVATION_INSTANCE_ID:}
+      candidate-head: ${NAVIGATOR_LIFECYCLE_ACTIVATION_CANDIDATE_HEAD:}
+      candidate-patch-sha256: ${NAVIGATOR_LIFECYCLE_ACTIVATION_CANDIDATE_PATCH_SHA256:}
+      owner-protocol: ${NAVIGATOR_LIFECYCLE_ACTIVATION_OWNER_PROTOCOL:0}
+      control-token: ${NAVIGATOR_LIFECYCLE_ACTIVATION_CONTROL_TOKEN:}
+      proof-lease: ${NAVIGATOR_LIFECYCLE_ACTIVATION_PROOF_LEASE:PT30S}
+      instance-ttl: ${NAVIGATOR_LIFECYCLE_ACTIVATION_INSTANCE_TTL:PT30S}
+      observation-max-age: ${NAVIGATOR_LIFECYCLE_ACTIVATION_OBSERVATION_MAX_AGE:PT15S}
+      observer-delay: ${NAVIGATOR_LIFECYCLE_ACTIVATION_OBSERVER_DELAY:PT5S}
   runtime-audit:
     termination-receipt-enabled: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_ENABLED:true}
     termination-receipt-retention: ${NAVIGATOR_RUNTIME_AUDIT_TERMINATION_RECEIPT_RETENTION:P7D}

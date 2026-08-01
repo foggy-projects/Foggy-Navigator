@@ -29,15 +29,21 @@ public class LifecycleWriterProofEntity {
     private LocalDateTime lastVerifiedAt;
     @Column(nullable = false)
     private LocalDateTime expiresAt;
+    @Column(length = 160)
+    private String quarantineCursor;
     @Version @Column(nullable = false)
     private Long rowVersion;
 
     public String getProofId() { return proofId; }
     public String getGenerationId() { return generationId; }
     public String getControllerInventoryDigest() { return controllerInventoryDigest; }
+    public String getHolderInstanceId() { return holderInstanceId; }
     public long getProofVersion() { return proofVersion; }
     public String getStatus() { return status; }
+    public LocalDateTime getAcquiredAt() { return acquiredAt; }
+    public LocalDateTime getLastVerifiedAt() { return lastVerifiedAt; }
     public LocalDateTime getExpiresAt() { return expiresAt; }
+    public String getQuarantineCursor() { return quarantineCursor; }
     public void setProofId(String value) { proofId = value; }
     public void setGenerationId(String value) { generationId = value; }
     public void setControllerInventoryDigest(String value) { controllerInventoryDigest = value; }
@@ -47,4 +53,5 @@ public class LifecycleWriterProofEntity {
     public void setAcquiredAt(LocalDateTime value) { acquiredAt = value; }
     public void setLastVerifiedAt(LocalDateTime value) { lastVerifiedAt = value; }
     public void setExpiresAt(LocalDateTime value) { expiresAt = value; }
+    public void setQuarantineCursor(String value) { quarantineCursor = value; }
 }

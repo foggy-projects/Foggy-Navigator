@@ -9,6 +9,7 @@ import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRep
 import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshotRepository;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofReferenceEntity;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -119,6 +120,7 @@ class WriterExclusivityProofServiceTest {
                 mock(TaskLifecycleSnapshotRepository.class),
                 mock(SessionLifecycleSnapshotRepository.class),
                 mock(com.foggy.navigator.session.lifecycle.repository
-                        .WorkerLifecycleSnapshotRepository.class));
+                        .WorkerLifecycleSnapshotRepository.class),
+                mock(PlatformTransactionManager.class));
     }
 }

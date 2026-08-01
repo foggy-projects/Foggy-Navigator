@@ -6,24 +6,23 @@ import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterProofRef
 import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofReferenceRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
+import com.foggy.navigator.session.lifecycle.repository.WorkerLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.persistence.WorkerLifecycleSnapshotEntity;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleSnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringJUnitConfig(classes = {
         TaskLifecycleOwnerVerticalIntegrationTest.Config.class,
-        WriterExclusivityProofService.class
+        WriterExclusivityProofService.class,
+        WorkerLifecycleReconciliationCommitService.class
 })
 class WriterExclusivityProofConcurrencyIntegrationTest {
     private static final LocalDateTime NOW =
@@ -38,9 +37,9 @@ class WriterExclusivityProofConcurrencyIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired
     LifecycleEffectOutboxRepository outbox;
     @org.springframework.beans.factory.annotation.Autowired
-    PlatformTransactionManager transactionManager;
-
-    private final AtomicInteger providerCalls = new AtomicInteger();
+    WorkerLifecycleSnapshotRepository workerSnapshots;
+    @org.springframework.beans.factory.annotation.Autowired
+    WorkerLifecycleReconciliationCommitService reconciliation;
 
     @BeforeEach
     void setUp() {
@@ -85,103 +84,96 @@ class WriterExclusivityProofConcurrencyIntegrationTest {
     }
 
     @Test
-    void lossFirstCommitsBeforeAuthorizationAndProviderCountRemainsZero()
-            throws Exception {
-        CountDownLatch proofLocked = new CountDownLatch(1);
-        CountDownLatch authorizationStarted = new CountDownLatch(1);
-        AtomicReference<WriterExclusivityProofService.EffectAuthorization>
-                authorizationDecision = new AtomicReference<>();
-        var executor = Executors.newFixedThreadPool(2);
-        try {
-            var loss = executor.submit(() -> new TransactionTemplate(transactionManager)
-                    .executeWithoutResult(status -> {
-                        var proof = proofs.findForUpdate("proof-1").orElseThrow();
-                        proof.setStatus("QUARANTINED");
-                        proofs.save(proof);
-                        proofLocked.countDown();
-                        await(authorizationStarted);
-                    }));
-            var authorization = executor.submit(() -> {
-                await(proofLocked);
-                authorizationStarted.countDown();
-                authorizationDecision.set(authorizeProviderOnce());
-            });
-            loss.get(10, TimeUnit.SECONDS);
-            authorization.get(10, TimeUnit.SECONDS);
-        } finally {
-            executor.shutdownNow();
+    void quarantineRecoveryUsesDurableFiftyReferenceBatches() {
+        outbox.deleteAll();
+        references.deleteAll();
+        LifecycleWriterProofEntity proof = proofs.findById("proof-1")
+                .orElseThrow();
+        proof.setStatus("QUARANTINING");
+        proofs.saveAndFlush(proof);
+
+        var referenceBatch = new ArrayList<LifecycleWriterProofReferenceEntity>();
+        for (int index = 0; index < 120; index++) {
+            LifecycleWriterProofReferenceEntity reference =
+                    new LifecycleWriterProofReferenceEntity();
+            reference.setReferenceId("reference-%03d".formatted(index));
+            reference.setProofId("proof-1");
+            reference.setAggregateType("TASK");
+            reference.setAggregateId("task-proof-%03d".formatted(index));
+            reference.setAcquiredAt(NOW);
+            referenceBatch.add(reference);
         }
-        assertThat(authorizationDecision.get()).isNotNull();
-        assertThat(authorizationDecision.get().providerCallAuthorized()).isFalse();
-        assertThat(authorizationDecision.get().alreadyStarted()).isFalse();
-        assertThat(authorizationDecision.get().safeReasonCode())
-                .isEqualTo("LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
-        assertThat(providerCalls).hasValue(0);
-        assertThat(outbox.findById("effect-1").orElseThrow().getEffectState())
-                .isEqualTo("CLAIMED");
+        references.saveAllAndFlush(referenceBatch);
+
+        service.resumeQuarantines();
+        LifecycleWriterProofEntity afterFirst = proofs.findById("proof-1")
+                .orElseThrow();
+        assertThat(afterFirst.getStatus()).isEqualTo("QUARANTINING");
+        assertThat(afterFirst.getQuarantineCursor())
+                .isEqualTo("reference-049");
+
+        // A later scheduler invocation (including after process restart) resumes
+        // strictly after the committed cursor; it never repeats the first batch.
+        service.resumeQuarantines();
+        LifecycleWriterProofEntity afterSecond = proofs.findById("proof-1")
+                .orElseThrow();
+        assertThat(afterSecond.getStatus()).isEqualTo("QUARANTINING");
+        assertThat(afterSecond.getQuarantineCursor())
+                .isEqualTo("reference-099");
+
+        service.resumeQuarantines();
+        LifecycleWriterProofEntity completed = proofs.findById("proof-1")
+                .orElseThrow();
+        assertThat(completed.getStatus()).isEqualTo("QUARANTINED");
+        assertThat(completed.getQuarantineCursor())
+                .isEqualTo("reference-119");
     }
 
     @Test
-    void authorizationFirstIsAtMostOnceAndQuarantineCannotAuthorizeRedelivery()
-            throws Exception {
-        CountDownLatch effectStarted = new CountDownLatch(1);
-        CountDownLatch quarantineStarted = new CountDownLatch(1);
-        var executor = Executors.newFixedThreadPool(2);
-        try {
-            var authorization = executor.submit(() ->
-                    new TransactionTemplate(transactionManager)
-                            .executeWithoutResult(status -> {
-                                var decision = service.authorizeEffect(
-                                        command(), NOW);
-                                assertThat(decision.providerCallAuthorized()).isTrue();
-                                effectStarted.countDown();
-                                await(quarantineStarted);
-                            }));
-            var loss = executor.submit(() -> {
-                await(effectStarted);
-                quarantineStarted.countDown();
-                service.quarantine("proof-1");
-            });
-            authorization.get(10, TimeUnit.SECONDS);
-            providerCalls.incrementAndGet();
-            loss.get(10, TimeUnit.SECONDS);
-        } finally {
-            executor.shutdownNow();
-        }
+    void laterOrdinaryCheckpointCannotClearCommittedWriterQuarantine() {
+        String workerId = "worker-proof-1";
+        WorkerLifecycleSnapshotEntity worker = new WorkerLifecycleSnapshotEntity();
+        worker.setPhysicalWorkerId(workerId);
+        worker.setOwnershipMode("ENFORCED");
+        worker.setStateGeneration("state-proof-1");
+        worker.setInstanceEpoch("epoch-proof-1");
+        worker.setAvailability(LifecycleAvailability.READY.name());
+        worker.setConflictState(LifecycleConflictState.NONE.name());
+        worker.setFactCursor(0L);
+        worker.setPolicyVersion("ARCH-001-MVP-A");
+        worker.setSnapshotJson("{}");
+        worker.setWriterGenerationId("generation-1");
+        workerSnapshots.saveAndFlush(worker);
 
-        var redelivery = service.authorizeEffect(command(), NOW.plusSeconds(1));
-        if (redelivery.providerCallAuthorized()) providerCalls.incrementAndGet();
-        assertThat(redelivery.alreadyStarted()).isTrue();
-        assertThat(providerCalls).hasValue(1);
+        LifecycleWriterProofReferenceEntity workerReference =
+                new LifecycleWriterProofReferenceEntity();
+        workerReference.setReferenceId("proof-1:WORKER:" + workerId);
+        workerReference.setProofId("proof-1");
+        workerReference.setAggregateType("WORKER");
+        workerReference.setAggregateId(workerId);
+        workerReference.setAcquiredAt(NOW);
+        references.saveAndFlush(workerReference);
+
+        service.quarantine("proof-1");
+        WorkerLifecycleSnapshotEntity quarantined = workerSnapshots
+                .findById(workerId).orElseThrow();
+        assertThat(quarantined.getAvailability())
+                .isEqualTo(LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+        assertThat(quarantined.getConflictState()).isEqualTo(
+                LifecycleConflictState.LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+
+        WorkerLifecycleIdentity identity = new WorkerLifecycleIdentity(
+                workerId, "state-proof-1", "epoch-proof-1");
+        reconciliation.commit(new WorkerLifecycleSnapshot(
+                identity, 0, 1, true, java.util.List.of(),
+                java.util.List.of()), quarantined);
+
+        WorkerLifecycleSnapshotEntity afterCheckpoint = workerSnapshots
+                .findById(workerId).orElseThrow();
+        assertThat(afterCheckpoint.getAvailability())
+                .isEqualTo(LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+        assertThat(afterCheckpoint.getConflictState()).isEqualTo(
+                LifecycleConflictState.LEGACY_WRITER_EXCLUSIVITY_LOST.name());
     }
 
-    private WriterExclusivityProofService.EffectAuthorization
-            authorizeProviderOnce() {
-        var decision = service.authorizeEffect(command(), NOW);
-        if (decision.providerCallAuthorized()) providerCalls.incrementAndGet();
-        return decision;
-    }
-
-    private WriterExclusivityProofService.EffectAuthorizationCommand command() {
-        return new WriterExclusivityProofService.EffectAuthorizationCommand(
-                "effect-1",
-                "proof-1",
-                "reference-1",
-                ProofAggregateType.TASK,
-                "task-proof-1",
-                "generation-1",
-                "inventory-1",
-                "TASK_CREATE_PROVIDER_CALL");
-    }
-
-    private static void await(CountDownLatch latch) {
-        try {
-            if (!latch.await(10, TimeUnit.SECONDS)) {
-                throw new AssertionError("fixture latch timed out");
-            }
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError(interrupted);
-        }
-    }
 }

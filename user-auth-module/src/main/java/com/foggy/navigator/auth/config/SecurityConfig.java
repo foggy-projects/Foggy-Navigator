@@ -132,6 +132,10 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/client-apps", "/api/v1/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/business-agent", "/api/v1/business-agent/**").permitAll()
                         .requestMatchers("/internal/worker-gateway/v1", "/internal/worker-gateway/v1/**").permitAll()
+                        // Separate target-owned control credential is enforced
+                        // by LifecycleActivationControlAuthorizer. JWT/admin/
+                        // runtime credentials are not activation authority.
+                        .requestMatchers("/internal/lifecycle-activation/v1/**").permitAll()
 
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()

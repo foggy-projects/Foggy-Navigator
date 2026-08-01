@@ -12,6 +12,7 @@ import com.foggy.navigator.agent.framework.protocol.AgentMessageBuilder;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.lifecycle.CodexLifecycleBindingDigest;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
@@ -35,6 +36,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
+import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -105,6 +109,14 @@ public class CodexStreamRelay {
     @Autowired(required = false)
     @Nullable
     private TaskLifecycleSnapshotRepository lifecycleSnapshots;
+
+    @Autowired(required = false)
+    @Nullable
+    private LifecycleProductionAdmissionService lifecycleProductionAdmission;
+
+    @Autowired(required = false)
+    @Nullable
+    private CodexLifecycleBindingDigest lifecycleBindingDigest;
 
     /** Fixed stripes avoid an unbounded per-task lock registry. */
     private final ReentrantLock[] streamOperationLocks = createStreamOperationLocks(1024);
@@ -254,30 +266,63 @@ public class CodexStreamRelay {
                         : lifecycleSnapshots.findById(taskId)
                         .map(value -> value.getOwnershipMode())
                         .orElse("SHADOW");
-                Mono<Map<String, Object>> lifecycleContextRequest =
-                        client.lifecycleContext(
+                if (lifecycleProductionAdmission != null
+                        && lifecycleProductionAdmission
+                        .ownershipModeForTask(taskId)
+                        == LifecycleOwnershipMode.ENFORCED) {
+                    ownershipMode = LifecycleOwnershipMode.ENFORCED.name();
+                }
+                String initialDispatchId = stableLifecycleDispatchId(
+                        codexThreadId == null
+                                ? "TASK_CREATE" : "TASK_RESUME",
+                        taskId);
+                Mono<CodexWorkerClient.LifecycleContextEvidence>
+                        lifecycleContextRequest =
+                        client.lifecycleContextEvidence(
                                 workerId,
                                 ownershipMode,
                                 codexThreadId == null
                                         ? "TASK_CREATE" : "TASK_RESUME",
                                 taskId,
-                                stableLifecycleDispatchId(
-                                        codexThreadId == null
-                                                ? "TASK_CREATE" : "TASK_RESUME",
-                                        taskId),
+                                initialDispatchId,
                                 1,
                                 null);
-                Map<String, Object> lifecycleContext =
+                CodexWorkerClient.LifecycleContextEvidence lifecycleEvidence =
                         lifecycleContextRequest == null
                                 ? null
                                 : lifecycleContextRequest
                                 .onErrorResume(error -> Mono.empty())
                                 .block(Duration.ofSeconds(12));
+                Map<String, Object> lifecycleContext = lifecycleEvidence == null
+                        ? null : lifecycleEvidence.wireContext();
                 if (lifecycleContext == null && "ENFORCED".equals(ownershipMode)) {
                     throw new IllegalStateException(
                             "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE");
                 }
                 if (lifecycleContext != null) {
+                    if ("ENFORCED".equals(ownershipMode)) {
+                        if (lifecycleProductionAdmission == null
+                                || lifecycleBindingDigest == null
+                                || lifecycleEvidence == null) {
+                            throw new IllegalStateException(
+                                    "LIFECYCLE_ACTIVATION_AUTHORITY_UNAVAILABLE");
+                        }
+                        String bindingDigest = lifecycleBindingDigest.task(
+                                requestBody, lifecycleContext);
+                        var authorization = lifecycleProductionAdmission
+                                .admitAndAuthorizeProviderEffect(
+                                        new LifecycleProductionAdmissionService
+                                                .ProviderEffectCommand(
+                                                taskId, sessionId, workerId,
+                                                lifecycleEvidence.identity(),
+                                                initialDispatchId,
+                                                "JCS_SHA256_V1",
+                                                bindingDigest));
+                        if (!authorization.providerCallAuthorized()) {
+                            throw new IllegalStateException(
+                                    authorization.safeReasonCode());
+                        }
+                    }
                     requestBody.put("lifecycle_context", lifecycleContext);
                     sseFlux = client.streamQuery(requestBody);
                 } else {
@@ -1210,6 +1255,38 @@ public class CodexStreamRelay {
                 disposition, "effect_phase"))) {
             throw new IllegalStateException(
                     "CODEX_LIFECYCLE_EFFECT_NOT_AUTHORIZED");
+        }
+        if ("ENFORCED".equals(stringField(
+                disposition, "ownership_mode"))) {
+            if (lifecycleProductionAdmission == null) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_ACTIVATION_AUTHORITY_UNAVAILABLE");
+            }
+            CodexTaskEntity task = taskRepository.findByTaskId(taskId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "CODEX_TASK_NOT_FOUND"));
+            Object versionValue = disposition.get("disposition_version");
+            long dispositionVersion = versionValue instanceof Number number
+                    ? number.longValue() : -1;
+            lifecycleProductionAdmission.observeAcceptedDisposition(
+                    new LifecycleProductionAdmissionService
+                            .AcceptedDisposition(
+                            taskId,
+                            task.getSessionId(),
+                            new WorkerLifecycleIdentity(
+                                    stringField(disposition,
+                                            "physical_worker_id"),
+                                    stringField(disposition,
+                                            "state_generation"),
+                                    stringField(disposition,
+                                            "instance_epoch")),
+                            providerTaskId,
+                            dispatchId,
+                            stringField(disposition,
+                                    "safe_binding_digest_version"),
+                            stringField(disposition,
+                                    "safe_binding_digest"),
+                            dispositionVersion));
         }
         taskService.recordWorkerProgress(
                 taskId, providerTaskId, null, null,

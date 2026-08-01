@@ -17,10 +17,31 @@ class LifecycleMigrationContractTest {
                 "docs/migration/2026-07-30-arch-001-lifecycle-owner.sql"));
         String rollback = Files.readString(root.resolve(
                 "docs/migration/2026-07-30-arch-001-lifecycle-owner-rollback.sql"));
+        String remediation = Files.readString(root.resolve(
+                "docs/migration/2026-07-31-arch-001-third-remediation.sql"));
+        String activation = Files.readString(root.resolve(
+                "docs/migration/2026-08-01-arch-001-activation-readiness.sql"));
         assertThat(forward).doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ");
         assertThat(forward.split("CREATE TABLE IF NOT EXISTS", -1).length - 1)
                 .isEqualTo(12);
         assertThat(rollback)
                 .contains("must not be used after any real ENFORCED aggregate exists");
+        assertThat(remediation)
+                .doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ")
+                .contains("information_schema.columns",
+                        "binding_digest_version",
+                        "client_request_id",
+                        "quarantine_cursor");
+        assertThat(activation)
+                .doesNotContain("DELETE FROM", "UPDATE ")
+                .contains(
+                        "CREATE TABLE IF NOT EXISTS lifecycle_activation_targets",
+                        "active_slot",
+                        "uk_lwg_active_slot",
+                        "controller_inventory_digest",
+                        "expires_at");
+        assertThat(rollback)
+                .contains("lifecycle_activation_targets",
+                        "status NOT IN ('CLOSED', 'DESTROYED')");
     }
 }

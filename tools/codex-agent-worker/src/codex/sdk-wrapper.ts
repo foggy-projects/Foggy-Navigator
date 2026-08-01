@@ -153,6 +153,122 @@ export const taskRegistry = new Map<string, TaskEntry>()
  */
 export const taskBroadcasts = new Map<string, EventBroadcast>()
 
+export type CodexResumeTargetState = 'PRESENT' | 'ABSENT' | 'UNVERIFIABLE'
+
+type SessionCatalogScan = {
+  found: boolean
+  directoryVersions: string[]
+}
+
+async function scanCodexSessionDirectory(
+  directory: string,
+  threadId: string,
+  versions: string[],
+): Promise<boolean> {
+  let before
+  try {
+    before = await fs.lstat(directory, { bigint: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      versions.push(`${directory}:missing`)
+      return false
+    }
+    throw error
+  }
+  if (before.isSymbolicLink() || !before.isDirectory()) {
+    throw new Error('CODEX_SESSION_CATALOG_INVALID')
+  }
+  const entries = await fs.readdir(directory, { withFileTypes: true })
+  for (const entry of entries) {
+    const candidate = path.join(directory, entry.name)
+    if (entry.isSymbolicLink()) {
+      throw new Error('CODEX_SESSION_CATALOG_SYMLINK_UNVERIFIABLE')
+    }
+    if (entry.isDirectory()) {
+      if (await scanCodexSessionDirectory(candidate, threadId, versions)) return true
+      continue
+    }
+    if (!entry.isFile()
+        || !entry.name.endsWith('.jsonl')
+        || !entry.name.endsWith(`-${threadId}.jsonl`)) continue
+    const handle = await fs.open(candidate, 'r')
+    try {
+      const buffer = Buffer.alloc(16 * 1024)
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+      const firstLine = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/, 1)[0]
+      const metadata = JSON.parse(firstLine) as {
+        type?: unknown
+        payload?: { id?: unknown }
+      }
+      if (metadata.type !== 'session_meta'
+          || metadata.payload?.id !== threadId) {
+        throw new Error('CODEX_SESSION_CATALOG_IDENTITY_CONFLICT')
+      }
+      return true
+    } finally {
+      await handle.close()
+    }
+  }
+  const after = await fs.lstat(directory, { bigint: true })
+  if (after.isSymbolicLink() || !after.isDirectory()) {
+    throw new Error('CODEX_SESSION_CATALOG_INVALID')
+  }
+  const version = `${directory}:${before.dev}:${before.ino}:${before.mtimeNs}:${before.size}`
+  const afterVersion = `${directory}:${after.dev}:${after.ino}:${after.mtimeNs}:${after.size}`
+  if (version !== afterVersion) {
+    throw new Error('CODEX_SESSION_CATALOG_CHANGED_DURING_SCAN')
+  }
+  versions.push(version)
+  return false
+}
+
+async function scanCodexSessionCatalog(
+  codexHome: string,
+  threadId: string,
+): Promise<SessionCatalogScan> {
+  const directoryVersions: string[] = []
+  for (const catalog of ['sessions', 'archived_sessions']) {
+    if (await scanCodexSessionDirectory(
+      path.join(codexHome, catalog), threadId, directoryVersions,
+    )) {
+      return { found: true, directoryVersions }
+    }
+  }
+  return { found: false, directoryVersions: directoryVersions.sort() }
+}
+
+/**
+ * Verifies resume-target existence from the exact CODEX_HOME used by the SDK.
+ * The pinned SDK persists resumable threads in the sessions catalog. Absence
+ * is authoritative only after two stable scans and an in-memory registry
+ * check; any I/O, identity, symlink, or concurrent catalog uncertainty fails
+ * closed as UNVERIFIABLE and must not become never-accepted authority.
+ */
+export async function inspectCodexResumeTarget(
+  threadId: string,
+  codexHomeKey: string | undefined,
+): Promise<CodexResumeTargetState> {
+  const normalized = threadId.trim()
+  if (!normalized) return 'UNVERIFIABLE'
+  const active = (): boolean => [...taskRegistry.values()]
+    .some(entry => entry.threadId === normalized)
+  if (active()) return 'PRESENT'
+  try {
+    const codexHome = resolveCodexHome(codexHomeKey) || config.codexHome
+    const first = await scanCodexSessionCatalog(codexHome, normalized)
+    if (first.found || active()) return 'PRESENT'
+    const second = await scanCodexSessionCatalog(codexHome, normalized)
+    if (second.found || active()) return 'PRESENT'
+    if (JSON.stringify(first.directoryVersions)
+        !== JSON.stringify(second.directoryVersions)) {
+      return 'UNVERIFIABLE'
+    }
+    return 'ABSENT'
+  } catch {
+    return 'UNVERIFIABLE'
+  }
+}
+
 export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided'
 export const UNSUPPORTED_CODEX_MODEL = 'UNSUPPORTED_CODEX_MODEL'
 export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
@@ -1635,6 +1751,15 @@ export async function runQuery(
         taskId,
         threadId,
       }),
+    }
+    const testCodexPath = process.env.NODE_ENV === 'test'
+      ? process.env.CODEX_WORKER_TEST_CODEX_PATH_OVERRIDE?.trim()
+      : undefined
+    if (testCodexPath) {
+      if (!path.isAbsolute(testCodexPath)) {
+        throw new Error('CODEX_WORKER_TEST_CODEX_PATH_OVERRIDE must be absolute')
+      }
+      codexOptions.codexPathOverride = testCodexPath
     }
     if (effectiveApiKey) {
       codexOptions.apiKey = effectiveApiKey

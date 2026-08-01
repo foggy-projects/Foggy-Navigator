@@ -37,6 +37,9 @@ public class TaskTerminalTombstoneEntity {
     @Column(length = 64)
     private String operationId;
 
+    @Column(length = 96)
+    private String clientRequestId;
+
     @Column(length = 32, nullable = false)
     private String terminalOutcome;
 
@@ -69,6 +72,7 @@ public class TaskTerminalTombstoneEntity {
     public String getProviderTaskUserId() { return providerTaskUserId; }
     public String getSourceAgentId() { return sourceAgentId; }
     public String getOperationId() { return operationId; }
+    public String getClientRequestId() { return clientRequestId; }
     public String getTerminalOutcome() { return terminalOutcome; }
     public String getTerminalFactId() { return terminalFactId; }
 
@@ -79,6 +83,7 @@ public class TaskTerminalTombstoneEntity {
     public void setProviderTaskUserId(String value) { providerTaskUserId = value; }
     public void setSourceAgentId(String value) { sourceAgentId = value; }
     public void setOperationId(String value) { operationId = value; }
+    public void setClientRequestId(String value) { clientRequestId = value; }
 
     public void setTerminalOutcome(String terminalOutcome) {
         this.terminalOutcome = terminalOutcome;

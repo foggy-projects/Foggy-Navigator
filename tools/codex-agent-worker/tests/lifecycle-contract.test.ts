@@ -326,7 +326,96 @@ test('asynchronous provider terminal converges query and termination dispatch fa
     assert.equal(inventory.dispatches.every(disposition => (
       disposition.effect_phase === 'RESULT_OBSERVED'
     )), true)
+    assert.deepEqual(inventory.tasks.map(task => ({
+      navigator_task_id: task.navigator_task_id,
+      provider_task_id: task.provider_task_id,
+      initial_dispatch_id: task.initial_dispatch_id,
+      safe_binding_digest: task.safe_binding_digest,
+    })), [{
+      navigator_task_id: 'navigator-terminal-task',
+      provider_task_id: 'provider-terminal-task',
+      initial_dispatch_id: queryContext.dispatch_id,
+      safe_binding_digest: queryBinding.digest,
+    }])
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pre-effect rejection and exact never-accepted fact are committed atomically', () => {
+  const reasons = [
+    'WORKER_TASK_ADMISSION_CAPACITY_REJECTED',
+    'WORKER_TASK_ADMISSION_THREAD_CONFLICT',
+    'WORKER_TASK_RESUME_TARGET_NOT_FOUND',
+  ] as const
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-lifecycle-rejected-'))
+  try {
+    for (const reason of reasons) {
+      const directory = path.join(root, reason)
+      const store = LifecycleStore.open({
+        directory,
+        physicalWorkerId: workerId,
+        workerToken: token,
+        instanceEpoch: `${reason}-epoch-1`,
+      })
+      const rejectedContext: LifecycleContext = {
+        ...context('ENFORCED'),
+        command_kind: reason === 'WORKER_TASK_RESUME_TARGET_NOT_FOUND'
+          ? 'TASK_RESUME'
+          : 'TASK_CREATE',
+        navigator_task_id: `navigator-${reason}`,
+        dispatch_id: `dispatch-${reason}`,
+        expected_state_generation: store.identity.state_generation,
+      }
+      const binding = computeSafeBindingDigest({
+        context: rejectedContext,
+        httpMethod: 'POST',
+        routeTemplate: '/api/v1/query',
+        bodyWithoutLifecycleContext: { prompt: 'fixture' },
+        providerTaskId: null,
+        capabilityPayload: null,
+      })
+
+      const rejected = store.rejectBeforeEffect(rejectedContext, binding, reason)
+      assert.equal(rejected.acceptance_disposition, 'REJECTED')
+      assert.equal(rejected.effect_phase, 'PRE_EFFECT')
+      assert.equal(rejected.never_accepted_proof, true)
+      assert.equal(rejected.accepted, false)
+      assert.equal(rejected.provider_effect_started, false)
+      assert.equal(rejected.provider_task_id, null)
+
+      const restarted = LifecycleStore.open({
+        directory,
+        physicalWorkerId: workerId,
+        workerToken: token,
+        instanceEpoch: `${reason}-epoch-2`,
+      })
+      const replay = restarted.rejectBeforeEffect(
+        { ...rejectedContext, delivery_attempt: 2 },
+        binding,
+        reason,
+      )
+      assert.equal(replay.duplicate, true)
+      assert.equal(replay.disposition_version, 1)
+      const inventory = restarted.inventory(0)
+      assert.equal(inventory.dispatches.length, 1)
+      assert.equal(inventory.facts.length, 1)
+      assert.deepEqual(
+        {
+          type: inventory.facts[0]?.fact_type,
+          reason: inventory.facts[0]?.safe_reason_code,
+          dispatch: inventory.facts[0]?.dispatch_id,
+          digest: inventory.facts[0]?.safe_binding_digest,
+        },
+        {
+          type: 'TASK_NEVER_ACCEPTED_CONFIRMED',
+          reason,
+          dispatch: rejectedContext.dispatch_id,
+          digest: binding.digest,
+        },
+      )
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })

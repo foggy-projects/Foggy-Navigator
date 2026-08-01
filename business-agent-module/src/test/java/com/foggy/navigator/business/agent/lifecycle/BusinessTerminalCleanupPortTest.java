@@ -23,7 +23,8 @@ class BusinessTerminalCleanupPortTest {
         TerminalCleanupContext context = new TerminalCleanupContext(
                 "task-cleanup", "session-cleanup", "codex-biz-worker",
                 "tenant-cleanup", "provider-task-cleanup", "owner-cleanup",
-                "agent-cleanup", "operation-cleanup", "CANCELLED");
+                "agent-cleanup", "operation-cleanup", "request-cleanup",
+                "CANCELLED");
 
         port.execute(
                 "PHYSICAL_TOKEN_REVOKE", context,
@@ -38,6 +39,7 @@ class BusinessTerminalCleanupPortTest {
         var evidence = forClass(
                 RuntimeRequestAuditService.TaskEvidence.class);
         verify(audits).refreshCompletedTaskOperation(
+                org.mockito.ArgumentMatchers.eq("request-cleanup"),
                 org.mockito.ArgumentMatchers.eq("task-cleanup"),
                 org.mockito.ArgumentMatchers.eq(
                         RuntimeRequestAuditService.OPERATION_TASK_TERMINATE),

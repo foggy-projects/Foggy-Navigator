@@ -674,6 +674,33 @@ class RuntimeRequestAuditServiceTest {
                         .anyMatch(stage -> "REQUEST_COMPLETED".equals(stage.getStage()))));
     }
 
+    @Test
+    void exactReceiptRefreshNeverSelectsLatestSameTaskReceipt() {
+        String firstRequest = UUID.randomUUID().toString();
+        String secondRequest = UUID.randomUUID().toString();
+        var first = service.beginTaskOperation(
+                firstRequest, "task-terminate", "runtime-key",
+                "runtime-secret", "agent-1", "user-1", "task-1");
+        service.taskOperationFailed(first, "FIRST_FAILURE");
+        var second = service.beginTaskOperation(
+                secondRequest, "task-terminate", "runtime-key",
+                "runtime-secret", "agent-1", "user-1", "task-1");
+        service.taskOperationFailed(second, "SECOND_FAILURE");
+
+        service.refreshCompletedTaskOperation(
+                firstRequest, "task-1", "task-terminate",
+                standardEvidence("task-1", "CANCELLED", "REVOKED",
+                        true, 1, "FIRST_EXACTLY_REFRESHED"));
+
+        assertEquals("FIRST_EXACTLY_REFRESHED",
+                audits.get(firstRequest).getResult());
+        assertEquals("FAILED", audits.get(secondRequest).getResult());
+        assertTrue(service.hasDurableTaskOperationReceipt(
+                firstRequest, "task-1", "task-terminate"));
+        assertFalse(service.hasDurableTaskOperationReceipt(
+                firstRequest, "other-task", "task-terminate"));
+    }
+
     private RuntimeRequestAuditService.TaskEvidence standardEvidence(
             String taskId, String status, String tokenStatus, boolean dispatched,
             int dispatchCount, String result) {

@@ -46,7 +46,7 @@ import static org.mockito.Mockito.mock;
 class AuthorizationRouteManifestCoverageTest {
 
     private static final String NAVIGATOR_BASE_PACKAGE = "com.foggy.navigator";
-    private static final int EXPECTED_LAUNCHER_MVC_ROUTE_COUNT = 445;
+    private static final int EXPECTED_LAUNCHER_MVC_ROUTE_COUNT = 450;
 
     private final AuthorizationRouteCatalog catalog = new AuthorizationRouteCatalog();
 

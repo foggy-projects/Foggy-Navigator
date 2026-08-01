@@ -142,6 +142,7 @@ public class LifecycleFactEntity {
     public String getTaskId() { return taskId; }
     public String getSessionId() { return sessionId; }
     public String getOperationId() { return operationId; }
+    public String getDispatchId() { return dispatchId; }
     public String getOwnershipMode() { return ownershipMode; }
     public Long getSourceSequence() { return sourceSequence; }
 

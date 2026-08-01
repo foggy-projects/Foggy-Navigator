@@ -217,7 +217,9 @@ public class RuntimeTaskClosureService {
                                 clientRequestId, appKey, appSecret,
                                 upstreamUserId, taskId,
                                 owned.sessionId(), owned.providerType(),
-                                owned.physicalWorkerId(), owned.providerTaskId())
+                                owned.physicalWorkerId(), owned.providerTaskId(),
+                                owned.ownerUserId(), owned.tenantId(), reason,
+                                selectedProvider)
                         : requestAuditService.beginTaskOperationIdempotent(
                                 clientRequestId,
                                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,

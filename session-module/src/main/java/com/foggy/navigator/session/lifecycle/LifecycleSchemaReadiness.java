@@ -25,17 +25,15 @@ public class LifecycleSchemaReadiness {
             "lifecycle_writer_instance_registrations",
             "lifecycle_writer_exclusivity_proofs",
             "lifecycle_writer_exclusivity_references",
-            "worker_lifecycle_sentinel_leases");
+            "worker_lifecycle_sentinel_leases",
+            "lifecycle_activation_targets");
 
     private final JdbcTemplate jdbcTemplate;
-    private final boolean activationEvidencePresent;
-
     public LifecycleSchemaReadiness(
             JdbcTemplate jdbcTemplate,
             @Value("${navigator.lifecycle.activation-evidence-present:false}")
-            boolean activationEvidencePresent) {
+            boolean ignoredLegacyActivationEvidence) {
         this.jdbcTemplate = jdbcTemplate;
-        this.activationEvidencePresent = activationEvidencePresent;
     }
 
     public Readiness assess() {
@@ -47,11 +45,12 @@ public class LifecycleSchemaReadiness {
             return new Readiness(false, false,
                     List.of("LIFECYCLE_SCHEMA_NOT_READY"), missing);
         }
-        if (!activationEvidencePresent) {
-            return new Readiness(true, false,
-                    List.of(ACTIVATION_DISABLED), List.of());
-        }
-        return new Readiness(true, true, List.of(), List.of());
+        // Schema presence is not production activation authority.  The exact
+        // target resolver owns ENFORCED readiness even if a legacy caller sets
+        // the retired boolean property to true.
+        return new Readiness(true, false,
+                List.of(LifecycleActivationReason.AUTHORITY_REQUIRED),
+                List.of());
     }
 
     private boolean tableExists(String table) {

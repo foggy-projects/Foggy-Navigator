@@ -6,6 +6,7 @@ import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePort;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleReadiness;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleActivationReadiness;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleSnapshot;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleTask;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleDispatchStatus;
@@ -67,11 +68,65 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
             }
             return new WorkerLifecycleReadiness(
                     true, identity(lifecycle),
-                    Set.of("IDENTITY_V1", "INVENTORY_V1", "EVENTS_V1", "ACK_V1"),
+                    stringSet(lifecycle.get("capabilities")),
                     List.of());
         } catch (RuntimeException unavailable) {
             return new WorkerLifecycleReadiness(
                     false, null, Set.of(), List.of("LIFECYCLE_WORKER_UNAVAILABLE"));
+        }
+    }
+
+    @Override
+    public WorkerLifecycleActivationReadiness activationReadiness(
+            String requestedWorkerId) {
+        requireWorker(requestedWorkerId);
+        try {
+            Map<?, ?> health = client.get().uri("/health").retrieve()
+                    .bodyToMono(Map.class).block(Duration.ofSeconds(10));
+            Map<?, ?> lifecycle = health == null
+                    ? null : asMap(health.get("lifecycle_contract"));
+            if (health == null || lifecycle == null) {
+                return activationUnavailable(
+                        "LIFECYCLE_ACTIVATION_READINESS_UNAVAILABLE");
+            }
+            boolean lifecycleReady = Boolean.TRUE.equals(
+                    lifecycle.get("ready"));
+            WorkerLifecycleIdentity observedIdentity = lifecycleReady
+                    ? identity(lifecycle) : null;
+            boolean lifecycleCredentialAuthenticated = false;
+            if (observedIdentity != null) {
+                Map<?, ?> inventory = client.get()
+                        .uri(uri -> uri.path("/api/v1/lifecycle/inventory")
+                                .queryParam("after_sequence", 0).build())
+                        .headers(headers -> fence(headers, observedIdentity))
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block(Duration.ofSeconds(10));
+                lifecycleCredentialAuthenticated = inventory != null
+                        && sameGeneration(
+                        observedIdentity, identity(inventory))
+                        && Boolean.TRUE.equals(
+                        inventory.get("complete_active_task_set"));
+            }
+            java.util.LinkedHashSet<String> reasons =
+                    new java.util.LinkedHashSet<>();
+            reasons.addAll(stringList(health.get("reasons")));
+            reasons.addAll(stringList(lifecycle.get("reason_codes")));
+            reasons.addAll(stringList(health.get("termination_reasons")));
+            return new WorkerLifecycleActivationReadiness(
+                    Boolean.TRUE.equals(health.get("ready")),
+                    lifecycleReady,
+                    string(lifecycle.get("schema")),
+                    exactInt(lifecycle.get("version")),
+                    observedIdentity,
+                    stringSet(lifecycle.get("capabilities")),
+                    string(health.get("version")),
+                    Boolean.TRUE.equals(health.get("termination_ready")),
+                    lifecycleCredentialAuthenticated,
+                    Boolean.TRUE.equals(health.get("codex_auth_configured")),
+                    List.copyOf(reasons));
+        } catch (RuntimeException unavailable) {
+            return activationUnavailable("LIFECYCLE_WORKER_UNAVAILABLE");
         }
     }
 
@@ -116,7 +171,7 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                 number(checkpoint.get("through_sequence")),
                 "COMPLETE".equals(checkpoint.get("coverage")),
                 List.of(),
-                facts(facts, actual));
+                facts(facts, actual, Map.of()));
     }
 
     @Override
@@ -141,7 +196,8 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                 number(body.get("through_sequence")),
                 Boolean.TRUE.equals(body.get("complete_active_task_set")),
                 tasks(body.get("tasks")),
-                facts(body.get("facts"), actual));
+                facts(body.get("facts"), actual,
+                        dispositions(body.get("dispatches"))));
     }
 
     @Override
@@ -229,6 +285,30 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
         return value instanceof Map<?, ?> map ? map : null;
     }
 
+    private WorkerLifecycleActivationReadiness activationUnavailable(
+            String reason) {
+        return new WorkerLifecycleActivationReadiness(
+                false, false, null, -1, null, Set.of(), null,
+                false, false, false, List.of(reason));
+    }
+
+    private Set<String> stringSet(Object value) {
+        return Set.copyOf(stringList(value));
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        return values.stream().map(this::string)
+                .filter(java.util.Objects::nonNull).toList();
+    }
+
+    private int exactInt(Object value) {
+        if (!(value instanceof Number number)) return -1;
+        long result = number.longValue();
+        return result < Integer.MIN_VALUE || result > Integer.MAX_VALUE
+                ? -1 : (int) result;
+    }
+
     private List<WorkerLifecycleTask> tasks(Object value) {
         if (!(value instanceof List<?> list)) return List.of();
         return list.stream().map(this::asMap).filter(java.util.Objects::nonNull)
@@ -245,7 +325,9 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
     }
 
     private List<NormalizedLifecycleFact> facts(
-            Object value, WorkerLifecycleIdentity identity) {
+            Object value,
+            WorkerLifecycleIdentity identity,
+            Map<String, Map<?, ?>> dispositions) {
         if (!(value instanceof List<?> list)) return List.of();
         return list.stream().map(this::asMap).filter(java.util.Objects::nonNull)
                 .map(fact -> {
@@ -260,6 +342,10 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                         throw new IllegalStateException(
                                 "LIFECYCLE_FACT_IDENTITY_MISMATCH");
                     }
+                    String factDispatchId =
+                            string(fact.get("dispatch_id"));
+                    Map<?, ?> disposition = factDispatchId == null
+                            ? null : dispositions.get(factDispatchId);
                     return new NormalizedLifecycleFact(
                             string(fact.get("fact_id")),
                             string(fact.get("fact_type")),
@@ -281,15 +367,37 @@ public final class CodexWorkerLifecycleHttpAdapter implements WorkerLifecyclePor
                             recordedAt,
                             recordedAt,
                             string(fact.get("safe_reason_code")),
-                            string(fact.get("terminal_outcome")));
+                            string(fact.get("terminal_outcome")),
+                            disposition == null ? null : string(
+                                    disposition.get("acceptance_disposition")),
+                            disposition == null ? null : string(
+                                    disposition.get("effect_phase")),
+                            disposition == null ? null : Boolean.valueOf(
+                                    Boolean.TRUE.equals(disposition.get(
+                                            "never_accepted_proof"))),
+                            disposition == null ? null : number(
+                                    disposition.get("disposition_version")));
                 }).toList();
+    }
+
+    private Map<String, Map<?, ?>> dispositions(Object value) {
+        if (!(value instanceof List<?> list)) return Map.of();
+        Map<String, Map<?, ?>> result = new java.util.HashMap<>();
+        for (Object candidate : list) {
+            Map<?, ?> disposition = asMap(candidate);
+            if (disposition == null) continue;
+            String dispatchId = string(disposition.get("dispatch_id"));
+            if (dispatchId != null) result.put(dispatchId, disposition);
+        }
+        return Map.copyOf(result);
     }
 
     private boolean sameGeneration(
             WorkerLifecycleIdentity expected,
             WorkerLifecycleIdentity actual) {
         return expected.physicalWorkerId().equals(actual.physicalWorkerId())
-                && expected.stateGeneration().equals(actual.stateGeneration());
+                && expected.stateGeneration().equals(actual.stateGeneration())
+                && expected.instanceEpoch().equals(actual.instanceEpoch());
     }
 
     private long number(Object value) {

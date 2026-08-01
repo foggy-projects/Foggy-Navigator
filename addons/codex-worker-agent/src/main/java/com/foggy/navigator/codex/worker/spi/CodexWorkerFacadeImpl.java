@@ -118,6 +118,19 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade, RuntimeTaskClos
     }
 
     @Override
+    public TerminationAdmission prepareTerminationAdmission(
+            String taskId,
+            String ownerUserId,
+            String tenantId,
+            String expectedPhysicalWorkerId,
+            String reason,
+            String clientRequestId) {
+        return taskService.prepareRuntimeTerminationAdmission(
+                taskId, ownerUserId, tenantId,
+                expectedPhysicalWorkerId, reason, clientRequestId);
+    }
+
+    @Override
     public ReconciliationResult reconcile(
             String taskId,
             String ownerUserId,

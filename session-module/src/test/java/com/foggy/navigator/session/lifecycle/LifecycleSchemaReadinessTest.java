@@ -23,7 +23,8 @@ class LifecycleSchemaReadinessTest {
             "lifecycle_writer_instance_registrations",
             "lifecycle_writer_exclusivity_proofs",
             "lifecycle_writer_exclusivity_references",
-            "worker_lifecycle_sentinel_leases");
+            "worker_lifecycle_sentinel_leases",
+            "lifecycle_activation_targets");
 
     @Test
     void schemaMustBeCompleteAndRealActivationStaysFailClosed() {
@@ -41,6 +42,6 @@ class LifecycleSchemaReadinessTest {
         assertThat(readiness.shadowReady()).isTrue();
         assertThat(readiness.enforcedEnrollmentReady()).isFalse();
         assertThat(readiness.reasonCodes())
-                .containsExactly(LifecycleSchemaReadiness.ACTIVATION_DISABLED);
+                .containsExactly(LifecycleActivationReason.AUTHORITY_REQUIRED);
     }
 }

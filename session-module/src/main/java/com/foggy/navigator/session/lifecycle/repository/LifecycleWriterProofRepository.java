@@ -17,4 +17,7 @@ public interface LifecycleWriterProofRepository
 
     List<LifecycleWriterProofEntity> findByGenerationIdAndStatus(
             String generationId, String status);
+
+    List<LifecycleWriterProofEntity>
+    findTop10ByStatusOrderByProofIdAsc(String status);
 }

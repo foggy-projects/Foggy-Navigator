@@ -11,6 +11,10 @@ import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshot
 import com.foggy.navigator.session.lifecycle.repository.WorkerLifecycleSnapshotRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.LocalDateTime;
 import java.util.Set;
@@ -24,6 +28,7 @@ public class WriterExclusivityProofService {
     private final TaskLifecycleSnapshotRepository taskSnapshots;
     private final SessionLifecycleSnapshotRepository sessionSnapshots;
     private final WorkerLifecycleSnapshotRepository workerSnapshots;
+    private final TransactionTemplate transactions;
 
     public WriterExclusivityProofService(
             LifecycleWriterProofRepository proofs,
@@ -31,13 +36,15 @@ public class WriterExclusivityProofService {
             LifecycleEffectOutboxRepository outbox,
             TaskLifecycleSnapshotRepository taskSnapshots,
             SessionLifecycleSnapshotRepository sessionSnapshots,
-            WorkerLifecycleSnapshotRepository workerSnapshots) {
+            WorkerLifecycleSnapshotRepository workerSnapshots,
+            PlatformTransactionManager transactionManager) {
         this.proofs = proofs;
         this.references = references;
         this.outbox = outbox;
         this.taskSnapshots = taskSnapshots;
         this.sessionSnapshots = sessionSnapshots;
         this.workerSnapshots = workerSnapshots;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
     @Transactional
@@ -115,7 +122,7 @@ public class WriterExclusivityProofService {
             return new EffectAuthorization(false, true, "EFFECT_ALREADY_STARTED");
         }
         if (!active(proof, now)) {
-            quarantineLocked(proof);
+            beginQuarantineLocked(proof);
             return new EffectAuthorization(
                     false, false, "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
         }
@@ -142,11 +149,28 @@ public class WriterExclusivityProofService {
         return new EffectAuthorization(true, false, "EFFECT_AUTHORIZED");
     }
 
-    @Transactional
     public void quarantine(String proofId) {
-        LifecycleWriterProofEntity proof = proofs.findForUpdate(proofId)
-                .orElseThrow(() -> new IllegalStateException("LIFECYCLE_PROOF_NOT_FOUND"));
-        quarantineLocked(proof);
+        transactions.executeWithoutResult(status -> {
+            LifecycleWriterProofEntity proof = proofs.findForUpdate(proofId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "LIFECYCLE_PROOF_NOT_FOUND"));
+            beginQuarantineLocked(proof);
+        });
+        while (Boolean.TRUE.equals(transactions.execute(status ->
+                quarantineBatch(proofId)))) {
+            // Each iteration is a separate, bounded transaction. The durable
+            // cursor makes interruption and restart safe.
+        }
+    }
+
+    @Scheduled(fixedDelayString =
+            "${navigator.lifecycle.proof-quarantine-recovery-ms:5000}")
+    public void resumeQuarantines() {
+        for (LifecycleWriterProofEntity proof :
+                proofs.findTop10ByStatusOrderByProofIdAsc("QUARANTINING")) {
+            transactions.execute(status ->
+                    quarantineBatch(proof.getProofId()));
+        }
     }
 
     public boolean mayReleaseProof(String proofId) {
@@ -200,13 +224,24 @@ public class WriterExclusivityProofService {
         return reference;
     }
 
-    private void quarantineLocked(LifecycleWriterProofEntity proof) {
-        proof.setStatus("QUARANTINED");
+    private void beginQuarantineLocked(LifecycleWriterProofEntity proof) {
+        if ("QUARANTINED".equals(proof.getStatus())) return;
+        proof.setStatus("QUARANTINING");
         proofs.save(proof);
-        for (LifecycleWriterProofReferenceEntity reference :
-                references
-                        .findByProofIdAndReleasedAtIsNullOrderByAggregateTypeAscAggregateIdAsc(
-                                proof.getProofId())) {
+    }
+
+    private boolean quarantineBatch(String proofId) {
+        LifecycleWriterProofEntity proof = proofs.findForUpdate(proofId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_PROOF_NOT_FOUND"));
+        if ("QUARANTINED".equals(proof.getStatus())) return false;
+        if (!"QUARANTINING".equals(proof.getStatus())) {
+            beginQuarantineLocked(proof);
+        }
+        var batch = references.findQuarantineBatch(
+                proofId, proof.getQuarantineCursor(),
+                PageRequest.of(0, 50));
+        for (LifecycleWriterProofReferenceEntity reference : batch) {
             switch (ProofAggregateType.valueOf(reference.getAggregateType())) {
                 case WORKER -> workerSnapshots.findById(
                         reference.getAggregateId()).ifPresent(snapshot -> {
@@ -234,6 +269,15 @@ public class WriterExclusivityProofService {
                 });
             }
         }
+        if (!batch.isEmpty()) {
+            proof.setQuarantineCursor(
+                    batch.get(batch.size() - 1).getReferenceId());
+        }
+        if (batch.size() < 50) {
+            proof.setStatus("QUARANTINED");
+        }
+        proofs.save(proof);
+        return "QUARANTINING".equals(proof.getStatus());
     }
 
     public record EffectAuthorization(

@@ -27,6 +27,7 @@ import com.foggy.navigator.common.termination.TerminationOperationCapability;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.service.SessionForwardService;
+import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
@@ -79,6 +80,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -164,6 +166,8 @@ class CodexTaskServiceTest {
     private CodexTaskRuntimeStateService taskRuntimeStateService;
     @Mock
     private TerminationOperationService terminationOperationService;
+    @Mock
+    private LifecycleProductionAdmissionService lifecycleProductionAdmission;
 
     private CodexTaskService service;
 
@@ -181,6 +185,9 @@ class CodexTaskServiceTest {
         ReflectionTestUtils.setField(service, "codingAgentRepository", codingAgentRepository);
         ReflectionTestUtils.setField(service, "streamRelay", streamRelay);
         ReflectionTestUtils.setField(service, "runtimeRegistryService", runtimeRegistryService);
+        ReflectionTestUtils.setField(
+                service, "lifecycleProductionAdmission",
+                lifecycleProductionAdmission);
 
         lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
         lenient().when(sessionTaskRepository.findByTaskIdForUpdate(anyString()))
@@ -291,7 +298,7 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void exactCodexBizWorkerRunsReadinessTerminationAndSameRequestReplay() {
+    void sdkClosureUnitCoversReadinessTerminationAndSameRequestReplay() {
         CodexTaskEntity task = createTask(
                 "task-biz-lifecycle", "session-biz-lifecycle", "worker-1",
                 "dir-1", "RUNNING", LocalDateTime.now());
@@ -322,6 +329,7 @@ class CodexTaskServiceTest {
                 .thenReturn(Mono.just(completionObservation(
                         "worker-1", "provider-task-biz", 1)));
         when(terminationOperationService.find("rt_bizrequest1"))
+                .thenReturn(null)
                 .thenReturn(null)
                 .thenReturn(terminationOperation(
                         "rt_bizrequest1", "task-biz-lifecycle",
@@ -1307,6 +1315,63 @@ class CodexTaskServiceTest {
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
                 "D:/projects/my-app".equals(event.getCwd())
         ));
+    }
+
+    @Test
+    void activationReservationPrecedesTaskPersistenceAndStartEvent() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> {
+                    savedTask[0] = invocation.getArgument(0);
+                    return savedTask[0];
+                });
+        when(taskRepository.findByTaskId(anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.createSession(any()))
+                .thenReturn("synthetic-session-activation");
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("providerType", CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        params.put("workerId", "synthetic-arch001-worker");
+        params.put("prompt", "static synthetic activation prompt");
+        params.put("cwd", "/tmp/arch001-act-run/workdir");
+        params.put("model", "gpt-5.4");
+        params.put("codexHomeKey", "synthetic/arch001/canary");
+        params.put("networkAccessEnabled", false);
+        params.put("webSearchMode", "disabled");
+
+        service.createTaskDirectForProvider(
+                CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                params, "synthetic-arch001-user",
+                "synthetic-arch001-tenant");
+
+        ArgumentCaptor<LifecycleProductionAdmissionService
+                .ProductionAdmissionRequest> request = ArgumentCaptor.forClass(
+                LifecycleProductionAdmissionService
+                        .ProductionAdmissionRequest.class);
+        verify(lifecycleProductionAdmission)
+                .reserveProductionAdmission(request.capture());
+        assertEquals(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                request.getValue().providerType());
+        assertEquals("synthetic-session-activation",
+                request.getValue().sessionId());
+        assertEquals(savedTask[0].getTaskId(), request.getValue().taskId());
+        assertEquals("synthetic-arch001-worker",
+                request.getValue().physicalWorkerId());
+        assertEquals(64, request.getValue().promptSha256().length());
+        assertNotEquals("static synthetic activation prompt",
+                request.getValue().promptSha256());
+        assertNull(request.getValue().existingSessionId());
+        assertEquals(Boolean.FALSE,
+                request.getValue().networkAccessEnabled());
+        assertEquals("disabled", request.getValue().webSearchMode());
+
+        var order = inOrder(
+                lifecycleProductionAdmission, taskRepository, eventPublisher);
+        order.verify(lifecycleProductionAdmission)
+                .reserveProductionAdmission(any());
+        order.verify(taskRepository).save(any(CodexTaskEntity.class));
+        order.verify(eventPublisher).publishEvent(
+                any(WorkerTaskStartEvent.class));
     }
 
     @Test

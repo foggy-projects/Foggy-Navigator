@@ -16,8 +16,11 @@ public final class LifecycleEnrollmentGate {
             "TERMINATION_ATOMIC_CAPABILITY_V1");
 
     public EnrollmentDecision evaluate(EnrollmentRequest request) {
-        if (!request.repoOwnedFixture() && !request.activationEvidencePresent()) {
-            return rejected(LifecycleSchemaReadiness.ACTIVATION_DISABLED);
+        // This legacy gate is deliberately fixture-only. Production activation
+        // is resolved by LifecycleActivationAuthorityService from exact
+        // server-side state; no value in EnrollmentRequest can authorize it.
+        if (!request.repoOwnedFixture()) {
+            return rejected(LifecycleActivationReason.AUTHORITY_REQUIRED);
         }
         if (!CANARY_PROVIDER.equals(request.providerType())
                 || !request.exactAllowlistedTuple()) {

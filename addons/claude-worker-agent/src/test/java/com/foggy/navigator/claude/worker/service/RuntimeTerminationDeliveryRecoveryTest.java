@@ -63,7 +63,8 @@ class RuntimeTerminationDeliveryRecoveryTest {
                 eq(REQUEST), eq("key"), eq("secret"), eq("user"),
                 eq("task-delivery"), eq("session-delivery"),
                 eq("codex-biz-worker"), eq("worker-delivery"),
-                eq("provider-task-delivery")))
+                eq("provider-task-delivery"), eq("owner"), eq("tenant"),
+                eq("operator-request"), eq(provider)))
                 .thenReturn(registration(true));
         when(coordinator.authorize(REQUEST)).thenReturn(authorization(true, false));
         when(provider.terminate(
@@ -88,7 +89,8 @@ class RuntimeTerminationDeliveryRecoveryTest {
     void responseLossRedeliveryNeverStartsSecondProviderTermination() {
         when(coordinator.accept(
                 eq(REQUEST), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), eq(provider)))
                 .thenReturn(registration(false), registration(true));
         when(coordinator.authorize(REQUEST))
                 .thenReturn(authorization(true, false),
@@ -117,7 +119,8 @@ class RuntimeTerminationDeliveryRecoveryTest {
     void acceptancePersistenceFailureFailsClosedBeforeProviderEffect() {
         when(coordinator.accept(
                 eq(REQUEST), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), eq(provider)))
                 .thenThrow(new IllegalStateException("FIXTURE_COMMIT_FAILED"));
 
         RuntimeTaskClosureDTO result = terminate();
@@ -150,6 +153,8 @@ class RuntimeTerminationDeliveryRecoveryTest {
                 "effect-delivery", REQUEST, "task-delivery",
                 "codex-biz-worker", "worker-delivery",
                 "provider-task-delivery", "operation-delivery",
+                "ENFORCED", "generation-delivery", "epoch-delivery",
+                "JCS_SHA256_V1",
                 "binding-delivery",
                 alreadyStarted ? "EFFECT_STARTED" : "PREPARED");
         return new RuntimeTerminationIntentPort.RuntimeTerminationAuthorization(

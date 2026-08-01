@@ -113,6 +113,10 @@ public class TaskLifecycleOwnerService {
         if (normalizedFacts == null || normalizedFacts.isEmpty()) {
             throw new IllegalArgumentException("LIFECYCLE_FACT_BATCH_REQUIRED");
         }
+        if (normalizedFacts.size() > 50) {
+            throw new IllegalArgumentException(
+                    "LIFECYCLE_FACT_BATCH_LIMIT_EXCEEDED");
+        }
         TaskLifecycleSnapshotEntity enrolled = snapshots.findForUpdate(taskId)
                 .orElseThrow(() -> new IllegalStateException(
                         "LIFECYCLE_TASK_NOT_ENROLLED"));
@@ -152,6 +156,12 @@ public class TaskLifecycleOwnerService {
                     .filter(operation -> !operation.equals(
                             expected.dispatchId()))
                     .orElse(null);
+            String clientRequestId = terminalOperationId == null
+                    ? null : exactTerminationClientRequestId(
+                            taskId, terminalOperationId,
+                            facts.findById(authority.factId())
+                                    .map(LifecycleFactEntity::getDispatchId)
+                                    .orElseThrow());
             terminalCommit.commit(new TerminalCommitCommand(
                     new TerminalTombstoneContext(
                             taskId,
@@ -161,7 +171,8 @@ public class TaskLifecycleOwnerService {
                             expected.providerTaskId(),
                             canonical.getUserId(),
                             canonical.getAgentId(),
-                            terminalOperationId),
+                            terminalOperationId,
+                            clientRequestId),
                     authority.factId(),
                     required(enrolled.getWriterGenerationId(),
                             "LIFECYCLE_WRITER_GENERATION_REQUIRED"),
@@ -176,6 +187,29 @@ public class TaskLifecycleOwnerService {
             afterCommit(() -> cleanup.resume(taskId));
         }
         return decision;
+    }
+
+    private String exactTerminationClientRequestId(
+            String taskId,
+            String operationId,
+            String dispatchId) {
+        String prefix = "termination-intent:";
+        List<String> requests = outbox
+                .findByAggregateIdAndOperationId(taskId, operationId)
+                .stream()
+                .filter(effect -> "TERMINATION_REQUEST".equals(
+                        effect.getEffectType()))
+                .filter(effect -> dispatchId.equals(effect.getDispatchId()))
+                .map(effect -> effect.getIdempotencyKey())
+                .filter(key -> key != null && key.startsWith(prefix))
+                .map(key -> key.substring(prefix.length()))
+                .distinct()
+                .toList();
+        if (requests.size() != 1) {
+            throw new IllegalStateException(
+                    "TERMINATION_RECEIPT_EXACT_BINDING_REQUIRED");
+        }
+        return requests.get(0);
     }
 
     private void observeAuthorizedEffectResult(
@@ -198,10 +232,21 @@ public class TaskLifecycleOwnerService {
 
     private TaskLifecycleFact normalizedFact(
             NormalizedLifecycleFact value, TaskLifecycleBinding expected) {
+        TaskLifecycleFactType type;
+        try {
+            type = TaskLifecycleFactType.valueOf(value.factType());
+        } catch (IllegalArgumentException unknown) {
+            type = TaskLifecycleFactType.DIAGNOSTIC_TEXT;
+        }
+        boolean neverAccepted =
+                type == TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED;
         if (!expected.physicalWorkerId().equals(value.workerIdentity().physicalWorkerId())
                 || !expected.stateGeneration().equals(value.workerIdentity().stateGeneration())
+                || !expected.instanceEpoch().equals(
+                value.workerIdentity().instanceEpoch())
                 || expected.ownershipMode() != value.ownershipMode()
-                || !expected.providerTaskId().equals(value.providerTaskId())) {
+                || (!neverAccepted && !Objects.equals(
+                expected.providerTaskId(), value.providerTaskId()))) {
             throw new IllegalStateException("LIFECYCLE_NORMALIZED_FACT_BINDING_MISMATCH");
         }
         String operation = value.operationId() == null
@@ -222,6 +267,14 @@ public class TaskLifecycleOwnerService {
                             value.dispatchId().equals(effect.getDispatchId())
                             && value.safeBindingDigest().equals(
                             effect.getBindingDigest())
+                            && value.ownershipMode().name().equals(
+                            effect.getOwnershipMode())
+                            && value.workerIdentity().stateGeneration().equals(
+                            effect.getStateGeneration())
+                            && value.workerIdentity().instanceEpoch().equals(
+                            effect.getInstanceEpoch())
+                            && value.safeBindingDigestVersion().equals(
+                            effect.getBindingDigestVersion())
                             && expected.physicalWorkerId().equals(
                             effect.getPhysicalWorkerId())
                             && expected.providerTaskId().equals(
@@ -238,12 +291,6 @@ public class TaskLifecycleOwnerService {
         // immutable initial aggregate binding only after the ingress checks
         // above proved the alternate termination binding through its outbox.
         TaskLifecycleBinding factBinding = expected;
-        TaskLifecycleFactType type;
-        try {
-            type = TaskLifecycleFactType.valueOf(value.factType());
-        } catch (IllegalArgumentException unknown) {
-            type = TaskLifecycleFactType.DIAGNOSTIC_TEXT;
-        }
         if (type == TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED) {
             TaskTerminalOutcome outcome;
             try {
@@ -258,6 +305,18 @@ public class TaskLifecycleOwnerService {
                     value.factId(), value.sourceSequence(), outcome, factBinding);
         }
         if (type == TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED) {
+            if (!initialDispatch
+                    || value.ownershipMode()
+                    != LifecycleOwnershipMode.ENFORCED
+                    || !"REJECTED".equals(value.acceptanceDisposition())
+                    || !"PRE_EFFECT".equals(value.effectPhase())
+                    || !Boolean.TRUE.equals(value.neverAcceptedProof())
+                    || value.dispositionVersion() == null
+                    || value.dispositionVersion() < 1L
+                    || value.providerTaskId() != null) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_NEVER_ACCEPTED_PROOF_INVALID");
+            }
             if (!Set.of(
                     "WORKER_TASK_ADMISSION_CAPACITY_REJECTED",
                     "WORKER_TASK_ADMISSION_THREAD_CONFLICT",
@@ -306,9 +365,29 @@ public class TaskLifecycleOwnerService {
 
     private TaskLifecycleFact fact(LifecycleFactEntity entity) {
         try {
+            var payload = objectMapper.readTree(
+                    entity.getContentFreePayloadJson());
+            if (payload.isObject() && payload.isEmpty()) {
+                // Admission facts written before the full fact envelope was
+                // persisted intentionally used an empty content-free payload.
+                // Rebuild their reducer fields from the immutable columns so
+                // existing in-flight tasks can still converge at terminal.
+                TaskLifecycleFactType type = TaskLifecycleFactType.valueOf(
+                        entity.getFactType());
+                if (!Set.of(
+                        TaskLifecycleFactType.TASK_DISPATCH_RESERVED,
+                        TaskLifecycleFactType.TASK_DISPATCHED).contains(type)) {
+                    throw new IllegalArgumentException(
+                            "LIFECYCLE_EMPTY_FACT_PAYLOAD_NOT_SUPPORTED");
+                }
+                return TaskLifecycleFact.of(
+                        entity.getFactId(),
+                        type,
+                        entity.getSourceSequence());
+            }
             return objectMapper.readValue(
                     entity.getContentFreePayloadJson(), TaskLifecycleFact.class);
-        } catch (JsonProcessingException invalid) {
+        } catch (JsonProcessingException | IllegalArgumentException invalid) {
             throw new IllegalStateException("LIFECYCLE_FACT_PAYLOAD_INVALID", invalid);
         }
     }
@@ -321,8 +400,18 @@ public class TaskLifecycleOwnerService {
                 ? null : snapshot.terminalOutcome().name());
         entity.setTerminalSource(snapshot.terminalSource() == null
                 ? null : snapshot.terminalSource().name());
-        entity.setAvailability(snapshot.availability().name());
-        entity.setConflictState(snapshot.conflictState().name());
+        if (entity.getConflictState() == null
+                || LifecycleConflictState.NONE.name().equals(
+                entity.getConflictState())) {
+            entity.setAvailability(snapshot.availability().name());
+            entity.setConflictState(snapshot.conflictState().name());
+        } else {
+            // Reducer output may advance canonical/local-safety state, but an
+            // ordinary fact batch cannot clear an independently committed
+            // authority quarantine. Recovery requires an explicit protocol.
+            entity.setAvailability(
+                    LifecycleAvailability.AUTHORITY_QUARANTINED.name());
+        }
         entity.setCleanupState(snapshot.cleanupState().name());
         entity.setFactCursor(snapshot.factCursor());
         entity.setPolicyVersion(snapshot.policyVersion());

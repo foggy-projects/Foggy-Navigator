@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
+import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -24,6 +25,8 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 mock(RuntimeRequestAuditService.class);
         RuntimeTerminationIntentPort intents =
                 mock(RuntimeTerminationIntentPort.class);
+        RuntimeTaskClosureProvider provider =
+                mock(RuntimeTaskClosureProvider.class);
         PlatformTransactionManager transactions = transactionManager();
         var registration =
                 new RuntimeRequestAuditService.TaskOperationRegistration(
@@ -33,15 +36,23 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
                 "key", "secret", null, "user", "task"))
                 .thenReturn(registration);
+        when(provider.prepareTerminationAdmission(
+                "task", "owner", "tenant", "worker",
+                "reason", "request"))
+                .thenReturn(admission());
 
         RuntimeTerminationAcceptanceCoordinator coordinator =
                 new RuntimeTerminationAcceptanceCoordinator(
                         audits, List.of(intents), transactions);
         coordinator.accept(
                 "request", "key", "secret", "user", "task",
-                "session", "codex-biz-worker", "worker", "provider-task");
+                "session", "codex-biz-worker", "worker", "provider-task",
+                "owner", "tenant", "reason", provider);
 
-        var order = inOrder(audits, intents, transactions);
+        var order = inOrder(provider, audits, intents, transactions);
+        order.verify(provider).prepareTerminationAdmission(
+                "task", "owner", "tenant", "worker",
+                "reason", "request");
         order.verify(audits).beginTaskOperationIdempotentAtomic(
                 "request",
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
@@ -56,6 +67,8 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 mock(RuntimeRequestAuditService.class);
         RuntimeTerminationIntentPort intents =
                 mock(RuntimeTerminationIntentPort.class);
+        RuntimeTaskClosureProvider provider =
+                mock(RuntimeTaskClosureProvider.class);
         PlatformTransactionManager transactions = transactionManager();
         when(audits.beginTaskOperationIdempotentAtomic(
                 any(), any(), any(), any(), any(), any(), any()))
@@ -65,6 +78,9 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                         false));
         when(intents.recordIntent(any()))
                 .thenThrow(new IllegalStateException("FIXTURE_OUTBOX_FAILED"));
+        when(provider.prepareTerminationAdmission(
+                any(), any(), any(), any(), any(), any()))
+                .thenReturn(admission());
 
         RuntimeTerminationAcceptanceCoordinator coordinator =
                 new RuntimeTerminationAcceptanceCoordinator(
@@ -72,7 +88,8 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
 
         assertThatThrownBy(() -> coordinator.accept(
                 "request", "key", "secret", "user", "task",
-                "session", "codex-biz-worker", "worker", "provider-task"))
+                "session", "codex-biz-worker", "worker", "provider-task",
+                "owner", "tenant", "reason", provider))
                 .hasMessage("FIXTURE_OUTBOX_FAILED");
         verify(transactions).rollback(any());
     }
@@ -83,5 +100,11 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
         when(manager.getTransaction(any(TransactionDefinition.class)))
                 .thenReturn(new SimpleTransactionStatus());
         return manager;
+    }
+
+    private RuntimeTaskClosureProvider.TerminationAdmission admission() {
+        return new RuntimeTaskClosureProvider.TerminationAdmission(
+                "operation", "dispatch", "ENFORCED",
+                "generation", "epoch", "JCS_SHA256_V1", "digest");
     }
 }
