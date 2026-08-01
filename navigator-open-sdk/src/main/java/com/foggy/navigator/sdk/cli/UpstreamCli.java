@@ -241,11 +241,15 @@ public class UpstreamCli {
     public int run(String[] args, Map<String, String> env) {
         CliArguments parsed = CliArguments.parse(args);
         try {
+            config = null;
             activeClientRequestId = null;
             activeRuntimeOperation = null;
             activeRuntimeAgentCode = null;
             activeRuntimeUpstreamUserId = null;
             parsed.rejectUnknownOptions();
+            if (parsed.flag("help")) {
+                return help(parsed);
+            }
             this.env = env != null ? env : Map.of();
             config = UpstreamCliConfig.load(parsed, env, cwd);
             return dispatch(parsed);
@@ -258,6 +262,71 @@ public class UpstreamCli {
                     config != null ? config.sensitiveValues() : List.of()));
             return 1;
         }
+    }
+
+    private int help(CliArguments args) {
+        String command = args.command();
+        printLegacyMigrationNotice(command);
+        if (command.startsWith("runtime ") || "runtime".equals(command)) {
+            return switch (command) {
+                case "runtime token" -> runtimeTokenUsage();
+                case "runtime readiness", "runtime verify-agent-readiness" -> runtimeReadinessUsage();
+                case "runtime owner-smoke" -> runtimeOwnerSmokeUsage();
+                default -> runtimeUsage();
+            };
+        }
+        if (command.startsWith("platform ") || "platform".equals(command)) {
+            if (command.startsWith("platform app-scope")) {
+                return platformAppScopeUsage();
+            }
+            if (command.startsWith("platform app ")) {
+                return platformAppUsage();
+            }
+            if (command.startsWith("platform agent")) {
+                return platformAgentUsage();
+            }
+            if (command.startsWith("platform model")) {
+                return platformModelUsage();
+            }
+            if (command.startsWith("platform worker-host")) {
+                return workerHostUsage();
+            }
+            if (command.startsWith("platform worker-pool")) {
+                return workerPoolUsage();
+            }
+            if (command.startsWith("platform worker")) {
+                return workerUsage();
+            }
+            if (command.startsWith("platform directory")) {
+                return directoryUsage();
+            }
+            return platformUsage();
+        }
+        if (command.startsWith("app ") || "app".equals(command)) {
+            return appUsage();
+        }
+        return switch (command) {
+            case "config check" -> configCheckUsage();
+            case "runtime-token" -> runtimeTokenUsage();
+            case "owner-smoke" -> runtimeOwnerSmokeUsage();
+            case "verify-agent-readiness", "verify-agent-grant" -> runtimeReadinessUsage();
+            case "auth", "auth login" -> authUsage();
+            case "auth whoami" -> authWhoamiUsage();
+            case "inspect permissions" -> inspectPermissionsUsage();
+            case "client-app" -> clientAppUsage();
+            case "agent" -> agentUsage();
+            case "model" -> modelUsage();
+            case "worker" -> workerUsage();
+            case "worker-host" -> workerHostUsage();
+            case "worker-pool" -> workerPoolUsage();
+            case "directory" -> directoryUsage();
+            case "function" -> functionUsage();
+            case "route" -> routeUsage();
+            case "diagnostics", "diagnostics session-dir" -> diagnosticsUsage();
+            case "admin-key" -> adminKeyUsage();
+            case "", "help" -> usage();
+            default -> usage();
+        };
     }
 
     private int dispatch(CliArguments args) throws Exception {
@@ -969,6 +1038,30 @@ public class UpstreamCli {
         out.println("    LANGGRAPH_BIZ resolves the local LangGraph BizWorker runtime session path from a bctx_yyyyMMdd_<shard>_<id> contextId.");
         out.println("    OPENAI_CODEX resolves the Codex navigator_business MCP debug log; pass --provider-task-id for the Codex worker task UUID when available.");
         out.println("    It prints paths and worker hints only; it does not print tokens, headers, credentials, or log contents.");
+        return 0;
+    }
+
+    private int configCheckUsage() {
+        out.println("Usage: navi upstream config check [--profile <path>]");
+        out.println("Reports local configuration state only. Help never loads or validates a profile.");
+        return 0;
+    }
+
+    private int runtimeTokenUsage() {
+        out.println("Usage: navi upstream runtime token [options]");
+        out.println("Exchanges ClientApp key/secret for a runtime access token; help never loads a profile or issues a token.");
+        return 0;
+    }
+
+    private int runtimeReadinessUsage() {
+        out.println("Usage: navi upstream runtime readiness --upstream-user-id <id> [--agent-code <id>] [options]");
+        out.println("Reads agent runtime readiness; help never loads a profile or sends a request.");
+        return 0;
+    }
+
+    private int runtimeOwnerSmokeUsage() {
+        out.println("Usage: navi upstream runtime owner-smoke --upstream-user-id <id> [--agent-code <id>] [options]");
+        out.println("Runs owner readiness checks without model submission; help never loads a profile or sends a request.");
         return 0;
     }
 

@@ -106,6 +106,7 @@
                 <configuration>
                     <dotGitDirectory>${project.basedir}/../.git</dotGitDirectory>
                     <generateGitPropertiesFile>true</generateGitPropertiesFile>
+                    <generateGitPropertiesFilename>${project.build.outputDirectory}/git.properties</generateGitPropertiesFilename>
                     <commitIdGenerationMode>full</commitIdGenerationMode>
                     <includeOnlyProperties>
                         <includeOnlyProperty>^git.branch$</includeOnlyProperty>
@@ -120,9 +121,72 @@
                 <executions>
                     <execution>
                         <id>git-build-metadata</id>
+                        <phase>initialize</phase>
                         <goals>
                             <goal>revision</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>verify-launcher-provenance</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <available file="${project.build.outputDirectory}/git.properties"
+                                           property="launcher.git.properties.exists"/>
+                                <fail unless="launcher.git.properties.exists"
+                                      message="Launcher provenance is missing: target/classes/git.properties"/>
+                                <property file="${project.build.outputDirectory}/git.properties"/>
+                                <exec executable="git" dir="${maven.multiModuleProjectDirectory}"
+                                      outputproperty="launcher.actual.git.commit" failonerror="true">
+                                    <arg value="rev-parse"/>
+                                    <arg value="HEAD"/>
+                                </exec>
+                                <condition property="launcher.git.commit.matches">
+                                    <equals arg1="${git.commit.id.full}" arg2="${launcher.actual.git.commit}" trim="true"/>
+                                </condition>
+                                <fail unless="launcher.git.commit.matches"
+                                      message="Refusing to package stale launcher provenance: generated commit does not match repository HEAD"/>
+                                <exec executable="git" dir="${maven.multiModuleProjectDirectory}"
+                                      resultproperty="launcher.git.diff.exit" failonerror="false">
+                                    <arg value="diff-index"/>
+                                    <arg value="--quiet"/>
+                                    <arg value="HEAD"/>
+                                    <arg value="--"/>
+                                </exec>
+                                <condition property="launcher.git.diff.exit.valid">
+                                    <or>
+                                        <equals arg1="${launcher.git.diff.exit}" arg2="0"/>
+                                        <equals arg1="${launcher.git.diff.exit}" arg2="1"/>
+                                    </or>
+                                </condition>
+                                <fail unless="launcher.git.diff.exit.valid"
+                                      message="Unable to determine launcher build worktree state"/>
+                                <condition property="launcher.git.dirty.matches">
+                                    <or>
+                                        <and>
+                                            <equals arg1="${git.dirty}" arg2="false" casesensitive="false"/>
+                                            <equals arg1="${launcher.git.diff.exit}" arg2="0"/>
+                                        </and>
+                                        <and>
+                                            <equals arg1="${git.dirty}" arg2="true" casesensitive="false"/>
+                                            <equals arg1="${launcher.git.diff.exit}" arg2="1"/>
+                                        </and>
+                                    </or>
+                                </condition>
+                                <fail unless="launcher.git.dirty.matches"
+                                      message="Refusing to package mismatched launcher provenance: generated dirty state does not match tracked worktree state"/>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

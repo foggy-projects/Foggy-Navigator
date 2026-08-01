@@ -98,10 +98,10 @@ if [ "$SKIP_BUILD" = true ]; then
 fi
 
 if [ "$SKIP_BUILD" = false ]; then
-    echo -e "${YELLOW}[2/4] Building project (mvn package)...${NC}"
+    echo -e "${YELLOW}[2/4] Building project (mvn clean package)...${NC}"
     echo -e "${GRAY}  This may take 30-60 seconds...${NC}"
 
-    (cd "$REPO_ROOT" && mvn package -pl launcher -am -DskipTests)
+    (cd "$REPO_ROOT" && mvn clean package -pl launcher -am -DskipTests)
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}  Build successful!${NC}"

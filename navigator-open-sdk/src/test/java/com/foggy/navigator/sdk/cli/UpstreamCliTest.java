@@ -538,6 +538,41 @@ class UpstreamCliTest {
     }
 
     @Test
+    void nestedRuntimeAndConfigHelpNeverLoadsProfileOrTouchesNavigator() throws Exception {
+        Files.createDirectories(tempDir.resolve(".navigator/upstream.env"));
+        List<HelpCase> cases = List.of(
+                new HelpCase(new String[]{"upstream", "runtime", "token", "--help"}, "Usage: navi upstream runtime token"),
+                new HelpCase(new String[]{"upstream", "runtime", "token", "-h"}, "Usage: navi upstream runtime token"),
+                new HelpCase(new String[]{"upstream", "runtime", "readiness", "--help"}, "Usage: navi upstream runtime readiness"),
+                new HelpCase(new String[]{"upstream", "runtime", "readiness", "-h"}, "Usage: navi upstream runtime readiness"),
+                new HelpCase(new String[]{"upstream", "runtime", "owner-smoke", "--help"}, "Usage: navi upstream runtime owner-smoke"),
+                new HelpCase(new String[]{"upstream", "runtime", "owner-smoke", "-h"}, "Usage: navi upstream runtime owner-smoke"),
+                new HelpCase(new String[]{"upstream", "config", "check", "--help"}, "Usage: navi upstream config check"),
+                new HelpCase(new String[]{"upstream", "config", "check", "-h"}, "Usage: navi upstream config check"),
+                new HelpCase(new String[]{"upstream", "runtime-token", "--help"}, "Usage: navi upstream runtime token"),
+                new HelpCase(new String[]{"upstream", "runtime-token", "-h"}, "Usage: navi upstream runtime token"),
+                new HelpCase(new String[]{"upstream", "verify-agent-readiness", "--help"}, "Usage: navi upstream runtime readiness"),
+                new HelpCase(new String[]{"upstream", "verify-agent-readiness", "-h"}, "Usage: navi upstream runtime readiness"),
+                new HelpCase(new String[]{"upstream", "owner-smoke", "--help"}, "Usage: navi upstream runtime owner-smoke"),
+                new HelpCase(new String[]{"upstream", "owner-smoke", "-h"}, "Usage: navi upstream runtime owner-smoke")
+        );
+
+        for (HelpCase helpCase : cases) {
+            stdout.reset();
+            stderr.reset();
+            int code = run(helpCase.arguments(), Map.of("NAVI_BASE_URL", baseUrl()));
+            String output = stdout.toString(StandardCharsets.UTF_8);
+
+            assertEquals(0, code, Arrays.toString(helpCase.arguments()));
+            assertTrue(output.contains(helpCase.expectedUsage()), Arrays.toString(helpCase.arguments()));
+            assertFalse(output.contains("clientRequestId="), Arrays.toString(helpCase.arguments()));
+            assertEquals("", stderr.toString(StandardCharsets.UTF_8), Arrays.toString(helpCase.arguments()));
+            assertTrue(requestPaths.isEmpty(), Arrays.toString(helpCase.arguments()));
+            assertTrue(requestClientRequestIds.isEmpty(), Arrays.toString(helpCase.arguments()));
+        }
+    }
+
+    @Test
     void platformAppScopeUsesOnlySystemAdminCredentialAndRequiresExplicitTarget() {
         responseOverride = "__SYSTEM_ADMIN_SCOPE_AGENT_LIST__";
         int code = run(new String[]{"upstream", "platform", "app-scope", "agent-list", "--client-app-id", "capp-sim"},
@@ -5454,8 +5489,8 @@ class UpstreamCliTest {
         List<String> manifestLines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
         Set<String> routeIds = new HashSet<>();
 
-        assertEquals("1.0.39-SNAPSHOT", provenance.sourceVersion());
-        assertEquals("1.0.39-SNAPSHOT", provenance.publishedVersion());
+        assertEquals("1.0.40-SNAPSHOT", provenance.sourceVersion());
+        assertEquals("1.0.40-SNAPSHOT", provenance.publishedVersion());
         assertEquals("SOURCE_MATCHES_PUBLISHED", provenance.artifactDrift());
         assertEquals(provenance.sourceVersion(), provenance.publishedVersion());
         assertTrue(Files.readString(root.resolve("navigator-open-sdk/pom.xml"), StandardCharsets.UTF_8)
@@ -5543,6 +5578,9 @@ class UpstreamCliTest {
                 new PrintStream(stderr, true, StandardCharsets.UTF_8),
                 tempDir)
                 .run(args, env);
+    }
+
+    private record HelpCase(String[] arguments, String expectedUsage) {
     }
 
     private void assertTypedManagementRequest(String expectedPath, String expectedMethod, String expectedPrincipalCredential) {

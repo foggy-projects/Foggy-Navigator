@@ -181,14 +181,16 @@ final class CliArguments {
         Map<String, String> options = new LinkedHashMap<>();
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
-            if (arg.startsWith("--")) {
+            if ("-h".equals(arg)) {
+                options.put("help", "true");
+            } else if (arg.startsWith("--")) {
                 String name = arg.substring(2);
                 String value = "true";
                 int eq = name.indexOf('=');
                 if (eq >= 0) {
                     value = name.substring(eq + 1);
                     name = name.substring(0, eq);
-                } else if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+                } else if (!"help".equals(name) && i + 1 < args.length && !args[i + 1].startsWith("--")) {
                     value = args[++i];
                 }
                 options.put(name, value);

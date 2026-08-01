@@ -4,6 +4,9 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,6 +32,13 @@ class BuildMetadataResourceTest {
         assertTrue(git.stringPropertyNames().stream()
                 .noneMatch(key -> key.contains("user") || key.contains("email") || key.contains("message")));
 
+        Path repository = repositoryRoot();
+        assertEquals(git(repository, "rev-parse", "HEAD").toLowerCase(), fullCommit.toLowerCase(),
+                "generated git.properties must describe the repository being built");
+        boolean repositoryDirty = !git(repository, "status", "--porcelain", "--untracked-files=no").isBlank();
+        assertEquals(Boolean.toString(repositoryDirty), dirty.toLowerCase(),
+                "generated git.properties must describe the candidate's tracked worktree state");
+
         String expectedCommit = System.getProperty("navigator.expectedCommit", "").trim();
         if (!expectedCommit.isEmpty()) {
             assertEquals(expectedCommit.toLowerCase(), fullCommit.toLowerCase());
@@ -45,5 +55,34 @@ class BuildMetadataResourceTest {
             properties.load(input);
             return properties;
         }
+    }
+
+    private Path repositoryRoot() {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        while (current != null) {
+            if (Files.isDirectory(current.resolve(".git")) && Files.isRegularFile(current.resolve("pom.xml"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException("repository root is unavailable");
+    }
+
+    private String git(Path repository, String... arguments) throws IOException {
+        String[] command = new String[arguments.length + 1];
+        command[0] = "git";
+        System.arraycopy(arguments, 0, command, 1, arguments.length);
+        Process process = new ProcessBuilder(command)
+                .directory(repository.toFile())
+                .redirectErrorStream(true)
+                .start();
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+        try {
+            assertEquals(0, process.waitFor(), () -> "git command failed: " + output);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while reading repository provenance", e);
+        }
+        return output;
     }
 }

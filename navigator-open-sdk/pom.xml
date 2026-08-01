@@ -8,7 +8,7 @@
     <groupId>com.foggy.navigator</groupId>
     <artifactId>navigator-open-sdk</artifactId>
     <!-- Snapshot contents are immutable by version; bump for each changed local artifact. -->
-    <version>1.0.39-SNAPSHOT</version>
+    <version>1.0.40-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>Foggy Navigator Open SDK</name>
     <description>Java SDK for integrating with Foggy Navigator Open API</description>
