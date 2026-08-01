@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: `ULTRA_EXECUTING`
+- State: `READY_FOR_SIGNOFF`
 - Approved at: 2026-08-01
 - Assurance: elevated
 - Delivery type: cross-module bug fix
@@ -68,6 +68,7 @@ Fix the launcher build provenance so a packaged candidate reports the exact repo
   - Focused launcher provenance tests pass (2 tests).
   - `mvn -pl navigator-open-sdk test` passes (204 tests).
   - `mvn test -pl launcher -am` passes all 14 reactor modules; launcher has 24 tests, 0 failures/errors, and 2 environment-gated skips.
-  - Final clean package, artifact hashes and local runtime observations will be attached to the handoff after the implementation commit is cleanly built.
+  - Clean `mvn clean package -pl launcher -am -DskipTests` passes all 14 reactor modules on implementation commit `44ead524fb5022e96fd9ea02c751ac68b6f653bb`; the packaged resource reports that exact full commit and `dirty=false` with non-empty version/time. Intermediate launcher SHA-256: `51d3d7310895be10d2146312f4b3700c2bce14bea49393ac90fabc65faddc2a8`.
+  - The final doc-only delivery commit is rebuilt once more; its final artifact hashes and local runtime observations are returned in the handoff without changing tracked files again.
 - Deviations: none.
 - Residual risks: the local CLI package is not a published release and must be reinstalled explicitly by consumers of 1.0.34.
