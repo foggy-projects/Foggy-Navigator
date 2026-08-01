@@ -46,6 +46,16 @@ test('Codex and Claude stop scripts require ownership and a quiescent process sn
   }
 })
 
+test('release archives source the canonical fail-closed Codex stop scripts', () => {
+  const archiveSource = readRepositoryFile(
+    'tools/codex-agent-worker/scripts/release-archive.mjs',
+  )
+
+  assert.match(archiveSource, /^\s*'stop\.sh',$/m)
+  assert.match(archiveSource, /^\s*'stop\.ps1',$/m)
+  assert.doesNotMatch(archiveSource, /'release\/stop\.(?:sh|ps1)'/)
+})
+
 test('Codex Unix stop script may force-stop only a verified listener after a snapshot failure or explicit local force', () => {
   const codex = readRepositoryFile('tools/codex-agent-worker/stop.sh')
 
