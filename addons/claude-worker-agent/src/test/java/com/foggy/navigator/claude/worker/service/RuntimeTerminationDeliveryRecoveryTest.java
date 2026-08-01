@@ -19,6 +19,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -41,6 +42,10 @@ class RuntimeTerminationDeliveryRecoveryTest {
         service = new RuntimeTaskClosureService(
                 stateAudit, List.of(provider), audits, coordinator);
         when(audits.terminationRequestReceiptEnabled()).thenReturn(true);
+        lenient().when(audits.beginTaskOperationIdempotent(
+                eq(REQUEST), eq(RuntimeRequestAuditService.OPERATION_TASK_TERMINATE),
+                eq("key"), eq("secret"), eq(null), eq("user"),
+                eq("task-delivery"))).thenReturn(registration(false));
         when(stateAudit.requireOwnedTask(
                 "key", "secret", "user", "task-delivery"))
                 .thenReturn(new RuntimeStateAuditService.OwnedRuntimeTask(
@@ -91,10 +96,13 @@ class RuntimeTerminationDeliveryRecoveryTest {
                 eq(REQUEST), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), eq(provider)))
+                .thenReturn(registration(true));
+        when(coordinator.authorize(REQUEST)).thenReturn(authorization(true, false));
+        when(audits.beginTaskOperationIdempotent(
+                eq(REQUEST), eq(RuntimeRequestAuditService.OPERATION_TASK_TERMINATE),
+                eq("key"), eq("secret"), eq(null), eq("user"),
+                eq("task-delivery")))
                 .thenReturn(registration(false), registration(true));
-        when(coordinator.authorize(REQUEST))
-                .thenReturn(authorization(true, false),
-                        authorization(false, true));
         when(provider.terminate(
                 "task-delivery", "owner", "tenant", "worker-delivery",
                 "operator-request", REQUEST, false))
@@ -128,7 +136,12 @@ class RuntimeTerminationDeliveryRecoveryTest {
         assertThat(result.getOutcome())
                 .isEqualTo(RuntimeTaskTerminationOutcome.REJECTED);
         assertThat(result.getReasonCode())
-                .isEqualTo("TERMINATION_REQUEST_RECEIPT_PERSISTENCE_FAILED");
+                .isEqualTo("FIXTURE_COMMIT_FAILED");
+        assertThat(result.getTerminationRequestReceiptPersisted()).isTrue();
+        assertThat(result.getRequestReconciliationAvailable()).isTrue();
+        verify(audits).taskOperationFailed(
+                new RuntimeRequestAuditService.AuditHandle(REQUEST),
+                "FIXTURE_COMMIT_FAILED");
         verify(provider, never()).terminate(
                 eq("task-delivery"), eq("owner"), eq("tenant"),
                 eq("worker-delivery"), anyString(), eq(REQUEST), eq(false));
@@ -154,8 +167,7 @@ class RuntimeTerminationDeliveryRecoveryTest {
                 "codex-biz-worker", "worker-delivery",
                 "provider-task-delivery", "operation-delivery",
                 "ENFORCED", "generation-delivery", "epoch-delivery",
-                "JCS_SHA256_V1",
-                "binding-delivery",
+                "JCS_SHA256_V1", "binding-delivery",
                 alreadyStarted ? "EFFECT_STARTED" : "PREPARED");
         return new RuntimeTerminationIntentPort.RuntimeTerminationAuthorization(
                 delivery, authorized, alreadyStarted, false,

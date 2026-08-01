@@ -380,6 +380,25 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void exactTerminationAdmissionRejectsCanonicalTerminalBeforeCreatingOperation() {
+        CodexTaskEntity task = createTask(
+                "task-terminal-admission", "session-terminal-admission", "worker-1",
+                "dir-1", "COMPLETED", LocalDateTime.now());
+        task.setTenantId("tenant-1");
+        task.setWorkerTaskId("provider-task-terminal");
+        when(taskRepository.findByTaskIdForUpdate("task-terminal-admission"))
+                .thenReturn(Optional.of(task));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.prepareRuntimeTerminationAdmission(
+                        "task-terminal-admission", "user-1", "tenant-1",
+                        "worker-1", "operator-request", "terminal-request"));
+
+        assertEquals("TASK_ALREADY_TERMINAL", error.getMessage());
+        verifyNoInteractions(terminationOperationService);
+    }
+
+    @Test
     void sdkProviderParamsCannotOverrideRouteToAppServer() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> service.createTaskDirect(Map.of(

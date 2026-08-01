@@ -15,12 +15,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class RuntimeTerminationAcceptanceCoordinatorTest {
 
     @Test
-    void receiptAndExactDeliveryCommitInOneTransaction() {
+    void preRegisteredReceiptIsVerifiedBeforeExactDeliveryCommits() {
         RuntimeRequestAuditService audits =
                 mock(RuntimeRequestAuditService.class);
         RuntimeTerminationIntentPort intents =
@@ -35,7 +36,8 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 "request",
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
                 "key", "secret", null, "user", "task"))
-                .thenReturn(registration);
+                .thenReturn(new RuntimeRequestAuditService.TaskOperationRegistration(
+                        registration.handle(), true));
         when(provider.prepareTerminationAdmission(
                 "task", "owner", "tenant", "worker",
                 "reason", "request"))
@@ -50,13 +52,13 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 "owner", "tenant", "reason", provider);
 
         var order = inOrder(provider, audits, intents, transactions);
-        order.verify(provider).prepareTerminationAdmission(
-                "task", "owner", "tenant", "worker",
-                "reason", "request");
         order.verify(audits).beginTaskOperationIdempotentAtomic(
                 "request",
                 RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
                 "key", "secret", null, "user", "task");
+        order.verify(provider).prepareTerminationAdmission(
+                "task", "owner", "tenant", "worker",
+                "reason", "request");
         order.verify(intents).recordIntent(any());
         order.verify(transactions).commit(any());
     }
@@ -74,8 +76,7 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new RuntimeRequestAuditService
                         .TaskOperationRegistration(
-                        new RuntimeRequestAuditService.AuditHandle("request"),
-                        false));
+                        new RuntimeRequestAuditService.AuditHandle("request"), true));
         when(intents.recordIntent(any()))
                 .thenThrow(new IllegalStateException("FIXTURE_OUTBOX_FAILED"));
         when(provider.prepareTerminationAdmission(
@@ -91,6 +92,33 @@ class RuntimeTerminationAcceptanceCoordinatorTest {
                 "session", "codex-biz-worker", "worker", "provider-task",
                 "owner", "tenant", "reason", provider))
                 .hasMessage("FIXTURE_OUTBOX_FAILED");
+        verify(transactions).rollback(any());
+    }
+
+    @Test
+    void missingPreRegisteredReceiptRejectsBeforeExactAdmissionOrIntent() {
+        RuntimeRequestAuditService audits =
+                mock(RuntimeRequestAuditService.class);
+        RuntimeTerminationIntentPort intents =
+                mock(RuntimeTerminationIntentPort.class);
+        RuntimeTaskClosureProvider provider =
+                mock(RuntimeTaskClosureProvider.class);
+        PlatformTransactionManager transactions = transactionManager();
+        when(audits.beginTaskOperationIdempotentAtomic(
+                any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new RuntimeRequestAuditService.TaskOperationRegistration(
+                        new RuntimeRequestAuditService.AuditHandle("request"), false));
+        RuntimeTerminationAcceptanceCoordinator coordinator =
+                new RuntimeTerminationAcceptanceCoordinator(
+                        audits, List.of(intents), transactions);
+
+        assertThatThrownBy(() -> coordinator.accept(
+                "request", "key", "secret", "user", "task",
+                "session", "codex-biz-worker", "worker", "provider-task",
+                "owner", "tenant", "reason", provider))
+                .hasMessage("TERMINATION_REQUEST_RECEIPT_REQUIRED");
+
+        verifyNoInteractions(provider, intents);
         verify(transactions).rollback(any());
     }
 

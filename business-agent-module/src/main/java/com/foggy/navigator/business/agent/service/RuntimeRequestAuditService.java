@@ -287,9 +287,10 @@ public class RuntimeRequestAuditService {
     }
 
     /**
-     * ARCH-001 receipt variant. The caller owns the surrounding transaction so
-     * receipt, lifecycle intent and effect outbox either commit together or all
-     * roll back. Existing non-lifecycle callers retain the REQUIRES_NEW method.
+     * ARCH-001 transaction-bound receipt lookup/registration variant. New
+     * termination attempts first persist their request receipt with the
+     * REQUIRES_NEW method; the lifecycle admission transaction then uses this
+     * method to verify the same owner/task binding before recording an intent.
      */
     @Transactional(propagation = Propagation.REQUIRED)
     public TaskOperationRegistration beginTaskOperationIdempotentAtomic(
@@ -543,9 +544,15 @@ public class RuntimeRequestAuditService {
             taskDispatchRecorded(handle, evidence);
             return;
         } else if (OPERATION_TASK_TERMINATE.equals(entity.getOperation())) {
-            appendStage(entity.getClientRequestId(), dryRun
-                    ? STAGE_TERMINATION_DRY_RUN_COMPLETED
-                    : STAGE_TERMINATION_DISPATCHED, "SUCCEEDED", null, now);
+            if (dryRun) {
+                appendStage(entity.getClientRequestId(),
+                        STAGE_TERMINATION_DRY_RUN_COMPLETED,
+                        "SUCCEEDED", null, now);
+            } else if (changed) {
+                appendStage(entity.getClientRequestId(),
+                        STAGE_TERMINATION_DISPATCHED,
+                        "SUCCEEDED", null, now);
+            }
         } else if (OPERATION_TASK_RECONCILE.equals(entity.getOperation())) {
             appendStage(entity.getClientRequestId(), changed
                     ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED

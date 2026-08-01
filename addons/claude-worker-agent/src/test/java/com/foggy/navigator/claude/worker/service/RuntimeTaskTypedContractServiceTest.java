@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -52,6 +53,12 @@ class RuntimeTaskTypedContractServiceTest {
                 stateAuditService, List.of(provider), requestAuditService);
         lenient().when(requestAuditService.terminationRequestReceiptEnabled())
                 .thenReturn(true);
+        lenient().when(requestAuditService.beginTaskOperationIdempotent(
+                        REQUEST_ID,
+                        RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                        "key", "secret", null, "user-a", "task-a"))
+                .thenReturn(new RuntimeRequestAuditService.TaskOperationRegistration(
+                        new RuntimeRequestAuditService.AuditHandle(REQUEST_ID), false));
         lenient().when(provider.supports("OPENAI_CODEX")).thenReturn(true);
         lenient().when(provider.inspect("task-a", "worker-a")).thenReturn(
                 new RuntimeTaskClosureProvider.TerminationReadiness(
@@ -108,6 +115,131 @@ class RuntimeTaskTypedContractServiceTest {
                 missingExpectedWorker.getReasonCode());
         assertFalse(missingExpectedWorker.getTerminateAllowed());
         verify(provider, never()).inspect("task-a", "worker-other");
+    }
+
+    @Test
+    void realPreflightRejectionPersistsAttemptBeforeMutableProviderObservation() {
+        newOperation();
+        owned("RUNNING", false);
+        when(provider.inspect("task-a", "worker-a")).thenReturn(
+                new RuntimeTaskClosureProvider.TerminationReadiness(
+                        true, false, true, true, true, false,
+                        "WORKER_ACTIVE_TASK_NOT_PRESENT"));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("RUNNING", false));
+
+        RuntimeTaskClosureDTO result = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+
+        assertEquals(RuntimeTaskTerminationOutcome.REJECTED, result.getOutcome());
+        assertEquals("WORKER_ACTIVE_TASK_NOT_PRESENT", result.getReasonCode());
+        assertTrue(result.getTerminationRequestReceiptPersisted());
+        assertTrue(result.getRequestReconciliationAvailable());
+        var order = inOrder(requestAuditService, provider);
+        order.verify(requestAuditService).beginTaskOperationIdempotent(
+                REQUEST_ID, RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                "key", "secret", null, "user-a", "task-a");
+        order.verify(provider).inspect("task-a", "worker-a");
+        verify(requestAuditService).taskOperationFailed(
+                new RuntimeRequestAuditService.AuditHandle(REQUEST_ID),
+                "WORKER_ACTIVE_TASK_NOT_PRESENT");
+        verify(provider, never()).terminate(
+                eq("task-a"), eq("owner-a"), eq("tenant-a"), eq("worker-a"),
+                eq("operator-request"), eq(REQUEST_ID), eq(false));
+    }
+
+    @Test
+    void taskFactObservationFailureIsDurableAndDoesNotReachProvider() {
+        newOperation();
+        owned("RUNNING", false);
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenThrow(new IllegalStateException("TASK_FACTS_TEMPORARILY_UNAVAILABLE"));
+
+        RuntimeTaskClosureDTO result = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+
+        assertEquals(RuntimeTaskTerminationOutcome.REJECTED, result.getOutcome());
+        assertEquals("TASK_FACTS_TEMPORARILY_UNAVAILABLE", result.getReasonCode());
+        assertTrue(result.getTerminationRequestReceiptPersisted());
+        assertTrue(result.getRequestReconciliationAvailable());
+        verify(requestAuditService).taskOperationFailed(
+                new RuntimeRequestAuditService.AuditHandle(REQUEST_ID),
+                "TASK_FACTS_TEMPORARILY_UNAVAILABLE");
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void terminalTransitionAfterReadinessIsDurableAlreadyTerminalWithoutProviderEffect() {
+        newOperation();
+        owned("RUNNING", false);
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("COMPLETED", true));
+
+        RuntimeTaskClosureDTO result = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+
+        assertEquals(RuntimeTaskTerminationOutcome.ALREADY_TERMINAL, result.getOutcome());
+        assertEquals("TASK_ALREADY_TERMINAL", result.getReasonCode());
+        assertTrue(result.getCanonicalTerminal());
+        assertFalse(result.getTerminationDispatched());
+        assertTrue(result.getTerminationRequestReceiptPersisted());
+        verify(provider, never()).inspect("task-a", "worker-a");
+        verify(provider, never()).terminate(
+                eq("task-a"), eq("owner-a"), eq("tenant-a"), eq("worker-a"),
+                eq("operator-request"), eq(REQUEST_ID), eq(false));
+        verify(requestAuditService).taskOperationCompleted(
+                eq(new RuntimeRequestAuditService.AuditHandle(REQUEST_ID)),
+                argThat(evidence -> "ALREADY_TERMINAL".equals(evidence.result())
+                        && Boolean.TRUE.equals(evidence.taskTerminal())),
+                eq(false), eq(false));
+    }
+
+    @Test
+    void duplicateReceiptReplaysBeforeAnyFreshProviderObservation() {
+        owned("RUNNING", false);
+        when(requestAuditService.beginTaskOperationIdempotent(
+                REQUEST_ID, RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                "key", "secret", null, "user-a", "task-a"))
+                .thenReturn(new RuntimeRequestAuditService.TaskOperationRegistration(
+                        new RuntimeRequestAuditService.AuditHandle(REQUEST_ID), true));
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TERMINATION_REQUESTED", "CANCEL_REQUESTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("RUNNING", false), audit("CANCEL_REQUESTED", false));
+
+        RuntimeTaskClosureDTO result = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "task-a", false);
+
+        assertEquals(RuntimeTaskTerminationOutcome.ACCEPTED, result.getOutcome());
+        assertTrue(result.getIdempotentReplay());
+        verify(provider, never()).inspect("task-a", "worker-a");
+        verify(provider, never()).terminate(
+                eq("task-a"), eq("owner-a"), eq("tenant-a"), eq("worker-a"),
+                eq("operator-request"), eq(REQUEST_ID), eq(false));
+    }
+
+    @Test
+    void requestIdentityRejectionDoesNotClaimAReceiptWasPersisted() {
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("RUNNING", false));
+
+        RuntimeTaskClosureDTO result = service.terminate(
+                "key", "secret", "user-a", REQUEST_ID, "task-a", "worker-a",
+                "operator-request", "different-task", false);
+
+        assertEquals(RuntimeTaskTerminationOutcome.REJECTED, result.getOutcome());
+        assertEquals("CONFIRM_TASK_ID_MISMATCH", result.getReasonCode());
+        assertFalse(result.getTerminationRequestReceiptPersisted());
+        assertFalse(result.getRequestReconciliationAvailable());
+        verify(requestAuditService, never()).beginTaskOperationIdempotent(
+                eq(REQUEST_ID), eq(RuntimeRequestAuditService.OPERATION_TASK_TERMINATE),
+                eq("key"), eq("secret"), eq(null), eq("user-a"), eq("task-a"));
+        verifyNoInteractions(provider);
     }
 
     @Test

@@ -1620,6 +1620,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             throw new IllegalArgumentException(
                     "EXPECTED_PHYSICAL_WORKER_MISMATCH");
         }
+        if (isTerminalStatus(task.getStatus())) {
+            throw new IllegalStateException("TASK_ALREADY_TERMINAL");
+        }
         if (!hasNonBlank(task.getWorkerTaskId())) {
             throw new IllegalStateException(
                     "TERMINATION_REMOTE_TASK_UNAVAILABLE");

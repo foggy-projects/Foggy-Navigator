@@ -18,6 +18,7 @@ import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenPolicyS
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditProperties;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
+import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskReconciliationState;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.session.lifecycle.*;
@@ -335,7 +336,7 @@ class BusinessLifecycleTerminalVerticalIntegrationTest {
     }
 
     @Test
-    void receiptAdmissionFailureRollsBackAndNeverInvokesProvider() {
+    void admissionFailureKeepsRejectedAttemptReceiptAndNeverInvokesProvider() {
         var proof = proofs.findById("proof-business").orElseThrow();
         proof.setStatus("QUARANTINED");
         proofs.saveAndFlush(proof);
@@ -346,13 +347,29 @@ class BusinessLifecycleTerminalVerticalIntegrationTest {
                 "task-business", "worker-business",
                 "operator-stuck-task-termination",
                 "task-business", false);
+        var reconciliation = closure.reconcileTerminationRequest(
+                "app-key", "app-secret", "upstream-business",
+                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                "task-business");
 
         assertThat(result.getReasonCode()).isEqualTo(
-                "TERMINATION_REQUEST_RECEIPT_PERSISTENCE_FAILED");
+                "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        assertThat(result.getTerminationRequestReceiptPersisted()).isTrue();
+        assertThat(result.getRequestReconciliationAvailable()).isTrue();
         assertThat(result.getTerminationDispatched()).isFalse();
         assertThat(provider.invocationCount()).isZero();
-        assertThat(requestAudits.findByClientRequestId(
-                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")).isEmpty();
+        var receipt = requestAudits.findByClientRequestId(
+                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee").orElseThrow();
+        assertThat(receipt.getTerminal()).isTrue();
+        assertThat(receipt.getResult()).isEqualTo("FAILED");
+        assertThat(receipt.getSanitizedErrorCode()).isEqualTo(
+                "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        assertThat(reconciliation.getReconciliationState()).isEqualTo(
+                RuntimeTaskReconciliationState.REJECTED);
+        assertThat(reconciliation.getReasonCode()).isEqualTo(
+                "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
+        assertThat(reconciliation.getReadOnly()).isTrue();
+        assertThat(reconciliation.getNewClientRequestIdAllowed()).isFalse();
         assertThat(outbox.findByIdempotencyKey(
                 "termination-intent:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))
                 .isEmpty();

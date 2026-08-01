@@ -229,6 +229,7 @@ class Arch001ThirdRemediationSlice8IntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired BusinessTaskScopedTokenRepository tokenRepository;
     @org.springframework.beans.factory.annotation.Autowired BusinessTaskTerminalStateRepository terminalStates;
     @org.springframework.beans.factory.annotation.Autowired RuntimeTerminationAcceptanceCoordinator acceptance;
+    @org.springframework.beans.factory.annotation.Autowired RuntimeRequestAuditService requestAudits;
     @org.springframework.beans.factory.annotation.Autowired RuntimeTerminationOutboxDispatcher dispatcher;
     @org.springframework.beans.factory.annotation.Autowired CodexWorkerFacadeImpl codexProvider;
     @org.springframework.beans.factory.annotation.Autowired WriterExclusivityProofService writerProofs;
@@ -454,6 +455,12 @@ class Arch001ThirdRemediationSlice8IntegrationTest {
     }
 
     private void acceptPrepared(String requestId) {
+        var receipt = requestAudits.beginTaskOperationIdempotent(
+                requestId,
+                RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
+                "slice8-key", "slice8-secret", null,
+                "slice8-upstream", TASK_ID);
+        assertThat(receipt.existing()).isFalse();
         acceptance.accept(
                 requestId, "slice8-key", "slice8-secret",
                 "slice8-upstream", TASK_ID, SESSION_ID,

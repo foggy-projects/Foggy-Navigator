@@ -39,14 +39,6 @@ public class RuntimeTerminationAcceptanceCoordinator {
             String reason,
             RuntimeTaskClosureProvider provider) {
         return transactions.execute(status -> {
-            RuntimeTaskClosureProvider.TerminationAdmission admission =
-                    provider.prepareTerminationAdmission(
-                            taskId, ownerUserId, tenantId,
-                            physicalWorkerId, reason, clientRequestId);
-            if (admission == null) {
-                throw new IllegalStateException(
-                        "TERMINATION_EXACT_ADMISSION_UNAVAILABLE");
-            }
             RuntimeRequestAuditService.TaskOperationRegistration registration =
                     audits.beginTaskOperationIdempotentAtomic(
                             clientRequestId,
@@ -57,22 +49,32 @@ public class RuntimeTerminationAcceptanceCoordinator {
                             upstreamUserId,
                             taskId);
             if (!registration.existing()) {
-                for (RuntimeTerminationIntentPort port : intentPorts) {
-                    port.recordIntent(new RuntimeTerminationIntentPort.RuntimeTerminationIntent(
-                            clientRequestId,
-                            taskId,
-                            sessionId,
-                            providerType,
-                            physicalWorkerId,
-                            providerTaskId,
-                            admission.dispatchId(),
-                            admission.operationId(),
-                            admission.ownershipMode(),
-                            admission.stateGeneration(),
-                            admission.instanceEpoch(),
-                            admission.bindingDigestVersion(),
-                            admission.bindingDigest()));
-                }
+                throw new IllegalStateException(
+                        "TERMINATION_REQUEST_RECEIPT_REQUIRED");
+            }
+            RuntimeTaskClosureProvider.TerminationAdmission admission =
+                    provider.prepareTerminationAdmission(
+                            taskId, ownerUserId, tenantId,
+                            physicalWorkerId, reason, clientRequestId);
+            if (admission == null) {
+                throw new IllegalStateException(
+                        "TERMINATION_EXACT_ADMISSION_UNAVAILABLE");
+            }
+            for (RuntimeTerminationIntentPort port : intentPorts) {
+                port.recordIntent(new RuntimeTerminationIntentPort.RuntimeTerminationIntent(
+                        clientRequestId,
+                        taskId,
+                        sessionId,
+                        providerType,
+                        physicalWorkerId,
+                        providerTaskId,
+                        admission.dispatchId(),
+                        admission.operationId(),
+                        admission.ownershipMode(),
+                        admission.stateGeneration(),
+                        admission.instanceEpoch(),
+                        admission.bindingDigestVersion(),
+                        admission.bindingDigest()));
             }
             return registration;
         });
