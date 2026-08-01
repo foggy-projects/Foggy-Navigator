@@ -1119,6 +1119,50 @@ that digest. Those files are named `18-*` through `22-*` plus
 - sanitized local evidence:
   `temp/test-artifacts/ARCH-001-ACT-001-replan/target-arch001-act001-provisioning-20260801-08/evidence/{00-preparation-boundary.json,11-bounded-submission-ledger.json,12-canary-outcome-sanitized.json}`.
 
+## 2026-08-01 Local SIM Runtime Handoff
+
+- Project Owner authorized merge to `main`, local stack restart and update of
+  the same-machine WSL Worker used by SIM. This remains local/trusted
+  development rollout only; activation and production promotion remain closed.
+- Navigator implementation was pushed through `main@b7ec48b9`; Codex Worker
+  release metadata and the packaged-stop correction were pushed through
+  `main@558811ff`.
+- SIM's existing WorkerHost `school-sim-wsl` still resolves Physical Worker
+  `ddc45293` to Claude/Directory `3131` and the same-worker Codex role `3151`
+  via `CLAUDE_WORKER_CODEX_CONFIG`. Independent local Workers `3031/3051` were
+  not substituted for that frozen binding.
+- `local-dev-stack.sh restart --skip-build` restarted `8112/3031/3051/3072/3061`
+  and synchronized/restarted WSL Biz Worker `3161` at version `0.2.2`.
+  SIM-owned `3131` was separately restarted with zero active tasks.
+- Codex Worker `3151` was upgraded from `1.0.25` to `1.0.32`; SDK `0.145.0`,
+  API-key readiness, termination identity, replay ledger and lifecycle-v1 are
+  ready. Its lifecycle store is an exclusive persistent local directory and
+  reports Physical Worker `ddc45293` with no reason codes.
+- deployment defect and remediation:
+  - release `1.0.31` exposed that archives still selected stale
+    `release/stop.sh` / `release/stop.ps1`, which bypassed the canonical
+    fail-closed ownership and quiescence checks; severity is `P1` because an
+    upgrade could force-stop active work;
+  - no active provider process existed during the observed update, so the
+    defect caused no task or data loss;
+  - release `1.0.32` now packages canonical root stop scripts and adds a
+    regression that rejects any return to the stale release copies. The stale
+    duplicate scripts were removed.
+- release evidence:
+  - `1.0.32` full smoke: 268 tests, 266 passed, two Windows-only skips, zero
+    failures; typecheck, build, archive structure, forbidden-file scan,
+    candidate `npm ci` and candidate `/health` all passed;
+  - published `latest.json` points to `1.0.32` at commit `558811ff`; Linux and
+    macOS SHA-256 are
+    `2637d628f543499a578449f90961f1f82d93e0b041bdb78823554d74618424cb`,
+    Windows SHA-256 is
+    `4918888d392caeadaf9f0e0788b5322977bd82d391517f89e247ad93c65e1c05`;
+  - remote archive/bootstrap verification and installed health/version/cwd
+    checks passed; temporary target archives were removed.
+- SIM may proceed with profile check, exact readiness, owner-smoke and one
+  narrow safe ask. Those checks are still required and must not be replaced by
+  Worker health alone.
+
 ## References
 
 - superseded activation signoff:
