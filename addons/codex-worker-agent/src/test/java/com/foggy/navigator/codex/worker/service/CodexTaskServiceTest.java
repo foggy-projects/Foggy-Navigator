@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.lifecycle.CodexLifecycleBindingDigest;
 import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
@@ -28,6 +29,8 @@ import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.service.SessionForwardService;
 import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
+import com.foggy.navigator.session.lifecycle.persistence.TaskLifecycleSnapshotEntity;
+import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
@@ -37,6 +40,7 @@ import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.lifecycle.WorkerLifecycleCommandAuthorizationPort;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.session.service.TerminationOperationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -168,6 +172,12 @@ class CodexTaskServiceTest {
     private TerminationOperationService terminationOperationService;
     @Mock
     private LifecycleProductionAdmissionService lifecycleProductionAdmission;
+    @Mock
+    private TaskLifecycleSnapshotRepository lifecycleSnapshots;
+    @Mock
+    private WorkerLifecycleCommandAuthorizationPort lifecycleCommandAuthorization;
+    @Mock
+    private CodexLifecycleBindingDigest lifecycleBindingDigest;
 
     private CodexTaskService service;
 
@@ -188,6 +198,12 @@ class CodexTaskServiceTest {
         ReflectionTestUtils.setField(
                 service, "lifecycleProductionAdmission",
                 lifecycleProductionAdmission);
+        ReflectionTestUtils.setField(service, "lifecycleSnapshots", lifecycleSnapshots);
+        ReflectionTestUtils.setField(
+                service, "lifecycleCommandAuthorization",
+                lifecycleCommandAuthorization);
+        ReflectionTestUtils.setField(
+                service, "lifecycleBindingDigest", lifecycleBindingDigest);
 
         lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
         lenient().when(sessionTaskRepository.findByTaskIdForUpdate(anyString()))
@@ -325,6 +341,9 @@ class CodexTaskServiceTest {
                 "termination_ready", true)));
         when(workerClient.getTaskStatus("provider-task-biz"))
                 .thenReturn(Mono.just(Map.of("status", "running")));
+        when(lifecycleSnapshots.findById("task-biz-lifecycle"))
+                .thenReturn(Optional.of(enforcedLifecycleSnapshot(
+                        "task-biz-lifecycle", "worker-1", "provider-task-biz")));
         when(workerClient.getTaskCompletionReadiness("provider-task-biz"))
                 .thenReturn(Mono.just(completionObservation(
                         "worker-1", "provider-task-biz", 1)));
@@ -344,11 +363,17 @@ class CodexTaskServiceTest {
                         "REMOTE_CANCEL", "ACCEPTED"));
         when(workerClient.terminationSigningSecret())
                 .thenReturn("fixture-signing-secret");
-        when(workerClient.lifecycleContext(
-                anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyInt(), anyString()))
-                .thenReturn(Mono.just(Map.of(
-                        "schema_version", "worker-lifecycle-v1")));
+        when(lifecycleBindingDigest.termination(
+                any(), eq("provider-task-biz"),
+                any(TerminationOperationCapability.class)))
+                .thenReturn("fixture-binding-digest");
+        var prepared = new WorkerLifecycleCommandAuthorizationPort.PreparedCommand(
+                "fixture-effect", "PREPARED", "fixture-binding-digest");
+        when(lifecycleCommandAuthorization.prepare(any()))
+                .thenReturn(prepared);
+        when(lifecycleCommandAuthorization.authorize("fixture-effect"))
+                .thenReturn(new WorkerLifecycleCommandAuthorizationPort.Authorization(
+                        prepared, true, false, null));
         when(workerClient.abortTask(
                 eq("provider-task-biz"),
                 any(TerminationOperationCapability.class),
@@ -377,6 +402,40 @@ class CodexTaskServiceTest {
                 eq("provider-task-biz"),
                 any(TerminationOperationCapability.class),
                 any());
+    }
+
+    @Test
+    void terminationReadinessBlocksWhenExactOwnerEnrollmentIsMissing() {
+        CodexTaskEntity task = createTask(
+                "task-owner-missing", "session-owner-missing", "worker-1",
+                "dir-1", "RUNNING", LocalDateTime.now());
+        task.setWorkerTaskId("provider-task-owner-missing");
+        when(taskRepository.findByTaskId("task-owner-missing"))
+                .thenReturn(Optional.of(task));
+        when(lifecycleSnapshots.findById("task-owner-missing"))
+                .thenReturn(Optional.empty());
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://worker.example")
+                        .authToken("fixture-secret").build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://worker.example", "fixture-secret"))
+                .thenReturn(workerClient);
+        when(workerClient.healthCheck()).thenReturn(Mono.just(Map.of(
+                "termination_auth_configured", true,
+                "termination_worker_id_configured", true,
+                "termination_ready", true)));
+        when(workerClient.getTaskStatus("provider-task-owner-missing"))
+                .thenReturn(Mono.just(Map.of("status", "running")));
+
+        var readiness = service.inspectRuntimeTermination(
+                "task-owner-missing", "worker-1");
+
+        assertTrue(readiness.workerReachable());
+        assertTrue(readiness.workerActiveTaskPresent());
+        assertFalse(readiness.terminateAllowed());
+        assertEquals("TERMINATION_OWNER_ENROLLMENT_REQUIRED",
+                readiness.blockedReason());
     }
 
     @Test
@@ -4773,6 +4832,18 @@ class CodexTaskServiceTest {
                 "worker-1:codex", "http://worker.example", "worker-token"))
                 .thenReturn(workerClient);
         return entity;
+    }
+
+    private TaskLifecycleSnapshotEntity enforcedLifecycleSnapshot(
+            String taskId, String workerId, String providerTaskId) {
+        TaskLifecycleSnapshotEntity snapshot = new TaskLifecycleSnapshotEntity();
+        snapshot.setTaskId(taskId);
+        snapshot.setPhysicalWorkerId(workerId);
+        snapshot.setProviderTaskId(providerTaskId);
+        snapshot.setOwnershipMode("ENFORCED");
+        snapshot.setAvailability("READY");
+        snapshot.setConflictState("NONE");
+        return snapshot;
     }
 
     private Map<String, Object> completionObservation(

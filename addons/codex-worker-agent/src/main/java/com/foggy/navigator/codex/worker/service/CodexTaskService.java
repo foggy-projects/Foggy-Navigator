@@ -1413,6 +1413,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return new RuntimeTaskClosureProvider.TerminationReadiness(
                     true, false, true, true, true, false, "TASK_ALREADY_TERMINAL");
         }
+        String ownerAdmissionBlocker = terminationOwnerAdmissionBlocker(
+                entity, expectedPhysicalWorkerId);
         try {
             CodexWorkerClient client = terminationClient(entity);
             Map<String, Object> health = client.healthCheck().block(Duration.ofSeconds(5));
@@ -1433,15 +1435,38 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                             false, "WORKER_TASK_STATUS_UNREACHABLE");
                 }
             }
-            String blocked = !ready ? "WORKER_TERMINATION_NOT_READY"
+            String blocked = ownerAdmissionBlocker != null
+                    ? ownerAdmissionBlocker
+                    : !ready ? "WORKER_TERMINATION_NOT_READY"
                     : !active ? "WORKER_ACTIVE_TASK_NOT_PRESENT" : null;
             return new RuntimeTaskClosureProvider.TerminationReadiness(
                     true, active, ready, authConfigured, workerIdConfigured,
-                    ready && active, blocked);
+                    ownerAdmissionBlocker == null && ready && active, blocked);
         } catch (RuntimeException error) {
             return new RuntimeTaskClosureProvider.TerminationReadiness(
                     false, false, false, false, false, false, "WORKER_UNREACHABLE");
         }
+    }
+
+    private String terminationOwnerAdmissionBlocker(
+            CodexTaskEntity task, String expectedPhysicalWorkerId) {
+        if (lifecycleSnapshots == null) {
+            return "ENFORCED_LIFECYCLE_AUTHORIZATION_UNAVAILABLE";
+        }
+        var snapshot = lifecycleSnapshots.findById(task.getTaskId()).orElse(null);
+        if (snapshot == null) {
+            return "TERMINATION_OWNER_ENROLLMENT_REQUIRED";
+        }
+        if (!"ENFORCED".equals(snapshot.getOwnershipMode())
+                || !Objects.equals(snapshot.getPhysicalWorkerId(),
+                expectedPhysicalWorkerId)
+                || !Objects.equals(snapshot.getProviderTaskId(),
+                task.getWorkerTaskId())
+                || !"READY".equals(snapshot.getAvailability())
+                || !"NONE".equals(snapshot.getConflictState())) {
+            return "TERMINATION_OWNER_BINDING_MISMATCH";
+        }
+        return null;
     }
 
     public RuntimeTaskCompletionReadinessProvider.Observation inspectRuntimeCompletionReadiness(

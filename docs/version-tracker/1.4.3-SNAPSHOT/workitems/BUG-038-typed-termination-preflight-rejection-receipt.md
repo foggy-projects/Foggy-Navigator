@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.3-SNAPSHOT
 ticket: BUG-038
-status: ULTRA_EXECUTING
+status: NEEDS_REPLAN
 canonical: true
 execution_mode: ultra
 assurance_level: elevated
@@ -81,17 +81,17 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1 每个通过基础鉴权、ownership 和 request identity 校验的非 dry-run termination attempt 恰好建立一个 clientRequestId keyed durable request receipt；随后 fresh preflight/admission 拒绝也不得回滚或删除该 receipt。
-- [ ] AC-2 Task 在 readiness/dry-run 后变为 canonical terminal 时，真实请求及同 ID reconciliation 返回 `ALREADY_TERMINAL`/`TERMINAL` 权威语义，`terminationDispatched=false`。
-- [ ] AC-3 Worker active task 缺失、Worker status/health 不可达或 exact admission 拒绝时返回 durable `REJECTED` 和对应稳定脱敏 reasonCode，不创建可执行 intent，不调用 Worker abort。
-- [ ] AC-4 `terminationRequestReceiptPersisted` 和 `requestReconciliationAvailable` 仅在本次 receipt 实际持久化时为 `true`；API 字段与数据库事实一致。
-- [ ] AC-5 同一 task/operation/clientRequestId 的重复请求只返回既有权威结果，不再次 inspect-for-effect、创建 intent 或 dispatch；ID 绑定冲突继续 fail closed。
-- [ ] AC-6 同 ID typed reconciliation 覆盖 `IN_PROGRESS|ACCEPTED|REJECTED|TERMINAL|AMBIGUOUS|UNKNOWN`，保持 `readOnly=true`、`newClientRequestIdAllowed=false`，不创建 audit、repair、retry 或 provider 调用。
-- [ ] AC-7 exact admission 与可执行 intent/outbox 继续保持原子性；request-attempt receipt 的提前持久化不得授权或扩大 provider effect。
-- [ ] AC-8 `--dry-run` 保持零 request receipt、零 termination operation、零 intent、零 HTTP abort 和零 runtime mutation。
-- [ ] AC-9 自动化回归至少覆盖 allowed→denied、allowed→canonical-terminal、exact-admission failure、rejected-response-loss reconciliation、duplicate/concurrent same-ID，以及 receipt 字段与持久化事实一致性。
+- [x] AC-1 每个通过基础鉴权、ownership 和 request identity 校验的非 dry-run termination attempt 恰好建立一个 clientRequestId keyed durable request receipt；随后 fresh preflight/admission 拒绝也不得回滚或删除该 receipt。
+- [x] AC-2 Task 在 readiness/dry-run 后变为 canonical terminal 时，真实请求及同 ID reconciliation 返回 `ALREADY_TERMINAL`/`TERMINAL` 权威语义，`terminationDispatched=false`。
+- [x] AC-3 Worker active task 缺失、Worker status/health 不可达或 exact admission 拒绝时返回 durable `REJECTED` 和对应稳定脱敏 reasonCode，不创建可执行 intent，不调用 Worker abort。
+- [x] AC-4 `terminationRequestReceiptPersisted` 和 `requestReconciliationAvailable` 仅在本次 receipt 实际持久化时为 `true`；API 字段与数据库事实一致。
+- [x] AC-5 同一 task/operation/clientRequestId 的重复请求只返回既有权威结果，不再次 inspect-for-effect、创建 intent 或 dispatch；ID 绑定冲突继续 fail closed。
+- [x] AC-6 同 ID typed reconciliation 覆盖 `IN_PROGRESS|ACCEPTED|REJECTED|TERMINAL|AMBIGUOUS|UNKNOWN`，保持 `readOnly=true`、`newClientRequestIdAllowed=false`，不创建 audit、repair、retry 或 provider 调用。
+- [x] AC-7 exact admission 与可执行 intent/outbox 继续保持原子性；request-attempt receipt 的提前持久化不得授权或扩大 provider effect。
+- [x] AC-8 `--dry-run` 保持零 request receipt、零 termination operation、零 intent、零 HTTP abort 和零 runtime mutation。
+- [x] AC-9 自动化回归至少覆盖 allowed→denied、allowed→canonical-terminal、exact-admission failure、rejected-response-loss reconciliation、duplicate/concurrent same-ID，以及 receipt 字段与持久化事实一致性。
 - [ ] AC-10 一次 disposable live smoke 在不访问 TMS、不重放历史 Task 的前提下证明：最多一个模型提交、一个真实 termination attempt、无 retry/recovery/redispatch，最终 canonical terminal、token `REVOKED`、active registration `ABSENT`，且 receipt/reconciliation 可按原 ID 查询。
-- [ ] AC-11 未修改或重绑 3151 Worker、Agent、modelConfig、Directory、grant 或 credential，未修改 SIM/TMS，未输出敏感信息。
+- [x] AC-11 未修改或重绑 3151 Worker、Agent、modelConfig、Directory、grant 或 credential，未修改 SIM/TMS，未输出敏感信息。
 
 ## Contract / Data / Security Constraints
 
@@ -172,6 +172,7 @@ open_questions: []
 ## Implementation Result
 
 - implementation_summary: 已将非 dry-run termination 拆分为独立 durable attempt receipt 与后续 fresh admission/intent 两阶段；receipt 在可变 Task/Worker observation 前以 `REQUIRES_NEW` 落库，exact admission/intent 继续在同一事务中原子提交。重复 request ID 在任何 fresh provider observation 前直接进入只读 replay；canonical terminal 映射为 durable `ALREADY_TERMINAL`，其他 fresh blocker 持久化稳定 `REJECTED` reason；typed receipt/reconciliation 字段改为依据本次实际 registration。
+- followup_alignment: bounded live 暴露普通 SIM Task 缺少 ENFORCED lifecycle owner enrollment；已使 Codex termination readiness 在 Worker active/healthy 但 exact owner enrollment 缺失时返回 `terminateAllowed=false` 和相同稳定 blocker，消除静态“ready 后必然 exact reject”的误报。让普通 Task 获得 ENFORCED owner 或放宽 termination authorization 属于 architecture/provisioning 决策，不在本契约授权范围。
 - changed_paths: `addons/claude-worker-agent` termination closure/coordinator 及回归；`addons/codex-worker-agent` exact terminal admission 与回归；`business-agent-module` receipt transaction contract/terminal stage；`launcher` lifecycle fixture；本 work item 与版本索引。
 - tests_and_results:
   - regression-first: `mvn -B -pl addons/claude-worker-agent -am -Dtest=RuntimeTaskTypedContractServiceTest -Dsurefire.failIfNoSpecifiedTests=false test` -> 21 tests，4 个预期失败，分别证明 receipt 顺序、terminal mapping、duplicate no-inspect 和 typed persistence flag 缺口。
@@ -180,12 +181,17 @@ open_questions: []
   - transactional vertical: `mvn -B -pl addons/claude-worker-agent -am -Dtest=BusinessLifecycleTerminalVerticalIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` -> SUCCESS，3 tests。
   - launcher lifecycle fixture: `mvn -B -pl launcher -am -Dtest=Arch001ThirdRemediationSlice8IntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` -> SUCCESS，4 tests。
   - affected reactor: `mvn -B test -pl launcher -am` -> SUCCESS，14/14 reactor modules；launcher 24 tests，0 failures/errors，2 skipped；total 5:20。首轮 fixture 因新 pre-registered receipt guard 暴露 3 errors，修正 fixture 后完整重跑通过。
-- manual_or_experience_evidence: pending clean package/runtime health and the single authorized bounded live smoke.
-- deviations: none
-- residual_risks: live timing 仍可能先自然终态；该安全结果必须是 durable `ALREADY_TERMINAL`，不能伪装成 dispatched termination。
-- reused_evidence:
-- omitted_validation_and_reason: 未运行 release/authority/replay/full-chain，均不在批准范围；未执行第二 Task/第二 termination attempt。
-- readiness: ULTRA_EXECUTING
+  - post-live readiness alignment: `mvn -B -pl addons/codex-worker-agent -am -Dtest=CodexTaskServiceTest -Dsurefire.failIfNoSpecifiedTests=false test` -> SUCCESS，151 tests；新增 owner-enrollment blocker 回归。
+  - final affected reactor after alignment: `mvn -B test -pl launcher -am` -> SUCCESS，14/14 reactor modules；launcher 24 tests，0 failures/errors，2 skipped；total 5:14。
+- manual_or_experience_evidence:
+  - clean launcher candidate at implementation commit `3bf56a7292bd77d018839fc367081a5c03b7447a`: package SUCCESS，SHA-256 `92973f0fe85aed03e3191a9f7d2b41a834ae1a9fdbc8fbcf389cd84a990c18ea`；8112 health UP，info exact commit/dirty=false/version/build time non-empty。
+  - only authorized live attempt: one disposable Task `20260801-2c68`，Maven failed at the existing `ACCEPTED|ALREADY_TERMINAL` assertion because real outcome was `REJECTED`；no rerun。
+  - read-only durable audit: exactly one `task-terminate` receipt survived with stable `TERMINATION_OWNER_ENROLLMENT_REQUIRED`；termination operation `0`，intent/outbox `0`，provider termination effect `0`；Task naturally `COMPLETED`，dispatch/retry/recovery `1/0/0`，token `REVOKED`，registration absent。Terminal convergence updated the same receipt; no second request ID was issued.
+- deviations: AC-10 did not pass; execution stopped before any architecture/provisioning expansion and did not consume a second live attempt.
+- residual_risks: 普通非 activation Task 当前没有 ENFORCED lifecycle owner enrollment，因此 truthful readiness 将阻止真实 termination；要获得 `ACCEPTED -> TERMINAL` live proof，需要先明确授权 activation/provisioning 方案或批准改变 termination owner policy。
+- reused_evidence: BUG-037 provenance guard；3151 既有 identity/capability/binding 只读事实；BUG-035/036 typed serialization/reconciliation tests。
+- omitted_validation_and_reason: 未运行第二次 live、第二 Task、release/authority/replay/full-chain；前者未获授权且 AC-10 已失败，后者均不在批准范围。
+- readiness: NEEDS_REPLAN
 
 ## References
 
