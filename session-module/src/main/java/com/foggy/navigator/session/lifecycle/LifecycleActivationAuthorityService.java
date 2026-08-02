@@ -26,7 +26,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -602,7 +602,7 @@ public class LifecycleActivationAuthorityService {
             throw denied(LifecycleActivationReason.CONTROLLER_DRIFT);
         }
         LocalDateTime observedAt = LocalDateTime.ofInstant(
-                observation.observedAt(), ZoneId.systemDefault());
+                observation.observedAt(), ZoneOffset.UTC);
         Duration maximumAge = validDuration(
                 properties.getObservationMaxAge(), Duration.ofSeconds(1),
                 Duration.ofMinutes(2));

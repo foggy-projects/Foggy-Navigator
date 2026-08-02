@@ -27,7 +27,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -738,7 +738,7 @@ class LifecycleProductionActivationIntegrationTest {
                                                     .REQUIRED_CAPABILITIES)),
                             controllers, controllerDigest);
             String manifestDigest = "fixture-manifest-digest";
-            Instant observedAt = now.atZone(ZoneId.systemDefault()).toInstant();
+            Instant observedAt = now.toInstant(ZoneOffset.UTC);
             return new ActivationArtifacts(
                     manifest, manifestDigest,
                     new LifecycleActivationManifest.ControllerObservation(

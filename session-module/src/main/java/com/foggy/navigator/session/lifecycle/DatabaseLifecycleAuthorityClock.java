@@ -27,7 +27,7 @@ public class DatabaseLifecycleAuthorityClock implements LifecycleAuthorityClock 
     @Transactional(readOnly = true, propagation = Propagation.MANDATORY)
     public LocalDateTime databaseNow() {
         Object value = entityManager.createNativeQuery(
-                "select current_timestamp(6)").getSingleResult();
+                "select utc_timestamp(6)").getSingleResult();
         if (value instanceof LocalDateTime time) return time;
         if (value instanceof Timestamp time) return time.toLocalDateTime();
         if (value instanceof OffsetDateTime time) return time.toLocalDateTime();
