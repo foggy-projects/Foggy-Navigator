@@ -32,6 +32,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
     private final LifecycleWriterProofReferenceRepository references;
     private final SessionTaskRepository canonicalTasks;
     private final WriterExclusivityProofService writerProofs;
+    private final LifecycleAuthorityClock clock;
 
     @org.springframework.beans.factory.annotation.Autowired
     public TaskTerminationIntentRecorder(
@@ -42,7 +43,8 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
             LifecycleWriterProofRepository proofs,
             LifecycleWriterProofReferenceRepository references,
             SessionTaskRepository canonicalTasks,
-            WriterExclusivityProofService writerProofs) {
+            WriterExclusivityProofService writerProofs,
+            LifecycleAuthorityClock clock) {
         this.outbox = outbox;
         this.snapshots = snapshots;
         this.workers = workers;
@@ -51,13 +53,14 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         this.references = references;
         this.canonicalTasks = canonicalTasks;
         this.writerProofs = writerProofs;
+        this.clock = clock;
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public RuntimeTerminationDelivery recordIntent(RuntimeTerminationIntent intent) {
         requireIntent(intent);
-        AdmissionFence fence = requireOwnerAdmission(intent);
+        AdmissionFence fence = requireOwnerAdmission(intent, clock.databaseNow());
         String key = key(intent.clientRequestId());
         String id = UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
         if (outbox.existsById(id)) {
@@ -154,7 +157,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                         entity.getEffectClaim(),
                         workerReference, snapshot.getPhysicalWorkerId(),
                         sessionReference, snapshot.getSessionId()),
-                LocalDateTime.now());
+                clock.databaseNow());
         LifecycleEffectOutboxEntity authorized = outbox.findById(
                 entity.getEffectId()).orElseThrow();
         return new RuntimeTerminationAuthorization(
@@ -195,7 +198,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 command.operationId(), lifecycle.getOwnershipMode(),
                 lifecycle.getStateGeneration(), lifecycle.getInstanceEpoch(),
                 "JCS_SHA256_V1", command.bindingDigest());
-        AdmissionFence fence = requireOwnerAdmission(intent);
+        AdmissionFence fence = requireOwnerAdmission(intent, clock.databaseNow());
         LifecycleEffectOutboxEntity parent = outbox
                 .findByAggregateIdAndOperationId(
                         command.taskId(), command.operationId()).stream()
@@ -292,7 +295,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                                 ProofAggregateType.SESSION,
                                 snapshot.getSessionId()),
                         snapshot.getSessionId()),
-                LocalDateTime.now());
+                clock.databaseNow());
         LifecycleEffectOutboxEntity authorized = outbox.findById(effectId)
                 .orElseThrow();
         return new Authorization(prepared(authorized),
@@ -418,7 +421,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
     }
 
     private AdmissionFence requireOwnerAdmission(
-            RuntimeTerminationIntent intent) {
+            RuntimeTerminationIntent intent, LocalDateTime authorityNow) {
         var snapshot = snapshots.findForUpdate(intent.taskId())
                 .orElseThrow(() -> new IllegalStateException(
                         "TERMINATION_OWNER_ENROLLMENT_REQUIRED"));
@@ -474,7 +477,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         var activeProofs = proofs.findByGenerationIdAndStatus(
                 snapshot.getWriterGenerationId(), "ACTIVE").stream()
                 .filter(proof -> proof.getExpiresAt().isAfter(
-                        LocalDateTime.now())).toList();
+                        authorityNow)).toList();
         if (activeProofs.size() != 1) {
             throw new IllegalStateException(
                     "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");

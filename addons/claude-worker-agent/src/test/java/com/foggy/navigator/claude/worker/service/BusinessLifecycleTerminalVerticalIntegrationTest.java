@@ -94,6 +94,21 @@ class BusinessLifecycleTerminalVerticalIntegrationTest {
             BusinessTerminalCleanupPort.class
     })
     static class Config {
+        @Bean LifecycleAuthorityClock lifecycleAuthorityClock() {
+            return new LifecycleAuthorityClock() {
+                @Override
+                public LocalDateTime databaseNow() {
+                    return LocalDateTime.now();
+                }
+
+                @Override
+                public DatabaseIdentity databaseIdentity() {
+                    return new DatabaseIdentity(
+                            "H2", "test", "test", "localhost", 0);
+                }
+            };
+        }
+
         @Bean ObjectMapper objectMapper() {
             return new ObjectMapper().findAndRegisterModules();
         }

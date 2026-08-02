@@ -6,6 +6,8 @@ import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleCommandAuthorizationPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -22,9 +24,32 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         TaskTerminationIntentRecorder.class,
         WriterExclusivityProofService.class,
         LifecycleEnrollmentService.class,
-        WorkerLifecycleReconciliationCommitService.class
+        WorkerLifecycleReconciliationCommitService.class,
+        TaskTerminationIntentRecorderIntegrationTest.AuthorityClockConfig.class
 })
 class TaskTerminationIntentRecorderIntegrationTest {
+    private static final LocalDateTime AUTHORITY_NOW =
+            LocalDateTime.of(2000, 1, 1, 0, 0);
+
+    @Configuration
+    static class AuthorityClockConfig {
+        @Bean
+        LifecycleAuthorityClock lifecycleAuthorityClock() {
+            return new LifecycleAuthorityClock() {
+                @Override
+                public LocalDateTime databaseNow() {
+                    return AUTHORITY_NOW;
+                }
+
+                @Override
+                public DatabaseIdentity databaseIdentity() {
+                    return new DatabaseIdentity(
+                            "H2", "test", "test", "localhost", 0);
+                }
+            };
+        }
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     RuntimeTerminationIntentPort recorder;
     @org.springframework.beans.factory.annotation.Autowired
@@ -157,6 +182,30 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 .isEqualTo("exact-node-binding");
         assertThat(command.getDispatchId())
                 .isEqualTo("termination-dispatch");
+    }
+
+    @Test
+    void terminationProofFencingUsesAuthorityClockAcrossReceiptAndWorkerCommand() {
+        var proof = proofs.findById("proof-delivery").orElseThrow();
+        proof.setAcquiredAt(AUTHORITY_NOW.minusMinutes(1));
+        proof.setLastVerifiedAt(AUTHORITY_NOW);
+        proof.setExpiresAt(AUTHORITY_NOW.plusMinutes(5));
+        proofs.saveAndFlush(proof);
+        assertThat(LocalDateTime.now()).isAfter(proof.getExpiresAt());
+
+        transaction(() -> recorder.recordIntent(intent("request-authority-clock")));
+        assertThat(transaction(() -> recorder.authorizeEffect(
+                "request-authority-clock")).providerCallAuthorized()).isTrue();
+
+        var prepared = commandAuthorization.prepare(
+                new WorkerLifecycleCommandAuthorizationPort
+                        .WorkerLifecycleCommand(
+                        "task-delivery", "codex-biz-worker",
+                        "worker-delivery", "provider-task-delivery",
+                        "termination-dispatch", "operation-delivery",
+                        "authority-clock-binding"));
+        assertThat(commandAuthorization.authorize(prepared.effectId())
+                .providerCallAuthorized()).isTrue();
     }
 
     @Test

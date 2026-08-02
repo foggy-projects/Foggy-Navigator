@@ -96,3 +96,32 @@ task audit dispatch projections consistent.
   forward cleanup contract is proved only with a fresh disposable one-shot
   target and Task.
 - readiness: READY_FOR_SIGNOFF
+
+### Authority-clock termination admission follow-up (2026-08-02)
+
+- root_cause: `TaskTerminationIntentRecorder` used JVM wall-clock time to
+  evaluate writer-proof expiry while lifecycle activation and proof ownership use
+  the database authority clock. A proof valid at authority time could therefore
+  be rejected as `LIFECYCLE_WRITER_EXCLUSIVITY_LOST`.
+- fix: receipt admission, effect authorization, worker-command preparation and
+  authorization, and active-proof filtering now use
+  `LifecycleAuthorityClock.databaseNow()`.
+- changed_paths:
+  - `session-module/src/main/java/com/foggy/navigator/session/lifecycle/TaskTerminationIntentRecorder.java`
+  - `session-module/src/test/java/com/foggy/navigator/session/lifecycle/TaskTerminationIntentRecorderIntegrationTest.java`
+  - `launcher/src/test/java/com/foggy/navigator/launcher/Arch001ThirdRemediationSlice8IntegrationTest.java`
+  - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/service/BusinessLifecycleTerminalVerticalIntegrationTest.java`
+- focused_tests:
+  - authority-clock regression: 6 passed.
+  - launcher vertical context: 4 passed; Claude terminal vertical context: 3
+    passed.
+  - lifecycle/model/terminal cleanup: 51 passed; business token/audit/cleanup:
+    79 passed; Claude typed/readiness/repair/audit/OpenAPI: 126 passed; Codex
+    task/relay: 200 passed; SDK typed contract and CLI: 163 passed.
+- final_sdk_artifact_identity:
+  - GAV: `com.foggy.navigator:navigator-open-sdk:1.0.40-SNAPSHOT`.
+  - binary SHA-256: `d459b75a5c66ef6a064da59481c9d5772d3ad61e071f7f795660346a99576b4b`.
+  - sources SHA-256: `ab0786a9412bd578181458a90df2d399b25140715b360f56eb323a3f600e9732`.
+- boundary: no historical Task, Session, target or proof was repaired, replayed,
+  reconciled, or reused. The bilateral evidence remains limited to a fresh
+  disposable fixture.
