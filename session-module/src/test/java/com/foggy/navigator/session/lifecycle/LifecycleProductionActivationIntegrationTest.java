@@ -309,6 +309,65 @@ class LifecycleProductionActivationIntegrationTest {
     }
 
     @Test
+    void localDevelopmentAdmissionCanonicalizesLogicalCodexModelToPhysicalTuple() {
+        fixture.localDevelopmentTarget = true;
+        fixture.manifestModel = "gpt-5.6-luna";
+        properties.setLocalDevelopmentTargetEnabled(true);
+        prepareAuthority();
+
+        var reservation = admission.reserveProductionAdmission(request(
+                TASK_ID, SESSION_ID, null,
+                "synthetic-arch001-tenant", true,
+                MODEL_CONFIG, "codex-luna:high"));
+
+        assertThat(reservation.activationRequired()).isTrue();
+        assertThat(target().getStatus()).isEqualTo("RESERVED");
+        assertThat(target().getReservedTaskId()).isEqualTo(TASK_ID);
+        assertThat(tasks.count()).isZero();
+        assertThat(outbox.count()).isZero();
+    }
+
+    @Test
+    void localDevelopmentManifestMustPinCanonicalPhysicalModelFamily() {
+        fixture.localDevelopmentTarget = true;
+        fixture.manifestModel = "codex-luna:high";
+        properties.setLocalDevelopmentTargetEnabled(true);
+
+        assertThatThrownBy(() -> authority.registerConfiguredTarget(TARGET_ID))
+                .hasMessage(LifecycleActivationReason.MANIFEST_INVALID);
+        assertThat(targets.count()).isZero();
+    }
+
+    @Test
+    void localDevelopmentModelCanonicalizationStillFailsClosedForNonExactTuple() {
+        fixture.localDevelopmentTarget = true;
+        fixture.manifestModel = "gpt-5.6-luna";
+        properties.setLocalDevelopmentTargetEnabled(true);
+        prepareAuthority();
+
+        assertThatThrownBy(() -> admission.reserveProductionAdmission(request(
+                TASK_ID, SESSION_ID, null,
+                "synthetic-arch001-tenant", true,
+                MODEL_CONFIG, "codex-terra:high")))
+                .hasMessage(LifecycleActivationReason.EXACT_TUPLE_MISMATCH);
+        assertThatThrownBy(() -> admission.reserveProductionAdmission(request(
+                TASK_ID, SESSION_ID, null,
+                "synthetic-arch001-tenant", true,
+                MODEL_CONFIG, "codex-luna:not-an-effort")))
+                .hasMessage(LifecycleActivationReason.EXACT_TUPLE_MISMATCH);
+        assertThatThrownBy(() -> admission.reserveProductionAdmission(request(
+                TASK_ID, SESSION_ID, null,
+                "synthetic-arch001-tenant", true,
+                "different-model-config", "codex-luna:high")))
+                .hasMessage(LifecycleActivationReason.EXACT_TUPLE_MISMATCH);
+
+        assertThat(target().getStatus()).isEqualTo("READY");
+        assertThat(target().getReservedTaskId()).isNull();
+        assertThat(tasks.count()).isZero();
+        assertThat(outbox.count()).isZero();
+    }
+
+    @Test
     void authorityAbsenceOrDisabledAdmissionNeverAuthorizesEffect() {
         properties.setAdmissionEnabled(false);
         assertThat(admission.ownershipModeForTask("any-task"))
@@ -562,10 +621,18 @@ class LifecycleProductionActivationIntegrationTest {
     private LifecycleProductionAdmissionService.ProductionAdmissionRequest request(
             String taskId, String sessionId, String existingSessionId,
             String tenantId, boolean localDevelopmentTarget) {
+        return request(taskId, sessionId, existingSessionId, tenantId,
+                localDevelopmentTarget, MODEL_CONFIG, MODEL);
+    }
+
+    private LifecycleProductionAdmissionService.ProductionAdmissionRequest request(
+            String taskId, String sessionId, String existingSessionId,
+            String tenantId, boolean localDevelopmentTarget,
+            String modelConfigId, String model) {
         return new LifecycleProductionAdmissionService.ProductionAdmissionRequest(
                 localDevelopmentTarget ? "codex-worker" : "codex-biz-worker",
                 tenantId, "synthetic-arch001-user",
-                WORKER_ID, sessionId, taskId, MODEL_CONFIG, MODEL,
+                WORKER_ID, sessionId, taskId, modelConfigId, model,
                 existingSessionId, PROMPT_DIGEST,
                 localDevelopmentTarget ? null : "synthetic/arch001/canary",
                 "/tmp/" + RUN_ID + "/workdir",
@@ -642,6 +709,7 @@ class LifecycleProductionActivationIntegrationTest {
         private boolean controllerContractDrift;
         private boolean nullCapabilities;
         private boolean localDevelopmentTarget;
+        private String manifestModel;
         private final AtomicInteger resolveCalls = new AtomicInteger();
         private DatabaseIdentity databaseIdentity;
 
@@ -662,6 +730,7 @@ class LifecycleProductionActivationIntegrationTest {
             controllerContractDrift = false;
             nullCapabilities = false;
             localDevelopmentTarget = false;
+            manifestModel = MODEL;
             resolveCalls.set(0);
             databaseIdentity = new DatabaseIdentity(
                     "MySQL", "8.0.44", "arch001_act_run_fixture",
@@ -710,7 +779,7 @@ class LifecycleProductionActivationIntegrationTest {
                                             : "codex-biz-worker",
                                     "synthetic-arch001-tenant",
                                     "synthetic-arch001-user", WORKER_ID,
-                                    MODEL_CONFIG, MODEL,
+                                    MODEL_CONFIG, manifestModel,
                                     localDevelopmentTarget
                                             ? null
                                             : "synthetic/arch001/canary",

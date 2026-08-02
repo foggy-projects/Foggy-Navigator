@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.util.CodexModelCanonicalizer;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleEffectOutboxEntity;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleFactEntity;
 import com.foggy.navigator.session.lifecycle.persistence.SessionLifecycleSnapshotEntity;
@@ -385,7 +386,8 @@ public class LifecycleProductionAdmissionService {
                 request.physicalWorkerId())
                 || !Objects.equals(exact.modelConfigId(),
                 request.modelConfigId())
-                || !Objects.equals(exact.model(), request.model())
+                || !CodexModelCanonicalizer.matchesPhysicalTuple(
+                request.providerType(), exact.model(), request.model())
                 || !Objects.equals(exact.codexHomeKey(),
                 request.codexHomeKey())) {
             throw denied(LifecycleActivationReason.EXACT_TUPLE_MISMATCH);

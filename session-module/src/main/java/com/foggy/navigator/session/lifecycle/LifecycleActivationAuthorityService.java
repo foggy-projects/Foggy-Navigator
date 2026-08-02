@@ -3,6 +3,7 @@ package com.foggy.navigator.session.lifecycle;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.foggy.navigator.common.util.CodexModelCanonicalizer;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleActivationTargetEntity;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterGenerationEntity;
 import com.foggy.navigator.session.lifecycle.persistence.LifecycleWriterInstanceRegistrationEntity;
@@ -512,6 +513,11 @@ public class LifecycleActivationAuthorityService {
                 && !properties.isLocalDevelopmentTargetEnabled()) {
             throw denied(LifecycleActivationReason
                     .LOCAL_DEVELOPMENT_TARGET_DISABLED);
+        }
+        if (localDevelopmentTarget
+                && !CodexModelCanonicalizer.isCanonicalPhysicalModelFamily(
+                manifest.exactTuple().model())) {
+            throw denied(LifecycleActivationReason.MANIFEST_INVALID);
         }
         String expectedProvider = localDevelopmentTarget
                 ? LOCAL_DEVELOPMENT_PROVIDER : DISPOSABLE_PROVIDER;
