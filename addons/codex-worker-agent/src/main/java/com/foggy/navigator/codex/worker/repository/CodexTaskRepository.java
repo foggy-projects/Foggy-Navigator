@@ -98,6 +98,8 @@ public interface CodexTaskRepository extends JpaRepository<CodexTaskEntity, Long
 
     List<CodexTaskEntity> findByStatusIn(List<String> statuses);
 
+    List<CodexTaskEntity> findByProviderTypeAndStatusIn(String providerType, List<String> statuses);
+
     List<CodexTaskEntity> findByUserIdAndStatusInOrderByCreatedAtDesc(String userId, List<String> statuses);
 
     /** 查询指定 Worker 下的活跃任务 */

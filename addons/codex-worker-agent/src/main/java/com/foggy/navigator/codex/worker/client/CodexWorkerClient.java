@@ -19,7 +19,9 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Codex Worker HTTP 客户端
@@ -549,13 +551,36 @@ public class CodexWorkerClient {
      * @return SSE 事件流
      */
     public Flux<ServerSentEvent<String>> subscribeToTask(String taskId, int ackSeq) {
+        return subscribeToTask(taskId, ackSeq, () -> { });
+    }
+
+    /**
+     * Internal recovery overload. The callback runs exactly once when response
+     * headers arrive, or when the subscription terminates before that point.
+     */
+    public Flux<ServerSentEvent<String>> subscribeToTask(
+            String taskId, int ackSeq, Runnable connectionSettledCallback) {
+        Runnable callback = Objects.requireNonNull(
+                connectionSettledCallback, "connectionSettledCallback must not be null");
+        AtomicBoolean settled = new AtomicBoolean(false);
+        Runnable signalSettled = () -> {
+            if (settled.compareAndSet(false, true)) callback.run();
+        };
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/api/v1/tasks/{taskId}/subscribe")
                         .queryParam("ack_seq", ackSeq)
                         .build(taskId))
-                .retrieve()
-                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {});
+                .exchangeToFlux(response -> {
+                    signalSettled.run();
+                    if (response.statusCode().isError()) {
+                        return response.createException().flatMapMany(Flux::error);
+                    }
+                    return response.bodyToFlux(
+                            new org.springframework.core.ParameterizedTypeReference<
+                                    ServerSentEvent<String>>() { });
+                })
+                .doFinally(ignored -> signalSettled.run());
     }
 
     /**

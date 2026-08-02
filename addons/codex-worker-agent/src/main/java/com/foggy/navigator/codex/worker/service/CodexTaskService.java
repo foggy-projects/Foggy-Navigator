@@ -63,8 +63,9 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
@@ -3818,7 +3819,27 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             nativeSubtaskStateRepository.deleteByTaskId(taskId);
         }
         taskRepository.delete(entity);
+        clearRelayStateAfterTaskDeletionCommit(taskId);
         log.info("Codex task deleted: taskId={}, userId={}", taskId, userId);
+    }
+
+    private void clearRelayStateAfterTaskDeletionCommit(String taskId) {
+        Runnable cleanup = () -> streamRelay.clearDeletedTask(taskId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cleanup.run();
+                }
+            });
+            return;
+        }
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            cleanup.run();
+            return;
+        }
+        log.warn("Codex relay deletion cleanup deferred because transaction synchronization is unavailable: "
+                + "taskId={}", taskId);
     }
 
     private void deleteTerminalAppServerTask(CodexTaskEntity entity) {

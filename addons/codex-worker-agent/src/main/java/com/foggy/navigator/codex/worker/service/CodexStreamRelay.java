@@ -40,6 +40,7 @@ import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRep
 import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
 import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryCapability;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -47,6 +48,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
@@ -60,6 +62,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
@@ -86,9 +89,11 @@ public class CodexStreamRelay {
     private static final String CODEX_APP_SERVER_AGENT_ID =
             CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE;
     private static final String CODEX_BIZ_AGENT_ID = CodexTaskService.CODEX_BIZ_PROVIDER_TYPE;
-    private static final int MAX_RECONNECT_ATTEMPTS = 3;
-    private static final long RECONNECT_BASE_DELAY_MS = 2000;
-    private static final long BACKGROUND_RECOVERY_DELAY_MS = 30_000;
+    private static final int RECOVERY_PENDING_NOTIFICATION_ATTEMPT = 3;
+    private static final List<String> AUTOMATIC_RECOVERY_STATUSES =
+            List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED");
+    private static final List<String> AUTOMATIC_RECOVERY_PROVIDERS =
+            List.of(AGENT_ID, CODEX_APP_SERVER_AGENT_ID);
     /**
      * BUG-021 compatibility contract. Enforcement moved to the generic session
      * payload router so every provider is bounded after optional externalization.
@@ -106,6 +111,7 @@ public class CodexStreamRelay {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final SessionEventListener sessionEventListener;
+    private final CodexBackgroundRecoveryPolicy backgroundRecoveryPolicy;
 
     @Autowired(required = false)
     @Nullable
@@ -136,6 +142,10 @@ public class CodexStreamRelay {
 
     /** At most one delayed recovery may be pending for a task. */
     private final ConcurrentHashMap<String, Disposable> scheduledRecoveries = new ConcurrentHashMap<>();
+    /** Production scheduler; replaceable only by package tests for timer-race control. */
+    private Scheduler recoveryScheduler = Schedulers.boundedElastic();
+    /** At most one boundary attention event is emitted for a stopped automatic chain. */
+    private final ConcurrentHashMap<String, String> recoveryAttentionNotified = new ConcurrentHashMap<>();
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     @Async("sessionEventExecutor")
@@ -365,22 +375,24 @@ public class CodexStreamRelay {
             String failureCode = stableAcceptanceRejection(e);
             log.error("Codex app-server rejected task acceptance: taskId={}, error={}", taskId, failureCode);
             taskService.failTask(taskId, null, null, failureCode);
+            clearAutomaticRecoveryState(taskId);
             publishMessage(sessionId, providerType, MessageType.ERROR,
                     Map.of("content", failureCode, "taskId", taskId));
         } catch (CodexAppServerAcceptanceService.UnknownException e) {
             log.error("Codex app-server acceptance is unknown: taskId={}", taskId);
             taskRuntimeStateService.markAcceptanceUnknown(taskId);
             publishResultUnknown(sessionId, providerType, taskId);
-            scheduleReconnect(taskId, sessionId, workerId, 0, RECONNECT_BASE_DELAY_MS);
+            scheduleRecoveryRound(taskId);
         } catch (Exception e) {
             String failureCode = stableFailureCode(e, "CODEX_WORKER_START_FAILED");
             log.error("Failed to start Codex stream relay: taskId={}, code={}, type={}",
                     taskId, failureCode, exceptionType(e));
             if (appServerAccepted) {
                 publishResultUnknown(sessionId, providerType, taskId);
-                scheduleReconnect(taskId, sessionId, workerId, 0, RECONNECT_BASE_DELAY_MS);
+                scheduleRecoveryRound(taskId);
             } else {
                 taskService.failTask(taskId, null, null, failureCode);
+                clearAutomaticRecoveryState(taskId);
                 if (providerEffectAdmissionAttempted
                         && preEffectAdmissionCommand != null
                         && e instanceof LifecycleActivationDeniedException denied
@@ -409,20 +421,30 @@ public class CodexStreamRelay {
      * 重连已在 Worker 上运行的任务
      */
     public void reconnectTask(String taskId, String sessionId, String workerId) {
-        reconnectTask(taskId, sessionId, workerId, 0);
+        reconnectTask(taskId, sessionId, workerId, false, null);
     }
 
-    private void reconnectTask(String taskId, String sessionId, String workerId, int reconnectAttempt) {
+    private void reconnectTask(
+            String taskId,
+            String sessionId,
+            String workerId,
+            boolean automatic,
+            BackgroundRecoveryCapability capability) {
         ReentrantLock operationLock = streamOperationLock(taskId);
         operationLock.lock();
         try {
-            reconnectTaskLocked(taskId, sessionId, workerId, reconnectAttempt);
+            reconnectTaskLocked(taskId, sessionId, workerId, automatic, capability);
         } finally {
             operationLock.unlock();
         }
     }
 
-    private void reconnectTaskLocked(String taskId, String sessionId, String workerId, int reconnectAttempt) {
+    private void reconnectTaskLocked(
+            String taskId,
+            String sessionId,
+            String workerId,
+            boolean automatic,
+            BackgroundRecoveryCapability capability) {
         if (activeStreams.containsKey(taskId)) {
             log.debug("reconnectTask: task {} already has active stream, skipping", taskId);
             return;
@@ -434,20 +456,38 @@ public class CodexStreamRelay {
             return;
         }
 
-        log.info("Reconnecting Codex stream: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
+        CodexBackgroundRecoveryPolicy.AttemptLease recoveryLease = null;
+        int reconnectAttempt = 0;
 
         try {
             CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
             if (entity == null) {
                 log.warn("reconnectTask: task {} not found in repository", taskId);
+                if (automatic) {
+                    clearAutomaticRecoveryState(taskId);
+                }
                 return;
             }
             if (isLocalTerminal(entity)) {
+                clearAutomaticRecoveryState(taskId);
                 clearStreamTracking(taskId);
                 return;
             }
             sessionId = entity.getSessionId();
             workerId = entity.getWorkerId();
+            if (automatic) {
+                CodexBackgroundRecoveryPolicy.AttemptDecision decision =
+                        backgroundRecoveryPolicy.tryAcquire(entity, capability);
+                if (!decision.permitted()) {
+                    handleAutomaticRecoveryDenial(entity, decision.denial());
+                    return;
+                }
+                recoveryLease = decision.lease();
+                reconnectAttempt = recoveryLease.attempt();
+            }
+
+            log.info("Reconnecting Codex stream: taskId={}, sessionId={}, workerId={}, automatic={}, attempt={}",
+                    taskId, sessionId, workerId, automatic, reconnectAttempt);
             CodexRuntimeBinding runtime = resolveRuntimeBinding(entity);
             CodexWorkerClient client = getCodexClient(entity, runtime);
             AtomicReference<String> detectedModel = new AtomicReference<>();
@@ -456,18 +496,21 @@ public class CodexStreamRelay {
                 if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
                         && "ABORTED_BEFORE_ACCEPT".equals(entity.getRuntimeAcceptanceState())) {
                     taskService.reconcileAbortedTask(taskId, null, entity.getCodexThreadId());
+                    clearAutomaticRecoveryState(taskId);
                     return;
                 }
                 if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
                         && "PREPARED".equals(entity.getRuntimeAcceptanceState())) {
                     if (taskService.failTaskIfAcceptanceNotStarted(
                             taskId, "CODEX_RUNTIME_NOT_ACCEPTED")) {
+                        clearAutomaticRecoveryState(taskId);
                         return;
                     }
                     entity = taskRepository.findByTaskId(taskId)
                             .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
                     if ("ABORTED_BEFORE_ACCEPT".equals(entity.getRuntimeAcceptanceState())) {
                         taskService.reconcileAbortedTask(taskId, null, entity.getCodexThreadId());
+                        clearAutomaticRecoveryState(taskId);
                         return;
                     }
                 }
@@ -477,7 +520,11 @@ public class CodexStreamRelay {
                     return;
                 }
                 Map<String, Object> requestBody = taskRuntimeStateService.loadPreparedRequest(taskId);
-                appServerAcceptanceService.accept(client, taskId, requestBody);
+                if (automatic) {
+                    appServerAcceptanceService.acceptForRecoveryAttempt(client, taskId, requestBody);
+                } else {
+                    appServerAcceptanceService.accept(client, taskId, requestBody);
+                }
                 entity = taskRepository.findByTaskId(taskId)
                         .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
             }
@@ -489,6 +536,7 @@ public class CodexStreamRelay {
             if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
                     && reconcileAppServerTerminal(entity, sessionId, resolveTaskProviderType(taskId),
                     detectedModel, detectedCodexThreadId)) {
+                clearAutomaticRecoveryState(taskId);
                 clearStreamTracking(taskId);
                 return;
             }
@@ -506,28 +554,44 @@ public class CodexStreamRelay {
                 return;
             }
 
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
+            Flux<ServerSentEvent<String>> sseFlux;
+            if (automatic) {
+                CodexBackgroundRecoveryPolicy.AttemptLease connectionLease = recoveryLease;
+                sseFlux = client.subscribeToTask(
+                        entity.getWorkerTaskId(), ackSeq, connectionLease::close);
+            } else {
+                sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
+            }
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
                     detectedModel, detectedCodexThreadId, reconnectAttempt, ackSeq);
 
             registerActiveStream(taskId, subscription);
+            if (automatic) {
+                // The connection callback now owns release. It fires at response
+                // headers or any pre-response terminal signal, not at SSE end.
+                recoveryLease = null;
+            }
 
         } catch (CodexTaskRuntimeStateService.AcceptanceCancelledException e) {
             log.info("Recovered acceptance was cancelled before subscription: taskId={}", taskId);
         } catch (CodexAppServerAcceptanceService.RejectedException e) {
             String failureCode = stableAcceptanceRejection(e);
             taskService.failTask(taskId, null, null, failureCode);
+            clearAutomaticRecoveryState(taskId);
             log.warn("App-server rejected recovered acceptance for task {}: {}", taskId, failureCode);
         } catch (CodexAppServerAcceptanceService.UnknownException e) {
             taskRuntimeStateService.markAcceptanceUnknown(taskId);
             log.warn("App-server acceptance remains unknown for task {}", taskId);
-            scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
+            scheduleRecoveryRound(taskId);
         } catch (Exception e) {
             log.warn("Failed to reconnect Codex task: taskId={}, code={}, type={}",
                     taskId, stableFailureCode(e, "CODEX_RUNTIME_RECONNECT_FAILED"), exceptionType(e));
-            scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
+            scheduleRecoveryRound(taskId);
         } finally {
+            if (recoveryLease != null) {
+                recoveryLease.close();
+            }
             guard.set(false);
         }
     }
@@ -537,6 +601,13 @@ public class CodexStreamRelay {
      */
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
+        boolean startupRecoveryEnabled = AUTOMATIC_RECOVERY_PROVIDERS.stream()
+                .anyMatch(provider -> backgroundRecoveryPolicy.providerPermits(
+                        provider, BackgroundRecoveryCapability.STARTUP_SCAN));
+        if (!startupRecoveryEnabled) {
+            log.info("Codex automatic startup recovery is disabled for all declared providers");
+            return;
+        }
         try {
             Thread.sleep(10_000);
         } catch (InterruptedException e) {
@@ -548,24 +619,25 @@ public class CodexStreamRelay {
     }
 
     void reconnectActiveTasks() {
-        List<CodexTaskEntity> activeTasks = taskRepository.findByStatusIn(
-                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"));
-        if (activeTasks.isEmpty()) {
-            log.info("No active Codex tasks to reconnect on startup");
-            return;
-        }
-
-        log.info("Attempting to reconnect {} active Codex task(s) on startup", activeTasks.size());
-        for (CodexTaskEntity task : activeTasks) {
-            try {
-                reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId());
-            } catch (Exception e) {
-                log.warn("Failed to reconnect Codex task on startup: taskId={}, code={}, type={}",
-                        task.getTaskId(), stableFailureCode(e, "CODEX_RUNTIME_RECONNECT_FAILED"), exceptionType(e));
-                scheduleReconnect(task.getTaskId(), task.getSessionId(), task.getWorkerId(),
-                        0, BACKGROUND_RECOVERY_DELAY_MS);
+        for (String providerType : AUTOMATIC_RECOVERY_PROVIDERS) {
+            if (!backgroundRecoveryPolicy.providerPermits(
+                    providerType, BackgroundRecoveryCapability.STARTUP_SCAN)) {
+                continue;
+            }
+            List<CodexTaskEntity> activeTasks = taskRepository.findByProviderTypeAndStatusIn(
+                    providerType, AUTOMATIC_RECOVERY_STATUSES);
+            log.info("Attempting automatic startup recovery for {} active Codex task(s): providerType={}",
+                    activeTasks.size(), providerType);
+            for (CodexTaskEntity task : activeTasks) {
+                recoverAutomatically(task, BackgroundRecoveryCapability.STARTUP_SCAN);
             }
         }
+    }
+
+    void recoverAutomatically(
+            CodexTaskEntity task, BackgroundRecoveryCapability capability) {
+        if (task == null) return;
+        reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId(), true, capability);
     }
 
     /**
@@ -591,6 +663,19 @@ public class CodexStreamRelay {
         reconnecting.remove(taskId);
         cancelScheduledRecovery(taskId);
         recoveryNotified.remove(taskId);
+    }
+
+    /** Clears only process-local relay state after durable task deletion commits. */
+    void clearDeletedTask(String taskId) {
+        ReentrantLock operationLock = streamOperationLock(taskId);
+        operationLock.lock();
+        try {
+            abortStreamLocked(taskId);
+            recoveryAttentionNotified.remove(taskId);
+            backgroundRecoveryPolicy.clear(taskId);
+        } finally {
+            operationLock.unlock();
+        }
     }
 
     /**
@@ -690,12 +775,13 @@ public class CodexStreamRelay {
         } catch (Exception repositoryError) {
             log.warn("Cannot inspect task after Codex stream error; recovery remains scheduled: taskId={}, type={}",
                     taskId, repositoryError.getClass().getSimpleName());
-            scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
+            scheduleRecoveryRound(taskId);
             return;
         }
         if (isLocalTerminal(task)) {
             log.info("Ignoring Codex SSE error after terminal task: taskId={}, status={}, type={}",
                     taskId, task.getStatus(), exceptionType(error));
+            clearAutomaticRecoveryState(taskId);
             clearStreamTracking(taskId);
             return;
         }
@@ -708,26 +794,26 @@ public class CodexStreamRelay {
         boolean appServer = CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType());
         if (appServer && reconcileAppServerTerminal(
                 task, sessionId, providerType, detectedModel, detectedCodexThreadId)) {
+            clearAutomaticRecoveryState(taskId);
             clearStreamTracking(taskId);
-            return;
-        }
-
-        if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
-            scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
             return;
         }
 
         // Once the Worker has accepted the task, losing its SSE transport does
         // not mean the remote Codex execution stopped. Keep the local task
-        // recoverable and replay the durable event stream in a later round.
-        log.warn("Codex stream retry round exhausted; continuing background recovery: taskId={}, runtime={}",
-                taskId, appServer ? CodexRuntimeType.APP_SERVER.name() : "LEGACY_SDK");
-        if (appServer) {
-            publishResultUnknown(sessionId, providerType, taskId);
-        } else {
-            publishStreamDisconnected(sessionId, providerType, taskId);
+        // recoverable and replay the durable event stream only while the
+        // provider-specific finite policy still permits another attempt.
+        boolean scheduled = scheduleRecoveryRound(taskId);
+        if (scheduled && reconnectAttempt >= RECOVERY_PENDING_NOTIFICATION_ATTEMPT) {
+            log.warn("Codex stream recovery remains pending: taskId={}, runtime={}, attempt={}",
+                    taskId, appServer ? CodexRuntimeType.APP_SERVER.name() : "LEGACY_SDK",
+                    reconnectAttempt);
+            if (appServer) {
+                publishResultUnknown(sessionId, providerType, taskId);
+            } else {
+                publishStreamDisconnected(sessionId, providerType, taskId);
+            }
         }
-        scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
     }
 
     private void handleSseCompletion(String taskId, String sessionId, String workerId, String providerType,
@@ -745,10 +831,11 @@ public class CodexStreamRelay {
         } catch (Exception repositoryError) {
             log.warn("Cannot inspect task after Codex stream completion; recovery remains scheduled: taskId={}, type={}",
                     taskId, repositoryError.getClass().getSimpleName());
-            scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
+            scheduleRecoveryRound(taskId);
             return;
         }
         if (task == null || isLocalTerminal(task)) {
+            clearAutomaticRecoveryState(taskId);
             clearStreamTracking(taskId);
             return;
         }
@@ -756,11 +843,12 @@ public class CodexStreamRelay {
         if (CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType())) {
             if (reconcileAppServerTerminal(
                     task, sessionId, providerType, detectedModel, detectedCodexThreadId)) {
+                clearAutomaticRecoveryState(taskId);
                 clearStreamTracking(taskId);
             } else {
                 log.warn("App-server SSE completed before a local or remote terminal outcome: taskId={}", taskId);
                 publishResultUnknown(sessionId, providerType, taskId);
-                scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
+                scheduleRecoveryRound(taskId);
             }
             return;
         }
@@ -807,6 +895,7 @@ public class CodexStreamRelay {
                 String failure = "CODEX_RUNTIME_REMOTE_FAILED: "
                         + stableRemoteErrorCode(status.errorCode());
                 taskService.failTask(task.getTaskId(), workerTaskId, detectedCodexThreadId.get(), failure);
+                clearAutomaticRecoveryState(task.getTaskId());
                 publishMessageIfSession(sessionId, providerType, MessageType.ERROR,
                         Map.of("content", failure, "taskId", task.getTaskId()));
                 publishCompletion(task.getTaskId(), sessionId, providerType, failure, "FAILED");
@@ -815,6 +904,7 @@ public class CodexStreamRelay {
             if ("aborted".equals(outcome)) {
                 closePendingUserInputBeforeTerminal(task.getTaskId(), sessionId, providerType);
                 taskService.reconcileAbortedTask(task.getTaskId(), workerTaskId, detectedCodexThreadId.get());
+                clearAutomaticRecoveryState(task.getTaskId());
                 publishCompletion(task.getTaskId(), sessionId, providerType,
                         "CODEX_RUNTIME_REMOTE_ABORTED", "ABORTED");
                 return true;
@@ -867,6 +957,58 @@ public class CodexStreamRelay {
         }
     }
 
+    private void handleAutomaticRecoveryDenial(
+            CodexTaskEntity task, CodexBackgroundRecoveryPolicy.Denial denial) {
+        if (task == null || denial == null) return;
+        switch (denial) {
+            case ATTEMPTS_EXHAUSTED -> publishBackgroundRecoveryAttention(
+                    task, "CODEX_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED");
+            case RECOVERY_WINDOW_EXHAUSTED -> publishBackgroundRecoveryAttention(
+                    task, "CODEX_BACKGROUND_RECOVERY_WINDOW_EXHAUSTED");
+            case CONCURRENCY_EXHAUSTED -> publishBackgroundRecoveryAttention(
+                    task, "CODEX_BACKGROUND_RECOVERY_CONCURRENCY_EXHAUSTED");
+            case LEGACY_TASK_AGE_UNKNOWN -> log.warn(
+                    "Codex automatic recovery skipped legacy task without UTC age; no facts were written: "
+                            + "taskId={}, providerType={}, code={}",
+                    task.getTaskId(), task.getProviderType(),
+                    "CODEX_BACKGROUND_RECOVERY_LEGACY_AGE_UNKNOWN");
+            case PROVIDER_RUNTIME_MISMATCH, PROVIDER_IDENTITY_CHANGED, TASK_AGE_INVALID -> log.warn(
+                    "Codex automatic recovery failed closed: taskId={}, providerType={}, reason={}",
+                    task.getTaskId(), task.getProviderType(), denial);
+            case POLICY_UNAVAILABLE -> log.warn(
+                    "Codex automatic recovery policy is unavailable: taskId={}, providerType={}",
+                    task.getTaskId(), task.getProviderType());
+            case PROVIDER_UNDECLARED, POLICY_DISABLED, TASK_INELIGIBLE -> log.debug(
+                    "Codex automatic recovery not eligible: taskId={}, providerType={}, reason={}",
+                    task.getTaskId(), task.getProviderType(), denial);
+            case NONE -> {
+            }
+        }
+    }
+
+    private void publishBackgroundRecoveryAttention(CodexTaskEntity task, String attentionCode) {
+        ReentrantLock operationLock = streamOperationLock(task.getTaskId());
+        operationLock.lock();
+        try {
+            if (recoveryAttentionNotified.containsKey(task.getTaskId())) return;
+            taskService.markLifecycleAttention(task.getTaskId(), attentionCode);
+            publishMessageIfSession(
+                    task.getSessionId(),
+                    task.getProviderType(),
+                    MessageType.STATE_SYNC,
+                    Map.of(
+                            "content", attentionCode,
+                            "subtype", "lifecycle_attention",
+                            "attention_status", attentionCode,
+                            "reconnectable", true,
+                            "terminal", false,
+                            "taskId", task.getTaskId()));
+            recoveryAttentionNotified.put(task.getTaskId(), attentionCode);
+        } finally {
+            operationLock.unlock();
+        }
+    }
+
     private void publishMessageIfSession(String sessionId, String providerType, MessageType type,
                                          Map<String, Object> payload) {
         if (sessionId != null && !sessionId.isBlank()) {
@@ -885,46 +1027,74 @@ public class CodexStreamRelay {
                 .build());
     }
 
-    private void scheduleRecoveryRound(String taskId, String sessionId, String workerId,
-                                       int reconnectAttempt) {
-        if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
-            long delay = (long) Math.pow(2, reconnectAttempt) * RECONNECT_BASE_DELAY_MS;
-            scheduleReconnect(taskId, sessionId, workerId, reconnectAttempt + 1, delay);
-        } else {
-            scheduleReconnect(taskId, sessionId, workerId, 0, BACKGROUND_RECOVERY_DELAY_MS);
+    private boolean scheduleRecoveryRound(String taskId) {
+        CodexTaskEntity task;
+        try {
+            task = taskRepository.findByTaskId(taskId).orElse(null);
+        } catch (RuntimeException repositoryError) {
+            log.warn("Codex automatic recovery stopped because task state is unreadable: taskId={}, code={}",
+                    taskId, "CODEX_BACKGROUND_RECOVERY_TASK_UNREADABLE");
+            return false;
         }
+        if (task == null || isLocalTerminal(task)) {
+            clearAutomaticRecoveryState(taskId);
+            clearStreamTracking(taskId);
+            return false;
+        }
+
+        CodexBackgroundRecoveryPolicy.Assessment assessment = backgroundRecoveryPolicy.assess(
+                task, BackgroundRecoveryCapability.DELAYED_RETRY);
+        if (!assessment.permitted()) {
+            handleAutomaticRecoveryDenial(task, assessment.denial());
+            return false;
+        }
+        scheduleReconnect(task, assessment.backoff());
+        return true;
     }
 
-    private void scheduleReconnect(String taskId, String sessionId, String workerId,
-                                   int reconnectAttempt, long delayMs) {
+    private void scheduleReconnect(CodexTaskEntity task, Duration delay) {
         if (shuttingDown.get()) return;
-        log.info("Scheduling Codex stream recovery in {}ms: taskId={}, attempt={}",
-                delayMs, taskId, reconnectAttempt);
-        AtomicReference<Disposable> scheduledRef = new AtomicReference<>();
-        Disposable scheduled = Schedulers.boundedElastic().schedule(() -> {
-            scheduledRecoveries.remove(taskId, scheduledRef.get());
-            if (shuttingDown.get()) return;
-            try {
-                CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(null);
-                if (current == null || isLocalTerminal(current)) {
-                    clearStreamTracking(taskId);
+        String taskId = task.getTaskId();
+        log.info("Scheduling Codex stream recovery: taskId={}, providerType={}, delay={}",
+                taskId, task.getProviderType(), delay);
+        scheduledRecoveries.compute(taskId, (ignored, previous) -> {
+            if (shuttingDown.get()) {
+                disposeTimer(previous);
+                return null;
+            }
+            AtomicReference<Disposable> scheduledRef = new AtomicReference<>();
+            CountDownLatch registrationReady = new CountDownLatch(1);
+            Disposable scheduled = recoveryScheduler.schedule(() -> {
+                awaitTimerRegistration(registrationReady);
+                Disposable registered = scheduledRef.get();
+                if (registered == null
+                        || !scheduledRecoveries.remove(taskId, registered)) {
                     return;
                 }
-                reconnectTask(taskId, current.getSessionId(), current.getWorkerId(), reconnectAttempt);
-            } catch (Exception recoveryError) {
-                log.warn("Scheduled Codex recovery failed before reconnect: taskId={}, type={}",
-                        taskId, recoveryError.getClass().getSimpleName());
-                scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
-            }
-        }, delayMs, TimeUnit.MILLISECONDS);
-        scheduledRef.set(scheduled);
-        Disposable previous = scheduledRecoveries.put(taskId, scheduled);
-        if (previous != null && previous != scheduled && !previous.isDisposed()) {
-            previous.dispose();
-        }
-        if (shuttingDown.get() && scheduledRecoveries.remove(taskId, scheduled)
-                && !scheduled.isDisposed()) {
-            scheduled.dispose();
+                if (shuttingDown.get()) return;
+                try {
+                    CodexTaskEntity current = taskRepository.findByTaskId(taskId).orElse(null);
+                    if (current == null || isLocalTerminal(current)) {
+                        clearAutomaticRecoveryState(taskId);
+                        clearStreamTracking(taskId);
+                        return;
+                    }
+                    // Policy is deliberately checked again at timer fire. Provider
+                    // identity, switch, age, attempts and concurrency may all have
+                    // changed since this timer was created.
+                    recoverAutomatically(current, BackgroundRecoveryCapability.DELAYED_RETRY);
+                } catch (Exception recoveryError) {
+                    log.warn("Scheduled Codex recovery stopped before reconnect: taskId={}, type={}",
+                            taskId, recoveryError.getClass().getSimpleName());
+                }
+            }, schedulerDelayNanos(delay), TimeUnit.NANOSECONDS);
+            scheduledRef.set(scheduled);
+            registrationReady.countDown();
+            disposeTimer(previous);
+            return scheduled;
+        });
+        if (shuttingDown.get()) {
+            cancelScheduledRecovery(taskId);
         }
     }
 
@@ -936,11 +1106,41 @@ public class CodexStreamRelay {
         cancelScheduledRecovery(taskId);
     }
 
+    private long schedulerDelayNanos(Duration delay) {
+        try {
+            return Math.max(1L, delay.toNanos());
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private void awaitTimerRegistration(CountDownLatch registrationReady) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                registrationReady.await();
+                break;
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+    }
+
     private void cancelScheduledRecovery(String taskId) {
         Disposable scheduled = scheduledRecoveries.remove(taskId);
-        if (scheduled != null && !scheduled.isDisposed()) {
-            scheduled.dispose();
-        }
+        disposeTimer(scheduled);
+    }
+
+    private void disposeTimer(Disposable scheduled) {
+        if (scheduled != null && !scheduled.isDisposed()) scheduled.dispose();
+    }
+
+    private void clearAutomaticRecoveryState(String taskId) {
+        cancelScheduledRecovery(taskId);
+        recoveryNotified.remove(taskId);
+        recoveryAttentionNotified.remove(taskId);
+        backgroundRecoveryPolicy.clear(taskId);
     }
 
     private boolean isLocalTerminal(CodexTaskEntity task) {
@@ -988,6 +1188,7 @@ public class CodexStreamRelay {
                                 AtomicReference<String> detectedCodexThreadId,
                                 String errorMessage) {
         taskService.failTask(taskId, null, detectedCodexThreadId.get(), errorMessage);
+        clearAutomaticRecoveryState(taskId);
         publishMessage(sessionId, providerType, MessageType.ERROR,
                 Map.of("content", errorMessage, "taskId", taskId));
         lastAckedSeq.remove(taskId);
@@ -1041,6 +1242,7 @@ public class CodexStreamRelay {
             if (isLocalTerminal(currentTask)) {
                 log.info("Ignoring Codex SSE event after terminal task: taskId={}, status={}, type={}, seq={}",
                         taskId, currentTask.getStatus(), event.getType(), event.getSeq());
+                clearAutomaticRecoveryState(taskId);
                 clearStreamTracking(taskId);
                 return;
             }
@@ -1175,6 +1377,7 @@ public class CodexStreamRelay {
                     // after that call succeeds; a failure leaves it untouched
                     // for replay.
                     lastAckedSeq.remove(taskId);
+                    clearAutomaticRecoveryState(taskId);
 
                     // 发布任务完成事件
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -1208,6 +1411,7 @@ public class CodexStreamRelay {
                         taskService.reconcileAbortedTask(taskId, event.getTaskId(),
                                 detectedCodexThreadId.get());
                         lastAckedSeq.remove(taskId);
+                        clearAutomaticRecoveryState(taskId);
                         eventPublisher.publishEvent(TaskCompletionEvent.builder()
                                 .externalTaskId(taskId)
                                 .parentSessionId(sessionId)
@@ -1229,6 +1433,7 @@ public class CodexStreamRelay {
                     // See the result branch: terminal ACK is durable with the
                     // task transition, so cleanup follows a successful commit.
                     lastAckedSeq.remove(taskId);
+                    clearAutomaticRecoveryState(taskId);
 
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
@@ -1781,6 +1986,8 @@ public class CodexStreamRelay {
         lastAckedSeq.clear();
         reconnecting.clear();
         recoveryNotified.clear();
+        recoveryAttentionNotified.clear();
+        backgroundRecoveryPolicy.clearAll();
     }
 
     private static final class WorkerEventProcessingException extends RuntimeException {

@@ -20,6 +20,12 @@ import com.foggy.navigator.session.lifecycle.LifecycleActivationDeniedException;
 import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
 import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryBounds;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryCapability;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryCapabilityDeclaration;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryPolicy;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryPolicyResolver;
+import com.foggy.navigator.spi.recovery.ResolvedBackgroundRecoveryPolicy;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,11 +37,16 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.test.util.ReflectionTestUtils;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +54,7 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -65,8 +77,11 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class CodexStreamRelayTest {
+
+    private static final Instant NOW = Instant.parse("2026-08-03T08:00:00Z");
 
     private CodexTaskRepository taskRepository;
     private CodexWorkerClientFactory clientFactory;
@@ -79,6 +94,8 @@ class CodexStreamRelayTest {
     private CodexWorkerClient client;
     private ApplicationEventPublisher eventPublisher;
     private SessionEventListener sessionEventListener;
+    private BackgroundRecoveryPolicyResolver recoveryPolicyResolver;
+    private CodexBackgroundRecoveryPolicy backgroundRecoveryPolicy;
     private CodexStreamRelay relay;
 
     @BeforeEach
@@ -94,6 +111,12 @@ class CodexStreamRelayTest {
         client = mock(CodexWorkerClient.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         sessionEventListener = mock(SessionEventListener.class);
+        recoveryPolicyResolver = mock(BackgroundRecoveryPolicyResolver.class);
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> new ResolvedBackgroundRecoveryPolicy(
+                        invocation.getArgument(0), recoveryPolicy(true, 100, 4)));
+        backgroundRecoveryPolicy = new CodexBackgroundRecoveryPolicy(
+                recoveryPolicyResolver, Clock.fixed(NOW, ZoneOffset.UTC));
 
         relay = new CodexStreamRelay(
                 workerManagementFacade,
@@ -106,7 +129,8 @@ class CodexStreamRelayTest {
                 taskRepository,
                 eventPublisher,
                 new ObjectMapper(),
-                sessionEventListener
+                sessionEventListener,
+                backgroundRecoveryPolicy
         );
         org.mockito.Mockito.lenient().when(runtimeRegistryService.resolveBoundRuntime(any(), any(), any(), any()))
                 .thenAnswer(invocation -> CodexRuntimeBinding.legacySdk(invocation.getArgument(2)));
@@ -666,7 +690,9 @@ class CodexStreamRelayTest {
     @ValueSource(strings = {"ACCEPTING", "ACCEPTED"})
     void applicationReadyRecoveryRecreatesMissingWorkerTaskIdWithEncryptedEnvelope(String state) {
         CodexTaskEntity entity = stubAppServerTask(state);
-        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+        when(taskRepository.findByProviderTypeAndStatusIn(
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
                 .thenReturn(List.of(entity));
         Map<String, Object> request = Map.of("prompt", "hello");
         when(taskRuntimeStateService.loadPreparedRequest("local-task-1")).thenReturn(request);
@@ -675,20 +701,26 @@ class CodexStreamRelayTest {
             entity.setWorkerTaskId(invocation.getArgument(1));
             return null;
         }).when(taskRuntimeStateService).recordAccepted("local-task-1", "local-task-1");
-        when(client.subscribeToTask("local-task-1", 0)).thenReturn(Flux.never());
+        when(client.subscribeToTask(eq("local-task-1"), eq(0), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.getArgument(2, Runnable.class).run();
+                    return Flux.never();
+                });
 
         relay.reconnectActiveTasks();
 
         verify(taskRuntimeStateService).loadPreparedRequest("local-task-1");
         verify(client).createTask("local-task-1", request);
         verify(taskRuntimeStateService).recordAccepted("local-task-1", "local-task-1");
-        verify(client).subscribeToTask("local-task-1", 0);
+        verify(client).subscribeToTask(eq("local-task-1"), eq(0), any(Runnable.class));
     }
 
     @Test
     void applicationReadyFailsPreparedTaskThatNeverStartedRemoteAcceptance() {
         CodexTaskEntity entity = stubAppServerTask("PREPARED");
-        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+        when(taskRepository.findByProviderTypeAndStatusIn(
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
                 .thenReturn(List.of(entity));
         when(taskService.failTaskIfAcceptanceNotStarted(
                 "local-task-1", "CODEX_RUNTIME_NOT_ACCEPTED")).thenReturn(true);
@@ -699,6 +731,350 @@ class CodexStreamRelayTest {
                 "local-task-1", "CODEX_RUNTIME_NOT_ACCEPTED");
         verify(taskRuntimeStateService, never()).loadPreparedRequest(any());
         verify(client, never()).createTask(any(), any());
+    }
+
+    @Test
+    void applicationReadyReturnsBeforeSleepOrScanWhenBothCodexProvidersAreDisabled() {
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> new ResolvedBackgroundRecoveryPolicy(
+                        invocation.getArgument(0), recoveryPolicy(false, 3, 1)));
+
+        assertTimeoutPreemptively(Duration.ofSeconds(1), relay::onApplicationReady);
+
+        verify(taskRepository, never()).findByProviderTypeAndStatusIn(any(), any());
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void manualReconnectRemainsAvailableWhenAutomaticRecoveryIsDisabled() {
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> new ResolvedBackgroundRecoveryPolicy(
+                        invocation.getArgument(0), recoveryPolicy(false, 3, 1)));
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://localhost:3051")
+                        .authToken("worker-token")
+                        .build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
+                .thenReturn(client);
+        when(client.subscribeToTask("worker-task-9", 0)).thenReturn(Flux.never());
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(client).subscribeToTask("worker-task-9", 0);
+    }
+
+    @Test
+    void automaticConcurrencyPermitWaitsForSseConnectionSettlement() {
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> new ResolvedBackgroundRecoveryPolicy(
+                        invocation.getArgument(0), recoveryPolicy(true, 3, 1)));
+        CodexTaskEntity first = legacyTask();
+        first.setWorkerTaskId("worker-task-1");
+        CodexTaskEntity second = legacyTask();
+        second.setTaskId("local-task-2");
+        second.setSessionId("session-2");
+        second.setWorkerTaskId("worker-task-2");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(first));
+        when(taskRepository.findByTaskId("local-task-2")).thenReturn(Optional.of(second));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://localhost:3051")
+                        .authToken("worker-token")
+                        .build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://localhost:3051", "worker-token"))
+                .thenReturn(client);
+        java.util.concurrent.atomic.AtomicReference<Runnable> firstConnectionSettled =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        when(client.subscribeToTask(eq("worker-task-1"), eq(0), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    firstConnectionSettled.set(invocation.getArgument(2, Runnable.class));
+                    return Flux.never();
+                });
+        when(client.subscribeToTask(eq("worker-task-2"), eq(0), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.getArgument(2, Runnable.class).run();
+                    return Flux.never();
+                });
+
+        try {
+            relay.recoverAutomatically(first, BackgroundRecoveryCapability.STARTUP_SCAN);
+            assertTrue(firstConnectionSettled.get() != null);
+
+            relay.recoverAutomatically(second, BackgroundRecoveryCapability.STARTUP_SCAN);
+
+            verify(client, never()).subscribeToTask(
+                    eq("worker-task-2"), eq(0), any(Runnable.class));
+            verify(taskService).markLifecycleAttention(
+                    "local-task-2", "CODEX_BACKGROUND_RECOVERY_CONCURRENCY_EXHAUSTED");
+            assertEquals(0, backgroundRecoveryPolicy.attempts("local-task-2"));
+
+            firstConnectionSettled.get().run();
+            relay.recoverAutomatically(second, BackgroundRecoveryCapability.STARTUP_SCAN);
+
+            verify(client).subscribeToTask(
+                    eq("worker-task-2"), eq(0), any(Runnable.class));
+            assertEquals(1, backgroundRecoveryPolicy.attempts("local-task-2"));
+        } finally {
+            relay.abortStream("local-task-1");
+            relay.abortStream("local-task-2");
+        }
+    }
+
+    @Test
+    void explicitAbortCancelsTimerWithoutResettingAutomaticAttemptBudget() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        var attempt = backgroundRecoveryPolicy.tryAcquire(
+                entity, BackgroundRecoveryCapability.DELAYED_RETRY);
+        assertTrue(attempt.permitted());
+        attempt.lease().close();
+
+        relay.abortStream("local-task-1");
+
+        assertEquals(1, backgroundRecoveryPolicy.attempts("local-task-1"));
+    }
+
+    @Test
+    void committedDeletionClearsAutomaticTimerAndAttemptState() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        var attempt = backgroundRecoveryPolicy.tryAcquire(
+                entity, BackgroundRecoveryCapability.DELAYED_RETRY);
+        assertTrue(attempt.permitted());
+        attempt.lease().close();
+        ReflectionTestUtils.invokeMethod(
+                relay, "scheduleReconnect", entity, Duration.ofHours(1));
+
+        relay.clearDeletedTask("local-task-1");
+
+        assertEquals(0, backgroundRecoveryPolicy.attempts("local-task-1"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> scheduled = (Map<String, Object>)
+                ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        assertTrue(scheduled.isEmpty());
+    }
+
+    @Test
+    void timerThatFiresWhileBeingRegisteredLeavesNoResidualEntry() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        RegistrationRaceScheduler scheduler = new RegistrationRaceScheduler();
+        ReflectionTestUtils.setField(relay, "recoveryScheduler", scheduler);
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
+
+        ReflectionTestUtils.invokeMethod(
+                relay, "scheduleReconnect", entity, Duration.ofNanos(1));
+
+        assertTrue(scheduler.awaitCompletion());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> scheduled = (Map<String, Object>)
+                ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        assertTrue(scheduled.isEmpty());
+        verify(taskRepository).findByTaskId("local-task-1");
+    }
+
+    @Test
+    void nonTerminalStreamCompletionDoesNotResetAutomaticAttemptBudget() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        var attempt = backgroundRecoveryPolicy.tryAcquire(
+                entity, BackgroundRecoveryCapability.DELAYED_RETRY);
+        assertTrue(attempt.permitted());
+        attempt.lease().close();
+
+        ReflectionTestUtils.invokeMethod(
+                relay,
+                "handleSseCompletion",
+                "local-task-1",
+                "session-1",
+                "worker-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                1,
+                null);
+
+        assertEquals(1, backgroundRecoveryPolicy.attempts("local-task-1"));
+    }
+
+    @Test
+    void disabledSdkProviderIsNotScannedWhileEnabledAppServerStillIs() {
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> {
+                    BackgroundRecoveryCapabilityDeclaration declaration = invocation.getArgument(0);
+                    boolean enabled = CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE.equals(
+                            declaration.providerId().value());
+                    return new ResolvedBackgroundRecoveryPolicy(
+                            declaration, recoveryPolicy(enabled, 3, 1));
+                });
+
+        relay.reconnectActiveTasks();
+
+        verify(taskRepository, never()).findByProviderTypeAndStatusIn(
+                eq(CodexTaskService.CODEX_PROVIDER_TYPE), any());
+        verify(taskRepository).findByProviderTypeAndStatusIn(
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED"));
+    }
+
+    @Test
+    void legacyNullEpochStartupTaskFailsClosedWithoutWritesOrProviderEffect() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setCreatedAtEpochMs(null);
+        entity.setStatus("RUNNING");
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByProviderTypeAndStatusIn(
+                CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT", "CANCEL_REQUESTED")))
+                .thenReturn(List.of(entity));
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        relay.reconnectActiveTasks();
+
+        verifyNoInteractions(client);
+        verifyNoInteractions(taskService);
+        verifyNoInteractions(eventPublisher);
+        verifyNoInteractions(sessionEventListener);
+    }
+
+    @Test
+    void codexBizHasNoAutomaticRecoveryCapabilityOrSideEffect() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        entity.setStatus("RUNNING");
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseError",
+                "local-task-1", "session-1", "worker-1", CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                0, null, new IllegalStateException("transport unavailable"));
+
+        verifyNoInteractions(client);
+        assertEquals(0, backgroundRecoveryPolicy.attempts("local-task-1"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> scheduled = (Map<String, Object>)
+                ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        assertTrue(scheduled.isEmpty());
+    }
+
+    @Test
+    void exhaustedAttemptBudgetStopsSchedulingAndPublishesNonTerminalAttention() {
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> new ResolvedBackgroundRecoveryPolicy(
+                        invocation.getArgument(0), recoveryPolicy(true, 1, 1)));
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://localhost:3051")
+                        .authToken("worker-token")
+                        .build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
+                .thenReturn(client);
+        when(client.subscribeToTask(eq("worker-task-9"), eq(0), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.getArgument(2, Runnable.class).run();
+                    return Flux.error(new IllegalStateException("transport unavailable"));
+                });
+
+        relay.recoverAutomatically(entity, BackgroundRecoveryCapability.STARTUP_SCAN);
+
+        verify(taskService).markLifecycleAttention(
+                "local-task-1", "CODEX_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED");
+        verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+        ArgumentCaptor<Object> event = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        AgentMessage attention = assertInstanceOf(AgentMessage.class, event.getValue());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) attention.getPayload();
+        assertEquals("lifecycle_attention", payload.get("subtype"));
+        assertEquals(false, payload.get("terminal"));
+        assertEquals(1, backgroundRecoveryPolicy.attempts("local-task-1"));
+    }
+
+    @Test
+    void failedAttentionWriteLeavesTheLatchOpenForASuccessfulRetry() {
+        CodexTaskEntity entity = legacyTask();
+        String attentionCode = "CODEX_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED";
+        doThrow(new IllegalStateException("attention store unavailable"))
+                .doNothing()
+                .when(taskService).markLifecycleAttention("local-task-1", attentionCode);
+
+        assertThrows(IllegalStateException.class, () -> ReflectionTestUtils.invokeMethod(
+                relay, "publishBackgroundRecoveryAttention", entity, attentionCode));
+        ReflectionTestUtils.invokeMethod(
+                relay, "publishBackgroundRecoveryAttention", entity, attentionCode);
+
+        verify(taskService, times(2)).markLifecycleAttention("local-task-1", attentionCode);
+        verify(eventPublisher, times(1)).publishEvent(any(AgentMessage.class));
+    }
+
+    @Test
+    void repeatedAttentionDenialIsPublishedOnlyOnceAfterSuccess() {
+        CodexTaskEntity entity = legacyTask();
+        String attentionCode = "CODEX_BACKGROUND_RECOVERY_WINDOW_EXHAUSTED";
+
+        ReflectionTestUtils.invokeMethod(
+                relay, "publishBackgroundRecoveryAttention", entity, attentionCode);
+        ReflectionTestUtils.invokeMethod(
+                relay, "publishBackgroundRecoveryAttention", entity, attentionCode);
+
+        verify(taskService, times(1)).markLifecycleAttention("local-task-1", attentionCode);
+        verify(eventPublisher, times(1)).publishEvent(any(AgentMessage.class));
+    }
+
+    @Test
+    void expiredWindowStopsBeforeProviderCallAndPublishesAttention() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setCreatedAtEpochMs(NOW.minus(Duration.ofHours(2)).toEpochMilli());
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        relay.recoverAutomatically(entity, BackgroundRecoveryCapability.STARTUP_SCAN);
+
+        verifyNoInteractions(client);
+        verify(taskService).markLifecycleAttention(
+                "local-task-1", "CODEX_BACKGROUND_RECOVERY_WINDOW_EXHAUSTED");
+        assertEquals(0, backgroundRecoveryPolicy.attempts("local-task-1"));
+    }
+
+    @Test
+    void providerConcurrencyBoundaryStopsWithoutQueueAndPublishesAttention() {
+        when(recoveryPolicyResolver.resolve(any(BackgroundRecoveryCapabilityDeclaration.class)))
+                .thenAnswer(invocation -> new ResolvedBackgroundRecoveryPolicy(
+                        invocation.getArgument(0), recoveryPolicy(true, 3, 1)));
+        CodexTaskEntity held = legacyTask();
+        held.setTaskId("held-task");
+        held.setWorkerTaskId("held-worker-task");
+        var heldAttempt = backgroundRecoveryPolicy.tryAcquire(
+                held, BackgroundRecoveryCapability.STARTUP_SCAN);
+        assertTrue(heldAttempt.permitted());
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        try {
+            relay.recoverAutomatically(entity, BackgroundRecoveryCapability.STARTUP_SCAN);
+        } finally {
+            heldAttempt.lease().close();
+        }
+
+        verifyNoInteractions(client);
+        verify(taskService).markLifecycleAttention(
+                "local-task-1", "CODEX_BACKGROUND_RECOVERY_CONCURRENCY_EXHAUSTED");
+        assertEquals(0, backgroundRecoveryPolicy.attempts("local-task-1"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> scheduled = (Map<String, Object>)
+                ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+        assertTrue(scheduled.isEmpty());
     }
 
     @Test
@@ -1778,7 +2154,85 @@ class CodexStreamRelayTest {
         entity.setRuntimeType("SDK_EXEC");
         entity.setRoutingEpoch(0L);
         entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        entity.setStatus("RUNNING");
+        entity.setCreatedAtEpochMs(NOW.minusSeconds(30).toEpochMilli());
         return entity;
+    }
+
+    private BackgroundRecoveryPolicy recoveryPolicy(
+            boolean enabled, int maxAttempts, int maxConcurrentRecoveries) {
+        return new BackgroundRecoveryPolicy(enabled, new BackgroundRecoveryBounds(
+                maxAttempts,
+                Duration.ofHours(1),
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(30),
+                maxConcurrentRecoveries,
+                Duration.ofMinutes(1)));
+    }
+
+    private static final class RegistrationRaceScheduler implements Scheduler {
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch completed = new CountDownLatch(1);
+        private final AtomicBoolean disposed = new AtomicBoolean(false);
+
+        @Override
+        public Disposable schedule(Runnable task) {
+            AtomicBoolean taskDisposed = new AtomicBoolean(false);
+            Disposable handle = new Disposable() {
+                @Override
+                public void dispose() {
+                    taskDisposed.set(true);
+                }
+
+                @Override
+                public boolean isDisposed() {
+                    return taskDisposed.get();
+                }
+            };
+            Thread callback = new Thread(() -> {
+                started.countDown();
+                try {
+                    if (!disposed.get() && !taskDisposed.get()) task.run();
+                } finally {
+                    completed.countDown();
+                }
+            }, "codex-recovery-registration-race");
+            callback.setDaemon(true);
+            callback.start();
+            try {
+                if (!started.await(2, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timer callback did not start");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("timer registration interrupted", interrupted);
+            }
+            return handle;
+        }
+
+        @Override
+        public Disposable schedule(Runnable task, long delay, TimeUnit unit) {
+            return schedule(task);
+        }
+
+        @Override
+        public Worker createWorker() {
+            throw new UnsupportedOperationException("worker scheduling is not used by this test");
+        }
+
+        @Override
+        public void dispose() {
+            disposed.set(true);
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return disposed.get();
+        }
+
+        private boolean awaitCompletion() throws InterruptedException {
+            return completed.await(2, TimeUnit.SECONDS);
+        }
     }
 
     @SuppressWarnings("unchecked")

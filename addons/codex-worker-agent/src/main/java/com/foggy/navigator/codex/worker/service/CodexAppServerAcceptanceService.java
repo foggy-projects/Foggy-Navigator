@@ -37,8 +37,22 @@ public class CodexAppServerAcceptanceService {
     private final CodexTaskRuntimeStateService taskRuntimeStateService;
 
     public String accept(CodexWorkerClient client, String taskId, Map<String, Object> requestBody) {
+        return accept(client, taskId, requestBody, 3);
+    }
+
+    /** One provider call for one policy-budgeted automatic recovery attempt. */
+    String acceptForRecoveryAttempt(
+            CodexWorkerClient client, String taskId, Map<String, Object> requestBody) {
+        return accept(client, taskId, requestBody, 1);
+    }
+
+    private String accept(
+            CodexWorkerClient client,
+            String taskId,
+            Map<String, Object> requestBody,
+            int maxAttempts) {
         Throwable lastError = null;
-        for (int attempt = 1; attempt <= 3; attempt++) {
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 CodexTaskAcceptanceDTO acceptance = client.createTask(taskId, requestBody)
                         .block(Duration.ofSeconds(20));
@@ -84,7 +98,7 @@ public class CodexAppServerAcceptanceService {
                     throw rejectedHttp(response, e);
                 }
                 lastError = e;
-                if (attempt == 3) break;
+                if (attempt == maxAttempts) break;
                 try {
                     Thread.sleep(250L * attempt);
                 } catch (InterruptedException interrupted) {

@@ -93,7 +93,8 @@ navigator:
   background-recovery:
     # Compatibility default: automatic recovery remains available unless a
     # more-specific server-owned deployment profile or provider override wins.
-    # S1-01 only publishes policy; no provider consumes this switch yet.
+    # Codex SDK and App Server consume this policy for automatic startup scan
+    # and delayed retry; explicit reconnect/resync remain outside this switch.
     global:
       enabled: ${NAVIGATOR_BACKGROUND_RECOVERY_ENABLED:true}
       bounds:

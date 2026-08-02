@@ -12,6 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -167,6 +170,54 @@ class CodexWorkerClientTest {
                     () -> client.getCapabilities().block(Duration.ofSeconds(5)));
             assertEquals("CODEX_RUNTIME_INSTANCE_PROOF_MISSING", missing.getCode());
         }
+    }
+
+    @Test
+    void subscribeSettlementCallbackRunsOnceAtHeadersBeforeSseBodyEnds() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.holdSubscribeBody();
+            CodexWorkerClient client = new CodexWorkerClient(
+                    server.baseUrl(), "token", "instance-a");
+            AtomicInteger settledCount = new AtomicInteger(0);
+            CountDownLatch settled = new CountDownLatch(1);
+            CountDownLatch terminal = new CountDownLatch(1);
+
+            var subscription = client.subscribeToTask("worker-task-9", 0, () -> {
+                        settledCount.incrementAndGet();
+                        settled.countDown();
+                    })
+                    .subscribe(ignored -> { }, ignored -> terminal.countDown(), terminal::countDown);
+            try {
+                assertTrue(server.awaitSubscribeHeaders());
+                assertTrue(settled.await(2, TimeUnit.SECONDS));
+                assertEquals(1, settledCount.get());
+                assertFalse(terminal.await(100, TimeUnit.MILLISECONDS));
+
+                server.releaseSubscribeBody();
+                assertTrue(terminal.await(2, TimeUnit.SECONDS));
+                assertEquals(1, settledCount.get());
+            } finally {
+                server.releaseSubscribeBody();
+                subscription.dispose();
+            }
+        }
+    }
+
+    @Test
+    void subscribeSettlementCallbackRunsOnPreResponseFailure() throws Exception {
+        String stoppedBaseUrl;
+        try (CaptureServer server = CaptureServer.start()) {
+            stoppedBaseUrl = server.baseUrl();
+        }
+        CodexWorkerClient client = new CodexWorkerClient(stoppedBaseUrl, "token");
+        AtomicInteger settledCount = new AtomicInteger(0);
+
+        assertThrows(RuntimeException.class,
+                () -> client.subscribeToTask(
+                                "worker-task-9", 0, settledCount::incrementAndGet)
+                        .blockFirst(Duration.ofSeconds(5)));
+
+        assertEquals(1, settledCount.get());
     }
 
     @Test
@@ -589,6 +640,8 @@ class CodexWorkerClientTest {
         private final AtomicReference<String> authorization = new AtomicReference<>();
         private final AtomicReference<String> terminationOperation = new AtomicReference<>();
         private final AtomicReference<String> terminationSignature = new AtomicReference<>();
+        private final CountDownLatch subscribeHeadersSent = new CountDownLatch(1);
+        private final CountDownLatch releaseSubscribeBody = new CountDownLatch(1);
         private volatile int abortStatus = 202;
         private volatile String abortResponse;
         private volatile boolean queryThreadActiveConflict;
@@ -600,6 +653,7 @@ class CodexWorkerClientTest {
         private volatile int staleTurnCleanupStatus = 200;
         private volatile String staleTurnCleanupErrorCode;
         private volatile String actualInstanceId = "instance-a";
+        private volatile boolean holdSubscribeBody;
 
         private CaptureServer(HttpServer server) {
             this.server = server;
@@ -644,7 +698,15 @@ class CodexWorkerClientTest {
                 if (exchange.getRequestURI().getPath().endsWith("/subscribe")) {
                     byte[] response = "event: message\ndata: sync\n\n".getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
-                    exchange.sendResponseHeaders(200, response.length);
+                    exchange.sendResponseHeaders(200, capture.holdSubscribeBody ? 0 : response.length);
+                    capture.subscribeHeadersSent.countDown();
+                    if (capture.holdSubscribeBody) {
+                        try {
+                            capture.releaseSubscribeBody.await(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                     exchange.getResponseBody().write(response);
                     exchange.close();
                     return;
@@ -929,8 +991,21 @@ class CodexWorkerClientTest {
             staleTurnCleanupErrorCode = errorCode;
         }
 
+        void holdSubscribeBody() {
+            holdSubscribeBody = true;
+        }
+
+        boolean awaitSubscribeHeaders() throws InterruptedException {
+            return subscribeHeadersSent.await(2, TimeUnit.SECONDS);
+        }
+
+        void releaseSubscribeBody() {
+            releaseSubscribeBody.countDown();
+        }
+
         @Override
         public void close() {
+            releaseSubscribeBody();
             server.stop(0);
         }
     }

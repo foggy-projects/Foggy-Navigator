@@ -17,10 +17,27 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class CodexAppServerAcceptanceServiceTest {
+
+    @Test
+    void automaticRecoveryAttemptMakesOnlyOneProviderAcceptanceCall() {
+        CodexTaskRuntimeStateService stateService = mock(CodexTaskRuntimeStateService.class);
+        CodexWorkerClient client = mock(CodexWorkerClient.class);
+        when(client.createTask("task-1", Map.of("prompt", "x")))
+                .thenReturn(Mono.error(new IllegalStateException("transport unavailable")));
+        CodexAppServerAcceptanceService service = new CodexAppServerAcceptanceService(stateService);
+
+        assertThrows(CodexAppServerAcceptanceService.UnknownException.class,
+                () -> service.acceptForRecoveryAttempt(
+                        client, "task-1", Map.of("prompt", "x")));
+
+        verify(client, times(1)).createTask("task-1", Map.of("prompt", "x"));
+        verify(stateService, never()).recordAccepted("task-1", "task-1");
+    }
 
     @Test
     void rejectsAWorkerTaskIdThatDiffersFromTheIdempotencyKey() {

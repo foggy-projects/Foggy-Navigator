@@ -59,6 +59,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import jakarta.persistence.EntityManager;
@@ -1094,7 +1096,56 @@ class CodexTaskServiceTest {
         verify(workerClient).deleteTask("task-delete");
         verify(nativeSubtaskStateRepository).deleteByTaskId("task-delete");
         verify(taskRepository).delete(entity);
-        verifyNoInteractions(streamRelay);
+        verify(streamRelay).clearDeletedTask("task-delete");
+    }
+
+    @Test
+    void deleteTaskRollbackDoesNotClearRelayState() {
+        CodexTaskEntity entity = new CodexTaskEntity();
+        entity.setTaskId("task-delete-rollback");
+        entity.setUserId("user-1");
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        entity.setStatus("FAILED");
+        entity.setRuntimeType("SDK_EXEC");
+        when(taskRepository.findByTaskIdAndUserId("task-delete-rollback", "user-1"))
+                .thenReturn(Optional.of(entity));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.deleteTask("user-1", "task-delete-rollback");
+
+            verify(streamRelay, never()).clearDeletedTask("task-delete-rollback");
+            TransactionSynchronizationManager.getSynchronizations().forEach(
+                    synchronization -> synchronization.afterCompletion(
+                            TransactionSynchronization.STATUS_ROLLED_BACK));
+            verify(streamRelay, never()).clearDeletedTask("task-delete-rollback");
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void deleteTaskClearsRelayStateOnlyAfterCommit() {
+        CodexTaskEntity entity = new CodexTaskEntity();
+        entity.setTaskId("task-delete-commit");
+        entity.setUserId("user-1");
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        entity.setStatus("FAILED");
+        entity.setRuntimeType("SDK_EXEC");
+        when(taskRepository.findByTaskIdAndUserId("task-delete-commit", "user-1"))
+                .thenReturn(Optional.of(entity));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.deleteTask("user-1", "task-delete-commit");
+
+            verify(streamRelay, never()).clearDeletedTask("task-delete-commit");
+            TransactionSynchronizationManager.getSynchronizations().forEach(
+                    TransactionSynchronization::afterCommit);
+            verify(streamRelay).clearDeletedTask("task-delete-commit");
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
