@@ -18,6 +18,8 @@ import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePort;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecyclePortResolver;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -38,6 +40,8 @@ import java.util.Set;
 
 @Service
 public class LifecycleActivationAuthorityService {
+    private static final Logger log = LoggerFactory.getLogger(
+            LifecycleActivationAuthorityService.class);
     static final String TARGET_CLASS = "ISOLATED_LOCAL_NON_FIXTURE";
     static final String LOCAL_DEVELOPMENT_TARGET_CLASS =
             "BOUNDED_ISOLATED_LOCAL_DEVELOPMENT";
@@ -599,6 +603,7 @@ public class LifecycleActivationAuthorityService {
                 || !"LIVE_LOCAL_INSPECTION".equals(
                 observation.evidenceSource())
                 || observation.observedAt() == null) {
+            log.warn("Lifecycle activation controller verification failed: condition=CONTENT_FREE_BINDING");
             throw denied(LifecycleActivationReason.CONTROLLER_DRIFT);
         }
         LocalDateTime observedAt = LocalDateTime.ofInstant(
@@ -606,8 +611,12 @@ public class LifecycleActivationAuthorityService {
         Duration maximumAge = validDuration(
                 properties.getObservationMaxAge(), Duration.ofSeconds(1),
                 Duration.ofMinutes(2));
-        if (observedAt.isAfter(now.plusSeconds(1))
-                || observedAt.plus(maximumAge).isBefore(now)) {
+        if (observedAt.isAfter(now.plusSeconds(1))) {
+            log.warn("Lifecycle activation controller verification failed: condition=OBSERVATION_FUTURE");
+            throw denied(LifecycleActivationReason.CONTROLLER_DRIFT);
+        }
+        if (observedAt.plus(maximumAge).isBefore(now)) {
+            log.warn("Lifecycle activation controller verification failed: condition=OBSERVATION_STALE");
             throw denied(LifecycleActivationReason.CONTROLLER_DRIFT);
         }
         if (!manifest.worker().requiredCapabilities()
