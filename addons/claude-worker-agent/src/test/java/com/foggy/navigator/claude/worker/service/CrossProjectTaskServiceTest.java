@@ -10,6 +10,7 @@ import com.foggy.navigator.claude.worker.model.entity.CrossProjectTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.claude.worker.model.form.CreateCrossProjectTaskForm;
+import com.foggy.navigator.claude.worker.config.CrossProjectTaskProperties;
 import com.foggy.navigator.claude.worker.repository.CrossProjectPhaseRepository;
 import com.foggy.navigator.claude.worker.repository.CrossProjectTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -56,9 +57,12 @@ class CrossProjectTaskServiceTest {
         directoryService = mock(WorkingDirectoryService.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        CrossProjectTaskProperties properties = new CrossProjectTaskProperties();
+        properties.setMutationsEnabled(true);
         service = new CrossProjectTaskService(
                 taskRepository, phaseRepository, claudeTaskService,
-                codingAgentService, directoryService, directoryRepository, eventPublisher);
+                codingAgentService, directoryService, directoryRepository, eventPublisher,
+                new CrossProjectMutationGate(properties));
 
         // Default: save returns argument with timestamps set
         when(taskRepository.save(any())).thenAnswer(inv -> {

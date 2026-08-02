@@ -46,11 +46,13 @@ public class CrossProjectTaskService {
     private final WorkingDirectoryService directoryService;
     private final WorkingDirectoryRepository directoryRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final CrossProjectMutationGate mutationGate;
 
     // === 创建 ===
 
     @Transactional
     public CrossProjectTaskDTO createTask(String userId, String tenantId, CreateCrossProjectTaskForm form) {
+        mutationGate.requireEnabled();
         if (form.getTitle() == null || form.getTitle().isBlank()) {
             throw new IllegalArgumentException("Task title is required");
         }
@@ -113,6 +115,7 @@ public class CrossProjectTaskService {
 
     @Transactional
     public CrossProjectTaskDTO startTask(String userId, String contextId) {
+        mutationGate.requireEnabled();
         CrossProjectTaskEntity task = getTaskEntity(userId, contextId);
         if (!"DRAFT".equals(task.getStatus())) {
             throw new IllegalStateException("Task is not in DRAFT status: " + task.getStatus());
@@ -136,6 +139,7 @@ public class CrossProjectTaskService {
     @Transactional
     public CrossProjectTaskDTO advancePhase(String userId, String tenantId,
                                              String contextId, String handoffOverride) {
+        mutationGate.requireEnabled();
         CrossProjectTaskEntity task = getTaskEntity(userId, contextId);
         if (!"PAUSED".equals(task.getStatus()) && !"RUNNING".equals(task.getStatus())) {
             throw new IllegalStateException("Task cannot advance in status: " + task.getStatus());
@@ -186,6 +190,7 @@ public class CrossProjectTaskService {
 
     @Transactional
     public DispatchTaskDTO triggerReview(String userId, String tenantId, String contextId) {
+        mutationGate.requireEnabled();
         CrossProjectTaskEntity task = getTaskEntity(userId, contextId);
 
         int currentIdx = task.getCurrentPhaseIndex() != null ? task.getCurrentPhaseIndex() : 0;
@@ -254,6 +259,7 @@ public class CrossProjectTaskService {
     @Transactional
     public CrossProjectPhaseDTO updateHandoff(String userId, String contextId,
                                                String phaseId, String handoffArtifact) {
+        mutationGate.requireEnabled();
         getTaskEntity(userId, contextId);
         CrossProjectPhaseEntity phase = phaseRepository.findByPhaseId(phaseId)
                 .orElseThrow(() -> new IllegalArgumentException("Phase not found: " + phaseId));
@@ -270,6 +276,7 @@ public class CrossProjectTaskService {
 
     @Transactional
     public CrossProjectTaskDTO cancelTask(String userId, String contextId) {
+        mutationGate.requireEnabled();
         CrossProjectTaskEntity task = getTaskEntity(userId, contextId);
         if ("COMPLETED".equals(task.getStatus()) || "CANCELLED".equals(task.getStatus())) {
             throw new IllegalStateException("Task is already " + task.getStatus());
@@ -312,6 +319,7 @@ public class CrossProjectTaskService {
 
     @EventListener
     public void onTaskCompleted(TaskCompletionEvent event) {
+        if (!mutationGate.isEnabled()) return;
         if (event.getExternalTaskId() == null) return;
 
         phaseRepository.findByClaudeTaskId(event.getExternalTaskId()).ifPresent(phase -> {

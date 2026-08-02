@@ -32,7 +32,10 @@ import java.util.concurrent.Executor;
 @EnableJpaRepositories(basePackages = {
         "com.foggy.navigator.claude.worker.repository"
 })
-@EnableConfigurationProperties(ExternalSurfaceProperties.class)
+@EnableConfigurationProperties({
+        ExternalSurfaceProperties.class,
+        CrossProjectTaskProperties.class
+})
 @EnableScheduling
 public class ClaudeWorkerAutoConfiguration {
 

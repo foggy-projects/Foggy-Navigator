@@ -90,6 +90,10 @@ agent:
 
 # 凭证加密配置
 navigator:
+  cross-project-task:
+    # Retired by default. Read-only get/list remain available; this switch is
+    # only a rollback path for the legacy mutation surface.
+    mutations-enabled: ${NAVIGATOR_CROSS_PROJECT_TASK_MUTATIONS_ENABLED:false}
   background-recovery:
     # Compatibility default: automatic recovery remains available unless a
     # more-specific server-owned deployment profile or provider override wins.
