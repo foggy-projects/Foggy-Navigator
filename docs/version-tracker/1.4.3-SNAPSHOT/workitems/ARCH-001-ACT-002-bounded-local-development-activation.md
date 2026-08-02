@@ -114,7 +114,7 @@ open_questions: []
 
 ## Implementation Result
 
-- implementation_summary: 新增默认关闭的 bounded local-development target opt-in；server-loaded manifest 精确选择标准 `codex-worker`；outbox provider 取自已注册 target；加入 nullable scoped-home migration、跨 WSL content-free live observer，统一 DB-time proof/observation 为 UTC 时钟域，并为 controller drift 保留不含身份、路径或凭据的 condition 日志。
+- implementation_summary: 新增默认关闭的 bounded local-development target opt-in；server-loaded manifest 精确选择标准 `codex-worker`；outbox provider 取自已注册 target；加入 nullable scoped-home migration、跨 WSL content-free live observer，使用事务内 JDBC `LocalDateTime` 读取 DB UTC 以避免 Hibernate/JVM 时区二次解释，并为 controller drift 保留不含身份、路径或凭据的 condition 日志。
 - changed_paths: `session-module` lifecycle authority/admission/properties/entity/DB clock/tests；`launcher` configuration；`docs/migration/2026-08-02-*`；`tools/arch001-activation/bounded_local_dev_target.py` 及测试。
 - tests_and_results: `python3 -m unittest ...test_bounded_local_dev_target.py`：2/2 pass；focused Maven lifecycle tests：18/18 pass；`mvn -pl launcher -am -DskipTests package`：BUILD SUCCESS。
 - manual_or_experience_evidence: 当前 8112/3151/DB 的 post-commit registration/proof/readiness 由 gitignored exact target root 留存脱敏结果，并在本轮最终 handoff 汇总。
