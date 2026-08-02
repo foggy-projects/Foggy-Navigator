@@ -32,7 +32,6 @@ import com.foggy.navigator.codex.worker.lifecycle.CodexLifecycleBindingDigest;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.common.util.ProviderStateCodec;
-import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
@@ -94,7 +93,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider, TaskListingProvider {
+public class CodexTaskService implements TaskLookupProvider, TaskListingProvider {
 
     public static final String CODEX_PROVIDER_TYPE = "codex-worker";
     public static final String CODEX_APP_SERVER_PROVIDER_TYPE = "codex-app-server-worker";
@@ -128,14 +127,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             "gpt-5.6-terra", "codex-terra",
             "gpt-5.6-luna", "codex-luna");
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
-            TaskQueryCapability.CREATE_TASK_DIRECT,
-            TaskQueryCapability.RESUME_TASK,
-            TaskQueryCapability.RESPOND_TO_TASK,
-            TaskQueryCapability.RECONNECT_TASK,
-            TaskQueryCapability.CANCEL_TASK,
-            TaskQueryCapability.DELETE_TASK,
-            TaskQueryCapability.RESYNC_TASK,
-            TaskQueryCapability.REWIND_TASK,
             TaskQueryCapability.LIST_TASKS_PAGED,
             TaskQueryCapability.SEARCH_SESSIONS,
             TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED);
@@ -231,7 +222,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return createAndStartTask(userId, tenantId, form, existingSessionId);
     }
 
-    @Override
     @Transactional(isolation = Isolation.READ_COMMITTED,
             noRollbackFor = CodexStaleTaskRepairedException.class)
     public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
@@ -1110,7 +1100,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return taskQueryService.listTasksByWorkerForProvider(userId, workerId, providerType);
     }
 
-    @Override
     public void cancelTaskDirect(String taskId, String userId) {
         cancelTaskDirectForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
     }
@@ -1130,7 +1119,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
     }
 
-    @Override
     public void reconnectTask(String taskId, String userId) {
         reconnectTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
     }
@@ -1218,7 +1206,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      * Sends one response to the exact bound runtime. The task row lock serializes concurrent replies;
      * answers are never written to task state.
      */
-    @Override
     @Transactional
     public void respondToTask(String taskId, String userId, Map<String, Object> response) {
         respondToTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId, response);
@@ -3583,7 +3570,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return CAPABILITIES;
     }
 
-    @Override
     @Transactional
     public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
                                              String userId, String tenantId) {
@@ -3700,7 +3686,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 userId, normalizedKeyword, workerId, directoryId, page, size, providerType);
     }
 
-    @Override
     @Transactional
     public void deleteTask(String userId, String taskId) {
         deleteTaskForProvider(CODEX_PROVIDER_TYPE, userId, taskId);
@@ -3775,7 +3760,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 entity.getTaskId(), remoteTaskId, removed);
     }
 
-    @Override
     @Transactional
     public Object resyncTask(String taskId, String userId) {
         return resyncTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
@@ -4922,7 +4906,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
     }
 
-    @Override
     @Transactional
     public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
         return rewindTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId, params);

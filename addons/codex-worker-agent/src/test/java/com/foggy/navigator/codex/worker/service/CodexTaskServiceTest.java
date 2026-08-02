@@ -109,6 +109,32 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void publicCommandWrappersRetainExistingTransactionBoundaries() throws Exception {
+        var transactionalMethods = List.of(
+                CodexTaskService.class.getMethod(
+                        "createTaskDirect", Map.class, String.class, String.class),
+                CodexTaskService.class.getMethod(
+                        "resumeTask", String.class, String.class, Map.class),
+                CodexTaskService.class.getMethod(
+                        "respondToTask", String.class, String.class, Map.class),
+                CodexTaskService.class.getMethod(
+                        "deleteTask", String.class, String.class),
+                CodexTaskService.class.getMethod(
+                        "resyncTask", String.class, String.class),
+                CodexTaskService.class.getMethod(
+                        "rewindTask", String.class, String.class, Map.class));
+
+        transactionalMethods.forEach(method ->
+                assertNotNull(method.getAnnotation(Transactional.class), method.getName()));
+        assertNull(CodexTaskService.class.getMethod(
+                        "cancelTaskDirect", String.class, String.class)
+                .getAnnotation(Transactional.class));
+        assertNull(CodexTaskService.class.getMethod(
+                        "reconnectTask", String.class, String.class)
+                .getAnnotation(Transactional.class));
+    }
+
+    @Test
     void resumeTaskCommitsStaleRepairExceptionButRollsBackOtherRuntimeFailures() throws Exception {
         var attributeSource = new AnnotationTransactionAttributeSource();
         var methods = List.of(
@@ -282,12 +308,16 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void exposesOnlySupportedTaskProviderPorts() {
+    void exposesOnlyLookupAndListingTaskProviderPorts() {
         assertInstanceOf(TaskLookupProvider.class, service);
-        assertInstanceOf(TaskCommandProvider.class, service);
         assertInstanceOf(TaskListingProvider.class, service);
+        assertFalse(service instanceof TaskCommandProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
-        assertTrue(service.getCapabilities().contains(TaskQueryCapability.RESPOND_TO_TASK));
+        assertEquals(Set.of(
+                TaskQueryCapability.LIST_TASKS_PAGED,
+                TaskQueryCapability.SEARCH_SESSIONS,
+                TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED),
+                service.getCapabilities());
     }
 
     @Test
