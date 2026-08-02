@@ -35,12 +35,12 @@ const routes = [
       {
         path: 'tasks',
         name: 'Tasks',
-        component: () => import('@/views/TasksView.vue'),
+        redirect: { name: 'Workers' },
       },
       {
         path: 'cross-tasks',
         name: 'CrossProjectTasks',
-        component: () => import('@/views/CrossProjectTaskView.vue'),
+        redirect: { name: 'Workers' },
       },
       {
         path: 'files',

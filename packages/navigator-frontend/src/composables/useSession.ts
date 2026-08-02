@@ -96,12 +96,15 @@ export function useSession() {
         const p = raw.payload as Record<string, string>
         const status = p.status || 'COMPLETED'
         const agent = p.targetAgentId || p.taskType || ''
+        const completedSessionId = typeof raw.sessionId === 'string' ? raw.sessionId.trim() : ''
         ElNotification({
           title: status === 'FAILED' ? '任务失败' : '任务完成',
           message: `${agent} ${p.resultSummary ? '— ' + p.resultSummary.substring(0, 80) : ''}`,
           type: status === 'FAILED' ? 'error' : 'success',
           duration: 6000,
-          onClick: () => router.push('/tasks'),
+          onClick: () => router.push(completedSessionId
+            ? { name: 'Chat', params: { id: completedSessionId } }
+            : { name: 'Workers' }),
         })
       }
     })

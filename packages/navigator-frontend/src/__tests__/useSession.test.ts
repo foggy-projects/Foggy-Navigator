@@ -244,10 +244,10 @@ describe('useSession', () => {
       )
     })
 
-    it('TASK_COMPLETED onClick navigates to /tasks', () => {
+    it('TASK_COMPLETED onClick navigates to the event session chat', () => {
       capturedSessionCallback!({
         messageId: 't3',
-        sessionId: 's1',
+        sessionId: 'completed-session',
         agentId: 'test-agent',
         timestamp: Date.now(),
         version: '1.0',
@@ -258,8 +258,31 @@ describe('useSession', () => {
       const call = vi.mocked(ElNotification).mock.calls[0]![0] as Record<string, unknown>
       const onClick = call.onClick as () => void
       onClick()
-      expect(mockRouter.push).toHaveBeenCalledWith('/tasks')
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        name: 'Chat',
+        params: { id: 'completed-session' },
+      })
     })
+
+    it.each([undefined, '', '   '])(
+      'TASK_COMPLETED onClick falls back to Workers without a valid session id (%s)',
+      (sessionId) => {
+        capturedSessionCallback!({
+          messageId: 't4',
+          sessionId,
+          agentId: 'test-agent',
+          timestamp: Date.now(),
+          version: '1.0',
+          type: 'TASK_COMPLETED',
+          payload: { status: 'COMPLETED' },
+        })
+
+        const call = vi.mocked(ElNotification).mock.calls[0]![0] as Record<string, unknown>
+        const onClick = call.onClick as () => void
+        onClick()
+        expect(mockRouter.push).toHaveBeenCalledWith({ name: 'Workers' })
+      },
+    )
   })
 
   // ========== sendMessage ==========
