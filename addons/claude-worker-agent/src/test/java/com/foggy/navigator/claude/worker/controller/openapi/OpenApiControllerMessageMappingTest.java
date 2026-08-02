@@ -72,7 +72,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
@@ -3320,6 +3319,8 @@ class OpenApiControllerMessageMappingTest {
     @Test
     void appServerLaunchUsesWorkspaceWorkerAndClassifiesOpaqueFailureAsRuntime() throws Exception {
         OpenApiController controller = newController();
+        OpenApiRuntimeTaskLaunchPlanner launchPlanner =
+                new OpenApiRuntimeTaskLaunchPlanner(mock(ClaudeWorkerRepository.class));
         A2AgentResourceResolver.ResolvedAgentResource agentResource =
                 new A2AgentResourceResolver.ResolvedAgentResource(
                         "agent-app", ResourceOwnerType.CLIENT_APP, "app-1", "app-1",
@@ -3339,19 +3340,11 @@ class OpenApiControllerMessageMappingTest {
                         List.of("/workspace/app"), false, null, null, null,
                         "WORKING_DIRECTORY:USER_PRIVATE");
 
-        Method launchMethod = OpenApiController.class.getDeclaredMethod(
-                "resolveOwnerAwareLaunchWorker",
-                String.class, String.class, A2AgentResourceResolver.class,
-                A2AgentResourceResolver.ResolvedAgentResource.class,
-                A2AgentResourceResolver.ResolvedModelResource.class,
-                A2AgentResourceResolver.ResolvedWorkspaceResource.class);
-        launchMethod.setAccessible(true);
-        Object launchWorker = launchMethod.invoke(
-                controller, "tenant-1", "app-1", mock(A2AgentResourceResolver.class),
+        OpenApiRuntimeTaskLaunchPlanner.OwnerAwareLaunchWorker launchWorker =
+                launchPlanner.resolveOwnerAwareLaunchWorker(
+                "tenant-1", "app-1", mock(A2AgentResourceResolver.class),
                 agentResource, modelResource, workspaceResource);
-        Method workerIdAccessor = launchWorker.getClass().getDeclaredMethod("workerId");
-        workerIdAccessor.setAccessible(true);
-        assertEquals("workspace-worker", workerIdAccessor.invoke(launchWorker));
+        assertEquals("workspace-worker", launchWorker.workerId());
 
         Method failureStageMethod = OpenApiController.class.getDeclaredMethod(
                 "inferFailureStageFromText",
@@ -3365,10 +3358,9 @@ class OpenApiControllerMessageMappingTest {
 
     @Test
     void codexWorkerHostConfigUsesDirectPhysicalWorkerSelectionInsteadOfPoolMembership() throws Exception {
-        OpenApiController controller = newController();
-        Field workerRepositoryField = OpenApiController.class.getDeclaredField("workerRepository");
-        workerRepositoryField.setAccessible(true);
-        ClaudeWorkerRepository workerRepository = (ClaudeWorkerRepository) workerRepositoryField.get(controller);
+        ClaudeWorkerRepository workerRepository = mock(ClaudeWorkerRepository.class);
+        OpenApiRuntimeTaskLaunchPlanner launchPlanner =
+                new OpenApiRuntimeTaskLaunchPlanner(workerRepository);
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId("workspace-worker");
         worker.setCodexConfig(CodexConfig.builder()
@@ -3393,43 +3385,39 @@ class OpenApiControllerMessageMappingTest {
                         WorkingDirectoryResolverType.MANAGED, "/workspace/codex", List.of("/workspace/codex"),
                         false, null, null, null, "WORKING_DIRECTORY:USER_PRIVATE");
 
-        Method resolveMethod = OpenApiController.class.getDeclaredMethod(
-                "resolveOwnerAwareLaunchWorker",
-                String.class, String.class, A2AgentResourceResolver.class,
-                A2AgentResourceResolver.ResolvedAgentResource.class,
-                A2AgentResourceResolver.ResolvedModelResource.class,
-                A2AgentResourceResolver.ResolvedWorkspaceResource.class);
-        resolveMethod.setAccessible(true);
-        Object launchWorker = resolveMethod.invoke(
-                controller, "tenant-1", "app-1", mock(A2AgentResourceResolver.class),
+        OpenApiRuntimeTaskLaunchPlanner.OwnerAwareLaunchWorker launchWorker =
+                launchPlanner.resolveOwnerAwareLaunchWorker(
+                "tenant-1", "app-1", mock(A2AgentResourceResolver.class),
                 agentResource, modelResource, workspaceResource);
-        Method workerIdAccessor = launchWorker.getClass().getDeclaredMethod("workerId");
-        Method workerSourceAccessor = launchWorker.getClass().getDeclaredMethod("workerSource");
-        workerIdAccessor.setAccessible(true);
-        workerSourceAccessor.setAccessible(true);
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("workerId", workerIdAccessor.invoke(launchWorker));
-        metadata.put("workerSource", workerSourceAccessor.invoke(launchWorker));
+        assertEquals("workspace-worker", launchWorker.workerId());
+        assertEquals("CLAUDE_WORKER_CODEX_CONFIG", launchWorker.workerSource());
 
-        Method selectionMethod = OpenApiController.class.getDeclaredMethod(
-                "buildOpenApiWorkerSelectionRequest",
-                String.class, String.class, String.class, String.class, String.class, String.class, String.class,
-                A2AgentResourceResolver.ResolvedAgentResource.class,
-                A2AgentResourceResolver.ResolvedModelResource.class,
-                A2AgentResourceResolver.ResolvedWorkspaceResource.class,
-                Map.class,
-                OpenApiQueryForm.class);
-        selectionMethod.setAccessible(true);
-        OpenApiQueryForm selectionForm = new OpenApiQueryForm();
-        BusinessAgentWorkerTaskLaunchRequest request = (BusinessAgentWorkerTaskLaunchRequest) selectionMethod.invoke(
-                controller, "tenant-1", "app-1", "app-1", "upstream-a", "agent-codex", "skill-codex", "ctx-1",
-                agentResource, modelResource, workspaceResource, metadata, selectionForm);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        when(resourceResolver.resolveRequiredAgent(
+                "tenant-1", "app-1", "upstream-a", "agent-codex"))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"), eq("app-1"), eq(agentResource),
+                eq("model-codex"), isNull(), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource);
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                "tenant-1", "app-1", "upstream-a", agentResource, "dir-codex"))
+                .thenReturn(workspaceResource);
+        OpenApiQueryForm launchForm = new OpenApiQueryForm();
+        OpenApiRuntimeTaskLaunchPlanner.LaunchContext launchContext =
+                new OpenApiRuntimeTaskLaunchPlanner.LaunchContext(
+                        "tenant-1", "app-1", "upstream-a", "agent-codex", "skill-codex", "ctx-1");
+        OpenApiRuntimeTaskLaunchPlanner.ResolvedLaunchResources resources =
+                launchPlanner.resolveResources(resourceResolver, launchContext, launchForm);
+        OpenApiRuntimeTaskLaunchPlanner.LaunchPlan plan =
+                launchPlanner.plan(resourceResolver, resources, launchForm);
+        BusinessAgentWorkerTaskLaunchRequest request = plan.workerSelectionRequest("owner-1");
 
         assertEquals("workspace-worker", request.getPhysicalWorkerId());
         assertEquals("workspace-worker", request.getWorkerPoolId());
         assertNull(request.getWorkerPoolOwnerType());
         assertNull(request.getWorkerPoolOwnerId());
-        assertEquals("CLAUDE_WORKER_CODEX_CONFIG", metadata.get("workerSource"));
+        assertEquals("CLAUDE_WORKER_CODEX_CONFIG", plan.metadata().get("workerSource"));
     }
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)
@@ -3803,13 +3791,14 @@ class OpenApiControllerMessageMappingTest {
         ObjectProvider<A2AgentResourceResolver> resourceResolverProvider = mock(ObjectProvider.class);
         when(resourceResolverProvider.getIfAvailable()).thenReturn(resourceResolver);
         TaskDispatchFacade taskDispatchFacade = defaultTaskDispatchFacade(agentResolver);
+        ClaudeWorkerRepository workerRepository = mock(ClaudeWorkerRepository.class);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
                 mock(ClaudeTaskService.class),
                 mock(WorkingDirectoryService.class),
                 mock(ClaudeWorkerFacade.class),
-                mock(ClaudeWorkerRepository.class),
+                workerRepository,
                 codingAgentRepository,
                 mock(WorkingDirectoryRepository.class),
                 mock(WorkerHealthChecker.class),
@@ -3833,7 +3822,8 @@ class OpenApiControllerMessageMappingTest {
                 sessionProvider,
                 frameReportProvider,
                 controlCredentialProvider,
-                resourceResolverProvider
+                resourceResolverProvider,
+                new OpenApiRuntimeTaskLaunchPlanner(workerRepository)
         );
     }
 

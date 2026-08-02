@@ -99,9 +99,6 @@ public class OpenApiController {
     private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
     private static final String BACKEND_OPENAI_CODEX_APP_SERVER =
             ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER;
-    private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
-    private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
-    private static final String SOURCE_CLAUDE_WORKER_CODEX_CONFIG = "CLAUDE_WORKER_CODEX_CONFIG";
     private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
     private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
             TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
@@ -114,15 +111,8 @@ public class OpenApiController {
             "open api task token binding failed";
     private static final String BUSINESS_RUNTIME_IMMEDIATE_TERMINAL_REASON =
             "open api task returned terminal after submission";
-    private static final String TOOL_SCOPE_SOURCE_RUNTIME_DEFAULT = "RUNTIME_DEFAULT";
-    private static final String TOOL_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY = "REQUEST_EXPLICIT_EMPTY";
-    private static final String TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST = "REQUEST_ALLOWLIST";
     private static final String TOOL_SCOPE_SOURCE_SAFE_SMOKE_NO_RUNTIME = "SAFE_SMOKE_NO_RUNTIME";
-    private static final String TOOL_SCOPE_KIND_NAVIGATOR_BUSINESS_MCP =
-            "NAVIGATOR_BUSINESS_MCP_WRAPPERS";
     private static final String TOOL_SCOPE_KIND_NO_RUNTIME = "NO_RUNTIME_MODEL_TOOL_SURFACE";
-    private static final Set<String> ALL_BUSINESS_TOOL_ALIASES = Set.of(
-            "business.*", "business.functions.*", "navigator.business_functions");
     private static final Set<String> SANITIZED_RUNTIME_ERROR_CODES = Set.of(
             "AUDIT_QUERY_MODE_CONFLICT",
             "AUDIT_RECORD_EXPIRED_OR_NOT_FOUND",
@@ -199,13 +189,6 @@ public class OpenApiController {
             "SAFE_SMOKE_TOOL_SCOPE_REQUIRED",
             "SAFE_SMOKE_UPSTREAM_USER_REQUIRED",
             "TOOL_SCOPE_EXPLICIT_NULL");
-    private static final Map<String, String> BUSINESS_TOOL_ALIASES = Map.of(
-            "business.functions.list", "list_business_functions",
-            "business.functions.schema", "get_business_function_schema",
-            "business.functions.invoke", "invoke_business_function",
-            "list_business_functions", "list_business_functions",
-            "get_business_function_schema", "get_business_function_schema",
-            "invoke_business_function", "invoke_business_function");
     private static final int MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH = 64 * 1024;
 
     private final OpenApiProvisioningService provisioningService;
@@ -242,6 +225,7 @@ public class OpenApiController {
     private final ObjectProvider<BusinessAgentFrameReportService> businessAgentFrameReportService;
     private final ObjectProvider<ClientAppControlCredentialService> clientAppControlCredentialService;
     private final ObjectProvider<A2AgentResourceResolver> a2AgentResourceResolver;
+    private final OpenApiRuntimeTaskLaunchPlanner runtimeTaskLaunchPlanner;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -857,43 +841,31 @@ public class OpenApiController {
         }
 
         A2AgentResourceResolver resourceResolver;
-        A2AgentResourceResolver.ResolvedAgentResource agentResource;
-        String requestedModelConfigId = extractRequestedModelConfigId(form);
-        String requestedModelVariant = extractRequestedModelVariant(form);
-        A2AgentResourceResolver.ResolvedModelResource modelResource;
-        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource;
+        OpenApiRuntimeTaskLaunchPlanner.ResolvedLaunchResources launchResources;
         try {
             resourceResolver = requireA2AgentResourceResolver();
-            agentResource = resourceResolver.resolveRequiredAgent(
-                    tenantId,
-                    clientAppCredential.getClientAppId(),
-                    upstreamUserId,
-                    route.agentId());
-            String effectiveRequestedModelConfigId = StringUtils.hasText(requestedModelConfigId)
-                    ? requestedModelConfigId
-                    : agentResource.defaultModelConfigId();
-            modelResource = resourceResolver.resolveRequiredModelForAgent(
-                    tenantId,
-                    clientAppCredential.getClientAppId(),
-                    agentResource,
-                    effectiveRequestedModelConfigId,
-                    requestedModelVariant,
-                    LlmModelCategory.GENERAL);
-            workspaceResource = resolveWorkspaceResourceForAsk(
+            launchResources = runtimeTaskLaunchPlanner.resolveResources(
                     resourceResolver,
-                    tenantId,
-                    clientAppCredential,
-                    upstreamUserId,
-                    agentResource,
+                    new OpenApiRuntimeTaskLaunchPlanner.LaunchContext(
+                            tenantId,
+                            clientAppCredential.getClientAppId(),
+                            upstreamUserId,
+                            route.agentId(),
+                            route.skillId(),
+                            contextId),
                     form);
         } catch (RuntimeException e) {
             requestAuditService.askFailed(askRequestAudit, "STANDARD_ASK_RESOURCE_RESOLUTION_FAILED");
             throw e;
         }
-        if (requiresTaskDirectory(agentResource, modelResource) && workspaceResource == null) {
+        if (launchResources.taskDirectoryMissing()) {
             requestAuditService.askFailed(askRequestAudit, "TASK_DIRECTORY_REQUIRED");
             return RX.failB(TASK_DIRECTORY_REQUIRED_MESSAGE);
         }
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                launchResources.agentResource();
+        A2AgentResourceResolver.ResolvedModelResource modelResource =
+                launchResources.modelResource();
         String agentOwnerUserId;
         try {
             agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
@@ -936,89 +908,12 @@ public class OpenApiController {
         String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
         message.setContextId(contextId);
-        Map<String, Object> metadata = new java.util.HashMap<>();
-        // 合并用户传入的扩展元数据
-        if (form.getMetadata() != null && !form.getMetadata().isEmpty()) {
-            metadata.putAll(form.getMetadata());
-        }
-        removeWorkerLaunchOnlyMetadata(metadata);
-        mergeTopLevelRuntimeOptions(metadata, form);
-        if (StringUtils.hasText(modelConfigId)) {
-            metadata.put("modelConfigId", modelConfigId);
-        }
-        if (StringUtils.hasText(modelResource.modelName())) {
-            metadata.put("model", modelResource.modelName());
-        }
-        if (StringUtils.hasText(modelResource.requestedModelVariant())) {
-            metadata.put("requestedModelVariant", modelResource.requestedModelVariant());
-        }
-        putText(metadata, "modelConfigSource", modelResource.source());
-        putText(metadata, "workerBackend", firstNonBlank(modelResource.workerBackend(), agentResource.workerBackend()));
-        putText(metadata, "agentSource", agentResource.source());
-        putText(metadata, "workerSource", firstNonBlank(
-                workspaceResource != null ? workspaceResource.source() : null,
-                agentResource.physicalWorkerSource(),
-                agentResource.workerPoolSource()));
-        putText(metadata, "backendSource", firstNonBlank(modelResource.source(), agentResource.workerPoolSource()));
-        injectOwnerAwareLaunchMetadata(
-                metadata,
-                tenantId,
-                clientAppCredential.getClientAppId(),
-                resourceResolver,
-                agentResource,
-                modelResource,
-                workspaceResource);
-        injectWorkspaceExecutionPolicy(metadata, workspaceResource);
-        mergeTopLevelExecutionPolicy(metadata, form);
-        Object metadataAttachments = metadata.remove("attachments");
-        List<Map<String, Object>> normalizedAttachments = OpenApiAttachmentNormalizer.normalize(
-                metadataAttachments,
-                form.getAttachments());
-        if (!normalizedAttachments.isEmpty()) {
-            metadata.put("attachments", normalizedAttachments);
-        }
-        if (form.getMaxTurns() != null) {
-            metadata.put("maxTurns", form.getMaxTurns());
-        }
-        if (form.getSystemPrompt() != null && !form.getSystemPrompt().isBlank()) {
-            metadata.put("systemPrompt", form.getSystemPrompt());
-        }
-        if (form.getFirstMsg() != null && !form.getFirstMsg().isBlank()) {
-            metadata.put("firstMsg", form.getFirstMsg());
-        }
-        BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest = buildOpenApiWorkerSelectionRequest(
-                tenantId,
-                agentOwnerUserId,
-                clientAppCredential.getClientAppId(),
-                upstreamUserId,
-                route.agentId(),
-                route.skillId(),
-                contextId,
-                agentResource,
-                modelResource,
-                workspaceResource,
-                metadata,
-                form);
-        ToolScopeSummary toolScopeSummary = resolveToolScope(form.getAllowedTools());
-        metadata.put("requestedToolCount", requestedScopeCount(form.getAllowedTools()));
-        metadata.put("effectiveToolCount", toolScopeSummary.effectiveToolCount());
-        metadata.put("toolScopeSource", toolScopeSummary.source());
-        metadata.put("toolScopeKind", toolScopeSummary.effectiveToolCount() == 0
-                ? TOOL_SCOPE_KIND_NO_RUNTIME
-                : TOOL_SCOPE_KIND_NAVIGATOR_BUSINESS_MCP);
-        metadata.put("requestedFunctionCount", requestedScopeCount(form.getAllowedFunctions()));
-        if (form.isAllowedFunctionsProvided()
-                && cleanRequestListPreservingEmpty(form.getAllowedFunctions()).isEmpty()) {
-            metadata.put("effectiveFunctionCount", 0);
-            metadata.put("functionScopeSource", "REQUEST_EXPLICIT_EMPTY");
-            metadata.put("taskTokenFunctionScopeEmpty", true);
-        }
-        // Task creation only enters Navigator's asynchronous dispatch lane.
-        // Provider/model dispatch is projected later from a persisted
-        // providerTaskId; never claim it at submission time.
-        metadata.put("runtimeDispatched", false);
-        metadata.put("modelDispatched", false);
-        metadata.put("businessFunctionDispatched", false);
+        OpenApiRuntimeTaskLaunchPlanner.LaunchPlan launchPlan =
+                runtimeTaskLaunchPlanner.plan(resourceResolver, launchResources, form);
+        Map<String, Object> metadata = launchPlan.mutableMetadata();
+        List<Map<String, Object>> normalizedAttachments = launchPlan.mutableNormalizedAttachments();
+        BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest =
+                launchPlan.workerSelectionRequest(agentOwnerUserId);
         if (askRequestAudit != null) {
             try {
                 requestAuditService.taskAdmissionRecorded(
@@ -1451,215 +1346,6 @@ public class OpenApiController {
             throw RX.throwB("A2Agent resource resolver is not available");
         }
         return resolver;
-    }
-
-    private A2AgentResourceResolver.ResolvedWorkspaceResource resolveWorkspaceResourceForAsk(
-            A2AgentResourceResolver resourceResolver,
-            String tenantId,
-            ResolvedClientAppCredentialDTO clientAppCredential,
-            String upstreamUserId,
-            A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            OpenApiQueryForm form) {
-        String directoryId = firstNonBlank(
-                form != null ? form.getDirectoryId() : null,
-                agentResource.defaultDirectoryId());
-        if (!StringUtils.hasText(directoryId)) {
-            return null;
-        }
-        return resourceResolver.resolveRequiredWorkspaceForAgent(
-                tenantId,
-                clientAppCredential.getClientAppId(),
-                upstreamUserId,
-                agentResource,
-                directoryId);
-    }
-
-    private void injectOwnerAwareLaunchMetadata(
-            Map<String, Object> metadata,
-            String tenantId,
-            String clientAppId,
-            A2AgentResourceResolver resourceResolver,
-            A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedModelResource modelResource,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        OwnerAwareLaunchWorker launchWorker = resolveOwnerAwareLaunchWorker(
-                tenantId,
-                clientAppId,
-                resourceResolver,
-                agentResource,
-                modelResource,
-                workspaceResource);
-        putText(metadata, "workerId", launchWorker.workerId());
-        putText(metadata, "workerSource", launchWorker.workerSource());
-        if (workspaceResource != null) {
-            putText(metadata, "directoryId", workspaceResource.directoryId());
-            putText(metadata, "cwd", workspaceResource.workdir());
-        } else {
-            putText(metadata, "directoryId", agentResource.defaultDirectoryId());
-        }
-    }
-
-    private OwnerAwareLaunchWorker resolveOwnerAwareLaunchWorker(
-            String tenantId,
-            String clientAppId,
-            A2AgentResourceResolver resourceResolver,
-            A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedModelResource modelResource,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        String workerBackend = firstNonBlank(
-                modelResource != null ? modelResource.workerBackend() : null,
-                agentResource != null ? agentResource.workerBackend() : null);
-        String workspaceWorkerId = workspaceResource != null ? stringValue(workspaceResource.physicalWorkerId()) : null;
-        String workspaceWorkerSource = workspaceResource != null ? stringValue(workspaceResource.source()) : null;
-        String agentWorkerId = agentResource != null ? stringValue(agentResource.physicalWorkerId()) : null;
-        String agentWorkerSource = agentResource != null ? stringValue(agentResource.physicalWorkerSource()) : null;
-        if ((isBackend(workerBackend, BACKEND_OPENAI_CODEX)
-                || isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER))
-                && StringUtils.hasText(workspaceWorkerId)) {
-            if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
-                    && hasClaudeCodexConfig(workspaceWorkerId)) {
-                return new OwnerAwareLaunchWorker(workspaceWorkerId, SOURCE_CLAUDE_WORKER_CODEX_CONFIG);
-            }
-            return new OwnerAwareLaunchWorker(workspaceWorkerId, workspaceWorkerSource);
-        }
-        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)) {
-            if (agentResource != null && StringUtils.hasText(agentResource.workerPoolId())) {
-                return OwnerAwareLaunchWorker.empty();
-            }
-            if (StringUtils.hasText(agentWorkerId)
-                    && SOURCE_BIZ_WORKER_IDENTITY.equals(agentWorkerSource)) {
-                return new OwnerAwareLaunchWorker(agentWorkerId, agentWorkerSource);
-            }
-            Optional<String> workerHostBizWorkerId = resourceResolver.resolveLatestHealthyBizWorkerIdentityId(
-                    tenantId,
-                    clientAppId);
-            if (workerHostBizWorkerId != null && workerHostBizWorkerId.isPresent()) {
-                log.info("Resolved Open API LangGraph Biz launch worker from worker host identity: tenantId={}, clientAppId={}, agentId={}, originalWorkerId={}, workerId={}",
-                        tenantId,
-                        clientAppId,
-                        agentResource != null ? agentResource.agentId() : null,
-                        agentWorkerId,
-                        workerHostBizWorkerId.get());
-                return new OwnerAwareLaunchWorker(workerHostBizWorkerId.get(), SOURCE_BIZ_WORKER_IDENTITY);
-            }
-            return OwnerAwareLaunchWorker.empty();
-        }
-        if (StringUtils.hasText(agentWorkerId)) {
-            return new OwnerAwareLaunchWorker(agentWorkerId, agentWorkerSource);
-        }
-        return new OwnerAwareLaunchWorker(workspaceWorkerId, workspaceWorkerSource);
-    }
-
-    private BusinessAgentWorkerTaskLaunchRequest buildOpenApiWorkerSelectionRequest(
-            String tenantId,
-            String actorUserId,
-            String clientAppId,
-            String upstreamUserId,
-            String agentId,
-            String skillId,
-            String contextId,
-            A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedModelResource modelResource,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
-            Map<String, Object> metadata,
-            OpenApiQueryForm form) {
-        String physicalWorkerId = stringValue(metadata.get("workerId"));
-        String routeId = firstNonBlank(
-                agentResource != null ? agentResource.workerPoolId() : null,
-                physicalWorkerId,
-                agentResource != null ? agentResource.physicalWorkerId() : null);
-        String workerBackend = firstNonBlank(
-                modelResource != null ? modelResource.workerBackend() : null,
-                agentResource != null ? agentResource.workerBackend() : null);
-        boolean directCodexPhysicalWorkerRoute = isBackend(workerBackend, BACKEND_OPENAI_CODEX)
-                && SOURCE_CLAUDE_WORKER_CODEX_CONFIG.equals(stringValue(metadata.get("workerSource")))
-                && StringUtils.hasText(physicalWorkerId);
-        return BusinessAgentWorkerTaskLaunchRequest.builder()
-                .tenantId(tenantId)
-                .actorUserId(actorUserId)
-                .sessionId(contextId)
-                .contextId(contextId)
-                .clientAppId(clientAppId)
-                .upstreamUserId(upstreamUserId)
-                .agentId(agentId)
-                .skillId(skillId)
-                .workerPoolId(directCodexPhysicalWorkerRoute ? physicalWorkerId : routeId)
-                .workerPoolOwnerType(directCodexPhysicalWorkerRoute
-                        ? null
-                        : agentResource != null ? agentResource.workerPoolOwnerType() : null)
-                .workerPoolOwnerId(directCodexPhysicalWorkerRoute
-                        ? null
-                        : agentResource != null ? agentResource.workerPoolOwnerId() : null)
-                .physicalWorkerId(physicalWorkerId)
-                .workerBackend(workerBackend)
-                .modelConfigId(modelResource != null ? modelResource.modelConfigId() : null)
-                .model(modelResource != null ? modelResource.modelName() : null)
-                .directoryId(workspaceResource != null ? workspaceResource.directoryId() : null)
-                .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
-                .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)
-                .allowedTools(cleanRequestListPreservingEmpty(form.getAllowedTools()))
-                .allowedFunctionsProvided(form.isAllowedFunctionsProvided())
-                .allowedFunctions(form.getAllowedFunctions())
-                .build();
-    }
-
-    private boolean hasClaudeCodexConfig(String workerId) {
-        if (!StringUtils.hasText(workerId)) {
-            return false;
-        }
-        return workerRepository.findByWorkerId(workerId.trim())
-                .map(ClaudeWorkerEntity::getCodexConfig)
-                .map(config -> config.getBaseUrl())
-                .filter(StringUtils::hasText)
-                .isPresent();
-    }
-
-    private record OwnerAwareLaunchWorker(String workerId, String workerSource) {
-
-        private static OwnerAwareLaunchWorker empty() {
-            return new OwnerAwareLaunchWorker(null, null);
-        }
-    }
-
-    private boolean isBackend(String actual, String expected) {
-        return expected.equals(ProviderRouteRegistry.canonicalWorkerBackendOrNull(actual));
-    }
-
-    private boolean requiresTaskDirectory(
-            A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedModelResource modelResource) {
-        String workerBackend = firstNonBlank(
-                modelResource != null ? modelResource.workerBackend() : null,
-                agentResource != null ? agentResource.workerBackend() : null);
-        return isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ);
-    }
-
-    private void injectWorkspaceExecutionPolicy(
-            Map<String, Object> metadata,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        if (workspaceResource == null) {
-            return;
-        }
-
-        Map<String, Object> runtimeContext = mutableStringMap(metadata.get("runtimeContext"));
-        Map<String, Object> executionPolicy = mutableStringMap(runtimeContext.get("execution_policy"));
-        putText(executionPolicy, "directory_id", workspaceResource.directoryId());
-        if (workspaceResource.workspaceScope() != null) {
-            executionPolicy.put("workspace_scope", workspaceResource.workspaceScope().name());
-        }
-        if (workspaceResource.resolverType() != null) {
-            executionPolicy.put("workspace_resolver_type", workspaceResource.resolverType().name());
-        }
-        executionPolicy.put("read_only", workspaceResource.readOnly());
-        putObject(executionPolicy, "quota_policy", workspaceResource.quotaPolicy());
-        putObject(executionPolicy, "retention_policy", workspaceResource.retentionPolicy());
-        putObject(executionPolicy, "concurrency_policy", workspaceResource.concurrencyPolicy());
-        putText(executionPolicy, "workdir", workspaceResource.workdir());
-        putStringList(executionPolicy, "allowed_dirs", workspaceResource.allowedDirs());
-        if (!executionPolicy.isEmpty()) {
-            runtimeContext.put("execution_policy", executionPolicy);
-            metadata.put("runtimeContext", runtimeContext);
-        }
     }
 
     @PostMapping("/agents/{agentId}/preflight")
@@ -2105,44 +1791,6 @@ public class OpenApiController {
         return null;
     }
 
-    private void removeWorkerLaunchOnlyMetadata(Map<String, Object> metadata) {
-        if (metadata == null || metadata.isEmpty()) {
-            return;
-        }
-        metadata.remove("runtimeContext");
-        metadata.remove("runtime_context");
-        metadata.remove("skill_name");
-        metadata.remove("skillName");
-        metadata.remove("skillId");
-        metadata.remove("skill_id");
-        metadata.remove("skill_markdown");
-        metadata.remove("skillMarkdown");
-        metadata.remove("markdownBody");
-        metadata.remove("workerId");
-        metadata.remove("worker_id");
-        metadata.remove("physicalWorkerId");
-        metadata.remove("physical_worker_id");
-        metadata.remove("selectedWorkerId");
-        metadata.remove("selected_worker_id");
-        metadata.remove("workerLeaseId");
-        metadata.remove("worker_lease_id");
-        metadata.remove("directoryId");
-        metadata.remove("directory_id");
-        metadata.remove("cwd");
-        metadata.remove("modelConfigSource");
-        metadata.remove("model_config_source");
-        metadata.remove("workerBackend");
-        metadata.remove("worker_backend");
-        metadata.remove("agentSource");
-        metadata.remove("agent_source");
-        metadata.remove("workerSource");
-        metadata.remove("worker_source");
-        metadata.remove("backendSource");
-        metadata.remove("backend_source");
-        metadata.remove("taskSource");
-        metadata.remove("task_source");
-    }
-
     private boolean isReservedBusinessRuntimeContextKey(String key) {
         return "clientAppId".equals(key)
                 || "client_app_id".equals(key)
@@ -2169,52 +1817,6 @@ public class OpenApiController {
                 || "workerLeaseId".equals(key)
                 || "runtimeContext".equals(key)
                 || "runtime_context".equals(key);
-    }
-
-    private void mergeTopLevelExecutionPolicy(Map<String, Object> metadata, OpenApiQueryForm form) {
-        Map<String, Object> policy = new LinkedHashMap<>();
-        putText(policy, "workdir", form.getWorkdir());
-        putStringList(policy, "allowed_dirs", form.getAllowedDirs());
-        putStringListPreservingEmpty(policy, "allowed_tools", form.getAllowedTools());
-        if (policy.isEmpty()) {
-            return;
-        }
-
-        Map<String, Object> context = new LinkedHashMap<>();
-        Object rawContext = metadata.get("context");
-        if (rawContext instanceof Map<?, ?> existingContext) {
-            existingContext.forEach((key, value) -> {
-                if (key instanceof String stringKey) {
-                    context.put(stringKey, value);
-                }
-            });
-        }
-
-        Map<String, Object> executionPolicy = new LinkedHashMap<>();
-        Object rawPolicy = context.get("execution_policy");
-        if (rawPolicy instanceof Map<?, ?> existingPolicy) {
-            existingPolicy.forEach((key, value) -> {
-                if (key instanceof String stringKey) {
-                    executionPolicy.put(stringKey, value);
-                }
-            });
-        }
-        executionPolicy.putAll(policy);
-        context.put("execution_policy", executionPolicy);
-        metadata.put("context", context);
-    }
-
-    private void mergeTopLevelRuntimeOptions(Map<String, Object> metadata, OpenApiQueryForm form) {
-        if (form == null) {
-            return;
-        }
-        putText(metadata, "providerType", form.getProviderType());
-        putText(metadata, "codexHomeKey", form.getCodexHomeKey());
-        putText(metadata, "privateAccountId", form.getPrivateAccountId());
-        putText(metadata, "sandboxMode", form.getSandboxMode());
-        putText(metadata, "approvalPolicy", form.getApprovalPolicy());
-        putText(metadata, "webSearchMode", form.getWebSearchMode());
-        putObject(metadata, "networkAccessEnabled", form.getNetworkAccessEnabled());
     }
 
     private void putText(Map<String, Object> target, String key, String value) {
@@ -2270,33 +1872,6 @@ public class OpenApiController {
                 .map(String::trim)
                 .distinct()
                 .toList();
-    }
-
-    private ToolScopeSummary resolveToolScope(List<String> allowedTools) {
-        if (allowedTools == null) {
-            return new ToolScopeSummary(3, TOOL_SCOPE_SOURCE_RUNTIME_DEFAULT);
-        }
-        List<String> cleaned = cleanRequestListPreservingEmpty(allowedTools);
-        if (cleaned.isEmpty()) {
-            return new ToolScopeSummary(0, TOOL_SCOPE_SOURCE_REQUEST_EXPLICIT_EMPTY);
-        }
-        Set<String> effectiveTools = new LinkedHashSet<>();
-        for (String allowedTool : cleaned) {
-            String normalized = allowedTool.toLowerCase(Locale.ROOT);
-            if (ALL_BUSINESS_TOOL_ALIASES.contains(normalized)) {
-                return new ToolScopeSummary(3, TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST);
-            }
-            String toolName = BUSINESS_TOOL_ALIASES.get(normalized);
-            if (toolName != null) {
-                effectiveTools.add(toolName);
-            }
-        }
-        return new ToolScopeSummary(effectiveTools.size(), TOOL_SCOPE_SOURCE_REQUEST_ALLOWLIST);
-    }
-
-    private Integer requestedScopeCount(List<String> values) {
-        if (values == null) return null;
-        return cleanRequestListPreservingEmpty(values).size();
     }
 
     private String issueBusinessRuntimeToken(
@@ -2357,9 +1932,6 @@ public class OpenApiController {
         metadata.put("functionScopeSource", prepared.functionScopeSource());
         metadata.put("taskTokenFunctionScopeEmpty", prepared.functionScopeEmpty());
         return prepared.plainToken();
-    }
-
-    private record ToolScopeSummary(int effectiveToolCount, String source) {
     }
 
     private RuntimeException openApiRequestRejected(Exception e) {
