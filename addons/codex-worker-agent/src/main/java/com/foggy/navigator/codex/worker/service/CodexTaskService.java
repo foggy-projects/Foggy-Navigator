@@ -32,7 +32,6 @@ import com.foggy.navigator.codex.worker.lifecycle.CodexLifecycleBindingDigest;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.common.util.ProviderStateCodec;
-import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
@@ -146,6 +145,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private final ApplicationEventPublisher eventPublisher;
     private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskRuntimeStateService taskRuntimeStateService;
+    private final CodexTaskProjectionMapper taskProjectionMapper = new CodexTaskProjectionMapper();
 
     @Autowired(required = false)
     @Nullable
@@ -3753,48 +3753,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity, String providerType) {
         String agentId = resolveLogicalAgentId(entity);
-        return DispatchTaskDTO.builder()
-                .taskId(entity.getTaskId())
-                .workerTaskId(entity.getWorkerTaskId())
-                .runtimeId(entity.getRuntimeId())
-                .runtimeRevision(entity.getRuntimeRevision())
-                .runtimeType(entity.getRuntimeType())
-                .runtimeInstanceId(entity.getRuntimeInstanceId())
-                .routingEpoch(entity.getRoutingEpoch())
-                .runtimeAcceptanceState(entity.getRuntimeAcceptanceState())
-                .sessionId(entity.getSessionId())
-                .workerId(entity.getWorkerId())
-                .userId(entity.getUserId())
-                .agentId(agentId)
-                .providerType(providerType)
-                .prompt(entity.getPrompt())
-                .cwd(entity.getCwd())
-                .directoryId(entity.getDirectoryId())
-                .status(entity.getStatus())
-                .model(entity.getModel())
-                .costUsd(entity.getCostUsd())
-                .inputTokens(entity.getInputTokens())
-                .outputTokens(entity.getOutputTokens())
-                .durationMs(entity.getDurationMs())
-                .numTurns(entity.getNumTurns())
-                .resultText(entity.getResultText())
-                .errorMessage(entity.getErrorMessage())
-                .error(toErrorMap(resolveErrorEnvelope(entity)))
-                .lastAckedSeq(entity.getLastAckedSeq())
-                .lastOutputAt(entity.getLastOutputAt())
-                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
-                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
-                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
-                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
-                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
-                .source(entity.getSource())
-                .createdAt(entity.getCreatedAt())
-                .createdAtEpochMs(entity.getCreatedAtEpochMs())
-                .updatedAt(entity.getUpdatedAt())
-                // Codex-specific
-                .codexThreadId(entity.getCodexThreadId())
-                .contextId(resolveTaskContextId(entity))
-                .build();
+        String contextId = resolveTaskContextId(entity);
+        ErrorEnvelope error = resolveErrorEnvelope(entity);
+        LocalDateTime observedAt = LocalDateTime.now();
+        return taskProjectionMapper.toDispatchTask(
+                entity, agentId, providerType, contextId, error, observedAt);
     }
 
     @Override
@@ -4000,16 +3963,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private String deriveInteractionState(String taskStatus) {
-        if ("RUNNING".equals(taskStatus) || "PENDING".equals(taskStatus)
-                || "CANCEL_REQUESTED".equals(taskStatus)) {
-            return "PROCESSING";
-        }
-        if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
-                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)
-                || "AWAITING_INPUT".equals(taskStatus)) {
-            return "AWAITING_REPLY";
-        }
-        return null;
+        return taskProjectionMapper.interactionState(taskStatus);
     }
 
     private void publishStatusChange(CodexTaskEntity entity, String previousStatus) {
@@ -4044,23 +3998,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return null;
         }
         return errorDiagnosticService.findLatestEnvelope(entity.getTaskId());
-    }
-
-    private Map<String, Object> toErrorMap(ErrorEnvelope error) {
-        if (error == null) return null;
-        Map<String, Object> value = new LinkedHashMap<>();
-        value.put("errorCode", error.getErrorCode());
-        value.put("message", error.getMessage());
-        value.put("category", error.getCategory());
-        value.put("runtimePhase", error.getRuntimePhase());
-        value.put("recoverable", error.getRecoverable());
-        value.put("diagnosticRef", error.getDiagnosticRef());
-        value.put("occurredAt", error.getOccurredAt());
-        value.put("taskId", error.getTaskId());
-        value.put("providerType", error.getProviderType());
-        value.put("runtimeType", error.getRuntimeType());
-        value.values().removeIf(java.util.Objects::isNull);
-        return value;
     }
 
     private Boolean terminalRecoverability(CodexTaskEntity entity) {
