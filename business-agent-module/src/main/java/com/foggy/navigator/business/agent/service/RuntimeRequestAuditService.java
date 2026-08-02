@@ -465,14 +465,32 @@ public class RuntimeRequestAuditService {
         auditRepository.save(entity);
         appendStageOnce(entity.getClientRequestId(), STAGE_TASK_CREATED, "SUCCEEDED", null, now);
         appendStageOnce(entity.getClientRequestId(), STAGE_TASK_TOKEN_ISSUED, "SUCCEEDED", null, now);
-        appendStageOnce(entity.getClientRequestId(), STAGE_RUNTIME_DISPATCH, "SUCCEEDED", null, now);
-        appendStageOnce(entity.getClientRequestId(), STAGE_MODEL_DISPATCH, "SUCCEEDED", null, now);
+        appendStageOnce(entity.getClientRequestId(),
+                Boolean.TRUE.equals(evidence.runtimeDispatched())
+                        ? STAGE_RUNTIME_DISPATCH : STAGE_RUNTIME_NOT_DISPATCHED,
+                "SUCCEEDED", null, now);
+        appendStageOnce(entity.getClientRequestId(),
+                Boolean.TRUE.equals(evidence.modelDispatched())
+                        ? STAGE_MODEL_DISPATCH : STAGE_MODEL_NOT_DISPATCHED,
+                "SUCCEEDED", null, now);
         appendStageOnce(entity.getClientRequestId(),
                 STAGE_BUSINESS_FUNCTION_NOT_DISPATCHED, "SUCCEEDED", null, now);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void taskTerminalRecorded(String taskId, String status, String sanitizedErrorCode) {
+        taskTerminalRecorded(
+                taskId, status, sanitizedErrorCode, null, null, null);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void taskTerminalRecorded(
+            String taskId,
+            String status,
+            String sanitizedErrorCode,
+            Boolean runtimeDispatched,
+            Boolean modelDispatched,
+            Integer dispatchCount) {
         if (!StringUtils.hasText(taskId) || !isTerminalTaskStatus(status)) {
             return;
         }
@@ -487,6 +505,15 @@ public class RuntimeRequestAuditService {
             ask.setStatus(normalizedStatus);
             ask.setSanitizedErrorCode(clean(sanitizedErrorCode, ask.getSanitizedErrorCode()));
             ask.setTaskTokenStatus("REVOKED");
+            if (runtimeDispatched != null) {
+                ask.setRuntimeDispatched(runtimeDispatched);
+            }
+            if (modelDispatched != null) {
+                ask.setModelDispatched(modelDispatched);
+            }
+            if (dispatchCount != null) {
+                ask.setDispatchCount(Math.max(0, dispatchCount));
+            }
             ask.setTerminal(true);
             ask.setCompletedAt(now);
             ask.setResult("COMPLETED".equals(ask.getStatus())
@@ -495,6 +522,18 @@ public class RuntimeRequestAuditService {
             auditRepository.save(ask);
             appendStageOnce(ask.getClientRequestId(), STAGE_TASK_TERMINAL, "SUCCEEDED", null, now);
             appendStageOnce(ask.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+            if (runtimeDispatched != null) {
+                appendStageOnce(ask.getClientRequestId(),
+                        runtimeDispatched ? STAGE_RUNTIME_DISPATCH
+                                : STAGE_RUNTIME_NOT_DISPATCHED,
+                        "SUCCEEDED", null, now);
+            }
+            if (modelDispatched != null) {
+                appendStageOnce(ask.getClientRequestId(),
+                        modelDispatched ? STAGE_MODEL_DISPATCH
+                                : STAGE_MODEL_NOT_DISPATCHED,
+                        "SUCCEEDED", null, now);
+            }
             appendStageOnce(ask.getClientRequestId(), STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
         }
 

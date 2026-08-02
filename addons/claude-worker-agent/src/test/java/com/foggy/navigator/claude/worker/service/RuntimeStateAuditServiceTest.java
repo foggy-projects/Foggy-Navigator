@@ -362,6 +362,34 @@ class RuntimeStateAuditServiceTest {
     }
 
     @Test
+    void lifecycleAdmissionFailureOverridesStaleOptimisticDispatchMetadata() {
+        LocalDateTime created = LocalDateTime.of(2026, 8, 2, 12, 0, 0);
+        LocalDateTime completed = created.plusSeconds(1);
+        SessionTaskEntity task = task(created, completed);
+        task.setProviderTaskId(null);
+        task.setErrorMessage(
+                "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH");
+        task.setTaskStateJson("{\"runtimeDispatched\":true,"
+                + "\"modelDispatched\":true}");
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token("REVOKED", created, completed)));
+
+        RuntimeTaskAuditDTO audit = service.auditTask(
+                "runtime-key", "runtime-secret", "user-a", "task-existing");
+
+        assertEquals(
+                "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH",
+                audit.getSanitizedErrorCode());
+        assertEquals(0, audit.getDispatchCount());
+        assertFalse(audit.getRuntimeDispatched());
+        assertFalse(audit.getTaskModelDispatched());
+    }
+
+    @Test
     void taskAuditDoesNotPromoteFreeFormTaskErrorToSanitizedCode() {
         LocalDateTime created = LocalDateTime.of(2026, 7, 26, 10, 1, 40);
         SessionTaskEntity task = task(created, created.plusSeconds(1));

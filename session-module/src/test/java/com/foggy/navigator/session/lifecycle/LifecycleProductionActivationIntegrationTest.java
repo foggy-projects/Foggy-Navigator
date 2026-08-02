@@ -288,7 +288,9 @@ class LifecycleProductionActivationIntegrationTest {
                 target().getProofId())).isZero();
         assertThat(facts.findByAggregateTypeAndAggregateIdOrderBySourceSequenceAsc(
                 "TASK", TASK_ID)).isEmpty();
-        assertThat(target().getStatus()).isEqualTo("RESERVED");
+        assertThat(target().getStatus()).isEqualTo("QUARANTINED");
+        assertThat(proofs.findById(target().getProofId()).orElseThrow()
+                .getStatus()).isEqualTo("QUARANTINED");
     }
 
     @Test
@@ -324,6 +326,68 @@ class LifecycleProductionActivationIntegrationTest {
         assertThat(target().getStatus()).isEqualTo("RESERVED");
         assertThat(target().getReservedTaskId()).isEqualTo(TASK_ID);
         assertThat(tasks.count()).isZero();
+        assertThat(outbox.count()).isZero();
+    }
+
+    @Test
+    void providerEffectAdmissionUsesTheSameCanonicalModelTupleAsReservation() {
+        fixture.localDevelopmentTarget = true;
+        fixture.manifestModel = "gpt-5.6-luna";
+        properties.setLocalDevelopmentTargetEnabled(true);
+        prepareAuthority();
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            admission.reserveProductionAdmission(request(
+                    TASK_ID, SESSION_ID, null,
+                    "synthetic-arch001-tenant", true,
+                    MODEL_CONFIG, "codex-luna:high"));
+            SessionTaskEntity canonical = canonical(TASK_ID, SESSION_ID, true);
+            canonical.setModel("codex-luna:high");
+            canonicalTasks.save(canonical);
+        });
+
+        var authorization = admission.admitAndAuthorizeProviderEffect(
+                providerEffect(TASK_ID, SESSION_ID));
+
+        assertThat(authorization.providerCallAuthorized()).isTrue();
+        assertThat(target().getStatus()).isEqualTo("ADMITTED");
+        assertThat(tasks.findById(TASK_ID).orElseThrow().getOwnershipMode())
+                .isEqualTo("ENFORCED");
+        assertThat(references.countByProofIdAndReleasedAtIsNull(
+                target().getProofId())).isEqualTo(3);
+        assertThat(facts.findByAggregateTypeAndAggregateIdOrderBySourceSequenceAsc(
+                "TASK", TASK_ID)).hasSize(1);
+        assertThat(outbox.findAll()).hasSize(1);
+    }
+
+    @Test
+    void providerEffectCanonicalModelMismatchQuarantinesOneShotReservation() {
+        fixture.localDevelopmentTarget = true;
+        fixture.manifestModel = "gpt-5.6-luna";
+        properties.setLocalDevelopmentTargetEnabled(true);
+        prepareAuthority();
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            admission.reserveProductionAdmission(request(
+                    TASK_ID, SESSION_ID, null,
+                    "synthetic-arch001-tenant", true,
+                    MODEL_CONFIG, "codex-luna:high"));
+            SessionTaskEntity canonical = canonical(TASK_ID, SESSION_ID, true);
+            canonical.setModel("codex-terra:high");
+            canonicalTasks.save(canonical);
+        });
+
+        assertThatThrownBy(() -> admission.admitAndAuthorizeProviderEffect(
+                providerEffect(TASK_ID, SESSION_ID)))
+                .hasMessage(LifecycleActivationReason.ADMISSION_BINDING_MISMATCH);
+
+        assertThat(target().getStatus()).isEqualTo("QUARANTINED");
+        assertThat(proofs.findById(target().getProofId()).orElseThrow()
+                .getStatus()).isEqualTo("QUARANTINED");
+        assertThat(workers.findById(WORKER_ID).orElseThrow()
+                .getOwnershipMode()).isEqualTo("SHADOW");
+        assertThat(tasks.count()).isZero();
+        assertThat(sessions.count()).isZero();
+        assertThat(references.count()).isZero();
+        assertThat(facts.count()).isZero();
         assertThat(outbox.count()).isZero();
     }
 

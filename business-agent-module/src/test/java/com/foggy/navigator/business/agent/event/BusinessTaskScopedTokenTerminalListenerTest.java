@@ -58,7 +58,35 @@ class BusinessTaskScopedTokenTerminalListenerTest {
                 "worker_task_01",
                 BusinessTaskScopedTokenTerminalListener.REVOKED_BY);
         verify(runtimeRequestAuditService).taskTerminalRecorded(
-                "worker_task_01", status, null);
+                "worker_task_01", status, null, null, null, null);
+    }
+
+    @Test
+    void lifecycleAdmissionFailureProjectsSafeZeroDispatchFacts() {
+        TaskStatusChangeEvent event = TaskStatusChangeEvent.builder()
+                .taskId("task-lifecycle-not-admitted")
+                .tenantId("tenant-01")
+                .userId("actor-01")
+                .agentId("codex-worker")
+                .status("FAILED")
+                .errorMessage("LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH")
+                .runtimeDispatched(false)
+                .modelDispatched(false)
+                .dispatchCount(0)
+                .recoverable(false)
+                .build();
+        BusinessTaskScopedTokenTerminalListener listener = listener();
+
+        listener.recordTerminalStateBeforeCommit(event);
+        listener.materializeRevocationAfterCommit(event);
+
+        verify(runtimeRequestAuditService).taskTerminalRecorded(
+                "task-lifecycle-not-admitted",
+                "FAILED",
+                "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH",
+                false,
+                false,
+                0);
     }
 
     @ParameterizedTest

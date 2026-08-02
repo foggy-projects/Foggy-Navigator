@@ -30,6 +30,10 @@ public class TaskStatusChangeEvent {
     /** Safe structured failure metadata. Raw diagnostic text is never carried here. */
     private ErrorEnvelope error;
     private String interactionState;  // PROCESSING / AWAITING_REPLY / ARCHIVED
+    /** Server-observed provider dispatch facts; null means not projected. */
+    private Boolean runtimeDispatched;
+    private Boolean modelDispatched;
+    private Integer dispatchCount;
     /**
      * Explicit lifecycle contract: false means definitive terminal, true means
      * recoverable, and null means unspecified/non-terminal. Governance must

@@ -3997,6 +3997,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private void publishStatusChange(CodexTaskEntity entity, String previousStatus,
                                      Boolean recoverable) {
+        boolean providerDispatched = entity.getWorkerTaskId() != null
+                && !entity.getWorkerTaskId().isBlank()
+                && !isDefinitivePreacceptanceFailure(entity);
         eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
@@ -4008,6 +4011,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .errorMessage(entity.getErrorMessage())
                 .error(resolveErrorEnvelope(entity))
                 .interactionState(deriveInteractionState(entity.getStatus()))
+                .runtimeDispatched(providerDispatched)
+                .modelDispatched(providerDispatched)
+                .dispatchCount(providerDispatched ? 1 : 0)
                 .recoverable(recoverable)
                 .build());
     }
@@ -4060,10 +4066,16 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private boolean isDefinitivePreacceptanceFailure(CodexTaskEntity entity) {
-        return entity != null
-                && "FAILED".equals(entity.getStatus())
-                && ("CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(entity.getErrorMessage())
-                || "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(entity.getErrorMessage()));
+        if (entity == null || !"FAILED".equals(entity.getStatus())) {
+            return false;
+        }
+        String error = entity.getErrorMessage();
+        return "CODEX_WORKING_DIRECTORY_UNAVAILABLE".equals(error)
+                || "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(error)
+                || "ENFORCED_LIFECYCLE_CONTEXT_UNAVAILABLE".equals(error)
+                || "LIFECYCLE_ACTIVATION_AUTHORITY_UNAVAILABLE".equals(error)
+                || (error != null
+                && error.startsWith("LIFECYCLE_ACTIVATION_"));
     }
 
     private boolean containsIgnoreCase(String value, String keyword) {

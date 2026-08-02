@@ -536,8 +536,8 @@ public class RuntimeStateAuditService {
         return new TaskScopeFacts(
                 requestedToolCount, effectiveToolCount, toolScopeKind, toolScopeSource,
                 requestedFunctionCount, effectiveFunctionCount, functionScopeSource, tokenEmpty,
-                booleanObject(state.get("runtimeDispatched"), dispatched),
-                booleanObject(state.get("modelDispatched"), dispatched),
+                dispatched,
+                dispatched,
                 booleanObject(state.get("businessFunctionDispatched"), false));
     }
 
@@ -563,6 +563,7 @@ public class RuntimeStateAuditService {
                 || candidate.startsWith("GEMINI_")
                 || candidate.startsWith("LANGGRAPH_")
                 || candidate.startsWith("PROVIDER_")
+                || candidate.startsWith("LIFECYCLE_")
                 || candidate.startsWith("RUNTIME_")
                 || candidate.startsWith("TASK_")
                 || candidate.startsWith("WORKER_")

@@ -3054,6 +3054,9 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "COMPLETED".equals(event.getStatus())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
+                        && Boolean.TRUE.equals(event.getRuntimeDispatched())
+                        && Boolean.TRUE.equals(event.getModelDispatched())
+                        && Integer.valueOf(1).equals(event.getDispatchCount())
                         && Boolean.FALSE.equals(event.getRecoverable())
         ));
     }
@@ -3075,6 +3078,8 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "worker timeout".equals(event.getErrorMessage())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
+                        && Boolean.TRUE.equals(event.getRuntimeDispatched())
+                        && Integer.valueOf(1).equals(event.getDispatchCount())
                         && Boolean.TRUE.equals(event.getRecoverable())
         ));
     }
@@ -3131,8 +3136,42 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "FAILED".equals(event.getStatus())
                         && "CODEX_WORKER_STREAM_FAILED_BEFORE_ACCEPTANCE".equals(event.getErrorMessage())
+                        && Boolean.FALSE.equals(event.getRuntimeDispatched())
+                        && Boolean.FALSE.equals(event.getModelDispatched())
+                        && Integer.valueOf(0).equals(event.getDispatchCount())
                         && Boolean.FALSE.equals(event.getRecoverable())
         ));
+    }
+
+    @Test
+    void lifecycleProviderEffectAdmissionFailureIsDefinitiveAndZeroDispatch() {
+        CodexTaskEntity entity = createTask(
+                "task-lifecycle-not-admitted", "session-2", "worker-1",
+                "dir-1", "RUNNING", LocalDateTime.of(2026, 8, 2, 12, 0));
+        entity.setTenantId("tenant-1");
+        entity.setWorkerTaskId(null);
+        when(taskRepository.findByTaskIdForUpdate("task-lifecycle-not-admitted"))
+                .thenReturn(Optional.of(entity));
+        lenient().when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.failTask(
+                "task-lifecycle-not-admitted",
+                null,
+                null,
+                "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH");
+
+        assertEquals("FAILED", entity.getStatus());
+        assertNull(entity.getWorkerTaskId());
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-lifecycle-not-admitted".equals(event.getTaskId())
+                        && "FAILED".equals(event.getStatus())
+                        && "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH"
+                        .equals(event.getErrorMessage())
+                        && Boolean.FALSE.equals(event.getRecoverable())
+                        && Boolean.FALSE.equals(event.getRuntimeDispatched())
+                        && Boolean.FALSE.equals(event.getModelDispatched())
+                        && Integer.valueOf(0).equals(event.getDispatchCount())));
     }
 
     @Test

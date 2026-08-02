@@ -61,7 +61,10 @@ public class BusinessTaskScopedTokenTerminalListener {
             runtimeRequestAuditService.taskTerminalRecorded(
                     terminal.workerTaskId(),
                     terminal.status(),
-                    null);
+                    safeErrorCode(event),
+                    event.getRuntimeDispatched(),
+                    event.getModelDispatched(),
+                    event.getDispatchCount());
         } catch (RuntimeException e) {
             // The durable tombstone written before commit remains the
             // authorization authority. Replaying the event retries this row
@@ -96,6 +99,18 @@ public class BusinessTaskScopedTokenTerminalListener {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String safeErrorCode(TaskStatusChangeEvent event) {
+        String value = event != null && event.getError() != null
+                ? event.getError().getErrorCode()
+                : event != null ? event.getErrorMessage() : null;
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String candidate = value.trim();
+        return candidate.matches("[A-Z][A-Z0-9_]{2,127}")
+                ? candidate : null;
     }
 
     private record TerminalTransition(

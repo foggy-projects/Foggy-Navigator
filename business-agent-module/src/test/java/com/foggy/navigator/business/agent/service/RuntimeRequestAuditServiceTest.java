@@ -546,6 +546,45 @@ class RuntimeRequestAuditServiceTest {
     }
 
     @Test
+    void definitivePreProviderFailureCorrectsOptimisticAskDispatchProjection() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.AuditHandle ask = service.beginAsk(
+                requestId, resolvedCredential(), "agent-1", "user-1");
+        service.taskAdmissionRecorded(ask, standardEvidence(
+                null, "ADMITTED", "NOT_ISSUED", false, 0,
+                "STANDARD_SCOPE_ADMITTED"));
+        service.taskDispatchRecorded(ask, standardEvidence(
+                "task-1", "RUNNING", "ACTIVE", true, 1,
+                "STANDARD_ASK_DISPATCHED"));
+
+        service.taskTerminalRecorded(
+                "task-1",
+                "FAILED",
+                "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH",
+                false,
+                false,
+                0);
+        RuntimeRequestAuditDTO audit = exact(requestId);
+
+        assertAll(
+                () -> assertTrue(audit.getTerminal()),
+                () -> assertEquals("FAILED", audit.getStatus()),
+                () -> assertEquals(
+                        "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH",
+                        audit.getSanitizedErrorCode()),
+                () -> assertEquals("REVOKED", audit.getTaskTokenStatus()),
+                () -> assertFalse(audit.getRuntimeDispatched()),
+                () -> assertFalse(audit.getModelDispatched()),
+                () -> assertEquals(0, audit.getDispatchCount()),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "RUNTIME_NOT_DISPATCHED"
+                                .equals(stage.getStage()))),
+                () -> assertTrue(audit.getStages().stream()
+                        .anyMatch(stage -> "MODEL_NOT_DISPATCHED"
+                                .equals(stage.getStage()))));
+    }
+
+    @Test
     void taskTerminationClientRequestIdIsIdempotentAndAuditable() {
         String requestId = UUID.randomUUID().toString();
         RuntimeRequestAuditService.TaskOperationRegistration first =

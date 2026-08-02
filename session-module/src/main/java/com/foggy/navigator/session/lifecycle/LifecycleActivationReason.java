@@ -65,6 +65,8 @@ public final class LifecycleActivationReason {
             "LIFECYCLE_WORKER_BUILD_MISMATCH";
     public static final String ADMISSION_BINDING_MISMATCH =
             "LIFECYCLE_ACTIVATION_ADMISSION_BINDING_MISMATCH";
+    public static final String PROVIDER_EFFECT_ADMISSION_FAILED =
+            "LIFECYCLE_ACTIVATION_PROVIDER_EFFECT_ADMISSION_FAILED";
 
     private LifecycleActivationReason() {
     }

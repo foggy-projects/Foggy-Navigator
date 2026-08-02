@@ -135,7 +135,12 @@ public class LifecycleProductionAdmissionService {
         if (!authority.properties().isAdmissionEnabled()) {
             return ProviderEffectAuthorization.notRequired();
         }
-        return transactions.execute(status -> admitLocked(command));
+        try {
+            return transactions.execute(status -> admitLocked(command));
+        } catch (RuntimeException failure) {
+            quarantineFailedProviderEffectAdmission(failure);
+            throw failure;
+        }
     }
 
     public void observeAcceptedDisposition(AcceptedDisposition disposition) {
@@ -450,9 +455,27 @@ public class LifecycleProductionAdmissionService {
                 || !Objects.equals(target.getUserId(), canonical.getUserId())
                 || !Objects.equals(target.getModelConfigId(),
                 canonical.getModelConfigId())
-                || !Objects.equals(target.getModel(), canonical.getModel())) {
+                || !CodexModelCanonicalizer.matchesPhysicalTuple(
+                target.getProviderType(), target.getModel(),
+                canonical.getModel())) {
             throw denied(LifecycleActivationReason
                     .ADMISSION_BINDING_MISMATCH);
+        }
+    }
+
+    private void quarantineFailedProviderEffectAdmission(
+            RuntimeException failure) {
+        String reason = failure instanceof LifecycleActivationDeniedException
+                && failure.getMessage() != null
+                && failure.getMessage().matches("[A-Z][A-Z0-9_]{2,95}")
+                ? failure.getMessage()
+                : LifecycleActivationReason.PROVIDER_EFFECT_ADMISSION_FAILED;
+        try {
+            authority.quarantineConfiguredTarget(reason);
+        } catch (RuntimeException quarantineFailure) {
+            // Preserve the original stable admission failure. A retained
+            // reservation is still fail-closed and requires operator review.
+            failure.addSuppressed(quarantineFailure);
         }
     }
 

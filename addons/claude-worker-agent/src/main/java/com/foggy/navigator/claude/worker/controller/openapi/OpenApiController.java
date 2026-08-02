@@ -970,8 +970,11 @@ public class OpenApiController {
             metadata.put("functionScopeSource", "REQUEST_EXPLICIT_EMPTY");
             metadata.put("taskTokenFunctionScopeEmpty", true);
         }
-        metadata.put("runtimeDispatched", true);
-        metadata.put("modelDispatched", true);
+        // Task creation only enters Navigator's asynchronous dispatch lane.
+        // Provider/model dispatch is projected later from a persisted
+        // providerTaskId; never claim it at submission time.
+        metadata.put("runtimeDispatched", false);
+        metadata.put("modelDispatched", false);
         metadata.put("businessFunctionDispatched", false);
         if (askRequestAudit != null) {
             try {
@@ -1101,7 +1104,7 @@ public class OpenApiController {
                             modelResource.modelName(),
                             metadata,
                             "STANDARD_ASK_DISPATCHED",
-                            true));
+                            false));
         } catch (RuntimeException e) {
             return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
         }
@@ -1340,6 +1343,7 @@ public class OpenApiController {
             Map<String, Object> metadata,
             String result,
             boolean dispatched) {
+        boolean taskCreated = StringUtils.hasText(taskId);
         return new RuntimeRequestAuditService.TaskEvidence(
                 taskId,
                 status,
@@ -1358,7 +1362,7 @@ public class OpenApiController {
                 integerValue(metadata.get("effectiveFunctionCount")),
                 stringValue(metadata.get("functionScopeSource")),
                 booleanValue(metadata.get("taskTokenFunctionScopeEmpty")),
-                dispatched ? "ACTIVE" : "NOT_ISSUED",
+                taskCreated ? "ACTIVE" : "NOT_ISSUED",
                 dispatched,
                 dispatched,
                 false,
