@@ -1,6 +1,5 @@
 package com.foggy.navigator.claude.worker.controller.openapi;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
@@ -135,14 +134,7 @@ public class OpenApiSessionProjectionMapper {
     }
 
     private Map<String, Object> parseMap(String json) {
-        if (!hasText(json)) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (Exception ignored) {
-            return null;
-        }
+        return OpenApiProjectionSupport.parseNullableMap(objectMapper, json);
     }
 
     private String resolveSessionTitle(
@@ -184,120 +176,15 @@ public class OpenApiSessionProjectionMapper {
     }
 
     private List<OpenTaskReportRefDTO> extractReportRefs(Map<String, Object> metadata) {
-        if (metadata == null || metadata.isEmpty()) {
-            return null;
-        }
-        List<OpenTaskReportRefDTO> refs = new ArrayList<>();
-        collectReportRefs(refs, firstPresent(metadata,
-                "reportRef", "report_ref", "frameReportRef", "frame_report_ref",
-                "executionReportRef", "execution_report_ref", "reportRefs", "report_refs"));
-        return refs.isEmpty() ? null : refs;
-    }
-
-    private void collectReportRefs(List<OpenTaskReportRefDTO> refs, Object raw) {
-        if (raw == null) {
-            return;
-        }
-        if (raw instanceof List<?> list) {
-            for (Object item : list) {
-                collectReportRefs(refs, item);
-            }
-            return;
-        }
-        OpenTaskReportRefDTO dto = null;
-        if (raw instanceof Map<?, ?> rawMap) {
-            Map<String, Object> map = toStringObjectMap(rawMap);
-            String ref = stringValue(firstPresent(map,
-                    "ref", "reportRef", "report_ref", "executionReportRef", "execution_report_ref"));
-            dto = OpenTaskReportRefDTO.builder()
-                    .type(firstNonBlank(stringValue(map.get("type")), inferReportRefType(ref)))
-                    .ref(sanitizeDiagnosticText(ref))
-                    .frameId(sanitizeDiagnosticText(firstNonBlank(
-                            stringValue(map.get("frameId")), inferFrameId(ref))))
-                    .summary(sanitizeDiagnosticText(stringValue(map.get("summary"))))
-                    .build();
-        } else if (raw instanceof String text && hasText(text)) {
-            dto = OpenTaskReportRefDTO.builder()
-                    .type(inferReportRefType(text))
-                    .ref(sanitizeDiagnosticText(text))
-                    .frameId(sanitizeDiagnosticText(inferFrameId(text)))
-                    .build();
-        }
-        if (dto != null && hasText(dto.getRef())) {
-            String ref = dto.getRef();
-            if (refs.stream().noneMatch(existing -> ref.equals(existing.getRef()))) {
-                refs.add(dto);
-            }
-        }
+        return OpenApiProjectionSupport.extractReportRefs(metadata);
     }
 
     private List<OpenTaskArtifactRefDTO> extractArtifactRefs(Map<String, Object> metadata) {
-        if (metadata == null || metadata.isEmpty()) {
-            return null;
-        }
-        List<OpenTaskArtifactRefDTO> refs = new ArrayList<>();
-        collectArtifactRefs(refs, firstPresent(metadata,
-                "artifactRefs", "artifact_refs", "artifacts"));
-        return refs.isEmpty() ? null : refs;
-    }
-
-    private void collectArtifactRefs(List<OpenTaskArtifactRefDTO> refs, Object raw) {
-        if (raw == null) {
-            return;
-        }
-        if (raw instanceof List<?> list) {
-            for (Object item : list) {
-                collectArtifactRefs(refs, item);
-            }
-            return;
-        }
-        OpenTaskArtifactRefDTO dto = null;
-        if (raw instanceof Map<?, ?> rawMap) {
-            Map<String, Object> map = toStringObjectMap(rawMap);
-            dto = OpenTaskArtifactRefDTO.builder()
-                    .path(safeArtifactRef(firstNonBlank(
-                            stringValue(map.get("path")), stringValue(map.get("file")))))
-                    .ref(safeArtifactRef(firstNonBlank(
-                            stringValue(map.get("ref")), stringValue(map.get("id")))))
-                    .summary(sanitizeDiagnosticText(stringValue(map.get("summary"))))
-                    .hash(sanitizeDiagnosticText(stringValue(map.get("hash"))))
-                    .mtime(sanitizeDiagnosticText(firstNonBlank(
-                            stringValue(map.get("mtime")), stringValue(map.get("modifiedAt")))))
-                    .build();
-        } else if (raw instanceof String text && hasText(text)) {
-            dto = OpenTaskArtifactRefDTO.builder().path(safeArtifactRef(text)).build();
-        }
-        if (dto != null && (hasText(dto.getPath()) || hasText(dto.getRef()))) {
-            String key = firstNonBlank(dto.getRef(), dto.getPath());
-            if (refs.stream().noneMatch(existing ->
-                    key.equals(firstNonBlank(existing.getRef(), existing.getPath())))) {
-                refs.add(dto);
-            }
-        }
+        return OpenApiProjectionSupport.extractArtifactRefs(metadata);
     }
 
     private String inferMessageType(String role, Map<String, Object> metadata) {
-        if ("USER".equalsIgnoreCase(role)) {
-            return "USER";
-        }
-        if ("SYSTEM".equalsIgnoreCase(role)) {
-            return "STATE";
-        }
-        if (metadata != null) {
-            Object rawType = metadata.get("type");
-            if (rawType instanceof String type) {
-                return switch (type) {
-                    case "TEXT_COMPLETE" -> "TEXT";
-                    case "TOOL_CALL_START" -> "TOOL_CALL";
-                    case "TOOL_CALL_RESULT", "TOOL_CALL_ERROR" -> "TOOL_RESULT";
-                    case "TASK_COMPLETED" -> "RESULT";
-                    case "STATE_SYNC" -> "STATE";
-                    case "ERROR" -> "ERROR";
-                    default -> "TEXT";
-                };
-            }
-        }
-        return "TEXT";
+        return OpenApiProjectionSupport.inferMessageType(role, metadata);
     }
 
     private String inferEventKind(
@@ -435,117 +322,34 @@ public class OpenApiSessionProjectionMapper {
     }
 
     private Object sanitizeEvidenceValue(Object value) {
-        if (value instanceof String text) {
-            return sanitizeDiagnosticText(text);
-        }
-        if (value instanceof Map<?, ?> rawMap) {
-            Map<String, Object> sanitized = new LinkedHashMap<>();
-            rawMap.forEach((key, childValue) -> {
-                if (key instanceof String keyText) {
-                    sanitized.put(keyText, sanitizeEvidenceValue(childValue));
-                }
-            });
-            return sanitized;
-        }
-        if (value instanceof List<?> rawList) {
-            return rawList.stream().map(this::sanitizeEvidenceValue).toList();
-        }
-        return value;
+        return OpenApiProjectionSupport.sanitizeEvidenceValue(value);
     }
 
     private String sanitizeDiagnosticText(String text) {
-        if (!hasText(text)) {
-            return null;
-        }
-        String sanitized = text.replace('\n', ' ').replace('\r', ' ').trim()
-                .replaceAll("(?i)(authorization\\s*[:=]\\s*)(bearer\\s+)?[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)(api[_-]?key\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)(access[_-]?token\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)(token\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)(client[_-]?secret\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)(secret\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)(password\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
-                .replaceAll("(?i)bearer\\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]")
-                .replaceAll("sk-[A-Za-z0-9_-]{12,}", "sk-[REDACTED]");
-        return truncate(sanitized, 500);
-    }
-
-    private String safeArtifactRef(String value) {
-        String sanitized = sanitizeDiagnosticText(value);
-        if (!hasText(sanitized)) {
-            return null;
-        }
-        int queryIndex = sanitized.indexOf('?');
-        if (queryIndex > 0) {
-            sanitized = sanitized.substring(0, queryIndex);
-        }
-        return truncate(sanitized, 300);
-    }
-
-    private String inferReportRefType(String ref) {
-        if (!hasText(ref)) {
-            return null;
-        }
-        return ref.startsWith("frame-report://") ? "frame_report" : "report";
-    }
-
-    private String inferFrameId(String ref) {
-        if (!hasText(ref) || !ref.startsWith("frame-report://")) {
-            return null;
-        }
-        int slash = ref.lastIndexOf('/');
-        return slash >= 0 && slash + 1 < ref.length() ? ref.substring(slash + 1) : null;
+        return OpenApiProjectionSupport.sanitizeDiagnosticText(text);
     }
 
     private Map<String, Object> toStringObjectMap(Map<?, ?> rawMap) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        rawMap.forEach((key, value) -> {
-            if (key instanceof String text) {
-                map.put(text, value);
-            }
-        });
-        return map;
+        return OpenApiProjectionSupport.toStringObjectMap(rawMap);
     }
 
     private Object firstPresent(Map<String, Object> map, String... keys) {
-        if (map == null || map.isEmpty() || keys == null) {
-            return null;
-        }
-        for (String key : keys) {
-            if (map.containsKey(key)) {
-                return map.get(key);
-            }
-        }
-        return null;
+        return OpenApiProjectionSupport.firstPresent(map, keys);
     }
 
     private String firstNonBlank(String... values) {
-        if (values != null) {
-            for (String value : values) {
-                if (hasText(value)) {
-                    return value;
-                }
-            }
-        }
-        return null;
+        return OpenApiProjectionSupport.firstNonBlank(values);
     }
 
     private String stringValue(Object value) {
-        if (value == null) {
-            return null;
-        }
-        String text = value.toString();
-        return hasText(text) ? text : null;
+        return OpenApiProjectionSupport.stringValue(value);
     }
 
     private boolean hasText(String value) {
-        return value != null && !value.isBlank();
+        return OpenApiProjectionSupport.hasText(value);
     }
 
     private String truncate(String text, int maxLength) {
-        if (text == null || text.length() <= maxLength) {
-            return text;
-        }
-        return text.substring(0, maxLength);
+        return OpenApiProjectionSupport.truncate(text, maxLength);
     }
 }
