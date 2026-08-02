@@ -3839,6 +3839,12 @@ class OpenApiControllerMessageMappingTest {
                 auditProvider,
                 taskProvider,
                 sessionProvider);
+        ObjectMapper objectMapper = new ObjectMapper();
+        OpenApiSessionProjectionMapper sessionProjectionMapper =
+                new OpenApiSessionProjectionMapper(objectMapper);
+        OpenApiDurableTaskSessionQueryFacade durableTaskSessionQueryFacade =
+                new OpenApiDurableTaskSessionQueryFacade(
+                        sessionQueryService, sessionProjectionMapper, objectMapper);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -3853,7 +3859,7 @@ class OpenApiControllerMessageMappingTest {
                 taskDispatchFacade,
                 mock(TaskStateReconciler.class),
                 sessionQueryService,
-                new ObjectMapper(),
+                objectMapper,
                 routeService,
                 credentialProvider,
                 auditProvider,
@@ -3871,7 +3877,8 @@ class OpenApiControllerMessageMappingTest {
                 resourceResolverProvider,
                 launchPlanner,
                 createFacade,
-                new OpenApiSessionProjectionMapper(new ObjectMapper())
+                durableTaskSessionQueryFacade,
+                sessionProjectionMapper
         );
     }
 

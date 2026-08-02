@@ -30,7 +30,6 @@ import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialReso
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
-import com.foggy.navigator.business.agent.support.BusinessAgentSessionMessageVisibility;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -39,9 +38,7 @@ import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.a2a.*;
-import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
-import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
@@ -202,6 +199,7 @@ public class OpenApiController {
     private final ObjectProvider<A2AgentResourceResolver> a2AgentResourceResolver;
     private final OpenApiRuntimeTaskLaunchPlanner runtimeTaskLaunchPlanner;
     private final OpenApiRuntimeTaskCreateFacade runtimeTaskCreateFacade;
+    private final OpenApiDurableTaskSessionQueryFacade durableTaskSessionQueryFacade;
     private final OpenApiSessionProjectionMapper sessionProjectionMapper;
     private final OpenApiTaskProjectionMapper taskProjectionMapper = new OpenApiTaskProjectionMapper();
 
@@ -1851,9 +1849,8 @@ public class OpenApiController {
         String tenantId = clientAppCredential.getTenantId();
         resolveOpenApiAgent(route.agentId(), tenantId);
 
-        SessionTaskEntity taskEntity = requireOpenApiTask(taskId, tenantId, route.agentId());
-        String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
-        return RX.ok(toOpenTaskDiagnosticsDTO(taskEntity, route.agentId(), contextId));
+        return RX.ok(durableTaskSessionQueryFacade.loadTaskDiagnostics(
+                taskId, tenantId, route.agentId()));
     }
 
     /**
@@ -1872,10 +1869,8 @@ public class OpenApiController {
         String tenantId = clientAppCredential.getTenantId();
         resolveOpenApiAgent(route.agentId(), tenantId);
 
-        SessionTaskEntity taskEntity = requireOpenApiTask(taskId, tenantId, route.agentId());
-        String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
-        List<SessionMessageEntity> messages = sessionQueryService.getLatestTaskMessages(taskId, 200);
-        return RX.ok(toOpenTaskEvidenceDTO(taskEntity, route.agentId(), contextId, messages));
+        return RX.ok(durableTaskSessionQueryFacade.loadTaskEvidence(
+                taskId, tenantId, route.agentId()));
     }
 
     /**
@@ -1946,68 +1941,8 @@ public class OpenApiController {
         String tenantId = clientAppCredential.getTenantId();
         resolveOpenApiAgent(route.agentId(), tenantId);
 
-        // 验证 task 存在并获取 contextId
-        SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
-                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
-        if (!tenantId.equals(taskEntity.getTenantId()) || !route.agentId().equals(taskEntity.getAgentId())) {
-            throw RX.throwB("Task not found: " + taskId);
-        }
-
-        // 获取 contextId（从 task 的 sessionId 反查 context）
-        String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
-
-        int safeLimit = Math.min(Math.max(limit, 1), 200);
-        List<SessionMessageEntity> messages = sessionQueryService.getTaskMessages(taskId, cursor, safeLimit);
-
-        boolean hasMore = messages.size() > safeLimit;
-        List<SessionMessageEntity> page = hasMore ? messages.subList(0, safeLimit) : messages;
-
-        String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
-
-        OpenApiTaskProjectionMapper.TaskStatusProjection taskStatus =
-                taskProjectionMapper.projectStatus(taskEntity.getStatus());
-        List<OpenSessionMessageDTO> dtos = page.stream()
-                .filter(message -> includeInternal
-                        || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
-                .map(m -> sessionProjectionMapper.mapMessage(m, contextId, taskStatus.messageStatus()))
-                .toList();
-
-        OpenApiTaskProjectionMapper.TaskMessageProjection taskProjection =
-                taskProjectionMapper.projectTaskMessages(objectMapper, taskEntity, dtos);
-        String status = taskProjection.status().responseStatus();
-        String terminalStatus = taskProjection.status().terminalStatus();
-        Map<String, Object> taskState = taskProjection.taskState();
-        String failureSummary = taskProjection.failureSummary();
-        String failureStage = taskProjection.failureStage();
-        if (dtos.isEmpty() && "FAILED".equals(terminalStatus)) {
-            dtos = List.of(sessionProjectionMapper.mapSyntheticTaskError(
-                    taskEntity, contextId, status, terminalStatus, failureSummary, failureStage));
-            nextCursor = "task-error:" + taskEntity.getTaskId();
-        }
-
-        return RX.ok(OpenTaskMessagesResponse.builder()
-                .taskId(taskId)
-                .contextId(contextId)
-                .workerTaskId(taskEntity.getProviderTaskId())
-                .providerTaskId(taskEntity.getProviderTaskId())
-                .lastAckedSeq(taskEntity.getLastAckedSeq())
-                .modelConfigId(firstNonBlank(taskEntity.getModelConfigId(), stringValue(taskState.get("modelConfigId"))))
-                .modelConfigSource(stringValue(taskState.get("modelConfigSource")))
-                .workerBackend(firstNonBlank(stringValue(taskState.get("workerBackend")),
-                        workerBackendFromProviderType(taskEntity.getProviderType())))
-                .providerType(taskEntity.getProviderType())
-                .taskSource(firstNonBlank(taskEntity.getSource(), stringValue(taskState.get("taskSource"))))
-                .workerSource(stringValue(taskState.get("workerSource")))
-                .backendSource(stringValue(taskState.get("backendSource")))
-                .failureStage(failureStage)
-                .failureSummary(failureSummary)
-                .messages(dtos)
-                .status(status)
-                .terminal(terminalStatus != null)
-                .terminalStatus(terminalStatus)
-                .nextCursor(nextCursor)
-                .hasMore(hasMore)
-                .build());
+        return RX.ok(durableTaskSessionQueryFacade.loadTaskMessages(
+                taskId, tenantId, route.agentId(), cursor, limit, includeInternal));
     }
 
     // ===== 6c. Agent 会话列表与消息（上游接入首版） =====
@@ -2028,33 +1963,8 @@ public class OpenApiController {
         String userId = resolveAgentOwnerUserId(route.agentId(), tenantId);
         resolveOpenApiAgent(route.agentId(), tenantId);
 
-        int safeLimit = Math.min(Math.max(limit, 1), 100);
-        List<AgentConversationContextEntity> contexts = sessionQueryService.listSessions(
-                userId, route.agentId(), cursor, safeLimit);
-
-        boolean hasMore = contexts.size() > safeLimit;
-        List<AgentConversationContextEntity> page = hasMore ? contexts.subList(0, safeLimit) : contexts;
-
-        // 批量预取 latestTaskId，消除 N+1
-        List<String> sessionIds = page.stream()
-                .map(AgentConversationContextEntity::getNavigatorSessionId)
-                .filter(s -> s != null && !s.isBlank())
-                .toList();
-        Map<String, String> latestTaskMap = sessionQueryService.batchFindLatestTaskIds(sessionIds);
-        Map<String, String> firstUserMessageMap = sessionQueryService.batchFindFirstUserMessageContents(sessionIds);
-
-        List<OpenSessionSummaryDTO> dtos = page.stream()
-                .map(ctx -> sessionProjectionMapper.mapSummary(
-                        ctx, route.agentId(), latestTaskMap, firstUserMessageMap))
-                .toList();
-
-        String nextCursor = page.isEmpty() ? null : page.get(page.size() - 1).getContextId();
-
-        return RX.ok(OpenSessionListResponse.builder()
-                .sessions(dtos)
-                .nextCursor(nextCursor)
-                .hasMore(hasMore)
-                .build());
+        return RX.ok(durableTaskSessionQueryFacade.listSessions(
+                userId, route.agentId(), limit, cursor));
     }
 
     /**
@@ -2075,45 +1985,8 @@ public class OpenApiController {
         String userId = resolveAgentOwnerUserId(route.agentId(), tenantId);
         resolveOpenApiAgent(route.agentId(), tenantId);
 
-        // 解析 contextId → sessionId
-        String sessionId = sessionQueryService.resolveSessionId(contextId, userId)
-                .orElseThrow(() -> RX.throwB("Context not found: " + contextId));
-
-        int safeLimit = Math.min(Math.max(limit, 1), 200);
-        List<SessionMessageEntity> messages = sessionQueryService.getSessionMessages(
-                sessionId, cursor, safeLimit);
-
-        boolean hasMore = messages.size() > safeLimit;
-        List<SessionMessageEntity> page = hasMore ? messages.subList(0, safeLimit) : messages;
-
-        String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
-
-        List<String> taskIds = page.stream()
-                .map(SessionMessageEntity::getTaskId)
-                .filter(id -> id != null && !id.isBlank())
-                .distinct()
-                .toList();
-        Map<String, String> rawTaskStatusMap = sessionQueryService.batchFindTaskStatuses(taskIds);
-        final Map<String, String> taskStatusMap = rawTaskStatusMap == null ? Map.of() : rawTaskStatusMap;
-
-        List<OpenSessionMessageDTO> dtos = page.stream()
-                .filter(message -> includeInternal
-                        || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
-                .map(message -> {
-                    String rawStatus = taskStatusMap.get(message.getTaskId());
-                    String mappedStatus = StringUtils.hasText(rawStatus)
-                            ? mapTaskStatus(rawStatus)
-                            : null;
-                    return sessionProjectionMapper.mapMessage(message, contextId, mappedStatus);
-                })
-                .toList();
-
-        return RX.ok(OpenSessionMessagesResponse.builder()
-                .contextId(contextId)
-                .messages(dtos)
-                .nextCursor(nextCursor)
-                .hasMore(hasMore)
-                .build());
+        return RX.ok(durableTaskSessionQueryFacade.loadSessionMessages(
+                contextId, userId, cursor, limit, includeInternal));
     }
 
     // ===== 7. Worker 进程管理 =====
@@ -2322,36 +2195,6 @@ public class OpenApiController {
 
     private OpenApiTaskDTO toOpenApiTaskDTO(SessionTaskEntity taskEntity, String agentId, String contextId) {
         return taskProjectionMapper.mapDurableTask(objectMapper, taskEntity, agentId, contextId);
-    }
-
-    private OpenTaskDiagnosticsDTO toOpenTaskDiagnosticsDTO(
-            SessionTaskEntity taskEntity,
-            String agentId,
-            String contextId) {
-        LocalDateTime lastMessageAt = sessionQueryService.findLatestTaskMessage(taskEntity.getTaskId())
-                .map(SessionMessageEntity::getCreatedAt)
-                .orElse(null);
-        long messagesCount = sessionQueryService.countTaskMessages(taskEntity.getTaskId());
-        return taskProjectionMapper.mapDiagnostics(
-                objectMapper, taskEntity, agentId, contextId, lastMessageAt, messagesCount);
-    }
-
-    private OpenTaskEvidenceDTO toOpenTaskEvidenceDTO(
-            SessionTaskEntity taskEntity,
-            String agentId,
-            String contextId,
-            List<SessionMessageEntity> messages) {
-        return taskProjectionMapper.mapEvidence(
-                objectMapper, taskEntity, agentId, contextId, messages);
-    }
-
-    private SessionTaskEntity requireOpenApiTask(String taskId, String tenantId, String agentId) {
-        SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
-                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
-        if (!tenantId.equals(taskEntity.getTenantId()) || !agentId.equals(taskEntity.getAgentId())) {
-            throw RX.throwB("Task not found: " + taskId);
-        }
-        return taskEntity;
     }
 
     private String inferFailureStageFromText(
