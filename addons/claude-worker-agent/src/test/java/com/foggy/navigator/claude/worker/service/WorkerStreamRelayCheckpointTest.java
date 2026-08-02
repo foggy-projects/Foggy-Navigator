@@ -60,7 +60,8 @@ class WorkerStreamRelayCheckpointTest {
                 conversationConfigService,
                 sessionEventListener,
                 publisher,
-                objectMapper
+                objectMapper,
+                mock(ClaudeBackgroundRecoveryPolicy.class)
         );
     }
 

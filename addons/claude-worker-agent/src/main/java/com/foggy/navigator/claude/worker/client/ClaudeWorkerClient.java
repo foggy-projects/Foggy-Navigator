@@ -18,6 +18,8 @@ import reactor.netty.http.client.HttpClient;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Worker HTTP/SSE 客户端
@@ -931,13 +933,38 @@ public class ClaudeWorkerClient {
      *               同时传 replay_from 参数兼容旧版 Worker。
      */
     public Flux<ServerSentEvent<String>> subscribeToTask(String taskId, int ackSeq) {
+        return subscribeToTask(taskId, ackSeq, () -> { });
+    }
+
+    /**
+     * Automatic-recovery overload. The callback runs exactly once when HTTP
+     * response headers arrive, or when the subscription terminates first.
+     */
+    public Flux<ServerSentEvent<String>> subscribeToTask(
+            String taskId, int ackSeq, Runnable connectionSettledCallback) {
+        Runnable callback = Objects.requireNonNull(
+                connectionSettledCallback, "connectionSettledCallback must not be null");
+        AtomicBoolean settled = new AtomicBoolean(false);
+        Runnable signalSettled = () -> {
+            if (settled.compareAndSet(false, true)) callback.run();
+        };
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder.path("/api/v1/tasks/{taskId}/subscribe")
                         .queryParam("ack_seq", ackSeq)
                         .queryParam("replay_from", ackSeq)  // 向后兼容旧 Worker
                         .build(taskId))
-                .retrieve()
-                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                .exchangeToFlux(response -> {
+                    signalSettled.run();
+                    if (response.statusCode().isError()) {
+                        return response.createException().flatMapMany(Flux::error);
+                    }
+                    return response.bodyToFlux(
+                            new ParameterizedTypeReference<ServerSentEvent<String>>() { });
+                })
+                .doOnError(ignored -> signalSettled.run())
+                .doOnCancel(signalSettled)
+                .doOnComplete(signalSettled)
+                .doFinally(ignored -> signalSettled.run())
                 .doOnError(e -> log.warn("Subscribe stream failed for worker {}, task {}: errorCode={}, errorType={}",
                         workerId, taskId, remoteErrorCode(e), exceptionType(e)));
     }

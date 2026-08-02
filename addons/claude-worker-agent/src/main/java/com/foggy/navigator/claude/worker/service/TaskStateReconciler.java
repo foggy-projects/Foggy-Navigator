@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryCapability;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -68,6 +69,7 @@ public class TaskStateReconciler {
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
     private final WorkerStreamRelay streamRelay;
+    private final ClaudeBackgroundRecoveryPolicy backgroundRecoveryPolicy;
 
     // -------------------------------------------------------------------------
     // 内存状态表
@@ -97,16 +99,34 @@ public class TaskStateReconciler {
 
     @Scheduled(fixedDelay = 60_000, initialDelay = 90_000)
     public void reconcileAll() {
-        List<ClaudeWorkerEntity> workers = workerRepository.findAll();
-        for (ClaudeWorkerEntity worker : workers) {
-            try {
-                reconcileWorker(worker);
-            } catch (Exception e) {
-                log.warn("Reconciler: failed for worker={}: errorCode={}, errorType={}", worker.getWorkerId(),
-                        lifecycleDiagnosticCode(e), exceptionType(e));
+        boolean ordinaryRecoveryScan = backgroundRecoveryPolicy.claimPeriodicScanIfDue();
+        if (ordinaryRecoveryScan) {
+            for (ClaudeWorkerEntity worker : workerRepository.findAll()) {
+                reconcileWorkerSafely(worker, true, null);
             }
+        } else {
+            Map<String, List<ClaudeTaskEntity>> cancellationsByWorker = taskRepository
+                    .findByStatusIn(List.of("CANCEL_REQUESTED"))
+                    .stream()
+                    .filter(task -> !"A2A".equals(task.getSource()))
+                    .filter(task -> task.getWorkerId() != null && !task.getWorkerId().isBlank())
+                    .collect(Collectors.groupingBy(
+                            ClaudeTaskEntity::getWorkerId, LinkedHashMap::new, Collectors.toList()));
+            cancellationsByWorker.forEach((workerId, cancellations) -> workerRepository
+                    .findByWorkerId(workerId)
+                    .ifPresent(worker -> reconcileWorkerSafely(worker, false, cancellations)));
         }
         cleanStaleMissEntries();
+    }
+
+    private void reconcileWorkerSafely(ClaudeWorkerEntity worker, boolean ordinaryRecoveryScan,
+                                       List<ClaudeTaskEntity> preloadedCancellations) {
+        try {
+            reconcileWorker(worker, ordinaryRecoveryScan, preloadedCancellations);
+        } catch (Exception e) {
+            log.warn("Reconciler: failed for worker={}: errorCode={}, errorType={}", worker.getWorkerId(),
+                    lifecycleDiagnosticCode(e), exceptionType(e));
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -114,10 +134,36 @@ public class TaskStateReconciler {
     // -------------------------------------------------------------------------
 
     @SuppressWarnings("unchecked")
-    private void reconcileWorker(ClaudeWorkerEntity worker) {
+    private void reconcileWorker(ClaudeWorkerEntity worker, boolean ordinaryRecoveryScan,
+                                 List<ClaudeTaskEntity> preloadedCancellations) {
         String workerId = worker.getWorkerId();
 
-        // 1. 调用 Worker API 获取所有 CLI 进程（真实状态）
+        List<ClaudeTaskEntity> activeTasks;
+        Set<String> activeTaskIds;
+        if (preloadedCancellations != null) {
+            activeTasks = preloadedCancellations;
+            activeTaskIds = activeTasks.stream()
+                    .map(ClaudeTaskEntity::getTaskId)
+                    .collect(Collectors.toSet());
+        } else {
+            List<ClaudeTaskEntity> discovered = taskRepository.findByWorkerIdAndStatusIn(
+                    workerId, List.of("RUNNING", "AWAITING_PERMISSION", "CANCEL_REQUESTED"));
+            activeTaskIds = discovered.stream()
+                    .map(ClaudeTaskEntity::getTaskId)
+                    .collect(Collectors.toSet());
+            activeTasks = discovered.stream()
+                    .filter(task -> "CANCEL_REQUESTED".equals(task.getStatus())
+                            || streamRelay.assessAutomaticCandidate(
+                            task, BackgroundRecoveryCapability.PERIODIC_RECOVERY_SCAN))
+                    .toList();
+            // Do not issue a Worker request on behalf of a legacy/disabled
+            // ordinary task that failed the per-task policy gate.
+            if (!discovered.isEmpty() && activeTasks.isEmpty()) return;
+        }
+        if (!ordinaryRecoveryScan && activeTasks.isEmpty()) return;
+
+        // A disabled/not-due ordinary lane reaches a Worker only for a real
+        // cancellation convergence candidate.
         Map<String, Object> processResponse;
         try {
             processResponse = workerService.createClient(worker)
@@ -126,7 +172,7 @@ public class TaskStateReconciler {
         } catch (Exception e) {
             log.debug("Reconciler: cannot reach worker={}, skipping: errorCode={}, errorType={}", workerId,
                     lifecycleDiagnosticCode(e), exceptionType(e));
-            return; // Worker 离线由 WorkerHealthChecker 处理
+            return;
         }
 
         if (processResponse == null) {
@@ -134,7 +180,6 @@ public class TaskStateReconciler {
             return;
         }
 
-        // 2. 解析进程列表，构建 foggyTaskId → pid 映射
         List<Map<String, Object>> processList =
                 (List<Map<String, Object>>) processResponse.getOrDefault("processes", List.of());
 
@@ -154,14 +199,6 @@ public class TaskStateReconciler {
             }
         }
 
-        // 3. 从 DB 获取该 Worker 的所有活跃任务
-        List<String> activeStatuses = List.of("RUNNING", "AWAITING_PERMISSION", "CANCEL_REQUESTED");
-        List<ClaudeTaskEntity> activeTasks =
-                taskRepository.findByWorkerIdAndStatusIn(workerId, activeStatuses);
-        Set<String> activeTaskIds = activeTasks.stream()
-                .map(ClaudeTaskEntity::getTaskId)
-                .collect(Collectors.toSet());
-
         // 4. 四象限处理：DB 活跃任务 vs CLI 进程
         for (ClaudeTaskEntity task : activeTasks) {
             // A2A 异步任务使用直接 HTTP 查询，没有 CLI 进程，跳过 reconcile
@@ -169,6 +206,7 @@ public class TaskStateReconciler {
                 log.debug("Reconciler: skipping A2A async task {}", task.getTaskId());
                 continue;
             }
+            boolean cancellationReconciliation = "CANCEL_REQUESTED".equals(task.getStatus());
             String taskId = task.getTaskId();
             Integer pid = foggyTaskIdToPid.get(taskId);
 
@@ -197,7 +235,12 @@ public class TaskStateReconciler {
                                 log.warn("Reconciler: seq gap detected! task={}, worker_seq={}, java_seq={}, "
                                          + "gap={}, triggering reconnect",
                                         taskId, workerLatestSeq, javaLatestSeq, workerLatestSeq - javaLatestSeq);
-                                streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
+                                if (cancellationReconciliation) {
+                                    streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
+                                } else {
+                                    streamRelay.recoverAutomatically(
+                                            task, BackgroundRecoveryCapability.PERIODIC_RECOVERY_SCAN);
+                                }
                             }
                         }
                     } catch (Exception e) {
@@ -232,7 +275,12 @@ public class TaskStateReconciler {
                         if (workerLatestSeq > javaLatestSeq) {
                             log.info("Reconciler: task={} has {} unconsumed Worker events; reconnecting for evidence",
                                     taskId, workerLatestSeq - javaLatestSeq);
-                            streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
+                            if (cancellationReconciliation) {
+                                streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
+                            } else {
+                                streamRelay.recoverAutomatically(
+                                        task, BackgroundRecoveryCapability.PERIODIC_RECOVERY_SCAN);
+                            }
                             replayStarted = true;
                         }
                     }
@@ -270,29 +318,26 @@ public class TaskStateReconciler {
         }
 
         // 5. 象限 3 & 4: 处理孤儿进程（CLI 存活但 DB 任务已终结）
-        for (Map<String, Object> proc : processList) {
-            Object pidObj = proc.get("pid");
-            if (pidObj == null) continue;
-            int pid = ((Number) pidObj).intValue();
-            String pidKey = workerId + ":" + pid;
+        if (ordinaryRecoveryScan) {
+            for (Map<String, Object> proc : processList) {
+                Object pidObj = proc.get("pid");
+                if (pidObj == null) continue;
+                int pid = ((Number) pidObj).intValue();
+                String pidKey = workerId + ":" + pid;
 
-            Object fti = proc.get("foggy_task_id");
-            String foggyTaskId = (fti instanceof String s && !s.isBlank()) ? s : null;
+                Object fti = proc.get("foggy_task_id");
+                String foggyTaskId = (fti instanceof String s && !s.isBlank()) ? s : null;
 
-            if (foggyTaskId == null) {
-                // 无 foggy_task_id（env 读取失败 / 进程刚启动），保守处理，不追踪孤儿
-                log.debug("Reconciler: pid={} on worker={} has no foggy_task_id, skipping orphan check",
-                        pid, workerId);
-                continue;
+                if (foggyTaskId == null) {
+                    // 无 foggy_task_id（env 读取失败 / 进程刚启动），保守处理，不追踪孤儿
+                    log.debug("Reconciler: pid={} on worker={} has no foggy_task_id, skipping orphan check",
+                            pid, workerId);
+                    continue;
+                }
+
+                if (activeTaskIds.contains(foggyTaskId)) continue;
+                handleOrphan(workerId, pid, pidKey);
             }
-
-            if (activeTaskIds.contains(foggyTaskId)) {
-                // 非孤儿（已在上方象限 1/2 处理过），无需处理
-                continue;
-            }
-
-            // foggy_task_id 存在且 DB 任务已结束 → 孤儿进程
-            handleOrphan(workerId, pid, pidKey);
         }
 
         // 6. 清除已消失进程的孤儿记录（进程自然退出或被杀）

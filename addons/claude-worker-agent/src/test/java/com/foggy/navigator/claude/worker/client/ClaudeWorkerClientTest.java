@@ -6,10 +6,14 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -56,9 +60,54 @@ class ClaudeWorkerClientTest {
         }
     }
 
+    @Test
+    void recoveryCallbackRunsAtResponseHeadersAndOnlyOnceAfterStreamEnds() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            ClaudeWorkerClient client = new ClaudeWorkerClient("worker-1", server.baseUrl(), "token");
+            AtomicInteger callbacks = new AtomicInteger();
+            CountDownLatch callbackObserved = new CountDownLatch(1);
+
+            var subscription = client.subscribeToTask("task-1", 7, () -> {
+                        callbacks.incrementAndGet();
+                        callbackObserved.countDown();
+                    })
+                    .subscribe();
+
+            assertEquals(true, server.awaitSubscribeHeaders());
+            assertEquals(true, callbackObserved.await(2, TimeUnit.SECONDS));
+            assertEquals(1, callbacks.get());
+            assertEquals(false, subscription.isDisposed());
+
+            server.releaseSubscribeBody();
+            assertEquals(true, server.awaitSubscribeComplete());
+            for (int i = 0; i < 20 && !subscription.isDisposed(); i++) Thread.sleep(10);
+            assertEquals(1, callbacks.get());
+        }
+    }
+
+    @Test
+    void recoveryCallbackRunsOnceOnPreResponseConnectionFailure() throws Exception {
+        int closedPort;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            closedPort = socket.getLocalPort();
+        }
+        ClaudeWorkerClient client = new ClaudeWorkerClient(
+                "worker-1", "http://127.0.0.1:" + closedPort, "token");
+        AtomicInteger callbacks = new AtomicInteger();
+
+        client.subscribeToTask("task-1", 0, callbacks::incrementAndGet)
+                .onErrorResume(ignored -> reactor.core.publisher.Flux.empty())
+                .blockLast(Duration.ofSeconds(5));
+
+        assertEquals(1, callbacks.get());
+    }
+
     private static class CaptureServer implements AutoCloseable {
         private final HttpServer server;
         private final AtomicReference<String> body = new AtomicReference<>();
+        private final CountDownLatch subscribeHeaders = new CountDownLatch(1);
+        private final CountDownLatch subscribeBodyRelease = new CountDownLatch(1);
+        private final CountDownLatch subscribeComplete = new CountDownLatch(1);
 
         private CaptureServer(HttpServer server) {
             this.server = server;
@@ -75,6 +124,21 @@ class ClaudeWorkerClientTest {
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
+            server.createContext("/api/v1/tasks/task-1/subscribe", exchange -> {
+                exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+                exchange.sendResponseHeaders(200, 0);
+                exchange.getResponseBody().write(": connected\n\n".getBytes(StandardCharsets.UTF_8));
+                exchange.getResponseBody().flush();
+                capture.subscribeHeaders.countDown();
+                try {
+                    capture.subscribeBodyRelease.await(3, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    exchange.close();
+                    capture.subscribeComplete.countDown();
+                }
+            });
             server.start();
             return capture;
         }
@@ -87,8 +151,21 @@ class ClaudeWorkerClientTest {
             return body.get();
         }
 
+        boolean awaitSubscribeHeaders() throws InterruptedException {
+            return subscribeHeaders.await(2, TimeUnit.SECONDS);
+        }
+
+        void releaseSubscribeBody() {
+            subscribeBodyRelease.countDown();
+        }
+
+        boolean awaitSubscribeComplete() throws InterruptedException {
+            return subscribeComplete.await(2, TimeUnit.SECONDS);
+        }
+
         @Override
         public void close() {
+            subscribeBodyRelease.countDown();
             server.stop(0);
         }
     }

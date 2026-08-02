@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 /**
@@ -142,6 +143,10 @@ public class ClaudeTaskEntity {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    /** UTC epoch captured for new rows only; legacy nulls are never inferred or backfilled. */
+    @Column(name = "created_at_epoch_ms", updatable = false)
+    private Long createdAtEpochMs;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 
@@ -150,6 +155,7 @@ public class ClaudeTaskEntity {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
         }
+        createdAtEpochMs = Instant.now().toEpochMilli();
         if (updatedAt == null) {
             updatedAt = LocalDateTime.now();
         }

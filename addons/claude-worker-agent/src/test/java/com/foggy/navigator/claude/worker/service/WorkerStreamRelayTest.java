@@ -12,6 +12,11 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.event.SessionEventListener;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryBounds;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryCapability;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryPolicy;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryPolicyResolver;
+import com.foggy.navigator.spi.recovery.ResolvedBackgroundRecoveryPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,14 +25,22 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.mockito.ArgumentCaptor;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Scheduler;
 
 import java.lang.reflect.Method;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -60,6 +73,7 @@ class WorkerStreamRelayTest {
     private ClaudeWorkerClient client;
     private SessionEventListener sessionEventListener;
     private ApplicationEventPublisher eventPublisher;
+    private ClaudeBackgroundRecoveryPolicy backgroundRecoveryPolicy;
     private WorkerStreamRelay relay;
 
     @BeforeEach
@@ -70,8 +84,21 @@ class WorkerStreamRelayTest {
         client = mock(ClaudeWorkerClient.class);
         sessionEventListener = mock(SessionEventListener.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        BackgroundRecoveryPolicyResolver resolver = declaration ->
+                new ResolvedBackgroundRecoveryPolicy(declaration,
+                        new BackgroundRecoveryPolicy(true, new BackgroundRecoveryBounds(
+                                3, Duration.ofHours(1), Duration.ofMinutes(5), Duration.ofMinutes(5),
+                                1, Duration.ofMinutes(1))));
+        backgroundRecoveryPolicy = new ClaudeBackgroundRecoveryPolicy(
+                resolver, Clock.systemUTC());
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation ->
+                Optional.of(recoverableTask(invocation.getArgument(0))));
 
-        relay = new WorkerStreamRelay(
+        relay = newRelay(backgroundRecoveryPolicy);
+    }
+
+    private WorkerStreamRelay newRelay(ClaudeBackgroundRecoveryPolicy policy) {
+        return new WorkerStreamRelay(
                 workerService,
                 taskService,
                 taskRepository,
@@ -79,7 +106,8 @@ class WorkerStreamRelayTest {
                 mock(ConversationConfigService.class),
                 sessionEventListener,
                 eventPublisher,
-                new ObjectMapper()
+                new ObjectMapper(),
+                policy
         );
     }
 
@@ -149,23 +177,21 @@ class WorkerStreamRelayTest {
                 .providerType("claude-worker")
                 .build();
         when(workerService.getWorkerEntity("worker-1")).thenThrow(new IllegalStateException("worker offline"));
-        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
 
         relay.onTaskStart(event);
 
-        verify(taskService).markLifecycleAttention("local-task-1", "STREAM_CONNECT_UNCONFIRMED");
+        verify(taskService, never()).markLifecycleAttention(anyString(), anyString());
         verify(taskService, never()).failTask(anyString(), any(), any(), any());
+        assertEquals(1, scheduledRecoveries().size());
     }
 
     @Test
     void clientSubscriptionErrorLeavesTaskPendingAndRetainsReplayCursor() throws Exception {
         WebClientResponseException error = WebClientResponseException.create(
                 HttpStatus.TOO_MANY_REQUESTS.value(), "too many requests", HttpHeaders.EMPTY, null, null);
-        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
-
         invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
 
-        verify(taskService).markLifecycleAttention("local-task-1", "STREAM_TRANSPORT_UNCONFIRMED");
+        verify(taskService, never()).markLifecycleAttention(anyString(), anyString());
         verify(taskService, never()).failTask(anyString(), any(), any(), any());
         assertEquals(0, relay.getLastAckedSeq("local-task-1").get());
     }
@@ -188,7 +214,6 @@ class WorkerStreamRelayTest {
 
     @Test
     void repeatedTransportErrorsPublishOnePendingNoticeAndScheduleOneRecovery() throws Exception {
-        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
         WebClientResponseException error = WebClientResponseException.create(
                 HttpStatus.NOT_FOUND.value(), "not found", HttpHeaders.EMPTY, null, null);
 
@@ -215,7 +240,6 @@ class WorkerStreamRelayTest {
     void terminalObservationCancelsPreviouslyScheduledRecovery() throws Exception {
         WebClientResponseException error = WebClientResponseException.create(
                 HttpStatus.NOT_FOUND.value(), "not found", HttpHeaders.EMPTY, null, null);
-        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.empty());
         invokeSubscribeSseFlux(Flux.error(error), "local-task-1", "session-1", "worker-1");
 
         @SuppressWarnings("unchecked")
@@ -231,6 +255,100 @@ class WorkerStreamRelayTest {
 
         assertTrue(scheduled.isEmpty());
         assertTrue(recovery.isDisposed());
+    }
+
+    @Test
+    void startupPolicyOffReturnsBeforeDelayAndRepositoryScan() {
+        BackgroundRecoveryPolicyResolver disabledResolver = declaration ->
+                new ResolvedBackgroundRecoveryPolicy(declaration,
+                        new BackgroundRecoveryPolicy(false, new BackgroundRecoveryBounds(
+                                3, Duration.ofHours(1), Duration.ofSeconds(1), Duration.ofMinutes(1),
+                                1, Duration.ofMinutes(1))));
+        WorkerStreamRelay disabledRelay = newRelay(new ClaudeBackgroundRecoveryPolicy(
+                disabledResolver, Clock.systemUTC()));
+
+        disabledRelay.onApplicationReady();
+
+        verify(taskRepository, never()).findByStatusIn(any());
+        verifyNoInteractions(workerService);
+    }
+
+    @Test
+    void legacyTaskTransportFailureCreatesNoTimerAttentionOrProviderEffect() throws Exception {
+        ClaudeTaskEntity legacy = recoverableTask("legacy-task");
+        legacy.setCreatedAtEpochMs(null);
+        when(taskRepository.findByTaskId("legacy-task")).thenReturn(Optional.of(legacy));
+        clearInvocations(taskService, eventPublisher, workerService);
+        WebClientResponseException error = WebClientResponseException.create(
+                HttpStatus.SERVICE_UNAVAILABLE.value(), "unavailable", HttpHeaders.EMPTY, null, null);
+
+        invokeSubscribeSseFlux(Flux.error(error), "legacy-task", "session-1", "worker-1");
+
+        verifyNoInteractions(workerService);
+        verify(taskService, never()).markLifecycleAttention(anyString(), anyString());
+        verifyNoInteractions(eventPublisher);
+        assertFalse(scheduledRecoveries().containsKey("legacy-task"));
+        assertEquals(0, backgroundRecoveryPolicy.attempts("legacy-task"));
+    }
+
+    @Test
+    void exhaustedAttentionLatchesOnlyAfterDurableMarkAndStateSyncSucceed() throws Exception {
+        ClaudeTaskEntity task = recoverableTask("exhausted-task");
+        when(taskRepository.findByTaskId("exhausted-task")).thenReturn(Optional.of(task));
+        for (int index = 0; index < 3; index++) {
+            var decision = backgroundRecoveryPolicy.tryAcquire(
+                    task, BackgroundRecoveryCapability.DELAYED_RETRY);
+            assertTrue(decision.permitted());
+            decision.lease().close();
+        }
+        doThrow(new IllegalStateException("db unavailable"))
+                .doNothing()
+                .when(taskService).markLifecycleAttention(
+                        "exhausted-task", "CLAUDE_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED");
+        WebClientResponseException error = WebClientResponseException.create(
+                HttpStatus.SERVICE_UNAVAILABLE.value(), "unavailable", HttpHeaders.EMPTY, null, null);
+
+        invokeSubscribeSseFlux(Flux.error(error), "exhausted-task", "session-1", "worker-1");
+        invokeSubscribeSseFlux(Flux.error(error), "exhausted-task", "session-1", "worker-1");
+        invokeSubscribeSseFlux(Flux.error(error), "exhausted-task", "session-1", "worker-1");
+
+        verify(taskService, times(2)).markLifecycleAttention(
+                "exhausted-task", "CLAUDE_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED");
+        ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, times(1)).publishEvent(events.capture());
+        AgentMessage attention = assertInstanceOf(AgentMessage.class, events.getValue());
+        assertEquals(MessageType.STATE_SYNC, attention.getType());
+        assertEquals("CLAUDE_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED",
+                ((Map<?, ?>) attention.getPayload()).get("attentionStatus"));
+    }
+
+    @Test
+    void explicitAbortDoesNotResetAttemptsButCommittedDeleteDoes() {
+        ClaudeTaskEntity task = recoverableTask("local-task-1");
+        var decision = backgroundRecoveryPolicy.tryAcquire(
+                task, BackgroundRecoveryCapability.DELAYED_RETRY);
+        assertTrue(decision.permitted());
+        decision.lease().close();
+
+        relay.abortStream("local-task-1");
+        assertEquals(1, backgroundRecoveryPolicy.attempts("local-task-1"));
+
+        relay.clearDeletedTask("local-task-1");
+        assertEquals(0, backgroundRecoveryPolicy.attempts("local-task-1"));
+    }
+
+    @Test
+    void timerImmediateFireRemovesExactRegisteredHandle() throws Exception {
+        ClaudeTaskEntity task = recoverableTask("race-task");
+        RegistrationRaceScheduler scheduler = new RegistrationRaceScheduler();
+        ReflectionTestUtils.setField(relay, "recoveryScheduler", scheduler);
+        when(taskRepository.findByTaskId("race-task")).thenReturn(Optional.empty());
+
+        ReflectionTestUtils.invokeMethod(relay, "scheduleReconnect", task, Duration.ofNanos(1));
+
+        assertTrue(scheduler.awaitCompletion());
+        assertFalse(scheduledRecoveries().containsKey("race-task"));
+        verify(taskRepository).findByTaskId("race-task");
     }
 
     @Test
@@ -268,10 +386,20 @@ class WorkerStreamRelayTest {
                 "closed", true,
                 "terminal_observed", true,
                 "terminal_status", "COMPLETED")));
+        entity.setSource("PLATFORM");
+        entity.setCreatedAtEpochMs(Instant.now().minusSeconds(30).toEpochMilli());
+        var attempt = backgroundRecoveryPolicy.tryAcquire(
+                entity, BackgroundRecoveryCapability.DELAYED_RETRY);
+        assertTrue(attempt.permitted());
+        attempt.lease().close();
 
         relay.reconnectTask("local-task-1", "session-1", "worker-1");
 
         verify(client, never()).subscribeToTask(anyString(), anyInt());
+        assertEquals(1, backgroundRecoveryPolicy.attempts("local-task-1"));
+        verify(taskService, never()).completeTask(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(taskService, never()).failTask(anyString(), any(), any(), any(), any());
     }
 
     @Test
@@ -283,6 +411,8 @@ class WorkerStreamRelayTest {
         entity.setWorkerTaskId("worker-task-9");
         entity.setStatus("RUNNING");
         entity.setLastAckedSeq(7);
+        entity.setSource("PLATFORM");
+        entity.setCreatedAtEpochMs(Instant.now().minusSeconds(30).toEpochMilli());
 
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId("worker-1");
@@ -508,8 +638,6 @@ class WorkerStreamRelayTest {
         ServerSentEvent<String> sse = ServerSentEvent.<String>builder()
                 .data(new ObjectMapper().writeValueAsString(event))
                 .build();
-        when(taskRepository.findByTaskId("local-task-46")).thenReturn(Optional.empty());
-
         invokeSubscribeSseFlux(sse, "local-task-46", "session-46", "worker-46");
 
         verify(taskService).markLifecycleAttention("local-task-46", "STREAM_ERROR_UNCONFIRMED");
@@ -610,5 +738,87 @@ class WorkerStreamRelayTest {
         method.setAccessible(true);
         method.invoke(relay, flux, taskId, sessionId, workerId,
                 new AtomicReference<String>(), new AtomicReference<String>(), 0);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Disposable> scheduledRecoveries() {
+        return (Map<String, Disposable>)
+                org.springframework.test.util.ReflectionTestUtils.getField(relay, "scheduledRecoveries");
+    }
+
+    private ClaudeTaskEntity recoverableTask(String taskId) {
+        ClaudeTaskEntity task = new ClaudeTaskEntity();
+        task.setTaskId(taskId);
+        task.setSessionId("session-1");
+        task.setWorkerId("worker-1");
+        task.setStatus("RUNNING");
+        task.setSource("PLATFORM");
+        task.setCreatedAtEpochMs(Instant.now().minusSeconds(30).toEpochMilli());
+        return task;
+    }
+
+    private static final class RegistrationRaceScheduler implements Scheduler {
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch completed = new CountDownLatch(1);
+        private final AtomicBoolean disposed = new AtomicBoolean(false);
+
+        @Override
+        public Disposable schedule(Runnable task) {
+            AtomicBoolean taskDisposed = new AtomicBoolean(false);
+            Disposable handle = new Disposable() {
+                @Override
+                public void dispose() {
+                    taskDisposed.set(true);
+                }
+
+                @Override
+                public boolean isDisposed() {
+                    return taskDisposed.get();
+                }
+            };
+            Thread callback = new Thread(() -> {
+                started.countDown();
+                try {
+                    if (!disposed.get() && !taskDisposed.get()) task.run();
+                } finally {
+                    completed.countDown();
+                }
+            }, "claude-recovery-registration-race");
+            callback.setDaemon(true);
+            callback.start();
+            try {
+                if (!started.await(2, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timer callback did not start");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("timer registration interrupted", interrupted);
+            }
+            return handle;
+        }
+
+        @Override
+        public Disposable schedule(Runnable task, long delay, TimeUnit unit) {
+            return schedule(task);
+        }
+
+        @Override
+        public Worker createWorker() {
+            throw new UnsupportedOperationException("worker scheduling is not used by this test");
+        }
+
+        @Override
+        public void dispose() {
+            disposed.set(true);
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return disposed.get();
+        }
+
+        private boolean awaitCompletion() throws InterruptedException {
+            return completed.await(2, TimeUnit.SECONDS);
+        }
     }
 }

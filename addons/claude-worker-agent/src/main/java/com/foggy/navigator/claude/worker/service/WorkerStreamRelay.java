@@ -15,6 +15,8 @@ import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.event.SessionEventListener;
+import com.foggy.navigator.spi.recovery.BackgroundRecoveryCapability;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -26,21 +28,25 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Worker SSE → AgentMessage 桥接
@@ -56,15 +62,10 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequiredArgsConstructor
 public class WorkerStreamRelay {
 
-    private static final String AGENT_ID = "claude-worker";
+    private static final String AGENT_ID = ClaudeBackgroundRecoveryPolicy.PROVIDER_TYPE;
 
     /** 启动后延迟多少毫秒再尝试重连（等 Worker 健康检查完成） */
     private static final long STARTUP_RECONNECT_DELAY_MS = 10_000;
-
-    /** 重连退避基础延迟（毫秒），实际延迟 = 2^attempt * BASE */
-    private static final long RECONNECT_BASE_DELAY_MS = 2000;
-    /** 重连退避上限（毫秒），避免无限增长 */
-    private static final long MAX_RECONNECT_BACKOFF_MS = 300_000;  // 5 minutes
 
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
@@ -74,6 +75,11 @@ public class WorkerStreamRelay {
     private final SessionEventListener sessionEventListener;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final ClaudeBackgroundRecoveryPolicy backgroundRecoveryPolicy;
+
+    /** Replaceable only by package tests; production uses a bounded scheduler. */
+    private Scheduler recoveryScheduler = Schedulers.boundedElastic();
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     /** 活跃的流订阅，用于 abort */
     private final ConcurrentHashMap<String, Disposable> activeStreams = new ConcurrentHashMap<>();
@@ -101,6 +107,10 @@ public class WorkerStreamRelay {
     /** transport interruption 只向会话发布一次 pending 提示，恢复或终态后清除。 */
     private final ConcurrentHashMap<String, Boolean> recoveryNotified = new ConcurrentHashMap<>();
 
+    /** A stopped automatic chain emits at most one durable non-terminal attention. */
+    private final ConcurrentHashMap<String, String> recoveryAttentionNotified = new ConcurrentHashMap<>();
+    private final ReentrantLock[] recoveryAttentionLocks = createRecoveryAttentionLocks();
+
     private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
 
     /**
@@ -112,8 +122,6 @@ public class WorkerStreamRelay {
     private static final List<String> STREAM_RECOVERY_STATUSES =
             List.of("RUNNING", "AWAITING_PERMISSION", "CANCEL_REQUESTED");
 
-    private static final String STREAM_CONNECT_UNCONFIRMED = "STREAM_CONNECT_UNCONFIRMED";
-    private static final String STREAM_TRANSPORT_UNCONFIRMED = "STREAM_TRANSPORT_UNCONFIRMED";
     private static final String STREAM_ERROR_UNCONFIRMED = "STREAM_ERROR_UNCONFIRMED";
     /** Stable public/persisted fallback for a Worker-provided failure body. */
     private static final String CLAUDE_RUNTIME_REMOTE_ERROR = "CLAUDE_RUNTIME_REMOTE_ERROR";
@@ -194,9 +202,7 @@ public class WorkerStreamRelay {
         } catch (Exception e) {
             log.error("Failed to start stream relay: taskId={}, errorCode={}, errorType={}", taskId,
                     remoteDiagnosticCode(e), exceptionType(e));
-            taskService.markLifecycleAttention(taskId, STREAM_CONNECT_UNCONFIRMED);
-            publishRecoveryPending(sessionId, taskId, STREAM_CONNECT_UNCONFIRMED);
-            scheduleRecovery(taskId, sessionId, workerId, 0);
+            scheduleRecovery(taskId);
         }
     }
 
@@ -214,10 +220,23 @@ public class WorkerStreamRelay {
      * 不会发布 SESSION_START 或 TaskStartedEvent（任务已经在进行中）。
      */
     public void reconnectTask(String taskId, String sessionId, String workerId) {
-        reconnectTask(taskId, sessionId, workerId, 0);
+        reconnectTask(taskId, sessionId, workerId, false, null);
     }
 
-    private void reconnectTask(String taskId, String sessionId, String workerId, int reconnectAttempt) {
+    void recoverAutomatically(ClaudeTaskEntity task, BackgroundRecoveryCapability capability) {
+        if (task == null) return;
+        reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId(), true, capability);
+    }
+
+    boolean assessAutomaticCandidate(ClaudeTaskEntity task, BackgroundRecoveryCapability capability) {
+        ClaudeBackgroundRecoveryPolicy.Assessment assessment = backgroundRecoveryPolicy.assess(task, capability);
+        if (assessment.permitted()) return true;
+        handleAutomaticRecoveryDenial(task, assessment.denial());
+        return false;
+    }
+
+    private void reconnectTask(String taskId, String sessionId, String workerId, boolean automatic,
+                               BackgroundRecoveryCapability capability) {
         if (hasActiveStream(taskId)) {
             log.debug("reconnectTask: task {} already has active stream, skipping", taskId);
             return;
@@ -231,21 +250,42 @@ public class WorkerStreamRelay {
             return;
         }
 
-        log.info("Reconnecting stream: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
+        ClaudeBackgroundRecoveryPolicy.AttemptLease recoveryLease = null;
+        int reconnectAttempt = 0;
 
         try {
             ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
             if (entity == null) {
                 log.warn("reconnectTask: task {} not found in repository", taskId);
-                clearStreamTracking(taskId);
+                clearDeletedTask(taskId);
                 return;
             }
             if (!isRecoverableTaskStatus(entity.getStatus())) {
                 log.info("reconnectTask: task {} is not recoverable (status={}), skipping",
                         taskId, entity.getStatus());
-                clearStreamTracking(taskId);
+                if (TERMINAL_STATES.contains(entity.getStatus())) {
+                    clearTerminalTracking(taskId);
+                } else {
+                    clearStreamTracking(taskId);
+                }
                 return;
             }
+
+            sessionId = entity.getSessionId();
+            workerId = entity.getWorkerId();
+            if (automatic) {
+                ClaudeBackgroundRecoveryPolicy.AttemptDecision decision =
+                        backgroundRecoveryPolicy.tryAcquire(entity, capability);
+                if (!decision.permitted()) {
+                    handleAutomaticRecoveryDenial(entity, decision.denial());
+                    return;
+                }
+                recoveryLease = decision.lease();
+                reconnectAttempt = recoveryLease.attempt();
+            }
+
+            log.info("Reconnecting stream: taskId={}, sessionId={}, workerId={}, automatic={}, attempt={}",
+                    taskId, sessionId, workerId, automatic, reconnectAttempt);
 
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
             ClaudeWorkerClient client = workerService.createClient(worker);
@@ -261,22 +301,35 @@ public class WorkerStreamRelay {
             int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
             String subscribeTaskId = resolveWorkerTaskLookupId(entity);
             if (isClosedAndAligned(client, subscribeTaskId, ackSeq, taskId, "reconnectTask")) {
+                // Remote terminal metadata is evidence, not the local durable
+                // lifecycle commit. Preserve the automatic budget until the
+                // local task row is terminal or deleted.
                 clearStreamTracking(taskId);
                 return;
             }
             log.info("reconnectTask ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
+            Flux<ServerSentEvent<String>> sseFlux;
+            if (automatic) {
+                ClaudeBackgroundRecoveryPolicy.AttemptLease connectionLease = recoveryLease;
+                sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq, connectionLease::close);
+            } else {
+                sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
+            }
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, reconnectAttempt);
 
             registerActiveStream(taskId, subscription);
+            if (automatic) {
+                recoveryLease = null;
+            }
 
         } catch (Exception e) {
             log.warn("Failed to reconnect task {}: errorCode={}, errorType={}", taskId,
                     remoteDiagnosticCode(e), exceptionType(e));
-            scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
+            scheduleRecovery(taskId);
         } finally {
+            if (recoveryLease != null) recoveryLease.close();
             guard.set(false);
         }
     }
@@ -287,10 +340,19 @@ public class WorkerStreamRelay {
     @Async("sessionEventExecutor")
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
+        if (!backgroundRecoveryPolicy.providerPermits(BackgroundRecoveryCapability.STARTUP_SCAN)) {
+            log.info("Claude automatic startup recovery is disabled");
+            return;
+        }
         try {
             Thread.sleep(STARTUP_RECONNECT_DELAY_MS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return;
+        }
+
+        if (!backgroundRecoveryPolicy.providerPermits(BackgroundRecoveryCapability.STARTUP_SCAN)) {
+            log.info("Claude automatic startup recovery was disabled during startup delay");
             return;
         }
 
@@ -310,26 +372,7 @@ public class WorkerStreamRelay {
                 continue;
             }
             try {
-                // Java 重启后 lastAckedSeq 为空 → 先查 Worker 状态判断是否需要回放
-                try {
-                    ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-                    ClaudeWorkerClient client = workerService.createClient(worker);
-                    Map<String, Object> status = client.getTaskStatus(resolveWorkerTaskLookupId(task))
-                            .block(java.time.Duration.ofSeconds(5));
-                    if (status != null) {
-                        boolean closed = Boolean.TRUE.equals(status.get("closed"));
-                        int latestSeq = ((Number) status.getOrDefault("latest_seq", 0)).intValue();
-                        log.info("Startup reconnect: task {} Worker status: closed={}, latestSeq={}",
-                                task.getTaskId(), closed, latestSeq);
-                        // ackSeq=0 会让 Worker 从头回放所有事件（安全，幂等）
-                        // 即使 Worker 已 closed，回放仍能让 Java 收到 result + sync_checkpoint
-                    }
-                } catch (Exception e) {
-                    log.debug("Startup reconnect: cannot query Worker status for {}: errorCode={}, errorType={}",
-                            task.getTaskId(), remoteDiagnosticCode(e), exceptionType(e));
-                }
-
-                reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId());
+                recoverAutomatically(task, BackgroundRecoveryCapability.STARTUP_SCAN);
             } catch (Exception e) {
                 log.warn("Startup reconnect failed for task {}: errorCode={}, errorType={}", task.getTaskId(),
                         remoteDiagnosticCode(e), exceptionType(e));
@@ -442,12 +485,12 @@ public class WorkerStreamRelay {
                         String status = taskOpt.get().getStatus();
                         if (TERMINAL_STATES.contains(status)) {
                             log.info("Task {} already in terminal state ({}), skipping reconnect", taskId, status);
-                            clearStreamTracking(taskId);
+                            clearTerminalTracking(taskId);
                             return;
                         }
                     }
 
-                    scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
+                    scheduleRecovery(taskId);
                 })
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}, errorCode={}, errorType={}", taskId,
@@ -463,7 +506,7 @@ public class WorkerStreamRelay {
                     if (isLocalTerminalTask(taskId)) {
                         log.info("Ignoring Worker stream error after terminal task: taskId={}, type={}",
                                 taskId, exceptionType(e));
-                        clearStreamTracking(taskId);
+                        clearTerminalTracking(taskId);
                         return;
                     }
 
@@ -474,7 +517,7 @@ public class WorkerStreamRelay {
                         // it replays the same ESN and leaves the cursor at
                         // its prior acknowledged value.
                         log.warn("Worker event persistence failed; retaining replay cursor: taskId={}", taskId);
-                        scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
+                        scheduleRecovery(taskId);
                         return;
                     }
 
@@ -482,10 +525,7 @@ public class WorkerStreamRelay {
                     // evidence, including 4xx responses after a task was
                     // accepted. Keep the task pending and retain its replay
                     // cursor instead of fabricating FAILED.
-                    taskService.markLifecycleAttention(taskId, STREAM_TRANSPORT_UNCONFIRMED);
-                    publishRecoveryPending(sessionId, taskId, STREAM_TRANSPORT_UNCONFIRMED);
-
-                    scheduleRecovery(taskId, sessionId, workerId, reconnectAttempt);
+                    scheduleRecovery(taskId);
                 })
                 .subscribe(ignored -> { }, error -> { });
     }
@@ -495,43 +535,74 @@ public class WorkerStreamRelay {
      * callback re-reads the durable task state so a terminal transition that
      * commits during backoff cancels the reconnect before any Worker request.
      */
-    private void scheduleRecovery(String taskId, String sessionId, String workerId, int currentAttempt) {
-        if (isLocalTerminalTask(taskId)) {
-            clearStreamTracking(taskId);
-            return;
+    private boolean scheduleRecovery(String taskId) {
+        ClaudeTaskEntity task;
+        try {
+            task = taskRepository.findByTaskId(taskId).orElse(null);
+        } catch (RuntimeException repositoryError) {
+            log.warn("Claude automatic recovery stopped because task state is unreadable: taskId={}, code={}",
+                    taskId, "CLAUDE_BACKGROUND_RECOVERY_TASK_UNREADABLE");
+            return false;
+        }
+        if (task == null) {
+            clearDeletedTask(taskId);
+            return false;
+        }
+        if (TERMINAL_STATES.contains(task.getStatus())) {
+            clearTerminalTracking(taskId);
+            return false;
         }
 
-        int nextAttempt = currentAttempt + 1;
-        long delayMs = Math.min(
-                (long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS,
-                MAX_RECONNECT_BACKOFF_MS);
-        AtomicReference<Disposable> scheduledRef = new AtomicReference<>();
-        Disposable scheduled = Schedulers.boundedElastic().schedule(() -> {
-            scheduledRecoveries.remove(taskId, scheduledRef.get());
-            ClaudeTaskEntity task;
-            try {
-                task = taskRepository.findByTaskId(taskId).orElse(null);
-            } catch (Exception repositoryError) {
-                log.warn("Cannot inspect Claude task before scheduled recovery: taskId={}, type={}",
-                        taskId, exceptionType(repositoryError));
-                scheduleRecovery(taskId, sessionId, workerId, nextAttempt);
-                return;
-            }
-            if (task == null || TERMINAL_STATES.contains(task.getStatus())) {
-                clearStreamTracking(taskId);
-                return;
-            }
-            reconnectTask(taskId, task.getSessionId(), task.getWorkerId(), nextAttempt);
-        }, delayMs, TimeUnit.MILLISECONDS);
-        scheduledRef.set(scheduled);
-
-        Disposable previous = scheduledRecoveries.putIfAbsent(taskId, scheduled);
-        if (previous != null && !scheduled.isDisposed()) {
-            scheduled.dispose();
-            return;
+        ClaudeBackgroundRecoveryPolicy.Assessment assessment = backgroundRecoveryPolicy.assess(
+                task, BackgroundRecoveryCapability.DELAYED_RETRY);
+        if (!assessment.permitted()) {
+            handleAutomaticRecoveryDenial(task, assessment.denial());
+            return false;
         }
-        log.info("Scheduled Claude stream recovery in {}ms: taskId={}, attempt={}",
-                delayMs, taskId, nextAttempt);
+        scheduleReconnect(task, assessment.backoff());
+        publishRecoveryPending(task.getSessionId(), taskId, "CLAUDE_BACKGROUND_RECOVERY_PENDING");
+        return true;
+    }
+
+    private void scheduleReconnect(ClaudeTaskEntity task, Duration delay) {
+        if (shuttingDown.get()) return;
+        String taskId = task.getTaskId();
+        scheduledRecoveries.compute(taskId, (ignored, previous) -> {
+            if (shuttingDown.get()) {
+                disposeTimer(previous);
+                return null;
+            }
+            AtomicReference<Disposable> scheduledRef = new AtomicReference<>();
+            CountDownLatch registrationReady = new CountDownLatch(1);
+            Disposable scheduled = recoveryScheduler.schedule(() -> {
+                awaitTimerRegistration(registrationReady);
+                Disposable registered = scheduledRef.get();
+                if (registered == null || !scheduledRecoveries.remove(taskId, registered)) return;
+                if (shuttingDown.get()) return;
+                ClaudeTaskEntity current;
+                try {
+                    current = taskRepository.findByTaskId(taskId).orElse(null);
+                } catch (RuntimeException repositoryError) {
+                    log.warn("Claude scheduled recovery stopped because task state is unreadable: taskId={}, code={}",
+                            taskId, "CLAUDE_BACKGROUND_RECOVERY_TASK_UNREADABLE");
+                    return;
+                }
+                if (current == null) {
+                    clearDeletedTask(taskId);
+                    return;
+                }
+                if (TERMINAL_STATES.contains(current.getStatus())) {
+                    clearTerminalTracking(taskId);
+                    return;
+                }
+                recoverAutomatically(current, BackgroundRecoveryCapability.DELAYED_RETRY);
+            }, schedulerDelayNanos(delay), TimeUnit.NANOSECONDS);
+            scheduledRef.set(scheduled);
+            registrationReady.countDown();
+            disposeTimer(previous);
+            return scheduled;
+        });
+        if (shuttingDown.get()) cancelScheduledRecovery(taskId);
     }
 
     private void registerActiveStream(String taskId, Disposable subscription) {
@@ -553,6 +624,51 @@ public class WorkerStreamRelay {
                             "reconnectable", true,
                             "taskId", taskId,
                             "attentionStatus", attentionStatus));
+        }
+    }
+
+    private void handleAutomaticRecoveryDenial(
+            ClaudeTaskEntity task, ClaudeBackgroundRecoveryPolicy.Denial denial) {
+        if (task == null || denial == null) return;
+        switch (denial) {
+            case ATTEMPTS_EXHAUSTED -> publishBackgroundRecoveryAttention(
+                    task, "CLAUDE_BACKGROUND_RECOVERY_ATTEMPTS_EXHAUSTED");
+            case RECOVERY_WINDOW_EXHAUSTED -> publishBackgroundRecoveryAttention(
+                    task, "CLAUDE_BACKGROUND_RECOVERY_WINDOW_EXHAUSTED");
+            case CONCURRENCY_EXHAUSTED -> publishBackgroundRecoveryAttention(
+                    task, "CLAUDE_BACKGROUND_RECOVERY_CONCURRENCY_EXHAUSTED");
+            case LEGACY_TASK_AGE_UNKNOWN -> log.warn(
+                    "Claude automatic recovery skipped legacy task without UTC age; no facts were written: "
+                            + "taskId={}, code={}",
+                    task.getTaskId(), "CLAUDE_BACKGROUND_RECOVERY_LEGACY_AGE_UNKNOWN");
+            case TASK_AGE_INVALID -> log.warn(
+                    "Claude automatic recovery failed closed: taskId={}, reason={}",
+                    task.getTaskId(), denial);
+            case POLICY_UNAVAILABLE -> log.warn(
+                    "Claude automatic recovery policy is unavailable: taskId={}", task.getTaskId());
+            case POLICY_DISABLED, TASK_INELIGIBLE -> log.debug(
+                    "Claude automatic recovery not eligible: taskId={}, reason={}", task.getTaskId(), denial);
+            case NONE -> {
+            }
+        }
+    }
+
+    private void publishBackgroundRecoveryAttention(ClaudeTaskEntity task, String attentionCode) {
+        ReentrantLock lock = recoveryAttentionLock(task.getTaskId());
+        lock.lock();
+        try {
+            if (recoveryAttentionNotified.containsKey(task.getTaskId())) return;
+            taskService.markLifecycleAttention(task.getTaskId(), attentionCode);
+            publishMessage(task.getSessionId(), MessageType.STATE_SYNC,
+                    Map.of("content", attentionCode,
+                            "subtype", "lifecycle_attention",
+                            "attentionStatus", attentionCode,
+                            "reconnectable", true,
+                            "terminal", false,
+                            "taskId", task.getTaskId()));
+            recoveryAttentionNotified.put(task.getTaskId(), attentionCode);
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -581,11 +697,62 @@ public class WorkerStreamRelay {
         workerTaskIdMap.remove(taskId);
     }
 
+    private void clearTerminalTracking(String taskId) {
+        clearStreamTracking(taskId);
+        clearAutomaticRecoveryState(taskId);
+    }
+
+    /** Clears process-local recovery state after a durable task delete commits. */
+    void clearDeletedTask(String taskId) {
+        clearStreamTracking(taskId);
+        clearAutomaticRecoveryState(taskId);
+    }
+
+    private void clearAutomaticRecoveryState(String taskId) {
+        cancelScheduledRecovery(taskId);
+        recoveryAttentionNotified.remove(taskId);
+        backgroundRecoveryPolicy.clear(taskId);
+    }
+
     private void cancelScheduledRecovery(String taskId) {
         Disposable scheduled = scheduledRecoveries.remove(taskId);
-        if (scheduled != null && !scheduled.isDisposed()) {
-            scheduled.dispose();
+        disposeTimer(scheduled);
+    }
+
+    private long schedulerDelayNanos(Duration delay) {
+        try {
+            return Math.max(1L, delay.toNanos());
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
         }
+    }
+
+    private void awaitTimerRegistration(CountDownLatch registrationReady) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                registrationReady.await();
+                break;
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+    }
+
+    private void disposeTimer(Disposable scheduled) {
+        if (scheduled != null && !scheduled.isDisposed()) scheduled.dispose();
+    }
+
+    private static ReentrantLock[] createRecoveryAttentionLocks() {
+        ReentrantLock[] locks = new ReentrantLock[64];
+        for (int index = 0; index < locks.length; index++) locks[index] = new ReentrantLock();
+        return locks;
+    }
+
+    private ReentrantLock recoveryAttentionLock(String taskId) {
+        int hash = taskId == null ? 0 : taskId.hashCode();
+        return recoveryAttentionLocks[Math.floorMod(hash, recoveryAttentionLocks.length)];
     }
 
     private boolean isRecoverableTaskStatus(String status) {
@@ -695,7 +862,16 @@ public class WorkerStreamRelay {
      * 中止任务的流
      */
     public void abortStream(String taskId) {
+        boolean terminalOrDeleted = false;
+        try {
+            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+            terminalOrDeleted = task == null || TERMINAL_STATES.contains(task.getStatus());
+        } catch (RuntimeException repositoryError) {
+            log.warn("Cannot classify Claude stream abort for task {}: type={}",
+                    taskId, exceptionType(repositoryError));
+        }
         clearStreamTracking(taskId);
+        if (terminalOrDeleted) clearAutomaticRecoveryState(taskId);
         log.info("Stream tracking cleared: taskId={}", taskId);
     }
 
@@ -772,7 +948,7 @@ public class WorkerStreamRelay {
                         event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
                         event.getNumTurns(), resolvedModel, event.getSeq());
 
-                clearStreamTracking(taskId);
+                clearTerminalTracking(taskId);
 
                 autoScanCheckpoints(taskId, event.getSessionId());
 
@@ -856,7 +1032,7 @@ public class WorkerStreamRelay {
                                 errorClaudeSessionId, stableError, event.getSeq());
                     }
 
-                    clearStreamTracking(taskId);
+                    clearTerminalTracking(taskId);
 
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
@@ -1024,6 +1200,21 @@ public class WorkerStreamRelay {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);
         }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        shuttingDown.set(true);
+        activeStreams.values().forEach(this::disposeTimer);
+        scheduledRecoveries.values().forEach(this::disposeTimer);
+        activeStreams.clear();
+        scheduledRecoveries.clear();
+        lastAckedSeq.clear();
+        reconnecting.clear();
+        recoveryNotified.clear();
+        recoveryAttentionNotified.clear();
+        workerTaskIdMap.clear();
+        backgroundRecoveryPolicy.clearAll();
     }
 
     private static final class DurableWorkerEventPersistenceException extends RuntimeException {

@@ -739,6 +739,7 @@ CREATE TABLE IF NOT EXISTS `claude_tasks` (
   `last_acked_seq` int DEFAULT NULL,
   `num_turns` int DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
+  `created_at_epoch_ms` bigint DEFAULT NULL,
   `duration_ms` bigint DEFAULT NULL,
   `id` bigint NOT NULL AUTO_INCREMENT,
   `input_tokens` bigint DEFAULT NULL,

@@ -43,13 +43,18 @@ class TaskStateReconcilerTest {
     @Mock private ClaudeTaskService taskService;
     @Mock private WorkerStreamRelay streamRelay;
     @Mock private ClaudeWorkerClient workerClient;
+    @Mock private ClaudeBackgroundRecoveryPolicy backgroundRecoveryPolicy;
 
     private TaskStateReconciler reconciler;
 
     @BeforeEach
     void setUp() {
         reconciler = new TaskStateReconciler(
-                taskRepository, workerRepository, workerService, taskService, streamRelay);
+                taskRepository, workerRepository, workerService, taskService, streamRelay,
+                backgroundRecoveryPolicy);
+        lenient().when(backgroundRecoveryPolicy.claimPeriodicScanIfDue()).thenReturn(true);
+        lenient().when(streamRelay.assessAutomaticCandidate(
+                any(ClaudeTaskEntity.class), any())).thenReturn(true);
         lenient().when(taskService.resolveWorkerTaskLookupId(any(ClaudeTaskEntity.class)))
                 .thenAnswer(inv -> {
                     ClaudeTaskEntity task = inv.getArgument(0);
@@ -133,7 +138,7 @@ class TaskStateReconcilerTest {
 
         reconciler.reconcileAll();
 
-        verify(streamRelay).reconnectTask("task-1", "session-1", "w1");
+        verify(streamRelay).recoverAutomatically(eq(task), any());
         verify(taskService, never()).reconcilerCompleteTask(anyString(), anyString());
     }
 
@@ -360,7 +365,86 @@ class TaskStateReconcilerTest {
         reconciler.reconcileAll();
 
         verify(taskService).touchAlive("task-1");
-        verify(streamRelay).reconnectTask("task-1", "session-1", "w1");
+        verify(streamRelay).recoverAutomatically(eq(task), any());
+    }
+
+    @Test
+    void policyOffWithNoCancellationMakesNoWorkerProviderCall() {
+        when(backgroundRecoveryPolicy.claimPeriodicScanIfDue()).thenReturn(false);
+        when(taskRepository.findByStatusIn(List.of("CANCEL_REQUESTED"))).thenReturn(List.of());
+
+        reconciler.reconcileAll();
+
+        verify(workerRepository, never()).findAll();
+        verifyNoInteractions(workerService);
+        verifyNoInteractions(workerClient);
+    }
+
+    @Test
+    void policyOffStillConvergesConfirmedAbsentCancellation() throws Exception {
+        when(backgroundRecoveryPolicy.claimPeriodicScanIfDue()).thenReturn(false);
+        ClaudeWorkerEntity worker = buildWorker("w1");
+        ClaudeTaskEntity task = buildTask("task-1", "w1", "CANCEL_REQUESTED");
+        task.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+        when(taskRepository.findByStatusIn(List.of("CANCEL_REQUESTED"))).thenReturn(List.of(task));
+        when(workerRepository.findByWorkerId("w1")).thenReturn(Optional.of(worker));
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(Map.of("processes", List.of())));
+        when(workerClient.getTaskStatus("task-1")).thenReturn(Mono.error(workerNotFound()));
+        when(taskService.reconcileAbsentUntrackedCancellation("task-1")).thenReturn(true);
+        getAbsentMissCountMap().put("task-1", 2);
+
+        reconciler.reconcileAll();
+
+        verify(taskService).reconcileAbsentUntrackedCancellation("task-1");
+        verify(streamRelay).abortStream("task-1");
+        verify(workerRepository, never()).findAll();
+        verify(streamRelay, never()).recoverAutomatically(any(), any());
+    }
+
+    @Test
+    void legacyOrdinaryCandidateMakesNoWorkerProviderCallOrWrite() {
+        ClaudeWorkerEntity worker = buildWorker("w1");
+        ClaudeTaskEntity legacy = buildTask("legacy", "w1", "RUNNING");
+        legacy.setCreatedAtEpochMs(null);
+        when(workerRepository.findAll()).thenReturn(List.of(worker));
+        when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
+                .thenReturn(List.of(legacy));
+        when(streamRelay.assessAutomaticCandidate(
+                legacy, com.foggy.navigator.spi.recovery.BackgroundRecoveryCapability.PERIODIC_RECOVERY_SCAN))
+                .thenReturn(false);
+
+        reconciler.reconcileAll();
+
+        verifyNoInteractions(workerService);
+        verify(taskService, never()).touchAlive(anyString());
+        verify(taskService, never()).markLifecycleAttention(anyString(), anyString());
+        verify(streamRelay, never()).recoverAutomatically(any(), any());
+    }
+
+    @Test
+    void mixedEligibleAndLegacyTasksNeverMisclassifyLegacyProcessAsOrphan() {
+        ClaudeWorkerEntity worker = buildWorker("w1");
+        ClaudeTaskEntity legacy = buildTask("legacy", "w1", "RUNNING");
+        legacy.setCreatedAtEpochMs(null);
+        ClaudeTaskEntity eligible = buildTask("eligible", "w1", "RUNNING");
+        eligible.setCreatedAtEpochMs(Instant.now().minusSeconds(30).toEpochMilli());
+        when(workerRepository.findAll()).thenReturn(List.of(worker));
+        when(taskRepository.findByWorkerIdAndStatusIn(eq("w1"), anyList()))
+                .thenReturn(List.of(legacy, eligible));
+        when(streamRelay.assessAutomaticCandidate(eq(legacy), any())).thenReturn(false);
+        when(streamRelay.assessAutomaticCandidate(eq(eligible), any())).thenReturn(true);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.listCliProcesses()).thenReturn(Mono.just(Map.of("processes", List.of(
+                Map.of("pid", 900, "foggy_task_id", "legacy"),
+                Map.of("pid", 901, "foggy_task_id", "eligible")))));
+        when(streamRelay.hasActiveStream("eligible")).thenReturn(true);
+
+        reconciler.reconcileAll();
+
+        assertNull(reconciler.getOrphanFirstSeen("w1", 900));
+        verify(taskService, never()).touchAlive("legacy");
+        verify(taskService).touchAlive("eligible");
     }
 
     // ---- Worker 离线 ----
