@@ -82,6 +82,16 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
             AuthorizationRequiredSection.CAPABILITY,
             AuthorizationRequiredSection.WORKER_ROUTE);
 
+    private static final Map<String, String> CROSS_PROJECT_DISPOSITION_BY_ROUTE = Map.of(
+            "mvc:post:/api/v1/cross-project-tasks", "RETIRED_STUB",
+            "mvc:get:/api/v1/cross-project-tasks/page", "KEEP",
+            "mvc:get:/api/v1/cross-project-tasks/{contextId}", "KEEP",
+            "mvc:post:/api/v1/cross-project-tasks/{contextId}/advance", "RETIRED_STUB",
+            "mvc:post:/api/v1/cross-project-tasks/{contextId}/cancel", "RETIRED_STUB",
+            "mvc:put:/api/v1/cross-project-tasks/{contextId}/phases/{phaseId}/handoff", "RETIRED_STUB",
+            "mvc:post:/api/v1/cross-project-tasks/{contextId}/review", "RETIRED_STUB",
+            "mvc:post:/api/v1/cross-project-tasks/{contextId}/start", "RETIRED_STUB");
+
     private final AuthorizationRouteCatalog catalog = new AuthorizationRouteCatalog();
 
     @Test
@@ -160,9 +170,38 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
         byte[] sourceBytes = Files.readAllBytes(source);
 
         assertArrayEquals(sourceBytes, Files.readAllBytes(evidence));
-        assertEquals(469, Files.readAllLines(source).size());
+        assertEquals(470, Files.readAllLines(source).size());
         assertEquals(AuthorizationRouteCatalog.EXPECTED_ENTRY_COUNT, sourceRows().size() - 1);
         assertEquals(AuthorizationRouteCatalog.EXPECTED_SHA_256, sha256(sourceBytes));
+    }
+
+    @Test
+    void crossProjectCatalogHasExactlySixRetiredMutationStubsAndTwoReadOnlyRoutes() {
+        Map<String, AuthorizationRouteManifestEntry> crossProjectEntries = catalog.entriesByRouteId().values().stream()
+                .filter(entry -> entry.path().startsWith("/api/v1/cross-project-tasks"))
+                .collect(Collectors.toMap(AuthorizationRouteManifestEntry::routeId, entry -> entry));
+
+        assertEquals(CROSS_PROJECT_DISPOSITION_BY_ROUTE, crossProjectEntries.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().disposition())));
+
+        List<AuthorizationRouteManifestEntry> retiredMutations = crossProjectEntries.values().stream()
+                .filter(entry -> "RETIRED_STUB".equals(entry.disposition()))
+                .toList();
+        assertEquals(6, retiredMutations.size());
+        assertTrue(retiredMutations.stream().allMatch(entry ->
+                entry.currentGuard().contains("@RequireAuth(AUTHENTICATED) remains first")
+                        && entry.currentTargetPredicate().contains("CrossProjectMutationGate")
+                        && entry.currentTargetPredicate().contains("HTTP 410 no-store CROSS_PROJECT_TASK_MUTATION_RETIRED")
+                        && entry.currentTargetPredicate().contains("before repository/target/provider/event effects")
+                        && entry.notes().contains("rollback is enabled")));
+
+        List<AuthorizationRouteManifestEntry> retainedReads = crossProjectEntries.values().stream()
+                .filter(entry -> "KEEP".equals(entry.disposition()))
+                .toList();
+        assertEquals(2, retainedReads.size());
+        assertTrue(retainedReads.stream().allMatch(entry -> "GET".equals(entry.httpMethod())
+                && entry.notes().contains("owner-scoped read-only")
+                && entry.notes().contains("zero dispatch/worktree/event/state mutation")));
     }
 
     @Test
@@ -201,7 +240,7 @@ class AuthorizationRequiredSectionCatalogRegressionTest {
 
         assertEquals(6, entries.stream().filter(entry -> entry.requiredSections().isEmpty()).count(),
                 "public/framework rows must say NONE explicitly");
-        assertEquals(241, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
+        assertEquals(242, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.AUTHORITY)).count());
         assertEquals(125, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.PLATFORM_GRANT)).count());
         assertEquals(158, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.TENANT_AUTHORITY)).count());
         assertEquals(20, entries.stream().filter(entry -> entry.requires(AuthorizationRequiredSection.DELEGATION)).count());
