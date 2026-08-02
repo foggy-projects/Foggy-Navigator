@@ -8,6 +8,7 @@ import java.time.Duration;
 public class LifecycleActivationProperties {
     private boolean admissionEnabled;
     private boolean controlEnabled;
+    private boolean localDevelopmentTargetEnabled;
     private String exactTargetId;
     private String manifestPath;
     private String observationPath;
@@ -24,6 +25,12 @@ public class LifecycleActivationProperties {
     public void setAdmissionEnabled(boolean value) { admissionEnabled = value; }
     public boolean isControlEnabled() { return controlEnabled; }
     public void setControlEnabled(boolean value) { controlEnabled = value; }
+    public boolean isLocalDevelopmentTargetEnabled() {
+        return localDevelopmentTargetEnabled;
+    }
+    public void setLocalDevelopmentTargetEnabled(boolean value) {
+        localDevelopmentTargetEnabled = value;
+    }
     public String getExactTargetId() { return exactTargetId; }
     public void setExactTargetId(String value) { exactTargetId = trim(value); }
     public String getManifestPath() { return manifestPath; }

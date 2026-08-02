@@ -99,6 +99,9 @@ navigator:
       # registered instance, DB-time proof and matched Worker identity.
       control-enabled: ${NAVIGATOR_LIFECYCLE_ACTIVATION_CONTROL_ENABLED:false}
       admission-enabled: ${NAVIGATOR_LIFECYCLE_ACTIVATION_ADMISSION_ENABLED:false}
+      # Separate opt-in for reusing an already isolated loopback development
+      # topology. It never follows from control/admission alone.
+      local-development-target-enabled: ${NAVIGATOR_LIFECYCLE_ACTIVATION_LOCAL_DEVELOPMENT_TARGET_ENABLED:false}
       exact-target-id: ${NAVIGATOR_LIFECYCLE_ACTIVATION_EXACT_TARGET_ID:}
       manifest-path: ${NAVIGATOR_LIFECYCLE_ACTIVATION_MANIFEST_PATH:}
       observation-path: ${NAVIGATOR_LIFECYCLE_ACTIVATION_OBSERVATION_PATH:}

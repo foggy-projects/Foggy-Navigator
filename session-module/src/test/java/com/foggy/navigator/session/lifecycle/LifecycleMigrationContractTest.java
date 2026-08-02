@@ -21,6 +21,8 @@ class LifecycleMigrationContractTest {
                 "docs/migration/2026-07-31-arch-001-third-remediation.sql"));
         String activation = Files.readString(root.resolve(
                 "docs/migration/2026-08-01-arch-001-activation-readiness.sql"));
+        String boundedLocalDevelopment = Files.readString(root.resolve(
+                "docs/migration/2026-08-02-arch-001-bounded-local-development-activation.sql"));
         assertThat(forward).doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ");
         assertThat(forward.split("CREATE TABLE IF NOT EXISTS", -1).length - 1)
                 .isEqualTo(12);
@@ -40,6 +42,9 @@ class LifecycleMigrationContractTest {
                         "uk_lwg_active_slot",
                         "controller_inventory_digest",
                         "expires_at");
+        assertThat(boundedLocalDevelopment)
+                .doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ")
+                .contains("MODIFY COLUMN codex_home_key VARCHAR(256) NULL");
         assertThat(rollback)
                 .contains("lifecycle_activation_targets",
                         "status NOT IN ('CLOSED', 'DESTROYED')");

@@ -123,11 +123,39 @@ class LifecycleProductionActivationIntegrationTest {
         canonicalTasks.deleteAll();
         properties.setControlEnabled(true);
         properties.setAdmissionEnabled(true);
+        properties.setLocalDevelopmentTargetEnabled(false);
         properties.setExactTargetId(TARGET_ID);
         properties.setInstanceId("activation-instance-1");
         ReflectionTestUtils.setField(
                 authority, "terminationReceiptEnabled", true);
         fixture.reset();
+    }
+
+    @Test
+    void boundedLocalDevelopmentTargetRequiresSeparateOptInAndUsesExactProvider() {
+        fixture.localDevelopmentTarget = true;
+
+        assertThatThrownBy(() -> authority.registerConfiguredTarget(TARGET_ID))
+                .hasMessage(LifecycleActivationReason
+                        .LOCAL_DEVELOPMENT_TARGET_DISABLED);
+        assertThat(targets.count()).isZero();
+
+        properties.setLocalDevelopmentTargetEnabled(true);
+        prepareAuthorityAndReservation(
+                TASK_ID, SESSION_ID, true);
+        var authorization = admission.admitAndAuthorizeProviderEffect(
+                providerEffect(TASK_ID, SESSION_ID));
+
+        assertThat(authorization.providerCallAuthorized()).isTrue();
+        assertThat(workers.findById(WORKER_ID).orElseThrow()
+                .getOwnershipMode()).isEqualTo("ENFORCED");
+        assertThat(sessions.findById(SESSION_ID).orElseThrow()
+                .getOwnershipMode()).isEqualTo("ENFORCED");
+        assertThat(tasks.findById(TASK_ID).orElseThrow()
+                .getOwnershipMode()).isEqualTo("ENFORCED");
+        assertThat(outbox.findAll()).singleElement()
+                .extracting(LifecycleEffectOutboxEntity::getProviderType)
+                .isEqualTo("codex-worker");
     }
 
     @Test
@@ -500,12 +528,19 @@ class LifecycleProductionActivationIntegrationTest {
     }
 
     private void prepareAuthorityAndReservation(String taskId, String sessionId) {
+        prepareAuthorityAndReservation(taskId, sessionId, false);
+    }
+
+    private void prepareAuthorityAndReservation(
+            String taskId, String sessionId, boolean localDevelopmentTarget) {
         prepareAuthority();
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
             admission.reserveProductionAdmission(
                     request(taskId, sessionId, null,
-                            "synthetic-arch001-tenant"));
-            canonicalTasks.save(canonical(taskId, sessionId));
+                            "synthetic-arch001-tenant",
+                            localDevelopmentTarget));
+            canonicalTasks.save(canonical(
+                    taskId, sessionId, localDevelopmentTarget));
         });
         assertThat(admission.ownershipModeForTask(taskId))
                 .isEqualTo(LifecycleOwnershipMode.ENFORCED);
@@ -521,11 +556,19 @@ class LifecycleProductionActivationIntegrationTest {
     private LifecycleProductionAdmissionService.ProductionAdmissionRequest request(
             String taskId, String sessionId, String existingSessionId,
             String tenantId) {
+        return request(taskId, sessionId, existingSessionId, tenantId, false);
+    }
+
+    private LifecycleProductionAdmissionService.ProductionAdmissionRequest request(
+            String taskId, String sessionId, String existingSessionId,
+            String tenantId, boolean localDevelopmentTarget) {
         return new LifecycleProductionAdmissionService.ProductionAdmissionRequest(
-                "codex-biz-worker", tenantId, "synthetic-arch001-user",
+                localDevelopmentTarget ? "codex-worker" : "codex-biz-worker",
+                tenantId, "synthetic-arch001-user",
                 WORKER_ID, sessionId, taskId, MODEL_CONFIG, MODEL,
                 existingSessionId, PROMPT_DIGEST,
-                "synthetic/arch001/canary", "/tmp/" + RUN_ID + "/workdir",
+                localDevelopmentTarget ? null : "synthetic/arch001/canary",
+                "/tmp/" + RUN_ID + "/workdir",
                 Map.of(), List.of(), false, "disabled", null);
     }
 
@@ -542,10 +585,16 @@ class LifecycleProductionActivationIntegrationTest {
     }
 
     private SessionTaskEntity canonical(String taskId, String sessionId) {
+        return canonical(taskId, sessionId, false);
+    }
+
+    private SessionTaskEntity canonical(
+            String taskId, String sessionId, boolean localDevelopmentTarget) {
         SessionTaskEntity task = new SessionTaskEntity();
         task.setTaskId(taskId);
         task.setSessionId(sessionId);
-        task.setProviderType("codex-biz-worker");
+        task.setProviderType(localDevelopmentTarget
+                ? "codex-worker" : "codex-biz-worker");
         task.setWorkerId(WORKER_ID);
         task.setTenantId("synthetic-arch001-tenant");
         task.setUserId("synthetic-arch001-user");
@@ -592,6 +641,7 @@ class LifecycleProductionActivationIntegrationTest {
         private boolean workerAvailable;
         private boolean controllerContractDrift;
         private boolean nullCapabilities;
+        private boolean localDevelopmentTarget;
         private final AtomicInteger resolveCalls = new AtomicInteger();
         private DatabaseIdentity databaseIdentity;
 
@@ -611,6 +661,7 @@ class LifecycleProductionActivationIntegrationTest {
             workerAvailable = true;
             controllerContractDrift = false;
             nullCapabilities = false;
+            localDevelopmentTarget = false;
             resolveCalls.set(0);
             databaseIdentity = new DatabaseIdentity(
                     "MySQL", "8.0.44", "arch001_act_run_fixture",
@@ -644,17 +695,26 @@ class LifecycleProductionActivationIntegrationTest {
                     new LifecycleActivationManifest(
                             LifecycleActivationAuthorityService.MANIFEST_SCHEMA,
                             TARGET_ID, RUN_ID,
-                            LifecycleActivationAuthorityService.TARGET_CLASS,
+                            localDevelopmentTarget
+                                    ? LifecycleActivationAuthorityService
+                                    .LOCAL_DEVELOPMENT_TARGET_CLASS
+                                    : LifecycleActivationAuthorityService
+                                    .TARGET_CLASS,
                             LifecycleActivationAuthorityService.PROVIDER_LANE,
                             new LifecycleActivationManifest.Candidate(
                                     properties.getCandidateHead(),
                                     properties.getCandidatePatchSha256(), 1),
                             new LifecycleActivationManifest.ExactTuple(
-                                    "codex-biz-worker",
+                                    localDevelopmentTarget
+                                            ? "codex-worker"
+                                            : "codex-biz-worker",
                                     "synthetic-arch001-tenant",
                                     "synthetic-arch001-user", WORKER_ID,
                                     MODEL_CONFIG, MODEL,
-                                    "synthetic/arch001/canary", PROMPT_DIGEST),
+                                    localDevelopmentTarget
+                                            ? null
+                                            : "synthetic/arch001/canary",
+                                    PROMPT_DIGEST),
                             new LifecycleActivationManifest.Target(
                                     "127.0.0.1", 18112, 13051, 13306, "8.0.44",
                                     "arch001_act_run_fixture", RUN_ID,

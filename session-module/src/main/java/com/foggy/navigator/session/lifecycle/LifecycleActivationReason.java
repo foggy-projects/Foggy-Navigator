@@ -9,6 +9,8 @@ public final class LifecycleActivationReason {
             "LIFECYCLE_ACTIVATION_CONTROL_DISABLED";
     public static final String CONTROL_UNAUTHORIZED =
             "LIFECYCLE_ACTIVATION_CONTROL_UNAUTHORIZED";
+    public static final String LOCAL_DEVELOPMENT_TARGET_DISABLED =
+            "LIFECYCLE_ACTIVATION_LOCAL_DEVELOPMENT_TARGET_DISABLED";
     public static final String TARGET_NOT_CONFIGURED =
             "LIFECYCLE_ACTIVATION_TARGET_NOT_CONFIGURED";
     public static final String TARGET_NOT_REGISTERED =

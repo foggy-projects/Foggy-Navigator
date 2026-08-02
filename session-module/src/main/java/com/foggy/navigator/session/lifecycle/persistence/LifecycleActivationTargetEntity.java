@@ -33,7 +33,7 @@ public class LifecycleActivationTargetEntity {
     private String modelConfigId;
     @Column(length = 128, nullable = false)
     private String model;
-    @Column(length = 256, nullable = false)
+    @Column(length = 256)
     private String codexHomeKey;
     @Column(length = 64, nullable = false)
     private String promptSha256;

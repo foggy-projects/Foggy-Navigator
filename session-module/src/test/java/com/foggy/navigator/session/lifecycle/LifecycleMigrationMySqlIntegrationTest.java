@@ -50,6 +50,8 @@ class LifecycleMigrationMySqlIntegrationTest {
             "docs/migration/2026-07-31-arch-001-third-remediation.sql";
     private static final String ACTIVATION_READINESS =
             "docs/migration/2026-08-01-arch-001-activation-readiness.sql";
+    private static final String BOUNDED_LOCAL_DEVELOPMENT =
+            "docs/migration/2026-08-02-arch-001-bounded-local-development-activation.sql";
     private static final List<String> TABLES = List.of(
             "lifecycle_facts",
             "worker_lifecycle_snapshots",
@@ -91,9 +93,13 @@ class LifecycleMigrationMySqlIntegrationTest {
             execute(connection, THIRD_REMEDIATION);
             execute(connection, ACTIVATION_READINESS);
             execute(connection, ACTIVATION_READINESS);
+            execute(connection, BOUNDED_LOCAL_DEVELOPMENT);
+            execute(connection, BOUNDED_LOCAL_DEVELOPMENT);
             for (String table : TABLES) {
                 assertThat(tableExists(connection, table)).isTrue();
             }
+            assertColumn(connection, "lifecycle_activation_targets",
+                    "codex_home_key", true, 256);
             assertThat(scalar(connection,
                     "select marker from arch001_legacy_sentinel where id=1"))
                     .isEqualTo("legacy-untouched");

@@ -39,8 +39,11 @@ import java.util.Set;
 @Service
 public class LifecycleActivationAuthorityService {
     static final String TARGET_CLASS = "ISOLATED_LOCAL_NON_FIXTURE";
+    static final String LOCAL_DEVELOPMENT_TARGET_CLASS =
+            "BOUNDED_ISOLATED_LOCAL_DEVELOPMENT";
     static final String PROVIDER_LANE = "REAL_CODEX_MODEL";
-    static final String PROVIDER = "codex-biz-worker";
+    static final String DISPOSABLE_PROVIDER = "codex-biz-worker";
+    static final String LOCAL_DEVELOPMENT_PROVIDER = "codex-worker";
     static final String MANIFEST_SCHEMA =
             "NAVIGATOR_ARCH001_ACTIVATION_TARGET_V2";
     static final String OBSERVATION_SCHEMA =
@@ -499,11 +502,22 @@ public class LifecycleActivationAuthorityService {
                 || manifest.exactTuple().physicalWorkerId().isBlank()) {
             throw denied(LifecycleActivationReason.MANIFEST_INVALID);
         }
+        boolean localDevelopmentTarget = LOCAL_DEVELOPMENT_TARGET_CLASS.equals(
+                manifest.targetClass());
+        if (localDevelopmentTarget
+                && !properties.isLocalDevelopmentTargetEnabled()) {
+            throw denied(LifecycleActivationReason
+                    .LOCAL_DEVELOPMENT_TARGET_DISABLED);
+        }
+        String expectedProvider = localDevelopmentTarget
+                ? LOCAL_DEVELOPMENT_PROVIDER : DISPOSABLE_PROVIDER;
         if (!MANIFEST_SCHEMA.equals(manifest.schema())
                 || !OBSERVATION_SCHEMA.equals(observation.schema())
-                || !TARGET_CLASS.equals(manifest.targetClass())
+                || (!TARGET_CLASS.equals(manifest.targetClass())
+                && !localDevelopmentTarget)
                 || !PROVIDER_LANE.equals(manifest.providerEvidenceLane())
-                || !PROVIDER.equals(manifest.exactTuple().providerType())
+                || !expectedProvider.equals(
+                manifest.exactTuple().providerType())
                 || !"8.0.44".equals(manifest.target().mysqlVersion())
                 || !required(properties.getExactTargetId(),
                 LifecycleActivationReason.TARGET_NOT_CONFIGURED)
@@ -517,6 +531,21 @@ public class LifecycleActivationAuthorityService {
                 || properties.getOwnerProtocol()
                 != manifest.candidate().ownerProtocol()) {
             throw denied(LifecycleActivationReason.MANIFEST_MISMATCH);
+        }
+        if (manifest.exactTuple().tenantId() == null
+                || manifest.exactTuple().tenantId().isBlank()
+                || manifest.exactTuple().userId() == null
+                || manifest.exactTuple().userId().isBlank()
+                || manifest.exactTuple().modelConfigId() == null
+                || manifest.exactTuple().modelConfigId().isBlank()
+                || manifest.exactTuple().model() == null
+                || manifest.exactTuple().model().isBlank()
+                || manifest.exactTuple().promptSha256() == null
+                || manifest.exactTuple().promptSha256().length() != 64
+                || (!localDevelopmentTarget
+                && (manifest.exactTuple().codexHomeKey() == null
+                || manifest.exactTuple().codexHomeKey().isBlank()))) {
+            throw denied(LifecycleActivationReason.MANIFEST_INVALID);
         }
         LifecycleAuthorityClock.DatabaseIdentity database =
                 clock.databaseIdentity();

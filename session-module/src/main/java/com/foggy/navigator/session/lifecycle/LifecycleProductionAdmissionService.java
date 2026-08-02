@@ -376,8 +376,7 @@ public class LifecycleProductionAdmissionService {
             LifecycleActivationManifest manifest,
             String targetStatus) {
         LifecycleActivationManifest.ExactTuple exact = manifest.exactTuple();
-        if (!LifecycleActivationAuthorityService.PROVIDER.equals(
-                request.providerType())) {
+        if (!Objects.equals(exact.providerType(), request.providerType())) {
             throw denied(LifecycleActivationReason.PROVIDER_NOT_ALLOWLISTED);
         }
         if (!Objects.equals(exact.tenantId(), request.tenantId())
@@ -491,7 +490,7 @@ public class LifecycleProductionAdmissionService {
         effect.setAggregateType(ProofAggregateType.TASK.name());
         effect.setAggregateId(command.taskId());
         effect.setPhysicalWorkerId(command.physicalWorkerId());
-        effect.setProviderType(LifecycleActivationAuthorityService.PROVIDER);
+        effect.setProviderType(target.getProviderType());
         effect.setProviderTaskId(null);
         effect.setDispatchId(command.dispatchId());
         effect.setOperationId(command.dispatchId());
@@ -517,7 +516,7 @@ public class LifecycleProductionAdmissionService {
         payload.put("taskId", command.taskId());
         payload.put("sessionId", command.sessionId());
         payload.put("physicalWorkerId", command.physicalWorkerId());
-        payload.put("providerType", LifecycleActivationAuthorityService.PROVIDER);
+        payload.put("providerType", target.getProviderType());
         payload.put("dispatchId", command.dispatchId());
         effect.setContentFreePayloadJson(json(payload));
         return effect;
