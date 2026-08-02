@@ -211,6 +211,7 @@ public class OpenApiController {
     private final ObjectProvider<A2AgentResourceResolver> a2AgentResourceResolver;
     private final OpenApiRuntimeTaskLaunchPlanner runtimeTaskLaunchPlanner;
     private final OpenApiRuntimeTaskCreateFacade runtimeTaskCreateFacade;
+    private final OpenApiSessionProjectionMapper sessionProjectionMapper;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -1984,20 +1985,22 @@ public class OpenApiController {
 
         String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
 
+        String rawStatus = taskEntity.getStatus();
+        String status = mapTaskStatus(rawStatus);
+        String messageStatus = StringUtils.hasText(rawStatus) ? status : null;
         List<OpenSessionMessageDTO> dtos = page.stream()
                 .filter(message -> includeInternal
                         || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
-                .map(m -> toOpenSessionMessageDTO(m, contextId, taskEntity.getStatus()))
+                .map(m -> sessionProjectionMapper.mapMessage(m, contextId, messageStatus))
                 .toList();
 
-        String status = mapTaskStatus(taskEntity.getStatus());
         String terminalStatus = terminalStatusFromTaskStatus(status);
         Map<String, Object> taskState = parseJsonMap(taskEntity.getTaskStateJson());
         String failureSummary = failureSummary(taskEntity, dtos);
         String failureStage = inferFailureStage(taskEntity, failureSummary);
         if (dtos.isEmpty() && "FAILED".equals(terminalStatus)) {
-            dtos = List.of(toSyntheticTaskErrorMessage(taskEntity, contextId, status, terminalStatus,
-                    failureSummary, failureStage));
+            dtos = List.of(sessionProjectionMapper.mapSyntheticTaskError(
+                    taskEntity, contextId, status, terminalStatus, failureSummary, failureStage));
             nextCursor = "task-error:" + taskEntity.getTaskId();
         }
 
@@ -2060,7 +2063,8 @@ public class OpenApiController {
         Map<String, String> firstUserMessageMap = sessionQueryService.batchFindFirstUserMessageContents(sessionIds);
 
         List<OpenSessionSummaryDTO> dtos = page.stream()
-                .map(ctx -> toSessionSummary(ctx, route.agentId(), latestTaskMap, firstUserMessageMap))
+                .map(ctx -> sessionProjectionMapper.mapSummary(
+                        ctx, route.agentId(), latestTaskMap, firstUserMessageMap))
                 .toList();
 
         String nextCursor = page.isEmpty() ? null : page.get(page.size() - 1).getContextId();
@@ -2114,7 +2118,13 @@ public class OpenApiController {
         List<OpenSessionMessageDTO> dtos = page.stream()
                 .filter(message -> includeInternal
                         || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
-                .map(m -> toOpenSessionMessageDTO(m, contextId, taskStatusMap.get(m.getTaskId())))
+                .map(message -> {
+                    String rawStatus = taskStatusMap.get(message.getTaskId());
+                    String mappedStatus = StringUtils.hasText(rawStatus)
+                            ? mapTaskStatus(rawStatus)
+                            : null;
+                    return sessionProjectionMapper.mapMessage(message, contextId, mappedStatus);
+                })
                 .toList();
 
         return RX.ok(OpenSessionMessagesResponse.builder()
@@ -3088,165 +3098,6 @@ public class OpenApiController {
         return null;
     }
 
-    // ── 上游接入首版辅助方法 ──
-
-    /**
-     * SessionMessageEntity → OpenSessionMessageDTO
-     */
-    private OpenSessionMessageDTO toOpenSessionMessageDTO(SessionMessageEntity entity, String contextId) {
-        return toOpenSessionMessageDTO(entity, contextId, null);
-    }
-
-    private OpenSessionMessageDTO toOpenSessionMessageDTO(
-            SessionMessageEntity entity,
-            String contextId,
-            String taskStatus) {
-        Map<String, Object> metadata = null;
-        if (entity.getMetadata() != null && !entity.getMetadata().isBlank()) {
-            try {
-                metadata = objectMapper.readValue(entity.getMetadata(),
-                        new TypeReference<Map<String, Object>>() {});
-            } catch (Exception e) {
-                log.debug("Failed to parse message metadata: {}", e.getMessage());
-            }
-        }
-
-        // 推断消息类型
-        String type = inferMessageType(entity.getRole(), metadata);
-        String terminalStatus = inferTerminalStatus(metadata);
-        String status = taskStatus == null || taskStatus.isBlank() ? null : mapTaskStatus(taskStatus);
-        List<Map<String, Object>> attachments = extractOpenMessageAttachments(metadata);
-        String eventKind = inferEventKind(entity.getRole(), type, terminalStatus, metadata);
-        String progressType = inferProgressType(metadata, eventKind);
-        List<OpenTaskReportRefDTO> reportRefs = extractOpenMessageReportRefs(metadata);
-        List<OpenTaskArtifactRefDTO> artifactRefs = extractOpenMessageArtifactRefs(metadata);
-        Object structuredOutput = sanitizeEvidenceValue(firstPresent(metadata,
-                "structuredOutput", "structured_output", "outputJson", "output_json"));
-
-        // 过滤内部字段，避免泄露（不直接 mutate Jackson 反序列化的 Map）
-        if (metadata != null) {
-            metadata = new java.util.LinkedHashMap<>(metadata);
-            metadata.remove("taskId");  // taskId 已在顶层字段返回
-        }
-
-        return OpenSessionMessageDTO.builder()
-                .messageId(entity.getId())
-                .contextId(contextId)
-                .taskId(entity.getTaskId())
-                .role(entity.getRole() != null ? entity.getRole().toLowerCase() : null)
-                .type(type)
-                .eventKind(eventKind)
-                .progressType(progressType)
-                .content(sanitizeDiagnosticText(entity.getContent()))
-                .status(status)
-                .terminal(terminalStatus != null)
-                .terminalStatus(terminalStatus)
-                .metadata(metadata)
-                .structuredOutput(structuredOutput)
-                .attachments(attachments)
-                .reportRefs(reportRefs)
-                .artifactRefs(artifactRefs)
-                .createdAt(entity.getCreatedAt())
-                .build();
-    }
-
-    private OpenSessionMessageDTO toSyntheticTaskErrorMessage(
-            SessionTaskEntity taskEntity,
-            String contextId,
-            String status,
-            String terminalStatus) {
-        return toSyntheticTaskErrorMessage(
-                taskEntity,
-                contextId,
-                status,
-                terminalStatus,
-                taskEntity.getErrorMessage(),
-                inferFailureStage(taskEntity.getErrorMessage()));
-    }
-
-    private OpenSessionMessageDTO toSyntheticTaskErrorMessage(
-            SessionTaskEntity taskEntity,
-            String contextId,
-            String status,
-            String terminalStatus,
-            String failureSummary,
-            String failureStage) {
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("type", "ERROR");
-        metadata.put("source", "task_state");
-        metadata.put("synthetic", true);
-        if (StringUtils.hasText(failureStage)) {
-            metadata.put("failureStage", failureStage);
-        }
-        if (StringUtils.hasText(taskEntity.getWorkerId())) {
-            metadata.put("workerId", taskEntity.getWorkerId());
-        }
-        if (StringUtils.hasText(taskEntity.getProviderType())) {
-            metadata.put("providerType", taskEntity.getProviderType());
-        }
-        return OpenSessionMessageDTO.builder()
-                .messageId("task-error:" + taskEntity.getTaskId())
-                .contextId(contextId)
-                .taskId(taskEntity.getTaskId())
-                .role("assistant")
-                .type("ERROR")
-                .eventKind("error")
-                .content(firstNonBlank(failureSummary, "Task failed without persisted runtime messages."))
-                .status(status)
-                .terminal(true)
-                .terminalStatus(terminalStatus)
-                .metadata(metadata)
-                .createdAt(taskEntity.getUpdatedAt() != null ? taskEntity.getUpdatedAt() : taskEntity.getCreatedAt())
-                .build();
-    }
-
-    private List<Map<String, Object>> extractOpenMessageAttachments(Map<String, Object> metadata) {
-        if (metadata == null) {
-            return null;
-        }
-        Object rawAttachments = metadata.get("attachments");
-        if (!(rawAttachments instanceof List<?> rawList) || rawList.isEmpty()) {
-            return null;
-        }
-        List<Map<String, Object>> attachments = new ArrayList<>();
-        for (Object item : rawList) {
-            if (!(item instanceof Map<?, ?> rawMap)) {
-                continue;
-            }
-            Map<String, Object> attachment = new LinkedHashMap<>();
-            rawMap.forEach((key, value) -> {
-                if (key instanceof String keyString) {
-                    attachment.put(keyString, value);
-                }
-            });
-            if (!attachment.isEmpty()) {
-                attachments.add(attachment);
-            }
-        }
-        return attachments.isEmpty() ? null : attachments;
-    }
-
-    private List<OpenTaskReportRefDTO> extractOpenMessageReportRefs(Map<String, Object> metadata) {
-        if (metadata == null || metadata.isEmpty()) {
-            return null;
-        }
-        List<OpenTaskReportRefDTO> refs = new ArrayList<>();
-        collectReportRefs(refs, firstPresent(metadata,
-                "reportRef", "report_ref", "frameReportRef", "frame_report_ref",
-                "executionReportRef", "execution_report_ref", "reportRefs", "report_refs"));
-        return refs.isEmpty() ? null : refs;
-    }
-
-    private List<OpenTaskArtifactRefDTO> extractOpenMessageArtifactRefs(Map<String, Object> metadata) {
-        if (metadata == null || metadata.isEmpty()) {
-            return null;
-        }
-        List<OpenTaskArtifactRefDTO> refs = new ArrayList<>();
-        collectArtifactRefs(refs, firstPresent(metadata,
-                "artifactRefs", "artifact_refs", "artifacts"));
-        return refs.isEmpty() ? null : refs;
-    }
-
     /**
      * 根据 role 和 metadata 推断对外消息类型
      */
@@ -3272,144 +3123,6 @@ public class OpenApiController {
         return "TEXT";
     }
 
-    private String inferEventKind(
-            String role,
-            String messageType,
-            String terminalStatus,
-            Map<String, Object> metadata) {
-        String explicitKind = normalizedEventToken(firstPresent(metadata,
-                "eventKind", "event_kind", "kind"));
-        if (StringUtils.hasText(explicitKind)) {
-            return explicitKind;
-        }
-        if ("FAILED".equals(terminalStatus)) {
-            return "error";
-        }
-        if ("COMPLETED".equals(terminalStatus)) {
-            return "final_marker";
-        }
-        String metadataType = stringValue(firstPresent(metadata, "type", "messageType", "message_type"));
-        if (StringUtils.hasText(metadataType)) {
-            String normalizedType = normalizedEventToken(metadataType);
-            return switch (normalizedType) {
-                case "text_delta", "delta" -> "text_delta";
-                case "text_complete", "text", "message", "assistant_message" -> "text_complete";
-                case "tool_call_start", "tool_call", "tool_use" -> "tool_call_summary";
-                case "tool_call_result", "tool_result" -> "tool_result_summary";
-                case "tool_call_error", "error" -> "error";
-                case "task_completed", "task_complete", "final", "final_answer" -> "final_marker";
-                case "structured_output", "output_json" -> "structured_output";
-                case "heartbeat" -> "heartbeat";
-                case "retry", "retrying", "backoff" -> "retrying";
-                case "progress" -> "progress";
-                case "state_sync" -> eventKindFromStateSubtype(metadata);
-                default -> switch (messageType) {
-                    case "TOOL_CALL" -> "tool_call_summary";
-                    case "TOOL_RESULT" -> "tool_result_summary";
-                    case "RESULT" -> "final_marker";
-                    case "ERROR" -> "error";
-                    case "STATE" -> "progress";
-                    case "USER" -> "user_message";
-                    default -> "text_complete";
-                };
-            };
-        }
-        if ("USER".equalsIgnoreCase(role) || "USER".equals(messageType)) {
-            return "user_message";
-        }
-        if ("TOOL".equalsIgnoreCase(role) || "TOOL_RESULT".equals(messageType)) {
-            return "tool_result_summary";
-        }
-        if ("SYSTEM".equalsIgnoreCase(role) || "STATE".equals(messageType)) {
-            return "progress";
-        }
-        if ("ERROR".equals(messageType)) {
-            return "error";
-        }
-        if ("RESULT".equals(messageType)) {
-            return "final_marker";
-        }
-        return "text_complete";
-    }
-
-    private String eventKindFromStateSubtype(Map<String, Object> metadata) {
-        String subtype = normalizedEventToken(firstPresent(metadata,
-                "subtype", "state", "stateType", "state_type", "progressType", "progress_type"));
-        if (!StringUtils.hasText(subtype)) {
-            return "progress";
-        }
-        if (subtype.contains("heartbeat") || subtype.contains("keepalive")) {
-            return "heartbeat";
-        }
-        if (subtype.contains("retry") || subtype.contains("backoff")) {
-            return "retrying";
-        }
-        if (subtype.contains("structured_output")) {
-            return "structured_output";
-        }
-        if (subtype.contains("error") || subtype.contains("failed")) {
-            return "error";
-        }
-        return "progress";
-    }
-
-    private String inferProgressType(Map<String, Object> metadata, String eventKind) {
-        String explicitProgressType = normalizedEventToken(firstPresent(metadata,
-                "progressType", "progress_type"));
-        if (StringUtils.hasText(explicitProgressType)) {
-            return explicitProgressType;
-        }
-        if (!StringUtils.hasText(eventKind)) {
-            return null;
-        }
-        if ("heartbeat".equals(eventKind)) {
-            return "heartbeat";
-        }
-        if ("retrying".equals(eventKind)) {
-            return "retry";
-        }
-        if (!"progress".equals(eventKind)) {
-            return null;
-        }
-        String subtype = normalizedEventToken(firstPresent(metadata,
-                "subtype", "state", "stateType", "state_type", "stage", "phase"));
-        return StringUtils.hasText(subtype) ? subtype : "progress";
-    }
-
-    private String normalizedEventToken(Object value) {
-        String text = sanitizeDiagnosticText(stringValue(value));
-        if (!StringUtils.hasText(text)) {
-            return null;
-        }
-        String normalized = text.trim()
-                .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
-                .replace('-', '_')
-                .replace(' ', '_')
-                .toLowerCase();
-        normalized = normalized.replaceAll("[^a-z0-9_]+", "_")
-                .replaceAll("_+", "_")
-                .replaceAll("^_|_$", "");
-        return StringUtils.hasText(normalized) ? truncate(normalized, 80) : null;
-    }
-
-    /**
-     * 标记任务终态消息，供上游轮询 messages 时判断是否可停止。
-     */
-    private String inferTerminalStatus(Map<String, Object> metadata) {
-        if (metadata == null) {
-            return null;
-        }
-        Object rawType = metadata.get("type");
-        if (!(rawType instanceof String typeStr)) {
-            return null;
-        }
-        return switch (typeStr) {
-            case "TASK_COMPLETED" -> "COMPLETED";
-            case "ERROR" -> "FAILED";
-            default -> null;
-        };
-    }
-
     private String terminalStatusFromTaskStatus(String status) {
         if (status == null) {
             return null;
@@ -3420,46 +3133,6 @@ public class OpenApiController {
             case "CANCELLED", "CANCELED" -> "CANCELLED";
             default -> null;
         };
-    }
-
-    /**
-     * AgentConversationContextEntity → OpenSessionSummaryDTO
-     *
-     * @param latestTaskMap 预取的 sessionId → latestTaskId 映射（消除 N+1）
-     */
-    private OpenSessionSummaryDTO toSessionSummary(AgentConversationContextEntity ctx,
-                                                    String agentId,
-                                                    Map<String, String> latestTaskMap,
-                                                    Map<String, String> firstUserMessageMap) {
-        String latestTaskId = ctx.getNavigatorSessionId() != null
-                ? latestTaskMap.get(ctx.getNavigatorSessionId())
-                : null;
-
-        return OpenSessionSummaryDTO.builder()
-                .contextId(ctx.getContextId())
-                .agentId(agentId)
-                .title(resolveSessionTitle(ctx, firstUserMessageMap))
-                .status("ACTIVE")
-                .latestTaskId(latestTaskId)
-                .clientContext(parseClientContext(ctx.getClientContextJson()))
-                .createdAt(ctx.getCreatedAt())
-                .updatedAt(ctx.getLastAccessedAt())
-                .build();
-    }
-
-    private String resolveSessionTitle(AgentConversationContextEntity ctx,
-                                       Map<String, String> firstUserMessageMap) {
-        if (StringUtils.hasText(ctx.getContextAlias())) {
-            return ctx.getContextAlias().trim();
-        }
-        if (ctx.getNavigatorSessionId() == null || firstUserMessageMap == null) {
-            return null;
-        }
-        String firstUserMessage = firstUserMessageMap.get(ctx.getNavigatorSessionId());
-        if (!StringUtils.hasText(firstUserMessage)) {
-            return null;
-        }
-        return truncate(firstUserMessage.trim(), 120);
     }
 
     private String truncate(String text, int maxLength) {
@@ -3477,18 +3150,6 @@ public class OpenApiController {
             return objectMapper.writeValueAsString(clientContext);
         } catch (Exception e) {
             throw RX.throwB("clientContext must be a valid JSON object");
-        }
-    }
-
-    private Map<String, Object> parseClientContext(String clientContextJson) {
-        if (clientContextJson == null || clientContextJson.isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(clientContextJson, new TypeReference<>() {});
-        } catch (Exception e) {
-            log.warn("Failed to parse clientContextJson from session summary: {}", e.getMessage());
-            return null;
         }
     }
 

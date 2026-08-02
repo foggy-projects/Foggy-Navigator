@@ -1077,6 +1077,52 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void getTaskMessagesKeepsMessageStatusNullWhenOwningTaskStatusIsMissing() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setTaskId("task-status-unknown");
+        task.setSessionId("session-1");
+        task.setTenantId("tenant-1");
+        task.setAgentId("agent-1");
+        task.setCreatedAt(LocalDateTime.now());
+
+        SessionMessageEntity message = message(
+                "message-status-unknown",
+                "session-1",
+                "ASSISTANT",
+                "still observable",
+                "{\"type\":\"TEXT_COMPLETE\"}");
+        message.setTaskId("task-status-unknown");
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-status-unknown")).thenReturn(Optional.of(task));
+        when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
+        when(sessionQueryService.getTaskMessages("task-status-unknown", null, 50))
+                .thenReturn(List.of(message));
+
+        OpenTaskMessagesResponse response = controller.getTaskMessages(
+                "agent-1", "task-status-unknown", null, 50, false, request).getData();
+
+        assertEquals("UNKNOWN", response.getStatus());
+        assertEquals(1, response.getMessages().size());
+        assertNull(response.getMessages().get(0).getStatus());
+        assertFalse(response.getMessages().get(0).getTerminal());
+    }
+
+    @Test
     void sessionSummaryIncludesClientContext() throws Exception {
         OpenApiController controller = newController();
         AgentConversationContextEntity entity = new AgentConversationContextEntity();
@@ -1087,16 +1133,11 @@ class OpenApiControllerMessageMappingTest {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setLastAccessedAt(LocalDateTime.now());
 
-        Method method = OpenApiController.class.getDeclaredMethod(
-                "toSessionSummary",
-                AgentConversationContextEntity.class,
-                String.class,
-                Map.class,
-                Map.class
-        );
-        method.setAccessible(true);
-        OpenSessionSummaryDTO dto = (OpenSessionSummaryDTO) method.invoke(
-                controller, entity, "agent-1", Map.of("session-1", "task-1"), Map.of("session-1", "first prompt"));
+        OpenSessionSummaryDTO dto = mapSummary(
+                controller,
+                entity,
+                Map.of("session-1", "task-1"),
+                Map.of("session-1", "first prompt"));
 
         assertEquals("ctx-1", dto.getContextId());
         assertEquals("alias-1", dto.getTitle());
@@ -1113,18 +1154,9 @@ class OpenApiControllerMessageMappingTest {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setLastAccessedAt(LocalDateTime.now());
 
-        Method method = OpenApiController.class.getDeclaredMethod(
-                "toSessionSummary",
-                AgentConversationContextEntity.class,
-                String.class,
-                Map.class,
-                Map.class
-        );
-        method.setAccessible(true);
-        OpenSessionSummaryDTO dto = (OpenSessionSummaryDTO) method.invoke(
+        OpenSessionSummaryDTO dto = mapSummary(
                 controller,
                 entity,
-                "agent-1",
                 Map.of(),
                 Map.of("session-1", "你可以帮我提交工单吗"));
 
@@ -3422,25 +3454,29 @@ class OpenApiControllerMessageMappingTest {
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)
             throws Exception {
-        Method method = OpenApiController.class.getDeclaredMethod(
-                "toOpenSessionMessageDTO",
-                SessionMessageEntity.class,
-                String.class
-        );
-        method.setAccessible(true);
-        return (OpenSessionMessageDTO) method.invoke(controller, entity, "ctx-1");
+        return projectionMapper(controller).mapMessage(entity, "ctx-1", null);
     }
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity, String status)
             throws Exception {
-        Method method = OpenApiController.class.getDeclaredMethod(
-                "toOpenSessionMessageDTO",
-                SessionMessageEntity.class,
-                String.class,
-                String.class
-        );
-        method.setAccessible(true);
-        return (OpenSessionMessageDTO) method.invoke(controller, entity, "ctx-1", status);
+        return projectionMapper(controller).mapMessage(entity, "ctx-1", status);
+    }
+
+    private OpenSessionSummaryDTO mapSummary(
+            OpenApiController controller,
+            AgentConversationContextEntity entity,
+            Map<String, String> latestTaskBySessionId,
+            Map<String, String> firstUserMessageBySessionId) {
+        return projectionMapper(controller).mapSummary(
+                entity,
+                "agent-1",
+                latestTaskBySessionId,
+                firstUserMessageBySessionId);
+    }
+
+    private OpenApiSessionProjectionMapper projectionMapper(OpenApiController controller) {
+        return (OpenApiSessionProjectionMapper) ReflectionTestUtils.getField(
+                controller, "sessionProjectionMapper");
     }
 
     private SessionMessageEntity userMessage(String id, String sessionId, String content) {
@@ -3834,7 +3870,8 @@ class OpenApiControllerMessageMappingTest {
                 controlCredentialProvider,
                 resourceResolverProvider,
                 launchPlanner,
-                createFacade
+                createFacade,
+                new OpenApiSessionProjectionMapper(new ObjectMapper())
         );
     }
 
