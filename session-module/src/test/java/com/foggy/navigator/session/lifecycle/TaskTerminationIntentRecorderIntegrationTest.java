@@ -7,7 +7,6 @@ import com.foggy.navigator.spi.lifecycle.WorkerLifecycleCommandAuthorizationPort
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -31,7 +30,6 @@ class TaskTerminationIntentRecorderIntegrationTest {
     private static final LocalDateTime AUTHORITY_NOW =
             LocalDateTime.of(2000, 1, 1, 0, 0);
 
-    @Configuration
     static class AuthorityClockConfig {
         @Bean
         LifecycleAuthorityClock lifecycleAuthorityClock() {
