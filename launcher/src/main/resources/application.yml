@@ -90,6 +90,24 @@ agent:
 
 # 凭证加密配置
 navigator:
+  background-recovery:
+    # Compatibility default: automatic recovery remains available unless a
+    # more-specific server-owned deployment profile or provider override wins.
+    # S1-01 only publishes policy; no provider consumes this switch yet.
+    global:
+      enabled: ${NAVIGATOR_BACKGROUND_RECOVERY_ENABLED:true}
+      bounds:
+        max-attempts: ${NAVIGATOR_BACKGROUND_RECOVERY_MAX_ATTEMPTS:100}
+        recovery-window: ${NAVIGATOR_BACKGROUND_RECOVERY_WINDOW:PT24H}
+        initial-backoff: ${NAVIGATOR_BACKGROUND_RECOVERY_INITIAL_BACKOFF:PT5S}
+        max-backoff: ${NAVIGATOR_BACKGROUND_RECOVERY_MAX_BACKOFF:PT5M}
+        max-concurrent-recoveries: ${NAVIGATOR_BACKGROUND_RECOVERY_MAX_CONCURRENCY:4}
+        scan-interval: ${NAVIGATOR_BACKGROUND_RECOVERY_SCAN_INTERVAL:PT1M}
+    providers: { }
+    profiles:
+      # Deployment identity aliases local/internal-dev/development to local-dev.
+      local-dev:
+        enabled: false
   lifecycle:
     # SHADOW projection is opt-in after the additive schema is pre-applied.
     shadow-enabled: ${NAVIGATOR_LIFECYCLE_SHADOW_ENABLED:false}
