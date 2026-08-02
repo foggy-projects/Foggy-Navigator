@@ -38,6 +38,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -359,6 +360,32 @@ class RuntimeStateAuditServiceTest {
         assertEquals("CODEX_WORKING_DIRECTORY_UNAVAILABLE", audit.getSanitizedErrorCode());
         assertEquals("REVOKED", audit.getTaskTokenStatus());
         assertEquals(0, audit.getDispatchCount());
+    }
+
+    @Test
+    void taskAuditRecognizesTerminalRepairStatusesWithoutLegacyTerminalProjection() {
+        LocalDateTime created = LocalDateTime.of(2026, 8, 2, 13, 0, 0);
+        LocalDateTime completed = created.plusSeconds(1);
+        for (String status : List.of("REJECTED", "TIMED_OUT", "TIMEOUT")) {
+            SessionTaskEntity task = task(created, completed);
+            task.setProviderTaskId(null);
+            task.setStatus(status);
+            when(sessionTaskRepository.findByTaskId("task-existing")).thenReturn(Optional.of(task));
+            when(terminalStateRepository.findByTenantIdAndWorkerTaskId("tenant-a", "task-existing"))
+                    .thenReturn(Optional.empty());
+            when(taskTokenRepository.findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                    "task-existing", "tenant-a", "app-a"))
+                    .thenReturn(Optional.of(token("REVOKED", created, completed)));
+
+            RuntimeTaskAuditDTO audit = service.auditTask(
+                    "runtime-key", "runtime-secret", "user-a", "task-existing");
+
+            assertTrue(audit.getTerminal(), status);
+            assertEquals(status, audit.getStatus());
+            assertFalse(audit.getActiveTaskRegistrationPresent());
+            assertTrue(audit.getTerminalStages().stream().anyMatch(stage ->
+                    "TASK_TERMINAL".equals(stage.getStage()) && status.equals(stage.getStatus())));
+        }
     }
 
     @Test

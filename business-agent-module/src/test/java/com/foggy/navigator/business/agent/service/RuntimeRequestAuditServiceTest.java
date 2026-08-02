@@ -72,6 +72,8 @@ class RuntimeRequestAuditServiceTest {
 
         when(auditRepository.findByClientRequestId(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(audits.get(invocation.getArgument(0))));
+        when(auditRepository.findByClientRequestIdForUpdate(anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(audits.get(invocation.getArgument(0))));
         when(auditRepository.findTopByTaskIdAndOperationOrderByReceivedAtDesc(
                 anyString(), anyString()))
                 .thenAnswer(invocation -> audits.values().stream()
@@ -430,6 +432,8 @@ class RuntimeRequestAuditServiceTest {
         assertAll(
                 () -> assertEquals("ask", audit.getOperation()),
                 () -> assertEquals("task-1", audit.getTaskId()),
+                () -> assertEquals("model-1", audit.getModelConfigId()),
+                () -> assertEquals("codex-luna:high", audit.getModelVariant()),
                 () -> assertEquals(0, audit.getRequestedToolCount()),
                 () -> assertEquals(0, audit.getEffectiveToolCount()),
                 () -> assertEquals("NO_RUNTIME_MODEL_TOOL_SURFACE", audit.getToolScopeKind()),
@@ -630,6 +634,48 @@ class RuntimeRequestAuditServiceTest {
         assertTrue(audit.getStages().stream()
                 .anyMatch(stage -> "TASK_TOKEN_REVOKED".equals(stage.getStage())));
         assertEquals(1, audits.size());
+    }
+
+    @Test
+    void terminalCleanupRepairSameIdCompletionLocksReceiptAndDoesNotDuplicateTerminalStages() {
+        String requestId = UUID.randomUUID().toString();
+        RuntimeRequestAuditService.TerminalCleanupRepairRegistration registration =
+                service.beginTerminalCleanupRepair(
+                        requestId, "runtime-key", "runtime-secret", "user-1", "task-1");
+        RuntimeRequestAuditService.TaskEvidence evidence = standardEvidence(
+                "task-1", "CANCELLED", "REVOKED", true, 1,
+                "NAVIGATOR_TERMINAL_REPUBLISH_READY");
+
+        RuntimeRequestAuditService.TerminalCleanupRepairReceipt dryRun =
+                service.terminalCleanupRepairDryRunCompleted(
+                        registration.handle(), evidence, true,
+                        "NAVIGATOR_TERMINAL_REPUBLISH_READY");
+        RuntimeRequestAuditService.TerminalCleanupRepairCompletion completed =
+                service.terminalCleanupRepairCompleted(
+                        registration.handle(), evidence, true,
+                        "NAVIGATOR_TERMINAL_REPUBLISH_READY");
+        RuntimeRequestAuditService.TerminalCleanupRepairCompletion replay =
+                service.terminalCleanupRepairCompleted(
+                        registration.handle(), evidence, true,
+                        "NAVIGATOR_TERMINAL_REPUBLISH_READY");
+
+        assertAll(
+                () -> assertTrue(dryRun.dryRunReady()),
+                () -> assertTrue(completed.receipt().completed()),
+                () -> assertFalse(completed.idempotentReplay()),
+                () -> assertEquals("REPAIRED", completed.receipt().status()),
+                () -> assertTrue(replay.idempotentReplay()),
+                () -> assertEquals(completed.receipt(), replay.receipt()),
+                () -> assertEquals(1, stages.stream()
+                        .filter(stage -> RuntimeRequestAuditService
+                                .STAGE_TERMINAL_CLEANUP_REPAIR_APPLIED
+                                .equals(stage.getStage()))
+                        .count()),
+                () -> assertEquals(1, stages.stream()
+                        .filter(stage -> RuntimeRequestAuditService.STAGE_REQUEST_COMPLETED
+                                .equals(stage.getStage()))
+                        .count()));
+        verify(auditRepository, times(3)).findByClientRequestIdForUpdate(requestId);
     }
 
     @Test

@@ -9,12 +9,14 @@ import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskReconciliationSt
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskTerminationOutcome;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapability;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
+import com.foggy.navigator.spi.lifecycle.TaskLifecycleProjectionPort;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Optional;
@@ -44,6 +46,8 @@ class RuntimeTaskTypedContractServiceTest {
     private RuntimeTaskClosureProvider provider;
     @Mock
     private RuntimeRequestAuditService requestAuditService;
+    @Mock
+    private TaskLifecycleProjectionPort lifecycleProjection;
 
     private RuntimeTaskClosureService service;
 
@@ -653,6 +657,26 @@ class RuntimeTaskTypedContractServiceTest {
     }
 
     @Test
+    void terminalReconciliationFailsClosedForAbsentTokenWithoutNeverIssuedProof() {
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TASK_TERMINATED", "ABORTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(terminalAudit("NOT_FOUND", false));
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertTrue(result.getCanonicalTerminal());
+        assertEquals("NOT_FOUND", result.getTaskFacts().getTaskTokenStatus());
+        assertFalse(result.getTaskFacts().getActiveTaskRegistrationPresent());
+        assertEquals("TERMINAL_CLEANUP_INCOMPLETE", result.getReasonCode());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
     void canonicalTaskDoesNotReportTerminalUntilTokenAndRegistrationCleanupConverge() {
         when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
                 .thenReturn(Optional.of(snapshot(
@@ -682,6 +706,78 @@ class RuntimeTaskTypedContractServiceTest {
         assertEquals("TERMINAL_CLEANUP_INCOMPLETE", result.getReasonCode());
     }
 
+    @Test
+    void coreTypedTerminalReconciliationFailsClosedWhenTaskTokenIsStillActive() {
+        assertCoreTypedTerminalCleanupIncomplete(terminalAudit("ACTIVE", false));
+    }
+
+    @Test
+    void coreTypedTerminalReconciliationFailsClosedWhenRegistrationIsStillActive() {
+        assertCoreTypedTerminalCleanupIncomplete(terminalAudit("REVOKED", true));
+    }
+
+    @Test
+    void terminalSnapshotWithRecognizedTaskStatusAndMissingTombstoneIsCleanupIncomplete() {
+        ReflectionTestUtils.setField(service, "lifecycleProjection", lifecycleProjection);
+        when(lifecycleProjection.find("task-a")).thenReturn(Optional.of(
+                new TaskLifecycleProjectionPort.TaskLifecycleProjection(
+                        "task-a", "CANCELLED", true, false, true,
+                        "CANCELLED", "TEST", "worker-a", "provider-task-a")));
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TASK_TERMINATED", "ABORTED", null)));
+        RuntimeTaskFactsDTO facts = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .status("CANCELLED")
+                .terminal(true)
+                .lifecycleCanonicalTerminal(true)
+                .terminalTombstonePresent(false)
+                .lifecycleCleanupComplete(true)
+                .physicalWorkerId("worker-a")
+                .taskTokenStatus("REVOKED")
+                .activeTaskRegistrationPresent(false)
+                .build();
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(RuntimeTaskAuditDTO.builder()
+                        .taskId("task-a")
+                        .status("CANCELLED")
+                        .terminal(true)
+                        .taskFacts(facts)
+                        .build());
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertTrue(result.getCanonicalTerminal());
+        assertEquals("TERMINAL_CLEANUP_INCOMPLETE", result.getReasonCode());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void terminalSnapshotWithNonterminalPersistedTaskStatusReportsStatusConflict() {
+        ReflectionTestUtils.setField(service, "lifecycleProjection", lifecycleProjection);
+        when(lifecycleProjection.find("task-a")).thenReturn(Optional.of(
+                new TaskLifecycleProjectionPort.TaskLifecycleProjection(
+                        "task-a", "RUNNING", true, false, true,
+                        "CANCELLED", "TEST", "worker-a", "provider-task-a")));
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TASK_TERMINATED", "ABORTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit("RUNNING", false));
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertFalse(result.getCanonicalTerminal());
+        assertEquals("CANONICAL_STATUS_NOT_TERMINAL", result.getReasonCode());
+        verifyNoInteractions(provider);
+    }
+
     private void newOperation() {
         when(requestAuditService.beginTaskOperationIdempotent(
                 REQUEST_ID, RuntimeRequestAuditService.OPERATION_TASK_TERMINATE,
@@ -702,6 +798,9 @@ class RuntimeTaskTypedContractServiceTest {
                 .taskId("task-a")
                 .status(status)
                 .terminal(terminal)
+                .lifecycleCanonicalTerminal(terminal)
+                .terminalTombstonePresent(terminal)
+                .lifecycleCleanupComplete(terminal)
                 .physicalWorkerId("worker-a")
                 .taskTokenStatus(terminal ? "REVOKED" : "ACTIVE")
                 .activeTaskRegistrationPresent(!terminal)
@@ -716,6 +815,52 @@ class RuntimeTaskTypedContractServiceTest {
                 .physicalWorkerId("worker-a")
                 .taskFacts(facts)
                 .build();
+    }
+
+    private RuntimeTaskAuditDTO terminalAudit(
+            String taskTokenStatus,
+            boolean activeTaskRegistrationPresent) {
+        RuntimeTaskFactsDTO facts = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .status("CANCELLED")
+                .terminal(true)
+                .lifecycleCanonicalTerminal(true)
+                .terminalTombstonePresent(true)
+                .lifecycleCleanupComplete(true)
+                .physicalWorkerId("worker-a")
+                .taskTokenStatus(taskTokenStatus)
+                .activeTaskRegistrationPresent(activeTaskRegistrationPresent)
+                .build();
+        return RuntimeTaskAuditDTO.builder()
+                .taskId("task-a")
+                .status("CANCELLED")
+                .terminal(true)
+                .taskFacts(facts)
+                .build();
+    }
+
+    private void assertCoreTypedTerminalCleanupIncomplete(RuntimeTaskAuditDTO audit) {
+        ReflectionTestUtils.setField(service, "lifecycleProjection", lifecycleProjection);
+        when(lifecycleProjection.find("task-a")).thenReturn(Optional.of(
+                new TaskLifecycleProjectionPort.TaskLifecycleProjection(
+                        "task-a", "CANCELLED", true, true, true,
+                        "CANCELLED", "TEST", "worker-a", "provider-task-a")));
+        when(requestAuditService.findSelfTaskOperation("key", "secret", REQUEST_ID))
+                .thenReturn(Optional.of(snapshot(
+                        true, "TASK_TERMINATED", "ABORTED", null)));
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(audit);
+
+        RuntimeTaskClosureDTO result = service.reconcileTerminationRequest(
+                "key", "secret", "user-a", REQUEST_ID, "task-a");
+
+        assertEquals(RuntimeTaskReconciliationState.AMBIGUOUS,
+                result.getReconciliationState());
+        assertTrue(result.getCanonicalTerminal());
+        assertEquals("TERMINAL_CLEANUP_INCOMPLETE", result.getReasonCode());
+        assertTrue(result.getReadOnly());
+        assertFalse(result.getNewClientRequestIdAllowed());
+        verifyNoInteractions(provider);
     }
 
     private RuntimeRequestAuditService.TaskOperationSnapshot snapshot(

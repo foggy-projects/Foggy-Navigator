@@ -444,6 +444,34 @@ class BusinessTaskScopedTokenLifecycleServiceTest {
     }
 
     @Test
+    void taskScopedTokensRevokedOrAbsentRequiresEveryRetainedTokenToBeRevoked() {
+        BusinessTaskScopedTokenEntity active = activeToken();
+        BusinessTaskScopedTokenEntity unknown = activeToken();
+        unknown.setTokenId("tst_02");
+        unknown.setStatus(null);
+        BusinessTaskScopedTokenEntity revoked = activeToken();
+        revoked.setTokenId("tst_03");
+        revoked.setStatus(BusinessAgentTaskService.STATUS_REVOKED);
+        revoked.setRevokedAt(LocalDateTime.now().minusMinutes(1));
+
+        when(tokenRepository.findByTaskIdAndTenantId("bt_01", "tenant_01"))
+                .thenReturn(List.of(active));
+        assertFalse(service().taskScopedTokensRevokedOrAbsent("tenant_01", "bt_01"));
+
+        when(tokenRepository.findByTaskIdAndTenantId("bt_01", "tenant_01"))
+                .thenReturn(List.of(unknown));
+        assertFalse(service().taskScopedTokensRevokedOrAbsent("tenant_01", "bt_01"));
+
+        when(tokenRepository.findByTaskIdAndTenantId("bt_01", "tenant_01"))
+                .thenReturn(List.of(revoked));
+        assertTrue(service().taskScopedTokensRevokedOrAbsent("tenant_01", "bt_01"));
+
+        when(tokenRepository.findByTaskIdAndTenantId("bt_01", "tenant_01"))
+                .thenReturn(List.of());
+        assertTrue(service().taskScopedTokensRevokedOrAbsent("tenant_01", "bt_01"));
+    }
+
+    @Test
     void revokeTaskScopedTokensForWorkerTask_locksAndRevokesOnlyActiveTokens() {
         BusinessTaskScopedTokenEntity active = activeToken();
         active.setWorkerTaskId("worker_task_01");

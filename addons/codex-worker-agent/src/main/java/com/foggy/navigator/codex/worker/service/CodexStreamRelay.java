@@ -23,6 +23,7 @@ import com.foggy.navigator.common.dto.NativeSubtaskUpdatePayload;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.session.event.SessionEventListener;
+import com.foggy.navigator.session.lifecycle.LifecycleActivationDeniedException;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -169,6 +170,9 @@ public class CodexStreamRelay {
                 taskId, providerType, sessionId, workerId);
 
         boolean appServerAccepted = false;
+        LifecycleProductionAdmissionService.ProviderEffectCommand
+                preEffectAdmissionCommand = null;
+        boolean providerEffectAdmissionAttempted = false;
         try {
             CodexTaskEntity task = taskRepository.findByTaskId(taskId)
                     .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
@@ -309,15 +313,18 @@ public class CodexStreamRelay {
                         }
                         String bindingDigest = lifecycleBindingDigest.task(
                                 requestBody, lifecycleContext);
+                        preEffectAdmissionCommand =
+                                new LifecycleProductionAdmissionService
+                                        .ProviderEffectCommand(
+                                        taskId, sessionId, workerId,
+                                        lifecycleEvidence.identity(),
+                                        initialDispatchId,
+                                        "JCS_SHA256_V1",
+                                        bindingDigest);
+                        providerEffectAdmissionAttempted = true;
                         var authorization = lifecycleProductionAdmission
                                 .admitAndAuthorizeProviderEffect(
-                                        new LifecycleProductionAdmissionService
-                                                .ProviderEffectCommand(
-                                                taskId, sessionId, workerId,
-                                                lifecycleEvidence.identity(),
-                                                initialDispatchId,
-                                                "JCS_SHA256_V1",
-                                                bindingDigest));
+                                        preEffectAdmissionCommand);
                         if (!authorization.providerCallAuthorized()) {
                             throw new IllegalStateException(
                                     authorization.safeReasonCode());
@@ -374,6 +381,24 @@ public class CodexStreamRelay {
                 scheduleReconnect(taskId, sessionId, workerId, 0, RECONNECT_BASE_DELAY_MS);
             } else {
                 taskService.failTask(taskId, null, null, failureCode);
+                if (providerEffectAdmissionAttempted
+                        && preEffectAdmissionCommand != null
+                        && e instanceof LifecycleActivationDeniedException denied
+                        && lifecycleProductionAdmission != null
+                        && lifecycleProductionAdmission
+                        .supportsDeterministicPreEffectClosure(
+                                denied.getMessage())) {
+                    try {
+                        lifecycleProductionAdmission
+                                .closeDeterministicPreEffectAdmissionFailure(
+                                        preEffectAdmissionCommand,
+                                        denied.getMessage());
+                    } catch (RuntimeException closureFailure) {
+                        log.warn("Failed to commit server pre-effect terminal fence: taskId={}, reason={}, type={}",
+                                taskId, denied.getMessage(),
+                                exceptionType(closureFailure));
+                    }
+                }
                 publishMessage(sessionId, providerType, MessageType.ERROR,
                         Map.of("content", failureCode, "taskId", taskId));
             }

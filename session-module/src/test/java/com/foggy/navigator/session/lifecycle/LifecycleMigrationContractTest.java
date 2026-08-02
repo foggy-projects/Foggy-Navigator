@@ -23,6 +23,10 @@ class LifecycleMigrationContractTest {
                 "docs/migration/2026-08-01-arch-001-activation-readiness.sql"));
         String boundedLocalDevelopment = Files.readString(root.resolve(
                 "docs/migration/2026-08-02-arch-001-bounded-local-development-activation.sql"));
+        String terminalCleanupRepair = Files.readString(root.resolve(
+                "docs/migration/2026-08-02-arch-001-terminal-cleanup-repair.sql"));
+        String currentBaseline = Files.readString(root.resolve(
+                "docs/migration/2026-08-01-arch-001-current-schema-baseline.sql"));
         assertThat(forward).doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ");
         assertThat(forward.split("CREATE TABLE IF NOT EXISTS", -1).length - 1)
                 .isEqualTo(12);
@@ -45,8 +49,18 @@ class LifecycleMigrationContractTest {
         assertThat(boundedLocalDevelopment)
                 .doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ")
                 .contains("MODIFY COLUMN codex_home_key VARCHAR(256) NULL");
+        assertThat(forward).contains("provider_task_id VARCHAR(128) NULL");
+        assertThat(terminalCleanupRepair)
+                .doesNotContain("DROP TABLE", "DELETE FROM", "UPDATE ")
+                .contains("MODIFY COLUMN provider_task_id VARCHAR(128) NULL",
+                        "CREATE TABLE IF NOT EXISTS task_terminal_cleanup_repairs",
+                        "UNIQUE KEY uk_ttcr_client_request (client_request_id)");
+        assertThat(currentBaseline)
+                .contains("`provider_task_id` varchar(128) DEFAULT NULL",
+                        "CREATE TABLE IF NOT EXISTS `task_terminal_cleanup_repairs`");
         assertThat(rollback)
                 .contains("lifecycle_activation_targets",
-                        "status NOT IN ('CLOSED', 'DESTROYED')");
+                        "status NOT IN ('CLOSED', 'DESTROYED')",
+                        "DROP TABLE IF EXISTS task_terminal_cleanup_repairs");
     }
 }

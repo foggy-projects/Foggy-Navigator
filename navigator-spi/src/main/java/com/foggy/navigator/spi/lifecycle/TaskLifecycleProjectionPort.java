@@ -9,6 +9,7 @@ public interface TaskLifecycleProjectionPort {
             String taskId,
             String canonicalTaskStatus,
             boolean canonicalTerminal,
+            boolean terminalTombstonePresent,
             boolean cleanupComplete,
             String terminalOutcome,
             String terminalSource,
@@ -16,6 +17,7 @@ public interface TaskLifecycleProjectionPort {
             String providerTaskId) {
         public boolean typedTerminal() {
             return canonicalTerminal
+                    && terminalTombstonePresent
                     && cleanupComplete
                     && canonicalTaskStatus != null
                     && switch (canonicalTaskStatus) {

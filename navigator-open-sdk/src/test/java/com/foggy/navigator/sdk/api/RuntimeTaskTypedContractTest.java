@@ -2,8 +2,12 @@ package com.foggy.navigator.sdk.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.sdk.NavigatorClient;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskCompletionReadinessDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskReconcileForm;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskReconciliationDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminalCleanupRepairDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminalCleanupRepairForm;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminalCleanupRepairOutcome;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminateForm;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminationDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTerminationReadinessDTO;
@@ -191,6 +195,73 @@ class RuntimeTaskTypedContractTest {
     }
 
     @Test
+    void completionReadinessUsesTypedNestedFactsAndPreservesUnknownLifecycleFacts() {
+        response = """
+                {"code":200,"data":{
+                  "taskFacts":{"taskId":"task-a","terminal":true,
+                    "terminalTombstonePresent":null,"lifecycleCleanupComplete":false},
+                  "workerObservedFacts":{"workerReachable":true,"workerTaskState":"COMPLETED"},
+                  "completionEvidenceFacts":{"finalOutputPresent":true,"resultRecoverable":true},
+                  "reconciliationAssessment":{"recommendedAction":"TERMINAL_CLEANUP_REPAIR_REQUIRED"},
+                  "auditSideEffects":{"workerCommandDispatched":false}
+                }}
+                """;
+
+        RuntimeTaskCompletionReadinessDTO result = client.businessAgent()
+                .getRuntimeTaskCompletionReadiness(
+                        "app-key", "app-secret", "user-a", "task-a", "worker-a");
+
+        assertEquals("task-a", result.getTaskFacts().getTaskId());
+        assertNull(result.getTaskFacts().getTerminalTombstonePresent());
+        assertFalse(result.getTaskFacts().getLifecycleCleanupComplete());
+        assertEquals("COMPLETED", result.getWorkerObservedFacts().getWorkerTaskState());
+        assertTrue(result.getCompletionEvidenceFacts().getResultRecoverable());
+        assertEquals("TERMINAL_CLEANUP_REPAIR_REQUIRED",
+                result.getReconciliationAssessment().getRecommendedAction());
+        assertFalse(result.getAuditSideEffects().getWorkerCommandDispatched());
+        assertEquals("GET", lastMethod);
+        assertTrue(lastPath.contains("/api/v1/open/runtime/task-completion-readiness"));
+    }
+
+    @Test
+    void terminalCleanupRepairUsesDedicatedTypedRouteAndExactRequestId() throws Exception {
+        response = """
+                {"code":200,"data":{
+                  "clientRequestId":"repair-request-1",
+                  "operation":"task-terminal-cleanup-repair",
+                  "taskId":"task-a",
+                  "dryRun":true,
+                  "outcome":"FUTURE_OUTCOME",
+                  "canonicalTerminal":null,
+                  "reasonCode":null,
+                  "futureField":"ignored"
+                }}
+                """;
+        RuntimeTaskTerminalCleanupRepairForm form = new RuntimeTaskTerminalCleanupRepairForm();
+        form.setTaskId("task-a");
+        form.setExpectedPhysicalWorkerId("worker-a");
+        form.setDryRun(true);
+        form.setConfirmTaskId(null);
+
+        RuntimeTaskTerminalCleanupRepairDTO result = client.businessAgent()
+                .repairRuntimeTaskTerminalCleanup(
+                        "app-key", "app-secret", "user-a", "repair-request-1", form);
+
+        assertEquals(RuntimeTaskTerminalCleanupRepairOutcome.UNKNOWN, result.getOutcome());
+        assertNull(result.getCanonicalTerminal());
+        assertEquals("UNKNOWN", result.getReasonCode());
+        assertEquals("POST", lastMethod);
+        assertEquals("/api/v1/open/runtime/task-terminal-cleanup-repair", lastPath);
+        assertEquals("repair-request-1", lastClientRequestId);
+        var body = new ObjectMapper().readTree(lastBody);
+        assertEquals(4, body.size());
+        assertEquals("task-a", body.path("taskId").textValue());
+        assertEquals("worker-a", body.path("expectedPhysicalWorkerId").textValue());
+        assertTrue(body.path("dryRun").booleanValue());
+        assertTrue(body.path("confirmTaskId").isNull());
+    }
+
+    @Test
     void unknownAndNullWireValuesFailClosedInsteadOfBreakingDeserialization() {
         response = """
                 {"code":200,"data":{
@@ -322,5 +393,10 @@ class RuntimeTaskTypedContractTest {
 
         assertNotNull(readiness);
         assertEquals("task-a", readiness.get("taskId"));
+
+        Map<String, Object> completion = client.businessAgent().runtimeTaskCompletionReadiness(
+                "app-key", "app-secret", "user-a", "task-a", "worker-a");
+        assertNotNull(completion);
+        assertEquals("task-a", completion.get("taskId"));
     }
 }

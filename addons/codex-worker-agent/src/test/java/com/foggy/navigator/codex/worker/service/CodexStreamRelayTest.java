@@ -16,6 +16,7 @@ import com.foggy.navigator.common.dto.NativeSubtaskSnapshotDTO;
 import com.foggy.navigator.common.dto.NativeSubtaskUpdatePayload;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.session.event.SessionEventListener;
+import com.foggy.navigator.session.lifecycle.LifecycleActivationDeniedException;
 import com.foggy.navigator.session.lifecycle.LifecycleProductionAdmissionService;
 import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
@@ -472,6 +473,100 @@ class CodexStreamRelayTest {
         assertEquals("JCS_SHA256_V1",
                 authorization.getValue().bindingDigestVersion());
         assertTrue(requestBody.containsKey("lifecycle_context"));
+    }
+
+    @Test
+    void enforcedAdmissionDenialFailsBeforeProviderEffectAndCommitsServerFence() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        when(taskRepository.findByTaskId("local-task-1"))
+                .thenReturn(Optional.of(entity));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://localhost:13051")
+                        .authToken("fixture-worker-token")
+                        .build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://localhost:13051",
+                "fixture-worker-token"))
+                .thenReturn(client);
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("prompt", "static synthetic prompt");
+        requestBody.put("cwd", "/tmp/arch001-act-run/workdir");
+        requestBody.put("model", "gpt-5.6-sol");
+        stubBuiltRequest(requestBody);
+        String dispatchId = CodexStreamRelay.stableLifecycleDispatchId(
+                "TASK_CREATE", "local-task-1");
+        Map<String, Object> lifecycleContext = new LinkedHashMap<>();
+        lifecycleContext.put("schema", "NAVIGATOR_WORKER_LIFECYCLE_V1");
+        lifecycleContext.put("ownership_mode", "ENFORCED");
+        lifecycleContext.put("command_kind", "TASK_CREATE");
+        lifecycleContext.put("navigator_task_id", "local-task-1");
+        lifecycleContext.put("dispatch_id", dispatchId);
+        lifecycleContext.put("delivery_attempt", 1);
+        lifecycleContext.put("expected_physical_worker_id", "worker-1");
+        lifecycleContext.put("expected_state_generation", "generation-1");
+        lifecycleContext.put("termination_operation_id", null);
+        WorkerLifecycleIdentity identity = new WorkerLifecycleIdentity(
+                "worker-1", "generation-1", "epoch-1");
+        when(client.lifecycleContextEvidence(
+                "worker-1", "ENFORCED", "TASK_CREATE", "local-task-1",
+                dispatchId, 1, null))
+                .thenReturn(Mono.just(
+                        new CodexWorkerClient.LifecycleContextEvidence(
+                                lifecycleContext, identity,
+                                "NAVIGATOR_WORKER_LIFECYCLE_V1", 1,
+                                java.util.Set.of(), "source-candidate",
+                                true, true, true)));
+        LifecycleProductionAdmissionService admission =
+                mock(LifecycleProductionAdmissionService.class);
+        when(admission.ownershipModeForTask("local-task-1"))
+                .thenReturn(LifecycleOwnershipMode.ENFORCED);
+        when(admission.admitAndAuthorizeProviderEffect(any()))
+                .thenThrow(new LifecycleActivationDeniedException(
+                        "ADMISSION_BINDING_MISMATCH"));
+        when(admission.supportsDeterministicPreEffectClosure(
+                "ADMISSION_BINDING_MISMATCH")).thenReturn(true);
+        ReflectionTestUtils.setField(
+                relay, "lifecycleProductionAdmission", admission);
+        ReflectionTestUtils.setField(
+                relay, "lifecycleBindingDigest",
+                new CodexLifecycleBindingDigest(new ObjectMapper()));
+
+        relay.onTaskStart(WorkerTaskStartEvent.builder()
+                .taskId("local-task-1")
+                .sessionId("session-1")
+                .workerId("worker-1")
+                .prompt("static synthetic prompt")
+                .cwd("/tmp/arch001-act-run/workdir")
+                .model("gpt-5.6-sol")
+                .providerType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE)
+                .providerConfig(Map.of(
+                        "codexHomeKey", "synthetic/arch001/canary",
+                        "networkAccessEnabled", false,
+                        "webSearchMode", "disabled"))
+                .build());
+
+        ArgumentCaptor<LifecycleProductionAdmissionService
+                .ProviderEffectCommand> authorization =
+                ArgumentCaptor.forClass(LifecycleProductionAdmissionService
+                        .ProviderEffectCommand.class);
+        ArgumentCaptor<LifecycleProductionAdmissionService
+                .ProviderEffectCommand> closure =
+                ArgumentCaptor.forClass(LifecycleProductionAdmissionService
+                        .ProviderEffectCommand.class);
+        var order = inOrder(admission, taskService, client);
+        order.verify(admission).admitAndAuthorizeProviderEffect(
+                authorization.capture());
+        order.verify(taskService).failTask("local-task-1", null, null,
+                "ADMISSION_BINDING_MISMATCH");
+        order.verify(admission).supportsDeterministicPreEffectClosure(
+                "ADMISSION_BINDING_MISMATCH");
+        order.verify(admission).closeDeterministicPreEffectAdmissionFailure(
+                closure.capture(), eq("ADMISSION_BINDING_MISMATCH"));
+        verify(client, never()).streamQuery(any(Map.class));
+        assertEquals(authorization.getValue(), closure.getValue());
+        assertEquals(dispatchId, closure.getValue().dispatchId());
     }
 
     @Test

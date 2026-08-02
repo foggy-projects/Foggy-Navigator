@@ -118,6 +118,43 @@ class TaskLifecycleReducerTest {
     }
 
     @Test
+    void serverPreEffectAdmissionRejectionIsTerminalOnlyWithoutWorkerEvidence() {
+        TaskLifecycleBinding serverBinding = new TaskLifecycleBinding(
+                "session-1", "worker-1", "generation-1", "epoch-1",
+                LifecycleOwnershipMode.ENFORCED, "dispatch-1", "operation-1",
+                "sha256:binding-1", null);
+        TaskLifecycleFact rejection =
+                TaskLifecycleFact.serverPreEffectAdmissionRejection(
+                        "server-pre-effect", 10, serverBinding);
+
+        TaskLifecycleDecision terminal = reducer.recompute(
+                "task-server-pre-effect", List.of(rejection), Set.of(),
+                serverBinding, "policy-v1");
+
+        assertEquals(TaskCanonicalPhase.TERMINAL,
+                terminal.snapshot().canonicalPhase());
+        assertEquals(TaskTerminalOutcome.FAILED,
+                terminal.snapshot().terminalOutcome());
+        assertEquals(TaskTerminalSource.SERVER_PRE_EFFECT_ADMISSION_REJECTION,
+                terminal.snapshot().terminalSource());
+        assertEquals(TaskDispatchState.REJECTED,
+                terminal.snapshot().dispatchState());
+        assertEquals(TaskExecutionObservation.NOT_STARTED,
+                terminal.snapshot().executionObservation());
+
+        TaskLifecycleDecision conflicting = reducer.recompute(
+                "task-server-pre-effect-conflict",
+                List.of(rejection, TaskLifecycleFact.workerAccepted(
+                        "worker-accepted", 11)),
+                Set.of(), serverBinding, "policy-v1");
+
+        assertFalse(conflicting.snapshot().canonicalTerminal());
+        assertTrue(conflicting.snapshot().activeBlockers()
+                .contains(LifecycleBlocker.EVIDENCE_CONFLICT));
+        assertTrue(conflicting.requiredEffects().isEmpty());
+    }
+
+    @Test
     void blockerPrecedenceAndClearRevealProduceOneLegalPair() {
         Set<LifecycleBlocker> blockers = Set.of(
                 LifecycleBlocker.WORKER_OFFLINE,

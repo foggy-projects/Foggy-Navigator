@@ -65,10 +65,34 @@ task audit dispatch projections consistent.
   - launcher 14-module package: passed.
   - restarted 8112: health/database `UP`; actuator provenance matched the
     packaged clean `main` commit.
-- residual_runtime_disposition: retain Task audit; formally reconcile the
-  pre-effect terminal Task to revoke its existing capability, and quarantine
-  target `-03` before creating a fresh immutable one-shot target. Restart-time
-  controller drift has already quarantined `-03` and its proof without reusing
-  the reservation; the retained Task token still requires the formal
-  zero-provider-dispatch terminal republish path.
+
+### SIM-NAVI-001 Navigator implementation-evidence addendum (2026-08-02)
+
+- scope: the follow-up keeps the retained pre-effect terminal Task read-only
+  and adds the provider-side typed terminal-cleanup repair and typed
+  completion-readiness contract needed by SIM.  It does not treat a client
+  declaration, `NOT_FOUND` token state, or a non-terminal receipt as closure.
+- focused_tests:
+  - `mvn -pl business-agent-module -am -Dtest=BusinessTerminalCleanupPortTest,BusinessTaskScopedTokenLifecycleServiceTest,RuntimeRequestAuditServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`: 60 tests passed, 0 failures, 0 errors.
+  - `mvn -pl addons/claude-worker-agent -am -Dtest=RuntimeStateAuditServiceTest,RuntimeTaskTypedContractServiceTest,RuntimeTaskCompletionReadinessServiceTest,RuntimeTaskTerminalCleanupRepairServiceTest,OpenApiControllerMessageMappingTest -Dsurefire.failIfNoSpecifiedTests=false test`: 123 tests passed, 0 failures, 0 errors.
+  - `mvn -pl session-module -am -Dtest=TerminalCleanupRepairServiceTest,TaskTerminalCommitServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`: 15 tests passed, 0 failures, 0 errors.
+  - `mvn -pl navigator-open-sdk -Dtest=RuntimeTaskTypedContractTest,UpstreamCliTest test`: 163 tests passed, 0 failures, 0 errors.
+- sdk_artifact_identity:
+  - GAV: `com.foggy.navigator:navigator-open-sdk:1.0.40-SNAPSHOT`.
+  - binary SHA-256: `f19bbf00f4527e69d3d017d0b28eca9b158c85493e49904a57564ed9d6de6e5e`.
+  - sources SHA-256: `d6efa1f9b2b27a78913596edbddf6156d9493f4258447dedd5aaacfd637e4e98`.
+- affected_lane:
+  - `mvn -pl session-module,business-agent-module,addons/claude-worker-agent,navigator-open-sdk -am test` stopped in the unchanged dependency module `agent-framework`; `LlmCircuitBreakerTest$HalfOpenToClosedTest.shouldCloseOnProbeSuccess` failed at its cooldown assertion, so the four target modules were skipped by Maven fail-fast.
+  - `git diff --name-only -- agent-framework` was empty.  The timing-sensitive test uses a 250 ms sleep with a wall-clock cooldown; the independent focused retry `mvn -pl agent-framework -Dtest=LlmCircuitBreakerTest test` passed 12 tests with 0 failures/errors.  This lane result is recorded as a pre-existing baseline flake, not as a SIM-NAVI-001 pass or candidate regression.
+- boundary_and_remaining_evidence: no historical Task/Session repair, replay,
+  reconciliation, cleanup, or fact synthesis was performed.  A fresh
+  disposable bilateral smoke, SIM consumer verification, independent commits,
+  and the shared canonical Implementation Result remain pending and are not
+  claimed by this addendum.
+- residual_runtime_disposition: retain the pre-effect terminal Task and its
+  quarantined target/proof for read-only audit only.  Per SIM-NAVI-001, do not
+  reconcile, repair, replay, revoke, clean, or synthesize facts for that
+  historical Task; its cleanup gap is a non-blocking residual risk.  The
+  forward cleanup contract is proved only with a fresh disposable one-shot
+  target and Task.
 - readiness: READY_FOR_SIGNOFF

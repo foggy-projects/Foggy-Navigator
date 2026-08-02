@@ -28,6 +28,7 @@ import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskClosureDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskCompletionReadinessDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
+import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskTerminalCleanupRepairDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTerminationReadinessDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeWorkerObservedFactsDTO;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskReconciliationState;
@@ -35,6 +36,7 @@ import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapabilit
 import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
 import com.foggy.navigator.claude.worker.model.form.RuntimeTaskReconcileForm;
+import com.foggy.navigator.claude.worker.model.form.RuntimeTaskTerminalCleanupRepairForm;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
@@ -193,6 +195,133 @@ class OpenApiControllerMessageMappingTest {
                 "c66ebce8-e7ae-45d2-9576-32454a960a4f", "task-a");
         verify(closureService, never()).reconcile(
                 any(), any(), any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+    }
+
+    @Test
+    void runtimeTaskReconcileRetainsExplicitLegacyProjectionRepairBranch() throws Exception {
+        RuntimeTaskClosureService closureService = mock(RuntimeTaskClosureService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RuntimeTaskClosureService> closureProvider = mock(ObjectProvider.class);
+        when(closureProvider.getIfAvailable()).thenReturn(closureService);
+        OpenApiController controller = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        ReflectionTestUtils.setField(
+                controller, "runtimeTaskClosureService", closureProvider);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Client-App-Secret")).thenReturn("runtime-secret");
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("user-a");
+        when(request.getHeader("X-Navigator-Client-Request-Id"))
+                .thenReturn("legacy-repair-request-1");
+        RuntimeTaskReconcileForm form = new ObjectMapper().readValue("""
+                {"taskId":"task-a","expectedPhysicalWorkerId":"worker-a",
+                 "expectedDispatchCount":0,"dryRun":true}
+                """, RuntimeTaskReconcileForm.class);
+        RuntimeTaskClosureDTO result = RuntimeTaskClosureDTO.builder()
+                .clientRequestId("legacy-repair-request-1")
+                .taskId("task-a")
+                .build();
+        when(closureService.reconcile(
+                "runtime-key", "runtime-secret", "user-a",
+                "legacy-repair-request-1", "task-a", "worker-a", 0, null, true))
+                .thenReturn(result);
+
+        RuntimeTaskClosureDTO response = controller.runtimeTaskReconcile(form, request).getData();
+
+        assertEquals("legacy-repair-request-1", response.getClientRequestId());
+        verify(closureService).reconcile(
+                "runtime-key", "runtime-secret", "user-a",
+                "legacy-repair-request-1", "task-a", "worker-a", 0, null, true);
+        verify(closureService, never()).reconcileTerminationRequest(
+                any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void terminalCleanupRepairUsesDedicatedServiceForDryRunAndSameIdConfirm() {
+        RuntimeTaskTerminalCleanupRepairService repairService =
+                mock(RuntimeTaskTerminalCleanupRepairService.class);
+        RuntimeTaskClosureService closureService = mock(RuntimeTaskClosureService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RuntimeTaskClosureService> closureProvider = mock(ObjectProvider.class);
+        when(closureProvider.getIfAvailable()).thenReturn(closureService);
+        OpenApiController controller = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        ReflectionTestUtils.setField(
+                controller, "runtimeTaskClosureService", closureProvider);
+        ReflectionTestUtils.setField(
+                controller, "runtimeTaskTerminalCleanupRepairService", repairService);
+
+        HttpServletRequest request = runtimeRequest("repair-request-1");
+        RuntimeTaskTerminalCleanupRepairForm dryRun = repairForm(true, null);
+        RuntimeTaskTerminalCleanupRepairForm confirm = repairForm(false, "task-a");
+        when(repairService.repair(
+                "runtime-key", "runtime-secret", "user-a", "repair-request-1",
+                "task-a", "worker-a", null, true))
+                .thenReturn(RuntimeTaskTerminalCleanupRepairDTO.builder()
+                        .taskId("task-a").dryRun(true).build());
+        when(repairService.repair(
+                "runtime-key", "runtime-secret", "user-a", "repair-request-1",
+                "task-a", "worker-a", "task-a", false))
+                .thenReturn(RuntimeTaskTerminalCleanupRepairDTO.builder()
+                        .taskId("task-a").dryRun(false).build());
+
+        assertTrue(controller.runtimeTaskTerminalCleanupRepair(dryRun, request).getData()
+                .getDryRun());
+        assertFalse(controller.runtimeTaskTerminalCleanupRepair(confirm, request).getData()
+                .getDryRun());
+        verify(repairService).repair(
+                "runtime-key", "runtime-secret", "user-a", "repair-request-1",
+                "task-a", "worker-a", null, true);
+        verify(repairService).repair(
+                "runtime-key", "runtime-secret", "user-a", "repair-request-1",
+                "task-a", "worker-a", "task-a", false);
+        verifyNoInteractions(closureService);
+    }
+
+    @Test
+    void terminalCleanupRepairRejectsUnavailableServiceAndNullBodyWithoutDispatch() {
+        OpenApiController unavailable = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        assertEquals("RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_SERVICE_UNAVAILABLE",
+                unavailable.runtimeTaskTerminalCleanupRepair(
+                        repairForm(true, null), runtimeRequest("repair-request-1")).getMsg());
+
+        RuntimeTaskTerminalCleanupRepairService repairService =
+                mock(RuntimeTaskTerminalCleanupRepairService.class);
+        OpenApiController bodyRequired = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        ReflectionTestUtils.setField(
+                bodyRequired, "runtimeTaskTerminalCleanupRepairService", repairService);
+        assertEquals("RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_BODY_REQUIRED",
+                bodyRequired.runtimeTaskTerminalCleanupRepair(
+                        null, runtimeRequest("repair-request-1")).getMsg());
+        verifyNoInteractions(repairService);
+    }
+
+    @Test
+    void terminalCleanupRepairReturnsOnlySanitizedStableServiceFailure() {
+        RuntimeTaskTerminalCleanupRepairService repairService =
+                mock(RuntimeTaskTerminalCleanupRepairService.class);
+        OpenApiController controller = newController(
+                (RuntimeStateAuditService) null,
+                (RuntimeTaskCompletionReadinessService) null);
+        ReflectionTestUtils.setField(
+                controller, "runtimeTaskTerminalCleanupRepairService", repairService);
+        when(repairService.repair(
+                "runtime-key", "runtime-secret", "user-a", "repair-request-1",
+                "task-a", "worker-a", null, true))
+                .thenThrow(new IllegalArgumentException(
+                        "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_NOT_READY internal-detail"));
+
+        String message = controller.runtimeTaskTerminalCleanupRepair(
+                repairForm(true, null), runtimeRequest("repair-request-1")).getMsg();
+
+        assertEquals("RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_NOT_READY", message);
+        assertFalse(message.contains("internal-detail"));
     }
 
     @Test
@@ -1091,16 +1220,21 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
-    void askAgent_topLevelModelConfigIdOverridesMetadataAndIsForwarded() {
+    void askAgent_topLevelLogicalModelVariantIsForwardedAndAuditedWithSelectedConfig() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
         A2aAgent agent = mock(A2aAgent.class);
-        OpenApiController controller = newController(agentResolver, credentialResolver);
+        RuntimeRequestAuditService auditService = defaultAuditService();
+        OpenApiController controller = newController(
+                agentResolver, credentialResolver, null, null, auditService);
 
         OpenApiQueryForm form = new OpenApiQueryForm();
         form.setMessage("run deterministic test");
         form.setModelConfigId("cfg-top-level");
-        form.setMetadata(Map.of("modelConfigId", "cfg-metadata"));
+        form.setModelVariant("codex-luna:high");
+        form.setMetadata(Map.of(
+                "modelConfigId", "cfg-metadata",
+                "model", "gpt-5.6-luna"));
 
         when(credentialResolver.resolveAccessToken(
                 nullable(String.class), nullable(String.class)))
@@ -1118,6 +1252,19 @@ class OpenApiControllerMessageMappingTest {
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
         assertEquals("cfg-top-level", captor.getValue().getMetadata().get("modelConfigId"));
+        assertEquals("codex-luna:high", captor.getValue().getMetadata().get("model"));
+        assertEquals("codex-luna:high", captor.getValue().getMetadata().get("requestedModelVariant"));
+
+        var admissionEvidence = org.mockito.ArgumentCaptor.forClass(
+                RuntimeRequestAuditService.TaskEvidence.class);
+        var dispatchEvidence = org.mockito.ArgumentCaptor.forClass(
+                RuntimeRequestAuditService.TaskEvidence.class);
+        verify(auditService).taskAdmissionRecorded(any(), admissionEvidence.capture());
+        verify(auditService).taskDispatchRecorded(any(), dispatchEvidence.capture());
+        assertEquals("cfg-top-level", admissionEvidence.getValue().modelConfigId());
+        assertEquals("codex-luna:high", admissionEvidence.getValue().modelVariant());
+        assertEquals("cfg-top-level", dispatchEvidence.getValue().modelConfigId());
+        assertEquals("codex-luna:high", dispatchEvidence.getValue().modelVariant());
     }
 
     @Test
@@ -3341,6 +3488,26 @@ class OpenApiControllerMessageMappingTest {
         task.setCreatedAt(LocalDateTime.of(2026, 5, 27, 9, 0));
         task.setUpdatedAt(LocalDateTime.of(2026, 5, 27, 9, 0));
         return task;
+    }
+
+    private HttpServletRequest runtimeRequest(String clientRequestId) {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader("X-Client-App-Key")).thenReturn("runtime-key");
+        when(request.getHeader("X-Client-App-Secret")).thenReturn("runtime-secret");
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("user-a");
+        when(request.getHeader("X-Navigator-Client-Request-Id")).thenReturn(clientRequestId);
+        return request;
+    }
+
+    private RuntimeTaskTerminalCleanupRepairForm repairForm(
+            boolean dryRun, String confirmTaskId) {
+        RuntimeTaskTerminalCleanupRepairForm form =
+                new RuntimeTaskTerminalCleanupRepairForm();
+        form.setTaskId("task-a");
+        form.setExpectedPhysicalWorkerId("worker-a");
+        form.setDryRun(dryRun);
+        form.setConfirmTaskId(confirmTaskId);
+        return form;
     }
 
     private String terminalStatusFromTaskStatus(OpenApiController controller, String status) throws Exception {

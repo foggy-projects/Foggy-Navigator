@@ -11,6 +11,8 @@ import com.foggy.navigator.session.lifecycle.persistence.SessionLifecycleSnapsho
 import com.foggy.navigator.session.lifecycle.persistence.TaskLifecycleSnapshotEntity;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleFactRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterGenerationRepository;
+import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleWriterProofReferenceRepository;
 import com.foggy.navigator.session.lifecycle.repository.SessionLifecycleSnapshotRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
@@ -19,6 +21,7 @@ import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.WorkerLifecycleIdentity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -35,6 +38,9 @@ import java.util.Set;
 @Service
 public class LifecycleProductionAdmissionService {
     private static final String POLICY = "ARCH-001-ACT-001";
+    private static final Set<String> DETERMINISTIC_PRE_EFFECT_CLOSURE_REASONS =
+            Set.of(LifecycleActivationReason.ADMISSION_BINDING_MISMATCH,
+                    "LIFECYCLE_WRITER_EXCLUSIVITY_LOST");
 
     private final LifecycleActivationAuthorityService authority;
     private final LifecycleAuthorityClock clock;
@@ -44,10 +50,14 @@ public class LifecycleProductionAdmissionService {
     private final LifecycleFactRepository facts;
     private final LifecycleEffectOutboxRepository outbox;
     private final LifecycleWriterProofReferenceRepository references;
+    private final LifecycleWriterGenerationRepository generations;
+    private final LifecycleWriterProofRepository proofs;
     private final SessionTaskRepository canonicalTasks;
+    private final TaskLifecycleOwnerService lifecycleOwner;
     private final WriterExclusivityProofService writerProofs;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactions;
+    private final TransactionTemplate preEffectClosureTransactions;
 
     public LifecycleProductionAdmissionService(
             LifecycleActivationAuthorityService authority,
@@ -58,7 +68,10 @@ public class LifecycleProductionAdmissionService {
             LifecycleFactRepository facts,
             LifecycleEffectOutboxRepository outbox,
             LifecycleWriterProofReferenceRepository references,
+            LifecycleWriterGenerationRepository generations,
+            LifecycleWriterProofRepository proofs,
             SessionTaskRepository canonicalTasks,
+            TaskLifecycleOwnerService lifecycleOwner,
             WriterExclusivityProofService writerProofs,
             ObjectMapper objectMapper,
             PlatformTransactionManager transactionManager) {
@@ -70,10 +83,17 @@ public class LifecycleProductionAdmissionService {
         this.facts = facts;
         this.outbox = outbox;
         this.references = references;
+        this.generations = generations;
+        this.proofs = proofs;
         this.canonicalTasks = canonicalTasks;
+        this.lifecycleOwner = lifecycleOwner;
         this.writerProofs = writerProofs;
         this.objectMapper = objectMapper;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.preEffectClosureTransactions = new TransactionTemplate(
+                transactionManager);
+        this.preEffectClosureTransactions.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Transactional
@@ -141,6 +161,109 @@ public class LifecycleProductionAdmissionService {
             quarantineFailedProviderEffectAdmission(failure);
             throw failure;
         }
+    }
+
+    /**
+     * Only these server-owned admission denials can prove that the provider
+     * call was fenced before any Worker task existed. Other startup, context,
+     * readiness, or Worker failures remain ordinary failures and must not
+     * manufacture this terminal authority.
+     */
+    public boolean supportsDeterministicPreEffectClosure(String safeReasonCode) {
+        return DETERMINISTIC_PRE_EFFECT_CLOSURE_REASONS.contains(safeReasonCode);
+    }
+
+    /**
+     * Replays no provider command. The relay invokes this only after its
+     * synchronous {@code failTask} transition has persisted canonical FAILED.
+     * The separate transaction prevents the failed admission transaction from
+     * being mistaken for a successful provider-effect enrollment.
+     */
+    public void closeDeterministicPreEffectAdmissionFailure(
+            ProviderEffectCommand command, String safeReasonCode) {
+        if (!supportsDeterministicPreEffectClosure(safeReasonCode)) {
+            throw new IllegalArgumentException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_REASON_UNSUPPORTED");
+        }
+        preEffectClosureTransactions.executeWithoutResult(status ->
+                closeDeterministicPreEffectAdmissionFailureLocked(
+                        command, safeReasonCode));
+    }
+
+    private void closeDeterministicPreEffectAdmissionFailureLocked(
+            ProviderEffectCommand command, String safeReasonCode) {
+        if (!authority.properties().isAdmissionEnabled()) {
+            throw denied(LifecycleActivationReason.ADMISSION_DISABLED);
+        }
+        if (command == null || command.workerIdentity() == null) {
+            throw denied("LIFECYCLE_SERVER_PRE_EFFECT_COMMAND_INVALID");
+        }
+        var target = authority.targetRepository().findForUpdate(
+                        authority.properties().getExactTargetId())
+                .orElseThrow(() -> denied(
+                        LifecycleActivationReason.TARGET_NOT_REGISTERED));
+        if (!"QUARANTINED".equals(target.getStatus())
+                || !safeReasonCode.equals(target.getSafeReasonCode())
+                || !Objects.equals(target.getReservedTaskId(), command.taskId())
+                || !Objects.equals(target.getReservedSessionId(),
+                command.sessionId())
+                || !Objects.equals(target.getPhysicalWorkerId(),
+                command.physicalWorkerId())
+                || !Objects.equals(target.getWorkerStateGeneration(),
+                command.workerIdentity().stateGeneration())
+                || !Objects.equals(target.getWorkerInstanceEpoch(),
+                command.workerIdentity().instanceEpoch())) {
+            throw denied("LIFECYCLE_SERVER_PRE_EFFECT_RESERVATION_REQUIRED");
+        }
+        SessionTaskEntity canonical = canonicalTasks
+                .findByTaskIdForUpdate(command.taskId())
+                .orElseThrow(() -> denied(
+                        "LIFECYCLE_SERVER_PRE_EFFECT_CANONICAL_REQUIRED"));
+        if (!"FAILED".equals(canonical.getStatus())
+                || canonical.getProviderTaskId() != null
+                || !Objects.equals(canonical.getSessionId(), command.sessionId())
+                || !Objects.equals(canonical.getWorkerId(),
+                command.physicalWorkerId())
+                || !Objects.equals(canonical.getProviderType(),
+                target.getProviderType())
+                || !Objects.equals(canonical.getTenantId(),
+                target.getTenantId())
+                || !Objects.equals(canonical.getUserId(), target.getUserId())
+                || !Objects.equals(canonical.getModelConfigId(),
+                target.getModelConfigId())) {
+            throw denied("LIFECYCLE_SERVER_PRE_EFFECT_CANONICAL_REQUIRED");
+        }
+        var generation = generations.findForUpdate(target.getGenerationId())
+                .orElseThrow(() -> denied(
+                        "LIFECYCLE_SERVER_PRE_EFFECT_GENERATION_REQUIRED"));
+        if (!"QUARANTINED".equals(generation.getStatus())
+                || !Objects.equals(generation.getTargetId(),
+                target.getTargetId())
+                || !Objects.equals(generation.getControllerInventoryDigest(),
+                target.getControllerInventoryDigest())) {
+            throw denied("LIFECYCLE_SERVER_PRE_EFFECT_GENERATION_REQUIRED");
+        }
+        var proof = proofs.findForUpdate(target.getProofId()).orElseThrow(
+                () -> denied("LIFECYCLE_SERVER_PRE_EFFECT_PROOF_REQUIRED"));
+        if (!"QUARANTINED".equals(proof.getStatus())
+                || !Objects.equals(proof.getGenerationId(),
+                target.getGenerationId())
+                || !Objects.equals(proof.getHolderInstanceId(),
+                target.getWriterInstanceId())
+                || !Objects.equals(proof.getControllerInventoryDigest(),
+                target.getControllerInventoryDigest())
+                || references.countByProofIdAndReleasedAtIsNull(
+                target.getProofId()) != 0L
+                || !outbox.findByAggregateId(command.taskId()).isEmpty()) {
+            throw denied("LIFECYCLE_SERVER_PRE_EFFECT_PROOF_REQUIRED");
+        }
+        lifecycleOwner.closeServerPreEffectAdmissionRejection(
+                new TaskLifecycleOwnerService.ServerPreEffectAdmissionRejection(
+                        command.taskId(), command.sessionId(),
+                        command.physicalWorkerId(), command.workerIdentity(),
+                        command.dispatchId(), command.bindingDigestVersion(),
+                        command.bindingDigest(), target.getGenerationId(),
+                        safeReasonCode));
     }
 
     public void observeAcceptedDisposition(AcceptedDisposition disposition) {

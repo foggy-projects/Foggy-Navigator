@@ -64,6 +64,7 @@ public class TaskTerminalCleanupPlanEntity {
 
     public TaskTerminalCleanupPlanId getId() { return id; }
     public String getApplicability() { return applicability; }
+    public String getNotApplicableReason() { return notApplicableReason; }
     public String getCheckpointState() { return checkpointState; }
     public void setCheckpointFactId(String value) { checkpointFactId = value; }
 }

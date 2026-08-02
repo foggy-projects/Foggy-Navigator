@@ -152,6 +152,24 @@ class TaskLifecycleOwnerVerticalIntegrationTest {
     }
 
     @Test
+    void typedTerminalIsFalseWhenCanonicalTerminalLostItsTombstone() {
+        owner.ingestNormalizedBatch("task-1", List.of(terminal(
+                "fact-terminal-no-tombstone", 2, "CANCELLED")));
+        assertThat(projection.find("task-1").orElseThrow().typedTerminal())
+                .isTrue();
+
+        tombstones.deleteById("task-1");
+
+        assertThat(projection.find("task-1").orElseThrow())
+                .satisfies(value -> {
+                    assertThat(value.canonicalTerminal()).isTrue();
+                    assertThat(value.cleanupComplete()).isTrue();
+                    assertThat(value.terminalTombstonePresent()).isFalse();
+                    assertThat(value.typedTerminal()).isFalse();
+                });
+    }
+
+    @Test
     void terminalFactConvergesWithContentFreeAdmissionFacts() {
         facts.saveAndFlush(contentFreeAdmissionFact(
                 "fact-reserved", TaskLifecycleFactType.TASK_DISPATCH_RESERVED, 0));

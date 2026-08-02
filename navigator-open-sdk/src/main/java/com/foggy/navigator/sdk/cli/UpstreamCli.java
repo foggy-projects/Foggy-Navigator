@@ -70,6 +70,11 @@ import com.foggy.navigator.sdk.model.businessagent.RuntimeRequestAuditStageDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeBindingAuditDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskAuditDTO;
 import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskAuditStageDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskCompletionReadinessDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskReconcileForm;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskReconciliationDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminalCleanupRepairDTO;
+import com.foggy.navigator.sdk.model.businessagent.RuntimeTaskTerminalCleanupRepairForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
@@ -191,6 +196,14 @@ public class UpstreamCli {
             "RUNTIME_TASK_AUDIT_QUERY_FAILED",
             "RUNTIME_TASK_AUDIT_TASK_REQUIRED",
             "RUNTIME_TASK_AUDIT_UPSTREAM_USER_REQUIRED",
+            "RUNTIME_TASK_FORBIDDEN",
+            "RUNTIME_TASK_NOT_FOUND",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_ALREADY_COMPLETE",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_BODY_REQUIRED",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_DRY_RUN_REQUIRED",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_NOT_READY",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_REPLAY_PROHIBITED",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_SERVICE_UNAVAILABLE",
             "SAFE_SMOKE_BODY_REQUIRED",
             "SAFE_SMOKE_FUNCTION_SCOPE_REQUIRED",
             "SAFE_SMOKE_MAX_TURNS_MUST_BE_ONE",
@@ -477,6 +490,7 @@ public class UpstreamCli {
             case "runtime termination-readiness" -> runtimeTerminationReadiness(args);
             case "runtime task-terminate" -> runtimeTaskTerminate(args);
             case "runtime task-reconcile" -> runtimeTaskReconcile(args);
+            case "runtime task-terminal-cleanup-repair" -> runtimeTaskTerminalCleanupRepair(args);
             case "runtime owner-smoke" -> ownerSmoke(args);
             case "runtime readiness", "runtime verify-agent-readiness" -> verifyAgentReadiness(args);
             case "runtime inspect" -> inspectRuntime(args);
@@ -654,8 +668,8 @@ public class UpstreamCli {
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv|none>] [--allowed-functions <csv|none>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  safe-ask --upstream-user-id <id> --message <label> [--model-config-id <id>] [--model-variant <name>]  # forces maxTurns=1 and exact allowedTools=[]/allowedFunctions=[]; no Worker/model dispatch");
-        out.println("  runtime audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
-        out.println("  runtime audit --since <offset-time> --until <offset-time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("  runtime audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile|task-terminal-cleanup-repair] [--json]");
+        out.println("  runtime audit --since <offset-time> --until <offset-time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile|task-terminal-cleanup-repair] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
         out.println("  runtime binding-audit --agent-code <id> --upstream-user-id <id> --model-config-id <id> --directory-id <id> [--json]");
         out.println("  runtime task-audit --task-id <existingTaskId> [--upstream-user-id <id>] [--json]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
@@ -807,17 +821,20 @@ public class UpstreamCli {
     }
 
     private int runtimeUsage() {
-        out.println("Usage: navi upstream runtime <token|audit|binding-audit|task-audit|task-completion-readiness|termination-readiness|task-terminate|task-reconcile|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
+        out.println("Usage: navi upstream runtime <token|audit|binding-audit|task-audit|task-completion-readiness|termination-readiness|task-terminate|task-reconcile|task-terminal-cleanup-repair|readiness|owner-smoke|inspect|ask|safe-ask|messages|diagnostics|evidence|sessions|session-messages|skill|account-context> [options]");
         out.println("Runtime lane accepts only ClientApp runtime material (key/secret or access token) and rejects admin, control, and typed-management credentials.");
         out.println("Use a tenant-runtime profile created by `platform tenant ensure` or `platform app issue-runtime-key`; runtime access tokens are not persisted by provisioning.");
-        out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--json]");
-        out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
+        out.println("  audit --request-id <clientRequestId> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile|task-terminal-cleanup-repair] [--json]");
+        out.println("  audit --since <ISO-8601 offset time> --until <ISO-8601 offset time> [--operation runtime-token|safe-ask|ask|task-terminate|task-reconcile|task-terminal-cleanup-repair] [--agent-code <id>] [--upstream-user-id <id>] [--limit <1..100>] [--json]");
         out.println("    STANDARD ask audit is task-id independent; Java SDK requests expose clientRequestId and parentClientRequestId correlation.");
         out.println("    Audit timestamps are RFC 3339 UTC instants; readiness reports serverTimezone, auditStorageTimezone, and taskIdDateTimezone.");
         out.println("  termination-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
         out.println("  task-completion-readiness --task-id <id> --expected-physical-worker-id <id> [--json]");
         out.println("  task-terminate --task-id <id> --expected-physical-worker-id <id> --reason <code> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
-        out.println("  task-reconcile --task-id <id> --expected-physical-worker-id <id> --expected-dispatch-count <n> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <id>] [--json]");
+        out.println("  task-reconcile --task-id <id> --replay-client-request-id <originalTerminationRequestId> [--json]");
+        out.println("    read-only: the JSON body contains only taskId; use the original termination request id exactly once in the header.");
+        out.println("  task-terminal-cleanup-repair --task-id <id> --expected-physical-worker-id <id> [--dry-run | --confirm-task-id <id>] [--replay-client-request-id <dryRunRequestId>] [--json]");
+        out.println("    run dry-run first, then confirm with the exact printed request id; the CLI never retries repair automatically.");
         out.println("Audit uses ClientApp key/secret only, derives tenant/system/ClientApp on the server, issues no token, and creates no task/context/session or runtime dispatch.");
         return 0;
     }
@@ -1505,9 +1522,9 @@ public class UpstreamCli {
         String taskId = requiredOption(args, "task-id", "task id");
         String expectedWorkerId = requiredOption(
                 args, "expected-physical-worker-id", "expected physical worker id");
-        Map<String, Object> result;
+        RuntimeTaskCompletionReadinessDTO result;
         try {
-            result = new BusinessAgentApi(runtimeAuditHttp()).runtimeTaskCompletionReadiness(
+            result = new BusinessAgentApi(runtimeAuditHttp()).getRuntimeTaskCompletionReadiness(
                     clientAppKey(args),
                     config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
                     upstreamUserId(args), taskId, expectedWorkerId);
@@ -1551,33 +1568,66 @@ public class UpstreamCli {
 
     private int runtimeTaskReconcile(CliArguments args) throws Exception {
         String taskId = requiredOption(args, "task-id", "task id");
-        String expectedWorkerId = requiredOption(
-                args, "expected-physical-worker-id", "expected physical worker id");
-        boolean dryRun = args.flag("dry-run");
-        String confirmTaskId = args.option("confirm-task-id");
-        if (!dryRun && !taskId.equals(confirmTaskId)) {
-            throw new UpstreamCliException("task-reconcile requires --confirm-task-id equal to --task-id");
-        }
-        Integer expectedDispatchCount = parseInteger(requiredOption(
-                args, "expected-dispatch-count", "expected dispatch count"));
+        String originalClientRequestId = requiredOption(
+                args, "replay-client-request-id", "original termination request id");
         String clientRequestId = beginRuntimeClientRequest(
                 "task-reconcile", null, upstreamUserId(args),
-                args.option("replay-client-request-id"));
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("taskId", taskId);
-        body.put("expectedPhysicalWorkerId", expectedWorkerId);
-        body.put("expectedDispatchCount", expectedDispatchCount);
-        body.put("dryRun", dryRun);
-        if (!dryRun) body.put("confirmTaskId", confirmTaskId);
+                originalClientRequestId);
+        RuntimeTaskReconcileForm form = new RuntimeTaskReconcileForm();
+        form.setTaskId(taskId);
         try {
-            Map<String, Object> result = new BusinessAgentApi(runtimeAuditHttp()).runtimeTaskReconcile(
+            RuntimeTaskReconciliationDTO result =
+                    new BusinessAgentApi(runtimeAuditHttp()).reconcileRuntimeTaskTermination(
                     clientAppKey(args),
                     config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
-                    upstreamUserId(args), clientRequestId, body);
+                    upstreamUserId(args), clientRequestId, form);
             printJson(result);
             return 0;
         } catch (NavigatorApiException e) {
             throw runtimeRequestFailure(e, "RUNTIME_TASK_RECONCILE_FAILED", clientRequestId);
+        }
+    }
+
+    private int runtimeTaskTerminalCleanupRepair(CliArguments args) throws Exception {
+        String taskId = requiredOption(args, "task-id", "task id");
+        String expectedWorkerId = requiredOption(
+                args, "expected-physical-worker-id", "expected physical worker id");
+        boolean dryRun = args.flag("dry-run");
+        String confirmTaskId = args.option("confirm-task-id");
+        String replayClientRequestId = args.option("replay-client-request-id");
+        if (dryRun && hasText(confirmTaskId)) {
+            throw new UpstreamCliException(
+                    "task-terminal-cleanup-repair accepts either --dry-run or --confirm-task-id");
+        }
+        if (!dryRun) {
+            if (!taskId.equals(confirmTaskId)) {
+                throw new UpstreamCliException(
+                        "task-terminal-cleanup-repair requires --confirm-task-id equal to --task-id");
+            }
+            if (!hasText(replayClientRequestId)) {
+                throw new UpstreamCliException(
+                        "task-terminal-cleanup-repair confirmation requires the dry-run --replay-client-request-id");
+            }
+        }
+        String clientRequestId = beginRuntimeClientRequest(
+                "task-terminal-cleanup-repair", null, upstreamUserId(args),
+                replayClientRequestId);
+        RuntimeTaskTerminalCleanupRepairForm form = new RuntimeTaskTerminalCleanupRepairForm();
+        form.setTaskId(taskId);
+        form.setExpectedPhysicalWorkerId(expectedWorkerId);
+        form.setDryRun(dryRun);
+        form.setConfirmTaskId(dryRun ? null : confirmTaskId);
+        try {
+            RuntimeTaskTerminalCleanupRepairDTO result =
+                    new BusinessAgentApi(runtimeAuditHttp()).repairRuntimeTaskTerminalCleanup(
+                            clientAppKey(args),
+                            config.required("NAVI_CLIENT_APP_SECRET", "client app secret"),
+                            upstreamUserId(args), clientRequestId, form);
+            printJson(result);
+            return 0;
+        } catch (NavigatorApiException e) {
+            throw runtimeRequestFailure(
+                    e, "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_FAILED", clientRequestId);
         }
     }
 

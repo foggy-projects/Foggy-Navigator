@@ -35,7 +35,9 @@ import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.session.repository.ErrorDiagnosticRepository;
 import com.foggy.navigator.session.repository.TerminationOperationRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.lifecycle.TaskLifecycleProjectionPort;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -69,7 +71,8 @@ public class RuntimeStateAuditService {
     public static final String TOKEN_UNCONFIRMED = "UNCONFIRMED";
 
     private static final Set<String> TERMINAL_STATUSES =
-            Set.of("COMPLETED", "FAILED", "ABORTED", "CANCELLED", "CANCELED");
+            Set.of("COMPLETED", "FAILED", "ABORTED", "CANCELLED", "CANCELED",
+                    "REJECTED", "TIMED_OUT", "TIMEOUT");
     private static final List<String> ACTIVE_STATUSES =
             List.of("PENDING", "SUBMITTED", "RUNNING", "AWAITING_PERMISSION",
                     "AWAITING_INPUT", "CANCEL_REQUESTED", "RECONNECTING");
@@ -88,6 +91,13 @@ public class RuntimeStateAuditService {
     private final ErrorDiagnosticRepository errorDiagnosticRepository;
     private final TerminationOperationRepository terminationOperationRepository;
     private final ObjectMapper objectMapper;
+
+    /**
+     * Optional provider-neutral lifecycle projection. This remains a read-only
+     * adapter dependency so runtime audit never becomes a lifecycle authority.
+     */
+    @Autowired(required = false)
+    private TaskLifecycleProjectionPort lifecycleProjection;
 
     @Transactional(readOnly = true)
     public RuntimeBindingAuditDTO auditBinding(
@@ -230,10 +240,16 @@ public class RuntimeStateAuditService {
         List<RuntimeTaskAuditStageDTO> stages = buildTerminalStages(
                 task, terminal.orElse(null), token.orElse(null), sanitizedErrorCode, status,
                 terminationOperations);
+        TaskLifecycleProjectionPort.TaskLifecycleProjection lifecycle = lifecycleProjection == null
+                ? null : lifecycleProjection.find(task.getTaskId()).orElse(null);
 
         RuntimeTaskFactsDTO taskFacts = RuntimeTaskFactsDTO.builder()
                 .taskId(task.getTaskId())
                 .terminal(isTerminal)
+                .lifecycleCanonicalTerminal(lifecycle != null ? lifecycle.canonicalTerminal() : null)
+                .terminalTombstonePresent(lifecycle != null
+                        ? lifecycle.terminalTombstonePresent() : null)
+                .lifecycleCleanupComplete(lifecycle != null ? lifecycle.cleanupComplete() : null)
                 .status(status)
                 .sanitizedErrorCode(sanitizedErrorCode)
                 .taskTokenStatus(tokenStatus)

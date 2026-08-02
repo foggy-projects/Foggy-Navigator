@@ -172,6 +172,34 @@ public class BusinessAgentApi {
         ), new TypeReference<>() {});
     }
 
+    /**
+     * Returns the formal typed completion-readiness graph.  The returned facts
+     * remain server-observed; nullable lifecycle facts must be treated as
+     * unknown rather than inferred by the caller.
+     */
+    public RuntimeTaskCompletionReadinessDTO getRuntimeTaskCompletionReadiness(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId,
+            String expectedPhysicalWorkerId) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/runtime/task-completion-readiness");
+        appendQuery(path, "taskId", taskId);
+        appendQuery(path, "expectedPhysicalWorkerId", expectedPhysicalWorkerId);
+        return http.get(path.toString(), Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId
+        ), new TypeReference<>() {});
+    }
+
+    /**
+     * @deprecated Use {@link #getRuntimeTaskCompletionReadiness(String, String,
+     * String, String, String)}. New callers must not infer completion from a
+     * Map response.
+     */
+    @Deprecated(since = "1.0.40", forRemoval = false)
     public Map<String, Object> runtimeTaskCompletionReadiness(
             String appKey,
             String appSecret,
@@ -246,10 +274,33 @@ public class BusinessAgentApi {
     }
 
     /**
-     * Legacy projection-repair/Map entry retained for source and binary
-     * compatibility. New callers must use
-     * {@link #reconcileRuntimeTaskTermination(String, String, String, String,
-     * RuntimeTaskReconcileForm)}.
+     * Performs the dedicated terminal-cleanup repair mutation. Callers must
+     * first submit a dry-run and then repeat its exact client request id for
+     * the confirmation; this method never retries or generates an id.
+     */
+    public RuntimeTaskTerminalCleanupRepairDTO repairRuntimeTaskTerminalCleanup(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String clientRequestId,
+            RuntimeTaskTerminalCleanupRepairForm form) {
+        return http.post("/api/v1/open/runtime/task-terminal-cleanup-repair", form, Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret,
+                "X-Upstream-User-Id", upstreamUserId,
+                "X-Navigator-Client-Request-Id", clientRequestId
+        ), new TypeReference<>() {});
+    }
+
+    /**
+     * Legacy Map entry retained for source and binary compatibility. The
+     * typed {@link #reconcileRuntimeTaskTermination(String, String, String,
+     * String, RuntimeTaskReconcileForm)} method is the strictly read-only
+     * reconciliation contract. This legacy entry still honors historical
+     * projection-repair fields for existing callers; new callers must use
+     * {@link #repairRuntimeTaskTerminalCleanup(String, String, String, String,
+     * RuntimeTaskTerminalCleanupRepairForm)} for the dedicated typed repair
+     * mutation.
      */
     @Deprecated(since = "1.0.37", forRemoval = false)
     public Map<String, Object> runtimeTaskReconcile(

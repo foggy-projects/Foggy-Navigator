@@ -2103,9 +2103,23 @@ CREATE TABLE IF NOT EXISTS `task_terminal_tombstones` (
   `client_request_id` varchar(96) DEFAULT NULL,
   `terminal_fact_id` varchar(96) NOT NULL,
   `writer_generation_id` varchar(96) NOT NULL,
-  `provider_task_id` varchar(128) NOT NULL,
+  `provider_task_id` varchar(128) DEFAULT NULL,
   PRIMARY KEY (`task_id`),
   UNIQUE KEY `UKkcui2nyw3vm44e2xtatblaoti` (`terminal_fact_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE IF NOT EXISTS `task_terminal_cleanup_repairs` (
+  `recorded_at` datetime(6) NOT NULL,
+  `repair_accepted` bit(1) NOT NULL,
+  `terminal_tombstone_present` bit(1) NOT NULL,
+  `cleanup_complete` bit(1) NOT NULL,
+  `task_id` varchar(64) NOT NULL,
+  `client_request_id` varchar(96) NOT NULL,
+  `safe_reason_code` varchar(96) NOT NULL,
+  PRIMARY KEY (`task_id`),
+  UNIQUE KEY `uk_ttcr_client_request` (`client_request_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;

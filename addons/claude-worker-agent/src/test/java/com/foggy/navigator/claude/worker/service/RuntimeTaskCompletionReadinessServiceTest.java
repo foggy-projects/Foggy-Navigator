@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.model.dto.RuntimeAuditSideEffectsDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskCompletionReadinessDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
+import com.foggy.navigator.spi.lifecycle.TerminalCleanupRepairPort;
 import com.foggy.navigator.spi.task.RuntimeTaskCompletionReadinessProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -32,13 +34,15 @@ class RuntimeTaskCompletionReadinessServiceTest {
     private RuntimeStateAuditService stateAuditService;
     @Mock
     private RuntimeTaskCompletionReadinessProvider provider;
+    @Mock
+    private TerminalCleanupRepairPort terminalCleanupRepairPort;
 
     private RuntimeTaskCompletionReadinessService service;
 
     @BeforeEach
     void setUp() {
         service = new RuntimeTaskCompletionReadinessService(
-                stateAuditService, List.of(provider));
+                stateAuditService, List.of(provider), terminalCleanupRepairPort);
     }
 
     @Test
@@ -118,6 +122,7 @@ class RuntimeTaskCompletionReadinessServiceTest {
     @Test
     void failedLanggraphReceiptCanBeAuthoritativeTerminalEvidenceWithoutClaimingCompletion() {
         arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "FAILED");
+        arrangeCoreAlreadyComplete();
         when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
         when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
                 .thenReturn(observation(
@@ -145,6 +150,7 @@ class RuntimeTaskCompletionReadinessServiceTest {
     @Test
     void completedLanggraphReceiptUsesItsExactAuthoritativeProfile() {
         arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "COMPLETED");
+        arrangeCoreAlreadyComplete();
         when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
         when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
                 .thenReturn(observation(
@@ -166,6 +172,7 @@ class RuntimeTaskCompletionReadinessServiceTest {
     @Test
     void crossProviderCompletionSignalCannotBecomeAuthoritative() {
         arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "COMPLETED");
+        arrangeCoreAlreadyComplete();
         when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
         when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
                 .thenReturn(observation(
@@ -186,6 +193,7 @@ class RuntimeTaskCompletionReadinessServiceTest {
     @Test
     void terminalTaskKeepsUnderlyingProviderObservationCodeSeparately() {
         arrangeOwnedTask("langgraph-biz-worker", true, 1, false, "FAILED");
+        arrangeCoreAlreadyComplete();
         when(provider.supportsCompletionReadiness("langgraph-biz-worker")).thenReturn(true);
         when(provider.inspectCompletionReadiness("task-a", "worker-a", 1))
                 .thenReturn(observation(
@@ -202,6 +210,121 @@ class RuntimeTaskCompletionReadinessServiceTest {
                 result.getReconciliationAssessment().getAssessmentReason());
         assertEquals("WORKER_COMPLETION_READINESS_UNREACHABLE",
                 result.getReconciliationAssessment().getProviderObservationErrorCode());
+    }
+
+    @Test
+    void canonicalTerminalWithIncompleteCleanupRequiresDedicatedRepair() {
+        arrangeOwnedTask("codex-worker", true, 0, true, "FAILED");
+        RuntimeTaskFactsDTO incomplete = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .terminal(true)
+                .lifecycleCanonicalTerminal(true)
+                .terminalTombstonePresent(false)
+                .lifecycleCleanupComplete(false)
+                .status("FAILED")
+                .taskTokenStatus("ACTIVE")
+                .activeTaskRegistrationPresent(true)
+                .physicalWorkerId("worker-a")
+                .build();
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(RuntimeTaskAuditDTO.builder().taskFacts(incomplete).build());
+        when(terminalCleanupRepairPort.assess(any()))
+                .thenReturn(repairReadyAssessment());
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertTrue(result.getReconciliationAssessment().getReconcileRequired());
+        assertEquals("NAVIGATOR_TERMINAL_REPUBLISH_READY",
+                result.getReconciliationAssessment().getReconcileReason());
+        assertEquals("NAVIGATOR_TERMINAL_REPUBLISH_READY",
+                result.getReconciliationAssessment().getAssessmentReason());
+        assertEquals("TERMINAL_CLEANUP_REPAIR_REQUIRED",
+                result.getReconciliationAssessment().getRecommendedAction());
+    }
+
+    @Test
+    void incompletePublicFactsNeverPublishRepairGateWhenLifecycleOwnerRejectsIt() {
+        arrangeOwnedTask("codex-worker", true, 0, true, "FAILED");
+        RuntimeTaskFactsDTO incomplete = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .terminal(true)
+                .lifecycleCanonicalTerminal(true)
+                .terminalTombstonePresent(false)
+                .lifecycleCleanupComplete(false)
+                .status("FAILED")
+                .taskTokenStatus("ACTIVE")
+                .activeTaskRegistrationPresent(true)
+                .physicalWorkerId("worker-a")
+                .build();
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(RuntimeTaskAuditDTO.builder().taskFacts(incomplete).build());
+        when(terminalCleanupRepairPort.assess(any()))
+                .thenReturn(new TerminalCleanupRepairPort.TerminalCleanupRepairAssessment(
+                        false, false, false,
+                        "LIFECYCLE_REPAIR_ENFORCED_OWNERSHIP_REQUIRED"));
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertTrue(result.getReconciliationAssessment().getReconcileRequired());
+        assertEquals("LIFECYCLE_REPAIR_ENFORCED_OWNERSHIP_REQUIRED",
+                result.getReconciliationAssessment().getReconcileReason());
+        assertEquals("TERMINAL_CLEANUP_STATE_UNKNOWN",
+                result.getReconciliationAssessment().getRecommendedAction());
+    }
+
+    @Test
+    void terminalWithUnknownLifecycleFactsFailsClosedInsteadOfNoAction() {
+        arrangeOwnedTask("codex-worker", true, 0, false, "FAILED");
+        RuntimeTaskFactsDTO unknown = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .terminal(true)
+                .status("FAILED")
+                .taskTokenStatus("REVOKED")
+                .activeTaskRegistrationPresent(false)
+                .physicalWorkerId("worker-a")
+                .build();
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(RuntimeTaskAuditDTO.builder().taskFacts(unknown).build());
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertTrue(result.getReconciliationAssessment().getReconcileRequired());
+        assertEquals("LIFECYCLE_TERMINAL_CLEANUP_FACTS_UNKNOWN",
+                result.getReconciliationAssessment().getReconcileReason());
+        assertEquals("TERMINAL_CLEANUP_STATE_UNKNOWN",
+                result.getReconciliationAssessment().getRecommendedAction());
+    }
+
+    @Test
+    void terminalWithAbsentTokenFailsClosedWithoutNeverIssuedProof() {
+        arrangeOwnedTask("codex-worker", true, 0, false, "FAILED");
+        arrangeCoreAlreadyComplete();
+        RuntimeTaskFactsDTO converged = RuntimeTaskFactsDTO.builder()
+                .taskId("task-a")
+                .terminal(true)
+                .lifecycleCanonicalTerminal(true)
+                .terminalTombstonePresent(true)
+                .lifecycleCleanupComplete(true)
+                .status("FAILED")
+                .taskTokenStatus("NOT_FOUND")
+                .activeTaskRegistrationPresent(false)
+                .physicalWorkerId("worker-a")
+                .build();
+        when(stateAuditService.auditTask("key", "secret", "user-a", "task-a"))
+                .thenReturn(RuntimeTaskAuditDTO.builder().taskFacts(converged).build());
+
+        RuntimeTaskCompletionReadinessDTO result = service.inspect(
+                "key", "secret", "user-a", "task-a", "worker-a");
+
+        assertEquals("NOT_FOUND", result.getTaskFacts().getTaskTokenStatus());
+        assertTrue(result.getReconciliationAssessment().getReconcileRequired());
+        assertEquals("LIFECYCLE_TERMINAL_CLEANUP_FACTS_UNKNOWN",
+                result.getReconciliationAssessment().getReconcileReason());
+        assertEquals("TERMINAL_CLEANUP_STATE_UNKNOWN",
+                result.getReconciliationAssessment().getRecommendedAction());
     }
 
     @Test
@@ -238,6 +361,9 @@ class RuntimeTaskCompletionReadinessServiceTest {
         RuntimeTaskFactsDTO facts = RuntimeTaskFactsDTO.builder()
                 .taskId("task-a")
                 .terminal(terminal)
+                .lifecycleCanonicalTerminal(terminal)
+                .terminalTombstonePresent(terminal)
+                .lifecycleCleanupComplete(terminal)
                 .status(status)
                 .sanitizedErrorCode(null)
                 .taskTokenStatus(terminal ? "REVOKED" : "ACTIVE")
@@ -260,6 +386,22 @@ class RuntimeTaskCompletionReadinessServiceTest {
                 true, true, DIGEST, false, null,
                 true, "PROVIDER_TERMINAL_EVENT", true,
                 "CODEX_COMPLETION_RECEIPT_V2", "task-a", true, null);
+    }
+
+    private TerminalCleanupRepairPort.TerminalCleanupRepairAssessment
+            alreadyCompleteRepairAssessment() {
+        return new TerminalCleanupRepairPort.TerminalCleanupRepairAssessment(
+                false, true, true, "TERMINAL_CLEANUP_ALREADY_COMPLETE");
+    }
+
+    private void arrangeCoreAlreadyComplete() {
+        when(terminalCleanupRepairPort.assess(any()))
+                .thenReturn(alreadyCompleteRepairAssessment());
+    }
+
+    private TerminalCleanupRepairPort.TerminalCleanupRepairAssessment repairReadyAssessment() {
+        return new TerminalCleanupRepairPort.TerminalCleanupRepairAssessment(
+                true, false, false, "NAVIGATOR_TERMINAL_REPUBLISH_READY");
     }
 
     private RuntimeTaskCompletionReadinessProvider.Observation observation(

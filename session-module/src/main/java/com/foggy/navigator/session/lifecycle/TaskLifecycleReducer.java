@@ -63,6 +63,7 @@ public final class TaskLifecycleReducer {
         TaskTerminalOutcome observedOutcome = null;
         boolean terminalEvidenceConflict = false;
         boolean exactNeverAccepted = false;
+        boolean exactServerPreEffectAdmissionRejected = false;
         for (TaskLifecycleFact fact : facts) {
             types.add(fact.type());
             cursor = Math.max(cursor, fact.sourceSequence());
@@ -87,7 +88,29 @@ public final class TaskLifecycleReducer {
                     blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
                     terminalEvidenceConflict = true;
                 }
+            } else if (fact.type()
+                    == TaskLifecycleFactType.SERVER_PRE_EFFECT_ADMISSION_REJECTED) {
+                boolean exact = fact.exactTerminalAuthority()
+                        && expectedBinding != null
+                        && fact.binding() != null
+                        && fact.binding().providerTaskId() == null
+                        && expectedBinding.exactRuntimeMatch(fact.binding());
+                if (!exact) {
+                    blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
+                    terminalEvidenceConflict = true;
+                } else {
+                    exactServerPreEffectAdmissionRejected = true;
+                }
             }
+        }
+        if (exactServerPreEffectAdmissionRejected
+                && (types.contains(TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED)
+                || types.contains(TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED)
+                || types.contains(TaskLifecycleFactType.TASK_ACCEPTED_BY_WORKER)
+                || types.contains(TaskLifecycleFactType.TASK_EXECUTION_STARTED_OBSERVED)
+                || types.contains(TaskLifecycleFactType.TASK_RUNNING_OBSERVED))) {
+            blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
+            terminalEvidenceConflict = true;
         }
         if (terminalEvidenceConflict) {
             observedOutcome = null;
@@ -113,7 +136,18 @@ public final class TaskLifecycleReducer {
             source = TaskTerminalSource.WORKER_PRE_EFFECT_REJECTION;
             dispatch = TaskDispatchState.REJECTED;
             execution = TaskExecutionObservation.NOT_STARTED;
+        } else if (exactServerPreEffectAdmissionRejected
+                && !types.contains(TaskLifecycleFactType.TASK_ACCEPTED_BY_WORKER)
+                && !types.contains(TaskLifecycleFactType.TASK_EXECUTION_STARTED_OBSERVED)
+                && !types.contains(TaskLifecycleFactType.TASK_RUNNING_OBSERVED)) {
+            phase = TaskCanonicalPhase.TERMINAL;
+            outcome = TaskTerminalOutcome.FAILED;
+            source = TaskTerminalSource.SERVER_PRE_EFFECT_ADMISSION_REJECTION;
+            dispatch = TaskDispatchState.REJECTED;
+            execution = TaskExecutionObservation.NOT_STARTED;
         } else if (exactNeverAccepted) {
+            blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
+        } else if (exactServerPreEffectAdmissionRejected) {
             blockers.add(LifecycleBlocker.EVIDENCE_CONFLICT);
         }
 

@@ -7,6 +7,7 @@ import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskCompletionReadinessDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeWorkerObservedFactsDTO;
+import com.foggy.navigator.spi.lifecycle.TerminalCleanupRepairPort;
 import com.foggy.navigator.spi.task.RuntimeTaskCompletionReadinessProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,13 @@ public class RuntimeTaskCompletionReadinessService {
 
     private final RuntimeStateAuditService stateAuditService;
     private final List<RuntimeTaskCompletionReadinessProvider> providers;
+    /**
+     * The lifecycle owner is the sole authority for whether a terminal cleanup
+     * repair can be mutated. Completion readiness may expose its stable
+     * mutation gate, but must not reconstruct that decision from an audit
+     * projection.
+     */
+    private final TerminalCleanupRepairPort terminalCleanupRepairPort;
 
     public RuntimeTaskCompletionReadinessDTO inspect(
             String appKey,
@@ -106,9 +114,12 @@ public class RuntimeTaskCompletionReadinessService {
                 && Boolean.TRUE.equals(observed.providerProcessPresent())
                 ? Boolean.FALSE
                 : null;
-        boolean registrationPresent = Boolean.TRUE.equals(
+        boolean lifecycleCanonicalTerminal = taskFacts != null
+                && Boolean.TRUE.equals(taskFacts.getLifecycleCanonicalTerminal());
+        boolean terminal = owned.terminal() || lifecycleCanonicalTerminal;
+        boolean registrationPresent = taskFacts != null && Boolean.TRUE.equals(
                 taskFacts.getActiveTaskRegistrationPresent());
-        boolean staleRegistration = !owned.terminal() && registrationPresent
+        boolean staleRegistration = !terminal && registrationPresent
                 && (Boolean.FALSE.equals(observed.workerTaskKnown())
                 || Boolean.TRUE.equals(processAbsent));
         boolean digestValid = StringUtils.hasText(observed.finalOutputDigest())
@@ -134,18 +145,39 @@ public class RuntimeTaskCompletionReadinessService {
                 && digestValid
                 && Boolean.TRUE.equals(observed.resultRecoverable());
         boolean completionCandidate = completionAuthoritative;
-        boolean completionReconciliationSupported = !owned.terminal() && completionAuthoritative;
-        boolean terminationReconciliationSupported = !owned.terminal()
+        boolean completionReconciliationSupported = !terminal && completionAuthoritative;
+        boolean terminationReconciliationSupported = !terminal
                 && Boolean.TRUE.equals(observed.workerReachable())
                 && Boolean.TRUE.equals(processAbsent);
-        boolean reconcileRequired = !owned.terminal()
+        boolean reconcileRequired = !terminal
                 && (completionReconciliationSupported || Boolean.TRUE.equals(processAbsent));
 
         String recommendedAction;
         String reason;
-        if (owned.terminal()) {
-            recommendedAction = "NO_ACTION_ALREADY_TERMINAL";
-            reason = "TASK_ALREADY_TERMINAL";
+        if (terminal) {
+            TerminalCleanupAssessment projectedCleanup = terminalCleanupAssessment(taskFacts);
+            TerminalCleanupRepairPort.TerminalCleanupRepairAssessment repair =
+                    terminalCleanupRepairPort.assess(
+                            new TerminalCleanupRepairPort.TerminalCleanupRepairAssessmentCommand(
+                                    owned.taskId(), owned.physicalWorkerId()));
+            if (repairReady(repair)) {
+                recommendedAction = "TERMINAL_CLEANUP_REPAIR_REQUIRED";
+                reason = "NAVIGATOR_TERMINAL_REPUBLISH_READY";
+                reconcileRequired = true;
+            } else if (projectedCleanup.complete() && repairAlreadyComplete(repair)) {
+                recommendedAction = "NO_ACTION_ALREADY_TERMINAL";
+                reason = "TASK_ALREADY_TERMINAL";
+            } else {
+                // A public audit projection is intentionally insufficient to
+                // authorize repair. If the lifecycle owner cannot attest to
+                // the exact ENFORCED terminal binding/authority/cleanup state,
+                // do not leak the unique mutation gate to the caller.
+                recommendedAction = "TERMINAL_CLEANUP_STATE_UNKNOWN";
+                reason = projectedCleanup == TerminalCleanupAssessment.UNKNOWN
+                        ? "LIFECYCLE_TERMINAL_CLEANUP_FACTS_UNKNOWN"
+                        : repairReasonOrUnknown(repair);
+                reconcileRequired = true;
+            }
         } else if (completionReconciliationSupported) {
             recommendedAction = "COMPLETION_RECONCILIATION_AVAILABLE";
             reason = "AUTHORITATIVE_DURABLE_COMPLETION_EVIDENCE";
@@ -181,6 +213,67 @@ public class RuntimeTaskCompletionReadinessService {
                 .providerObservationErrorCode(observed.sanitizedErrorCode())
                 .assessedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
+    }
+
+    private boolean repairReady(
+            TerminalCleanupRepairPort.TerminalCleanupRepairAssessment assessment) {
+        return assessment != null
+                && assessment.repairEligible()
+                && "NAVIGATOR_TERMINAL_REPUBLISH_READY".equals(
+                        assessment.safeReasonCode());
+    }
+
+    private boolean repairAlreadyComplete(
+            TerminalCleanupRepairPort.TerminalCleanupRepairAssessment assessment) {
+        return assessment != null
+                && !assessment.repairEligible()
+                && "TERMINAL_CLEANUP_ALREADY_COMPLETE".equals(
+                        assessment.safeReasonCode());
+    }
+
+    private String repairReasonOrUnknown(
+            TerminalCleanupRepairPort.TerminalCleanupRepairAssessment assessment) {
+        return assessment != null && StringUtils.hasText(assessment.safeReasonCode())
+                ? assessment.safeReasonCode()
+                : "LIFECYCLE_TERMINAL_CLEANUP_FACTS_UNKNOWN";
+    }
+
+    /**
+     * Keeps the public read-only completion assessment conservative. The
+     * lifecycle repair port remains the only authority that can decide whether
+     * a mutation is admissible; this method merely distinguishes an observed
+     * fully-converged terminal from an incomplete or unknowable one.
+     */
+    private TerminalCleanupAssessment terminalCleanupAssessment(
+            RuntimeTaskFactsDTO taskFacts) {
+        if (taskFacts == null
+                || !Boolean.TRUE.equals(taskFacts.getLifecycleCanonicalTerminal())
+                || taskFacts.getTerminalTombstonePresent() == null
+                || taskFacts.getLifecycleCleanupComplete() == null
+                || taskFacts.getActiveTaskRegistrationPresent() == null
+                || !StringUtils.hasText(taskFacts.getTaskTokenStatus())) {
+            return TerminalCleanupAssessment.UNKNOWN;
+        }
+        // A missing row is not public proof that a task-scoped token was
+        // never issued. Until Navigator exposes that server-owned proof, do
+        // not turn NOT_FOUND into either a no-action conclusion or a repair
+        // authorization hint.
+        if ("NOT_FOUND".equalsIgnoreCase(taskFacts.getTaskTokenStatus())) {
+            return TerminalCleanupAssessment.UNKNOWN;
+        }
+        boolean complete = Boolean.TRUE.equals(taskFacts.getTerminalTombstonePresent())
+                && Boolean.TRUE.equals(taskFacts.getLifecycleCleanupComplete())
+                && tokenCleared(taskFacts.getTaskTokenStatus())
+                && Boolean.FALSE.equals(taskFacts.getActiveTaskRegistrationPresent());
+        if (complete) {
+            return TerminalCleanupAssessment.COMPLETE;
+        }
+        return TerminalCleanupAssessment.REPAIR_READY;
+    }
+
+    /** Only a durable revoke is public proof of task-token closure. */
+    private boolean tokenCleared(String status) {
+        return "REVOKED".equalsIgnoreCase(status);
     }
 
     private boolean terminalSignalMatchesProviderProfile(
@@ -273,5 +366,27 @@ public class RuntimeTaskCompletionReadinessService {
                 .reconciliationTriggered(false)
                 .provisioningResourceChanged(false)
                 .build();
+    }
+
+    private enum TerminalCleanupAssessment {
+        COMPLETE(true, false),
+        REPAIR_READY(false, true),
+        UNKNOWN(false, false);
+
+        private final boolean complete;
+        private final boolean repairReady;
+
+        TerminalCleanupAssessment(boolean complete, boolean repairReady) {
+            this.complete = complete;
+            this.repairReady = repairReady;
+        }
+
+        boolean complete() {
+            return complete;
+        }
+
+        boolean repairReady() {
+            return repairReady;
+        }
     }
 }

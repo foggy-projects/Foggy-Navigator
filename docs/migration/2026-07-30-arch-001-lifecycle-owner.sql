@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS task_terminal_tombstones (
     session_id VARCHAR(64) NOT NULL,
     provider_type VARCHAR(32) NOT NULL,
     tenant_id VARCHAR(64) NULL,
-    provider_task_id VARCHAR(128) NOT NULL,
+    provider_task_id VARCHAR(128) NULL,
     provider_task_user_id VARCHAR(64) NULL,
     source_agent_id VARCHAR(64) NULL,
     operation_id VARCHAR(64) NULL,

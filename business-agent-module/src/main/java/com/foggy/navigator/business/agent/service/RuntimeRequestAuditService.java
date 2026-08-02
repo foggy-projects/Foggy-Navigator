@@ -15,6 +15,8 @@ import com.foggy.navigator.business.agent.repository.ClientAppRuntimeCredentialR
 import com.foggy.navigator.business.agent.repository.RuntimeRequestAuditRepository;
 import com.foggy.navigator.business.agent.repository.RuntimeRequestAuditStageRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -41,6 +43,8 @@ public class RuntimeRequestAuditService {
     public static final String OPERATION_ASK = "ask";
     public static final String OPERATION_TASK_TERMINATE = "task-terminate";
     public static final String OPERATION_TASK_RECONCILE = "task-reconcile";
+    public static final String OPERATION_TASK_TERMINAL_CLEANUP_REPAIR =
+            "task-terminal-cleanup-repair";
 
     public static final String STAGE_CLIENT_REQUEST_RECEIVED = "CLIENT_REQUEST_RECEIVED";
     public static final String STAGE_RUNTIME_TOKEN_REQUEST_RECEIVED = "RUNTIME_TOKEN_REQUEST_RECEIVED";
@@ -60,6 +64,12 @@ public class RuntimeRequestAuditService {
     public static final String STAGE_RECONCILIATION_REQUESTED = "RECONCILIATION_REQUESTED";
     public static final String STAGE_RECONCILIATION_EVIDENCE_OBSERVED = "RECONCILIATION_EVIDENCE_OBSERVED";
     public static final String STAGE_RECONCILIATION_NO_CHANGE = "RECONCILIATION_NO_CHANGE";
+    public static final String STAGE_TERMINAL_CLEANUP_REPAIR_REQUESTED =
+            "TERMINAL_CLEANUP_REPAIR_REQUESTED";
+    public static final String STAGE_TERMINAL_CLEANUP_REPAIR_DRY_RUN_COMPLETED =
+            "TERMINAL_CLEANUP_REPAIR_DRY_RUN_COMPLETED";
+    public static final String STAGE_TERMINAL_CLEANUP_REPAIR_APPLIED =
+            "TERMINAL_CLEANUP_REPAIR_APPLIED";
     public static final String STAGE_REQUEST_COMPLETED = "REQUEST_COMPLETED";
     public static final String STAGE_REQUEST_FAILED = "REQUEST_FAILED";
     public static final String STAGE_REQUEST_RECEIVED = "REQUEST_RECEIVED";
@@ -93,7 +103,12 @@ public class RuntimeRequestAuditService {
             OPERATION_SAFE_ASK,
             OPERATION_ASK,
             OPERATION_TASK_TERMINATE,
-            OPERATION_TASK_RECONCILE);
+            OPERATION_TASK_RECONCILE,
+            OPERATION_TASK_TERMINAL_CLEANUP_REPAIR);
+    private static final Set<String> TASK_OPERATION_RECEIPT_OPERATIONS = Set.of(
+            OPERATION_TASK_TERMINATE,
+            OPERATION_TASK_RECONCILE,
+            OPERATION_TASK_TERMINAL_CLEANUP_REPAIR);
 
     private final RuntimeRequestAuditRepository auditRepository;
     private final RuntimeRequestAuditStageRepository stageRepository;
@@ -101,11 +116,49 @@ public class RuntimeRequestAuditService {
     private final ClientAppRepository clientAppRepository;
     private final ClientAppRuntimeCredentialResolver credentialResolver;
     private final RuntimeRequestAuditProperties properties;
+    private ObjectProvider<RuntimeRequestAuditService> selfProvider;
 
     public record AuditHandle(String clientRequestId) {
     }
 
     public record TaskOperationRegistration(AuditHandle handle, boolean existing) {
+    }
+
+    /**
+     * Durable, content-free state used to gate one terminal-cleanup repair
+     * confirmation after its same-id dry run. It carries no provider payload
+     * or client-asserted lifecycle fact.
+     */
+    public record TerminalCleanupRepairReceipt(
+            String clientRequestId,
+            String taskId,
+            boolean completed,
+            boolean dryRunReady,
+            String result,
+            String status,
+            String sanitizedErrorCode,
+            String physicalWorkerId) {
+    }
+
+    public record TerminalCleanupRepairRegistration(
+            AuditHandle handle,
+            boolean existing,
+            TerminalCleanupRepairReceipt receipt) {
+    }
+
+    /**
+     * The locked audit receipt is the durable answer for a confirmation.  A
+     * caller that reached an already terminal receipt must not report a stale
+     * core result as a second repair.
+     */
+    public record TerminalCleanupRepairCompletion(
+            TerminalCleanupRepairReceipt receipt,
+            boolean idempotentReplay) {
+    }
+
+    @Autowired
+    void setSelfProvider(ObjectProvider<RuntimeRequestAuditService> selfProvider) {
+        this.selfProvider = selfProvider;
     }
 
     public record TaskOperationSnapshot(
@@ -318,8 +371,8 @@ public class RuntimeRequestAuditService {
             String taskId) {
         String requestId = requireRequestId(clientRequestId);
         String normalizedOperation = normalizeOperation(operation);
-        if (!Set.of(OPERATION_ASK, OPERATION_TASK_TERMINATE, OPERATION_TASK_RECONCILE)
-                .contains(normalizedOperation)) {
+        if (!OPERATION_ASK.equals(normalizedOperation)
+                && !TASK_OPERATION_RECEIPT_OPERATIONS.contains(normalizedOperation)) {
             throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
         }
         RuntimeRequestAuditEntity existing = auditRepository.findByClientRequestId(requestId).orElse(null);
@@ -337,7 +390,7 @@ public class RuntimeRequestAuditService {
         Instant now = Instant.now();
         RuntimeRequestAuditEntity entity = baseEntity(
                 requestId, normalizedOperation, owner, agentCode, upstreamUserId, now);
-        if (OPERATION_TASK_TERMINATE.equals(normalizedOperation)) {
+        if (TASK_OPERATION_RECEIPT_OPERATIONS.contains(normalizedOperation)) {
             entity.setExpiresAt(now.plus(effectiveTerminationReceiptRetention()));
         }
         entity.setTaskId(clean(taskId, null));
@@ -346,12 +399,227 @@ public class RuntimeRequestAuditService {
         appendStage(requestId, STAGE_CLIENT_REQUEST_RECEIVED, "RECEIVED", null, now);
         if (!OPERATION_ASK.equals(normalizedOperation)) {
             appendStage(requestId,
-                    OPERATION_TASK_RECONCILE.equals(normalizedOperation)
-                            ? STAGE_RECONCILIATION_REQUESTED
-                            : STAGE_TERMINATION_REQUESTED,
+                    taskOperationRequestedStage(normalizedOperation),
                     "RECEIVED", null, now);
         }
         return new TaskOperationRegistration(new AuditHandle(requestId), false);
+    }
+
+    /**
+     * Registers the dedicated terminal-cleanup repair receipt. A successful
+     * dry-run deliberately remains non-terminal so the exact same request id
+     * can make one confirmation; every other completed dry-run is replay-only.
+     */
+    public TerminalCleanupRepairRegistration beginTerminalCleanupRepair(
+            String clientRequestId,
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId) {
+        RuntimeRequestAuditService transactional = transactionalSelf();
+        try {
+            return transactional.beginTerminalCleanupRepairInNewTransaction(
+                    clientRequestId, appKey, appSecret, upstreamUserId, taskId);
+        } catch (TerminalCleanupRepairRegistrationConflict conflict) {
+            // The failed insert transaction has rolled back before this fresh
+            // lookup.  Only a same owner/task/user repair receipt is a valid
+            // idempotent replay; every other binding remains fail-closed.
+            return transactional.recoverTerminalCleanupRepairRegistration(
+                    clientRequestId, appKey, appSecret, upstreamUserId, taskId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public TerminalCleanupRepairRegistration beginTerminalCleanupRepairInNewTransaction(
+            String clientRequestId,
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId) {
+        ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+        return registerTerminalCleanupRepair(
+                clientRequestId, resolveOwner(credential), upstreamUserId, taskId);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public TerminalCleanupRepairRegistration recoverTerminalCleanupRepairRegistration(
+            String clientRequestId,
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String taskId) {
+        ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+        String requestId = requireRequestId(clientRequestId);
+        String normalizedTaskId = clean(taskId, null);
+        if (!StringUtils.hasText(normalizedTaskId)) {
+            throw new IllegalArgumentException("RUNTIME_TASK_REQUIRED");
+        }
+        RuntimeRequestAuditEntity existing = auditRepository.findByClientRequestId(requestId)
+                .orElseThrow(() -> new IllegalArgumentException("CLIENT_REQUEST_ID_ALREADY_USED"));
+        return existingTerminalCleanupRepairRegistration(
+                existing, requestId, resolveOwner(credential), upstreamUserId, normalizedTaskId);
+    }
+
+    private TerminalCleanupRepairRegistration registerTerminalCleanupRepair(
+            String clientRequestId,
+            OwnerScope owner,
+            String upstreamUserId,
+            String taskId) {
+        String requestId = requireRequestId(clientRequestId);
+        String normalizedTaskId = clean(taskId, null);
+        if (!StringUtils.hasText(normalizedTaskId)) {
+            throw new IllegalArgumentException("RUNTIME_TASK_REQUIRED");
+        }
+        RuntimeRequestAuditEntity existing = auditRepository
+                .findByClientRequestId(requestId)
+                .orElse(null);
+        if (existing != null) {
+            return existingTerminalCleanupRepairRegistration(
+                    existing, requestId, owner, upstreamUserId, normalizedTaskId);
+        }
+
+        Instant now = Instant.now();
+        RuntimeRequestAuditEntity entity = baseEntity(
+                requestId, OPERATION_TASK_TERMINAL_CLEANUP_REPAIR,
+                owner, null, upstreamUserId, now);
+        entity.setExpiresAt(now.plus(effectiveTerminationReceiptRetention()));
+        entity.setTaskId(normalizedTaskId);
+        entity.setStatus("REQUEST_RECEIVED");
+        saveNewTerminalCleanupRepair(entity);
+        appendStage(requestId, STAGE_CLIENT_REQUEST_RECEIVED, "RECEIVED", null, now);
+        appendStage(requestId, STAGE_TERMINAL_CLEANUP_REPAIR_REQUESTED,
+                "RECEIVED", null, now);
+        return new TerminalCleanupRepairRegistration(
+                new AuditHandle(requestId), false,
+                terminalCleanupRepairReceipt(entity));
+    }
+
+    private TerminalCleanupRepairRegistration existingTerminalCleanupRepairRegistration(
+            RuntimeRequestAuditEntity existing,
+            String requestId,
+            OwnerScope owner,
+            String upstreamUserId,
+            String normalizedTaskId) {
+        requireSameOwner(existing, owner);
+        if (!OPERATION_TASK_TERMINAL_CLEANUP_REPAIR.equals(existing.getOperation())
+                || !Objects.equals(normalizedTaskId, clean(existing.getTaskId(), null))
+                || !Objects.equals(clean(upstreamUserId, null),
+                clean(existing.getUpstreamUserId(), null))) {
+            throw new IllegalArgumentException("CLIENT_REQUEST_ID_OPERATION_MISMATCH");
+        }
+        return new TerminalCleanupRepairRegistration(
+                new AuditHandle(requestId), true,
+                terminalCleanupRepairReceipt(existing));
+    }
+
+    /** Records a read-only repair preflight without touching lifecycle state. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public TerminalCleanupRepairReceipt terminalCleanupRepairDryRunCompleted(
+            AuditHandle handle,
+            TaskEvidence evidence,
+            boolean repairReady,
+            String safeReasonCode) {
+        RuntimeRequestAuditEntity entity = requireTerminalCleanupRepairForUpdate(handle);
+        if (Boolean.TRUE.equals(entity.getTerminal())) {
+            return terminalCleanupRepairReceipt(entity);
+        }
+        Instant now = Instant.now();
+        String reason = requireSanitizedCode(safeReasonCode);
+        applyTaskEvidence(entity, evidence);
+        entity.setResult(reason);
+        entity.setStatus(repairReady ? "DRY_RUN_READY" : "REJECTED");
+        entity.setSanitizedErrorCode(repairReady ? null : reason);
+        entity.setSafeErrorSummary(null);
+        entity.setTerminal(!repairReady);
+        entity.setCompletedAt(repairReady ? null : now);
+        auditRepository.save(entity);
+        appendStageOnce(entity.getClientRequestId(),
+                STAGE_TERMINAL_CLEANUP_REPAIR_DRY_RUN_COMPLETED,
+                repairReady ? "SUCCEEDED" : "REJECTED",
+                repairReady ? null : reason, now);
+        if (!repairReady) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_REQUEST_FAILED, "REJECTED", reason, now);
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
+        }
+        return terminalCleanupRepairReceipt(entity);
+    }
+
+    /**
+     * Finishes the one allowed cleanup confirmation. The caller supplies only
+     * server-observed task evidence and a provider-neutral core outcome.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public TerminalCleanupRepairCompletion terminalCleanupRepairCompleted(
+            AuditHandle handle,
+            TaskEvidence evidence,
+            boolean repairAccepted,
+            String safeReasonCode) {
+        RuntimeRequestAuditEntity entity = requireTerminalCleanupRepairForUpdate(handle);
+        if (Boolean.TRUE.equals(entity.getTerminal())) {
+            return new TerminalCleanupRepairCompletion(
+                    terminalCleanupRepairReceipt(entity), true);
+        }
+        if (!"DRY_RUN_READY".equals(entity.getStatus())) {
+            throw new IllegalArgumentException(
+                    "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_DRY_RUN_REQUIRED");
+        }
+        Instant now = Instant.now();
+        String reason = requireSanitizedCode(safeReasonCode);
+        applyTaskEvidence(entity, evidence);
+        entity.setTerminal(true);
+        entity.setCompletedAt(now);
+        entity.setResult(reason);
+        entity.setStatus(repairAccepted ? "REPAIRED" : "REJECTED");
+        entity.setSanitizedErrorCode(repairAccepted ? null : reason);
+        entity.setSafeErrorSummary(null);
+        auditRepository.save(entity);
+        appendStageOnce(entity.getClientRequestId(),
+                STAGE_TERMINAL_CLEANUP_REPAIR_APPLIED,
+                repairAccepted ? "SUCCEEDED" : "REJECTED",
+                repairAccepted ? null : reason, now);
+        if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
+        }
+        appendStageOnce(entity.getClientRequestId(),
+                repairAccepted ? STAGE_REQUEST_COMPLETED : STAGE_REQUEST_FAILED,
+                repairAccepted ? "SUCCEEDED" : "REJECTED",
+                repairAccepted ? null : reason, now);
+        if (!repairAccepted) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_REQUEST_COMPLETED, "SUCCEEDED", null, now);
+        }
+        return new TerminalCleanupRepairCompletion(
+                terminalCleanupRepairReceipt(entity), false);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TerminalCleanupRepairReceipt> findSelfTerminalCleanupRepair(
+            String appKey,
+            String appSecret,
+            String upstreamUserId,
+            String clientRequestId) {
+        ResolvedClientAppCredentialDTO credential = credentialResolver.resolve(appKey, appSecret)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+        OwnerScope owner = resolveOwner(credential);
+        RuntimeRequestAuditEntity entity = auditRepository
+                .findByClientRequestId(requireRequestId(clientRequestId))
+                .orElse(null);
+        if (entity == null
+                || !OPERATION_TASK_TERMINAL_CLEANUP_REPAIR.equals(entity.getOperation())
+                || !sameOwner(entity, owner)
+                || !Objects.equals(clean(upstreamUserId, null),
+                clean(entity.getUpstreamUserId(), null))) {
+            return Optional.empty();
+        }
+        return Optional.of(terminalCleanupRepairReceipt(entity));
     }
 
     /**
@@ -393,8 +661,7 @@ public class RuntimeRequestAuditService {
     public boolean hasDurableTaskOperationReceipt(
             String taskId, String operation) {
         if (!StringUtils.hasText(taskId)
-                || !Set.of(OPERATION_TASK_TERMINATE,
-                OPERATION_TASK_RECONCILE).contains(operation)) {
+                || !TASK_OPERATION_RECEIPT_OPERATIONS.contains(operation)) {
             return false;
         }
         return auditRepository
@@ -410,8 +677,7 @@ public class RuntimeRequestAuditService {
             String operation) {
         if (!StringUtils.hasText(clientRequestId)
                 || !StringUtils.hasText(taskId)
-                || !Set.of(OPERATION_TASK_TERMINATE,
-                OPERATION_TASK_RECONCILE).contains(operation)) {
+                || !TASK_OPERATION_RECEIPT_OPERATIONS.contains(operation)) {
             return false;
         }
         return auditRepository.findByClientRequestId(
@@ -596,6 +862,11 @@ public class RuntimeRequestAuditService {
             appendStage(entity.getClientRequestId(), changed
                     ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED
                     : STAGE_RECONCILIATION_NO_CHANGE, "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_TERMINAL_CLEANUP_REPAIR.equals(entity.getOperation())) {
+            appendStage(entity.getClientRequestId(),
+                    dryRun ? STAGE_TERMINAL_CLEANUP_REPAIR_DRY_RUN_COMPLETED
+                            : STAGE_TERMINAL_CLEANUP_REPAIR_APPLIED,
+                    changed ? "SUCCEEDED" : "REJECTED", null, now);
         }
         if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
             appendStage(entity.getClientRequestId(), STAGE_TASK_TOKEN_REVOKED, "SUCCEEDED", null, now);
@@ -606,7 +877,7 @@ public class RuntimeRequestAuditService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void refreshCompletedTaskOperation(String taskId, String operation, TaskEvidence evidence) {
         String normalizedOperation = normalizeOperation(operation);
-        if (!Set.of(OPERATION_TASK_TERMINATE, OPERATION_TASK_RECONCILE).contains(normalizedOperation)) {
+        if (!TASK_OPERATION_RECEIPT_OPERATIONS.contains(normalizedOperation)) {
             throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
         }
         RuntimeRequestAuditEntity entity = auditRepository
@@ -633,6 +904,10 @@ public class RuntimeRequestAuditService {
                     "RECONCILIATION_CHANGED".equals(result)
                             ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED
                             : STAGE_RECONCILIATION_NO_CHANGE,
+                    "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_TERMINAL_CLEANUP_REPAIR.equals(normalizedOperation)) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TERMINAL_CLEANUP_REPAIR_APPLIED,
                     "SUCCEEDED", null, now);
         }
         if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
@@ -685,6 +960,10 @@ public class RuntimeRequestAuditService {
                     "RECONCILIATION_CHANGED".equals(result)
                             ? STAGE_RECONCILIATION_EVIDENCE_OBSERVED
                             : STAGE_RECONCILIATION_NO_CHANGE,
+                    "SUCCEEDED", null, now);
+        } else if (OPERATION_TASK_TERMINAL_CLEANUP_REPAIR.equals(normalizedOperation)) {
+            appendStageOnce(entity.getClientRequestId(),
+                    STAGE_TERMINAL_CLEANUP_REPAIR_APPLIED,
                     "SUCCEEDED", null, now);
         }
         if ("REVOKED".equalsIgnoreCase(entity.getTaskTokenStatus())) {
@@ -1045,11 +1324,100 @@ public class RuntimeRequestAuditService {
                 .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_RECORD_NOT_FOUND"));
     }
 
+    private RuntimeRequestAuditEntity requireTerminalCleanupRepairForUpdate(AuditHandle handle) {
+        if (handle == null || !StringUtils.hasText(handle.clientRequestId())) {
+            throw new IllegalArgumentException("RUNTIME_AUDIT_HANDLE_REQUIRED");
+        }
+        RuntimeRequestAuditEntity entity = auditRepository
+                .findByClientRequestIdForUpdate(handle.clientRequestId())
+                .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_RECORD_NOT_FOUND"));
+        if (!OPERATION_TASK_TERMINAL_CLEANUP_REPAIR.equals(entity.getOperation())) {
+            throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
+        }
+        return entity;
+    }
+
+    private TerminalCleanupRepairReceipt terminalCleanupRepairReceipt(
+            RuntimeRequestAuditEntity entity) {
+        boolean dryRunSucceeded = stageRepository
+                .findByClientRequestIdOrderByOccurredAtAscIdAsc(entity.getClientRequestId())
+                .stream()
+                .anyMatch(stage -> STAGE_TERMINAL_CLEANUP_REPAIR_DRY_RUN_COMPLETED
+                        .equals(stage.getStage())
+                        && "SUCCEEDED".equals(stage.getStatus()));
+        boolean completed = Boolean.TRUE.equals(entity.getTerminal());
+        return new TerminalCleanupRepairReceipt(
+                entity.getClientRequestId(),
+                entity.getTaskId(),
+                completed,
+                !completed && "DRY_RUN_READY".equals(entity.getStatus())
+                        && dryRunSucceeded,
+                clean(entity.getResult(), UNKNOWN),
+                clean(entity.getStatus(), UNKNOWN),
+                entity.getSanitizedErrorCode(),
+                entity.getPhysicalWorkerId());
+    }
+
+    private String taskOperationRequestedStage(String operation) {
+        return switch (operation) {
+            case OPERATION_TASK_TERMINATE -> STAGE_TERMINATION_REQUESTED;
+            case OPERATION_TASK_RECONCILE -> STAGE_RECONCILIATION_REQUESTED;
+            case OPERATION_TASK_TERMINAL_CLEANUP_REPAIR ->
+                    STAGE_TERMINAL_CLEANUP_REPAIR_REQUESTED;
+            default -> throw new IllegalArgumentException("RUNTIME_AUDIT_OPERATION_INVALID");
+        };
+    }
+
     private void saveNew(RuntimeRequestAuditEntity entity) {
         try {
             auditRepository.saveAndFlush(entity);
         } catch (DataIntegrityViolationException e) {
             throw new IllegalArgumentException("CLIENT_REQUEST_ID_ALREADY_USED");
+        }
+    }
+
+    private RuntimeRequestAuditService transactionalSelf() {
+        return selfProvider == null ? this : selfProvider.getObject();
+    }
+
+    private void saveNewTerminalCleanupRepair(RuntimeRequestAuditEntity entity) {
+        try {
+            auditRepository.saveAndFlush(entity);
+        } catch (DataIntegrityViolationException e) {
+            if (isTerminalCleanupRepairRequestIdConflict(e)) {
+                throw new TerminalCleanupRepairRegistrationConflict(e);
+            }
+            throw e;
+        }
+    }
+
+    private boolean isTerminalCleanupRepairRequestIdConflict(
+            DataIntegrityViolationException exception) {
+        for (Throwable current = exception; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (!StringUtils.hasText(message)) {
+                continue;
+            }
+            String normalized = message.toLowerCase(Locale.ROOT);
+            if (normalized.contains("idx_runtime_audit_request")) {
+                return true;
+            }
+            boolean duplicateOrUnique = normalized.contains("duplicate")
+                    || normalized.contains("unique")
+                    || normalized.contains("23505");
+            if (duplicateOrUnique
+                    && normalized.contains("runtime_request_audit")
+                    && normalized.contains("client_request_id")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final class TerminalCleanupRepairRegistrationConflict
+            extends RuntimeException {
+        private TerminalCleanupRepairRegistrationConflict(Throwable cause) {
+            super(cause);
         }
     }
 

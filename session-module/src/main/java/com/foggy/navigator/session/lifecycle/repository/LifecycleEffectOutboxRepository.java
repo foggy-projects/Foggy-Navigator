@@ -23,6 +23,8 @@ public interface LifecycleEffectOutboxRepository
     List<LifecycleEffectOutboxEntity> findByAggregateIdAndOperationId(
             String aggregateId, String operationId);
 
+    List<LifecycleEffectOutboxEntity> findByAggregateId(String aggregateId);
+
     List<LifecycleEffectOutboxEntity>
     findTop100ByEffectTypeAndEffectStateOrderByCreatedAtAsc(
             String effectType, String effectState);

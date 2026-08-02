@@ -2,6 +2,7 @@ package com.foggy.navigator.session.lifecycle;
 
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.TaskTerminalTombstoneRepository;
 import com.foggy.navigator.spi.lifecycle.TaskLifecycleProjectionPort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,12 +13,15 @@ import java.util.Optional;
 public class TaskLifecycleProjectionService implements TaskLifecycleProjectionPort {
     private final TaskLifecycleSnapshotRepository snapshots;
     private final SessionTaskRepository tasks;
+    private final TaskTerminalTombstoneRepository tombstones;
 
     public TaskLifecycleProjectionService(
             TaskLifecycleSnapshotRepository snapshots,
-            SessionTaskRepository tasks) {
+            SessionTaskRepository tasks,
+            TaskTerminalTombstoneRepository tombstones) {
         this.snapshots = snapshots;
         this.tasks = tasks;
+        this.tombstones = tombstones;
     }
 
     @Override
@@ -31,6 +35,7 @@ public class TaskLifecycleProjectionService implements TaskLifecycleProjectionPo
                 task.getStatus(),
                 TaskCanonicalPhase.TERMINAL.name()
                         .equals(snapshot.getCanonicalPhase()),
+                tombstones.existsById(taskId),
                 TaskCleanupState.COMPLETED.name()
                         .equals(snapshot.getCleanupState()),
                 snapshot.getTerminalOutcome(),

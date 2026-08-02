@@ -2,6 +2,11 @@ package com.foggy.navigator.claude.worker.model.form;
 
 import lombok.Data;
 
+/**
+ * A task-only body selects typed, read-only termination-request reconciliation.
+ * Explicit legacy projection-repair fields retain their existing deprecated
+ * branch; new terminal cleanup repair uses its dedicated typed route instead.
+ */
 @Data
 public class RuntimeTaskReconcileForm {
     private String taskId;
@@ -11,9 +16,8 @@ public class RuntimeTaskReconcileForm {
     private Boolean dryRun;
 
     /**
-     * The original mutation contract remains available only when one of its
-     * legacy projection-repair fields is explicitly present. A body containing
-     * only taskId selects typed, read-only request reconciliation.
+     * The historical mutation branch remains reachable only through explicit
+     * legacy fields. New typed callers never use this branch.
      */
     public boolean isLegacyProjectionRepairRequest() {
         return expectedPhysicalWorkerId != null

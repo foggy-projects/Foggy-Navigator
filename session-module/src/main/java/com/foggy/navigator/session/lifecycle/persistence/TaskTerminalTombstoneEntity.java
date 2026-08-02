@@ -25,7 +25,9 @@ public class TaskTerminalTombstoneEntity {
     @Column(length = 64)
     private String tenantId;
 
-    @Column(length = 128, nullable = false)
+    // A Worker or server pre-effect authority proves no provider task was ever
+    // created. Persist null rather than fabricating a provider identity.
+    @Column(length = 128)
     private String providerTaskId;
 
     @Column(length = 64)
@@ -74,7 +76,9 @@ public class TaskTerminalTombstoneEntity {
     public String getOperationId() { return operationId; }
     public String getClientRequestId() { return clientRequestId; }
     public String getTerminalOutcome() { return terminalOutcome; }
+    public String getTerminalSource() { return terminalSource; }
     public String getTerminalFactId() { return terminalFactId; }
+    public String getWriterGenerationId() { return writerGenerationId; }
 
     public void setSessionId(String value) { sessionId = value; }
     public void setProviderType(String value) { providerType = value; }

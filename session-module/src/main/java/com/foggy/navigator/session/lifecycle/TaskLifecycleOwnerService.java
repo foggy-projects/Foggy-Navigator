@@ -9,6 +9,7 @@ import com.foggy.navigator.session.lifecycle.persistence.TaskLifecycleSnapshotEn
 import com.foggy.navigator.session.lifecycle.repository.LifecycleFactRepository;
 import com.foggy.navigator.session.lifecycle.repository.LifecycleEffectOutboxRepository;
 import com.foggy.navigator.session.lifecycle.repository.TaskLifecycleSnapshotRepository;
+import com.foggy.navigator.session.lifecycle.repository.TaskTerminalTombstoneRepository;
 import com.foggy.navigator.spi.lifecycle.LifecycleOwnershipMode;
 import com.foggy.navigator.spi.lifecycle.NormalizedLifecycleFact;
 import com.foggy.navigator.spi.lifecycle.TerminalTombstoneContext;
@@ -19,6 +20,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -31,10 +35,10 @@ import java.util.Set;
 @Service
 public class TaskLifecycleOwnerService {
     private static final String POLICY = "ARCH-001-MVP-A";
-
     private final LifecycleFactRepository facts;
     private final LifecycleEffectOutboxRepository outbox;
     private final TaskLifecycleSnapshotRepository snapshots;
+    private final TaskTerminalTombstoneRepository tombstones;
     private final SessionTaskRepository canonicalTasks;
     private final TaskTerminalCommitService terminalCommit;
     private final TerminalCleanupHandler cleanup;
@@ -45,6 +49,7 @@ public class TaskLifecycleOwnerService {
             LifecycleFactRepository facts,
             LifecycleEffectOutboxRepository outbox,
             TaskLifecycleSnapshotRepository snapshots,
+            TaskTerminalTombstoneRepository tombstones,
             SessionTaskRepository canonicalTasks,
             TaskTerminalCommitService terminalCommit,
             TerminalCleanupHandler cleanup,
@@ -52,6 +57,7 @@ public class TaskLifecycleOwnerService {
         this.facts = facts;
         this.outbox = outbox;
         this.snapshots = snapshots;
+        this.tombstones = tombstones;
         this.canonicalTasks = canonicalTasks;
         this.terminalCommit = terminalCommit;
         this.cleanup = cleanup;
@@ -189,6 +195,101 @@ public class TaskLifecycleOwnerService {
         return decision;
     }
 
+    /**
+     * Commits the terminal fence for a server-side provider-effect admission
+     * denial after the relay has durably marked the canonical task FAILED.
+     * This is intentionally not part of Worker normalized-fact ingress: the
+     * Worker never accepted a task and no provider identity may be invented.
+     */
+    @Transactional
+    public void closeServerPreEffectAdmissionRejection(
+            ServerPreEffectAdmissionRejection command) {
+        TaskLifecycleBinding expected = serverPreEffectBinding(command);
+        SessionTaskEntity canonical = canonicalTasks.findByTaskIdForUpdate(
+                        command.taskId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "LIFECYCLE_CANONICAL_TASK_NOT_FOUND"));
+        if (!"FAILED".equals(canonical.getStatus())
+                || canonical.getProviderTaskId() != null
+                || !expected.sessionId().equals(canonical.getSessionId())
+                || !expected.physicalWorkerId().equals(canonical.getWorkerId())) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_CANONICAL_BINDING_REQUIRED");
+        }
+
+        List<LifecycleFactEntity> storedFacts = facts
+                .findByAggregateTypeAndAggregateIdOrderBySourceSequenceAsc(
+                        "TASK", command.taskId());
+        TaskLifecycleSnapshotEntity enrolled = snapshots
+                .findForUpdate(command.taskId()).orElse(null);
+        var existingTombstone = tombstones.findById(command.taskId()).orElse(null);
+        String authorityFactId = serverPreEffectFactId(command.taskId());
+        TaskLifecycleFact authority;
+        if (enrolled == null) {
+            if (!storedFacts.isEmpty() || existingTombstone != null) {
+                throw new IllegalStateException(
+                        "LIFECYCLE_SERVER_PRE_EFFECT_FACT_CONFLICT");
+            }
+            enrolled = newServerPreEffectSnapshot(command, expected);
+            authority = TaskLifecycleFact.serverPreEffectAdmissionRejection(
+                    authorityFactId, 1L, expected);
+            LifecycleFactEntity entity = serverPreEffectFactEntity(
+                    command, authority);
+            facts.save(entity);
+            storedFacts = List.of(entity);
+        } else {
+            requireExact(enrolled, expected);
+            authority = requireOnlyServerPreEffectAuthority(
+                    command, expected, storedFacts, authorityFactId);
+            if (exactServerPreEffectTerminalSnapshot(enrolled, command)
+                    && existingTombstone != null) {
+                if (exactServerPreEffectTombstone(
+                        existingTombstone, command, authorityFactId)) {
+                    return;
+                }
+                throw new IllegalStateException(
+                        "LIFECYCLE_SERVER_PRE_EFFECT_TOMBSTONE_CONFLICT");
+            }
+        }
+
+        List<TaskLifecycleFact> aggregateFacts = storedFacts.stream()
+                .map(this::fact).toList();
+        TaskLifecycleDecision decision = reducer.recompute(
+                command.taskId(), aggregateFacts,
+                Set.of(LifecycleBlocker.WRITER_EXCLUSIVITY_LOST), expected,
+                POLICY);
+        if (!decision.snapshot().canonicalTerminal()
+                || decision.snapshot().terminalOutcome() != TaskTerminalOutcome.FAILED
+                || decision.snapshot().terminalSource()
+                != TaskTerminalSource.SERVER_PRE_EFFECT_ADMISSION_REJECTION
+                || decision.snapshot().dispatchState() != TaskDispatchState.REJECTED
+                || decision.snapshot().executionObservation()
+                != TaskExecutionObservation.NOT_STARTED) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_REDUCTION_INVALID");
+        }
+        applyDecision(enrolled, decision);
+        enrolled.setWriterGenerationId(command.writerGenerationId());
+        snapshots.save(enrolled);
+        terminalCommit.commit(new TerminalCommitCommand(
+                new TerminalTombstoneContext(
+                        command.taskId(),
+                        canonical.getSessionId(),
+                        canonical.getProviderType(),
+                        canonical.getTenantId(),
+                        null,
+                        canonical.getUserId(),
+                        canonical.getAgentId(),
+                        null,
+                        null),
+                authority.factId(),
+                command.writerGenerationId(),
+                TaskTerminalOutcome.FAILED,
+                TaskTerminalSource.SERVER_PRE_EFFECT_ADMISSION_REJECTION,
+                new TerminalCleanupResources(false, false, false, false)));
+        afterCommit(() -> cleanup.resume(command.taskId()));
+    }
+
     private String exactTerminationClientRequestId(
             String taskId,
             String operationId,
@@ -210,6 +311,176 @@ public class TaskLifecycleOwnerService {
                     "TERMINATION_RECEIPT_EXACT_BINDING_REQUIRED");
         }
         return requests.get(0);
+    }
+
+    private TaskLifecycleBinding serverPreEffectBinding(
+            ServerPreEffectAdmissionRejection command) {
+        if (command == null
+                || command.workerIdentity() == null
+                || !"JCS_SHA256_V1".equals(command.bindingDigestVersion())
+                || command.safeReasonCode() == null
+                || !command.safeReasonCode().matches("[A-Z][A-Z0-9_]{2,95}")) {
+            throw new IllegalArgumentException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_COMMAND_INVALID");
+        }
+        required(command.taskId(),
+                "LIFECYCLE_SERVER_PRE_EFFECT_TASK_REQUIRED");
+        required(command.writerGenerationId(),
+                "LIFECYCLE_SERVER_PRE_EFFECT_WRITER_REQUIRED");
+        return new TaskLifecycleBinding(
+                required(command.sessionId(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_SESSION_REQUIRED"),
+                required(command.physicalWorkerId(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_WORKER_REQUIRED"),
+                required(command.workerIdentity().stateGeneration(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_GENERATION_REQUIRED"),
+                required(command.workerIdentity().instanceEpoch(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_EPOCH_REQUIRED"),
+                LifecycleOwnershipMode.ENFORCED,
+                required(command.dispatchId(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_DISPATCH_REQUIRED"),
+                required(command.dispatchId(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_DISPATCH_REQUIRED"),
+                required(command.bindingDigest(),
+                        "LIFECYCLE_SERVER_PRE_EFFECT_DIGEST_REQUIRED"),
+                null);
+    }
+
+    private boolean exactServerPreEffectTombstone(
+            com.foggy.navigator.session.lifecycle.persistence
+                    .TaskTerminalTombstoneEntity tombstone,
+            ServerPreEffectAdmissionRejection command,
+            String authorityFactId) {
+        return command.taskId().equals(tombstone.getTaskId())
+                && command.sessionId().equals(tombstone.getSessionId())
+                && tombstone.getProviderTaskId() == null
+                && TaskTerminalOutcome.FAILED.name().equals(
+                tombstone.getTerminalOutcome())
+                && TaskTerminalSource.SERVER_PRE_EFFECT_ADMISSION_REJECTION.name()
+                .equals(tombstone.getTerminalSource())
+                && authorityFactId.equals(tombstone.getTerminalFactId())
+                && command.writerGenerationId().equals(
+                tombstone.getWriterGenerationId());
+    }
+
+    private TaskLifecycleSnapshotEntity newServerPreEffectSnapshot(
+            ServerPreEffectAdmissionRejection command,
+            TaskLifecycleBinding binding) {
+        TaskLifecycleSnapshotEntity snapshot = new TaskLifecycleSnapshotEntity();
+        snapshot.setTaskId(command.taskId());
+        applyBinding(snapshot, binding, command.bindingDigestVersion());
+        snapshot.setCanonicalPhase(TaskCanonicalPhase.OPEN.name());
+        snapshot.setAvailability(LifecycleAvailability
+                .AUTHORITY_QUARANTINED.name());
+        snapshot.setConflictState(LifecycleConflictState
+                .LEGACY_WRITER_EXCLUSIVITY_LOST.name());
+        snapshot.setCleanupState(TaskCleanupState.NOT_REQUIRED.name());
+        snapshot.setFactCursor(0L);
+        snapshot.setPolicyVersion(POLICY);
+        snapshot.setWriterGenerationId(required(command.writerGenerationId(),
+                "LIFECYCLE_SERVER_PRE_EFFECT_WRITER_GENERATION_REQUIRED"));
+        snapshot.setSnapshotJson("{}");
+        return snapshot;
+    }
+
+    private TaskLifecycleFact requireOnlyServerPreEffectAuthority(
+            ServerPreEffectAdmissionRejection command,
+            TaskLifecycleBinding expected,
+            List<LifecycleFactEntity> storedFacts,
+            String authorityFactId) {
+        if (storedFacts.size() != 1) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_FACT_CONFLICT");
+        }
+        LifecycleFactEntity entity = storedFacts.get(0);
+        TaskLifecycleFact candidate = fact(entity);
+        boolean exact = authorityFactId.equals(candidate.factId())
+                && candidate.type()
+                == TaskLifecycleFactType.SERVER_PRE_EFFECT_ADMISSION_REJECTED
+                && candidate.exactTerminalAuthority()
+                && expected.exactRuntimeMatch(candidate.binding())
+                && entity.getSchemaVersion() == 1
+                && "TASK".equals(entity.getAggregateType())
+                && command.taskId().equals(entity.getAggregateId())
+                && command.taskId().equals(entity.getTaskId())
+                && expected.sessionId().equals(entity.getSessionId())
+                && expected.physicalWorkerId().equals(
+                entity.getPhysicalWorkerId())
+                && expected.stateGeneration().equals(entity.getStateGeneration())
+                && expected.instanceEpoch().equals(entity.getInstanceEpoch())
+                && entity.getProviderTaskId() == null
+                && expected.dispatchId().equals(entity.getDispatchId())
+                && expected.operationId().equals(entity.getOperationId())
+                && "JCS_SHA256_V1".equals(
+                entity.getSafeBindingDigestVersion())
+                && expected.bindingDigest().equals(entity.getSafeBindingDigest())
+                && LifecycleOwnershipMode.ENFORCED.name().equals(
+                entity.getOwnershipMode())
+                && entity.getSourceSequence() == 1L
+                && authorityFactId.equals(entity.getIdempotencyKey())
+                && command.safeReasonCode().equals(entity.getSafeReasonCode());
+        if (!exact) {
+            throw new IllegalStateException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_FACT_CONFLICT");
+        }
+        return candidate;
+    }
+
+    private LifecycleFactEntity serverPreEffectFactEntity(
+            ServerPreEffectAdmissionRejection command,
+            TaskLifecycleFact fact) {
+        LifecycleFactEntity entity = new LifecycleFactEntity();
+        entity.setFactId(fact.factId());
+        entity.setFactType(fact.type().name());
+        entity.setSchemaVersion(1);
+        entity.setAggregateType("TASK");
+        entity.setAggregateId(command.taskId());
+        entity.setTaskId(command.taskId());
+        entity.setSessionId(fact.binding().sessionId());
+        entity.setOperationId(fact.binding().operationId());
+        entity.setPhysicalWorkerId(fact.binding().physicalWorkerId());
+        entity.setStateGeneration(fact.binding().stateGeneration());
+        entity.setInstanceEpoch(fact.binding().instanceEpoch());
+        entity.setProviderTaskId(null);
+        entity.setDispatchId(fact.binding().dispatchId());
+        entity.setSafeBindingDigestVersion(command.bindingDigestVersion());
+        entity.setSafeBindingDigest(fact.binding().bindingDigest());
+        entity.setOwnershipMode(LifecycleOwnershipMode.ENFORCED.name());
+        entity.setSourceSequence(fact.sourceSequence());
+        entity.setIdempotencyKey(fact.factId());
+        entity.setSafeReasonCode(command.safeReasonCode());
+        entity.setContentFreePayloadJson(json(fact));
+        return entity;
+    }
+
+    private boolean exactServerPreEffectTerminalSnapshot(
+            TaskLifecycleSnapshotEntity snapshot,
+            ServerPreEffectAdmissionRejection command) {
+        return TaskCanonicalPhase.TERMINAL.name().equals(
+                snapshot.getCanonicalPhase())
+                && TaskTerminalOutcome.FAILED.name().equals(
+                snapshot.getTerminalOutcome())
+                && TaskTerminalSource.SERVER_PRE_EFFECT_ADMISSION_REJECTION.name()
+                .equals(snapshot.getTerminalSource())
+                && LifecycleAvailability.AUTHORITY_QUARANTINED.name().equals(
+                snapshot.getAvailability())
+                && LifecycleConflictState.LEGACY_WRITER_EXCLUSIVITY_LOST.name()
+                .equals(snapshot.getConflictState())
+                && LifecycleOwnershipMode.ENFORCED.name().equals(
+                snapshot.getOwnershipMode())
+                && command.writerGenerationId().equals(
+                snapshot.getWriterGenerationId());
+    }
+
+    private static String serverPreEffectFactId(String taskId) {
+        try {
+            String digest = java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(
+                            taskId.getBytes(StandardCharsets.UTF_8)));
+            return "server-pre-effect-admission-" + digest.substring(0, 48);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     private void observeAuthorizedEffectResult(
@@ -481,4 +752,17 @@ public class TaskLifecycleOwnerService {
                     }
                 });
     }
+
+    public record ServerPreEffectAdmissionRejection(
+            String taskId,
+            String sessionId,
+            String physicalWorkerId,
+            WorkerLifecycleIdentity workerIdentity,
+            String dispatchId,
+            String bindingDigestVersion,
+            String bindingDigest,
+            String writerGenerationId,
+            String safeReasonCode) {
+    }
+
 }

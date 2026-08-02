@@ -20,6 +20,7 @@ public class LifecycleSchemaReadiness {
             "session_lifecycle_snapshots",
             "lifecycle_effect_outbox",
             "task_terminal_tombstones",
+            "task_terminal_cleanup_repairs",
             "task_terminal_cleanup_plan",
             "lifecycle_writer_generations",
             "lifecycle_writer_instance_registrations",

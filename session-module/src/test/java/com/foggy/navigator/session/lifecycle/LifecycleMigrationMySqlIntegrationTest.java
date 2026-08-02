@@ -52,6 +52,8 @@ class LifecycleMigrationMySqlIntegrationTest {
             "docs/migration/2026-08-01-arch-001-activation-readiness.sql";
     private static final String BOUNDED_LOCAL_DEVELOPMENT =
             "docs/migration/2026-08-02-arch-001-bounded-local-development-activation.sql";
+    private static final String TERMINAL_CLEANUP_REPAIR =
+            "docs/migration/2026-08-02-arch-001-terminal-cleanup-repair.sql";
     private static final List<String> TABLES = List.of(
             "lifecycle_facts",
             "worker_lifecycle_snapshots",
@@ -59,6 +61,7 @@ class LifecycleMigrationMySqlIntegrationTest {
             "session_lifecycle_snapshots",
             "lifecycle_effect_outbox",
             "task_terminal_tombstones",
+            "task_terminal_cleanup_repairs",
             "task_terminal_cleanup_plan",
             "lifecycle_writer_generations",
             "lifecycle_writer_instance_registrations",
@@ -95,6 +98,8 @@ class LifecycleMigrationMySqlIntegrationTest {
             execute(connection, ACTIVATION_READINESS);
             execute(connection, BOUNDED_LOCAL_DEVELOPMENT);
             execute(connection, BOUNDED_LOCAL_DEVELOPMENT);
+            execute(connection, TERMINAL_CLEANUP_REPAIR);
+            execute(connection, TERMINAL_CLEANUP_REPAIR);
             for (String table : TABLES) {
                 assertThat(tableExists(connection, table)).isTrue();
             }
@@ -110,7 +115,7 @@ class LifecycleMigrationMySqlIntegrationTest {
             assertColumn(connection, "lifecycle_effect_outbox",
                     "aggregate_type", false, 32);
             assertColumn(connection, "task_terminal_tombstones",
-                    "provider_task_id", false, 128);
+                    "provider_task_id", true, 128);
             assertThat(indexExists(connection, "lifecycle_facts",
                     "uk_lf_idempotency", false)).isTrue();
             assertThat(indexExists(connection, "lifecycle_effect_outbox",
@@ -130,6 +135,12 @@ class LifecycleMigrationMySqlIntegrationTest {
                     "instance_epoch", true, 128);
             assertColumn(connection, "task_terminal_tombstones",
                     "client_request_id", true, 96);
+            assertColumn(connection, "task_terminal_cleanup_repairs",
+                    "client_request_id", false, 96);
+            assertColumn(connection, "task_terminal_cleanup_repairs",
+                    "safe_reason_code", false, 96);
+            assertThat(indexExists(connection, "task_terminal_cleanup_repairs",
+                    "uk_ttcr_client_request", false)).isTrue();
             assertColumn(connection,
                     "lifecycle_writer_exclusivity_proofs",
                     "quarantine_cursor", true, 160);
@@ -152,6 +163,7 @@ class LifecycleMigrationMySqlIntegrationTest {
             verifyActivationMetadataAndDestroyedCleanup(connection);
             validateJpa(mysql);
             verifyExactMySqlQuarantinePrecedence(mysql);
+            verifyTerminalCleanupRepairConcurrency(mysql);
 
             execute(connection, ROLLBACK);
             for (String table : TABLES) {
@@ -422,6 +434,92 @@ class LifecycleMigrationMySqlIntegrationTest {
         }
     }
 
+    /**
+     * The service serializes a task through its lifecycle-snapshot lock, but
+     * the durable repair receipt must also reject a concurrent request before
+     * either JVM can observe the other's newly committed row. Exercise both
+     * keys against real InnoDB rather than assuming the JPA mapping enforces
+     * that race safely.
+     */
+    private void verifyTerminalCleanupRepairConcurrency(
+            MySQLContainer<?> mysql) throws Exception {
+        assertExactlyOneConcurrentRepair(mysql,
+                "same-task-different-request-id",
+                new RepairRow("mysql-repair-same-task", "mysql-repair-request-a"),
+                new RepairRow("mysql-repair-same-task", "mysql-repair-request-b"));
+        assertExactlyOneConcurrentRepair(mysql,
+                "same-request-id-different-task",
+                new RepairRow("mysql-repair-task-a", "mysql-repair-same-request"),
+                new RepairRow("mysql-repair-task-b", "mysql-repair-same-request"));
+        System.out.println("ARCH001_MYSQL_REPAIR_CONCURRENCY "
+                + "same-task=one same-request=one");
+    }
+
+    private void assertExactlyOneConcurrentRepair(
+            MySQLContainer<?> mysql,
+            String scenario,
+            RepairRow first,
+            RepairRow second) throws Exception {
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var firstInsert = executor.submit(() -> insertRepairWhenReleased(
+                    mysql, first, ready, release));
+            var secondInsert = executor.submit(() -> insertRepairWhenReleased(
+                    mysql, second, ready, release));
+            await(ready);
+            release.countDown();
+
+            int established = (firstInsert.get(10, TimeUnit.SECONDS) ? 1 : 0)
+                    + (secondInsert.get(10, TimeUnit.SECONDS) ? 1 : 0);
+            assertThat(established).as(scenario).isEqualTo(1);
+            try (Connection inspection = DriverManager.getConnection(
+                    mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())) {
+                assertThat(scalar(inspection,
+                        "select count(*) from task_terminal_cleanup_repairs "
+                                + "where task_id='" + first.taskId() + "'"
+                                + (first.taskId().equals(second.taskId()) ? ""
+                                : " or task_id='" + second.taskId() + "'")))
+                        .as(scenario + " durable row count")
+                        .isEqualTo("1");
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private boolean insertRepairWhenReleased(
+            MySQLContainer<?> mysql,
+            RepairRow row,
+            CountDownLatch ready,
+            CountDownLatch release) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(
+                mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())) {
+            ready.countDown();
+            await(release);
+            try (var statement = connection.prepareStatement("""
+                    insert into task_terminal_cleanup_repairs(
+                      task_id,client_request_id,repair_accepted,
+                      terminal_tombstone_present,cleanup_complete,safe_reason_code,
+                      recorded_at)
+                    values(?,?,true,false,false,
+                      'TERMINAL_CLEANUP_REPAIR_ACCEPTED',current_timestamp(6))
+                    """)) {
+                statement.setString(1, row.taskId());
+                statement.setString(2, row.requestId());
+                statement.executeUpdate();
+                return true;
+            } catch (SQLException exception) {
+                if (exception.getErrorCode() == 1062
+                        || "23000".equals(exception.getSQLState())) {
+                    return false;
+                }
+                throw exception;
+            }
+        }
+    }
+
     private void quarantineBeforeCheckpoint(
             ExactMySqlFixture fixture, String suffix) throws Exception {
         AuthorityIds ids = fixture.seed(suffix);
@@ -575,6 +673,8 @@ class LifecycleMigrationMySqlIntegrationTest {
 
     private record AuthorityIds(
             String proofId, String workerId, String sessionId, String taskId) {}
+
+    private record RepairRow(String taskId, String requestId) {}
 
     private static final class ExactMySqlFixture {
         private final LifecycleWriterProofRepository proofs;
@@ -828,6 +928,7 @@ class LifecycleMigrationMySqlIntegrationTest {
                     .addAnnotatedClass(SessionLifecycleSnapshotEntity.class)
                     .addAnnotatedClass(LifecycleEffectOutboxEntity.class)
                     .addAnnotatedClass(TaskTerminalTombstoneEntity.class)
+                    .addAnnotatedClass(TaskTerminalCleanupRepairEntity.class)
                     .addAnnotatedClass(TaskTerminalCleanupPlanEntity.class)
                     .addAnnotatedClass(LifecycleWriterGenerationEntity.class)
                     .addAnnotatedClass(LifecycleWriterInstanceRegistrationEntity.class)

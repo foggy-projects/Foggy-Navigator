@@ -62,6 +62,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
@@ -173,6 +174,13 @@ public class OpenApiController {
             "RUNTIME_TASK_RECONCILE_NOT_CANCEL_REQUESTED",
             "RUNTIME_TASK_RECONCILE_EVIDENCE_INSUFFICIENT",
             "RUNTIME_TASK_RECONCILE_EVIDENCE_UNREACHABLE",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_BODY_REQUIRED",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_DRY_RUN_REQUIRED",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_NOT_READY",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_REPLAY_PROHIBITED",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_ALREADY_COMPLETE",
+            "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_SERVICE_UNAVAILABLE",
+            "NAVIGATOR_TERMINAL_REPUBLISH_READY",
             "EXPECTED_PHYSICAL_WORKER_MISMATCH",
             "EXPECTED_DISPATCH_COUNT_MISMATCH",
             "CONFIRM_TASK_ID_MISMATCH",
@@ -222,6 +230,9 @@ public class OpenApiController {
     private final ObjectProvider<RuntimeTaskClosureService> runtimeTaskClosureService;
     private final ObjectProvider<RuntimeTaskCompletionReadinessService>
             runtimeTaskCompletionReadinessService;
+    /** Optional while mixed-version launcher/module candidates are assembled. */
+    @Autowired(required = false)
+    private RuntimeTaskTerminalCleanupRepairService runtimeTaskTerminalCleanupRepairService;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
@@ -738,6 +749,38 @@ public class OpenApiController {
                     Boolean.TRUE.equals(form.getDryRun())));
         } catch (RuntimeException e) {
             return RX.failB(runtimeAuditErrorCode(e, "RUNTIME_TASK_RECONCILE_FAILED"));
+        }
+    }
+
+    /**
+     * The only mutation route for an already-terminal task with incomplete
+     * durable cleanup. It is distinct from read-only termination-request
+     * reconciliation and never delegates to a provider closure service.
+     */
+    @PostMapping("/runtime/task-terminal-cleanup-repair")
+    public RX<RuntimeTaskTerminalCleanupRepairDTO> runtimeTaskTerminalCleanupRepair(
+            @RequestBody RuntimeTaskTerminalCleanupRepairForm form,
+            HttpServletRequest request) {
+        RuntimeTaskTerminalCleanupRepairService service = runtimeTaskTerminalCleanupRepairService;
+        if (service == null) {
+            return RX.failB("RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_SERVICE_UNAVAILABLE");
+        }
+        if (hasForbiddenRuntimeStateAuditCredential(request)) {
+            return RX.failB("RUNTIME_STATE_AUDIT_CREDENTIAL_LANE_REJECTED");
+        }
+        if (form == null) {
+            return RX.failB("RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_BODY_REQUIRED");
+        }
+        try {
+            return RX.ok(service.repair(
+                    runtimeAuditAppKey(request), runtimeAuditAppSecret(request),
+                    runtimeUpstreamUserId(request),
+                    firstHeader(request, "X-Navigator-Client-Request-Id"),
+                    form.getTaskId(), form.getExpectedPhysicalWorkerId(),
+                    form.getConfirmTaskId(), Boolean.TRUE.equals(form.getDryRun())));
+        } catch (RuntimeException e) {
+            return RX.failB(runtimeAuditErrorCode(
+                    e, "RUNTIME_TASK_TERMINAL_CLEANUP_REPAIR_FAILED"));
         }
     }
 

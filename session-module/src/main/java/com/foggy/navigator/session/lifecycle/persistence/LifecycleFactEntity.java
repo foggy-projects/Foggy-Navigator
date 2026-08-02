@@ -92,6 +92,9 @@ public class LifecycleFactEntity {
         return factId;
     }
 
+    public Integer getSchemaVersion() { return schemaVersion; }
+    public String getAggregateType() { return aggregateType; }
+    public String getAggregateId() { return aggregateId; }
     public String getContentFreePayloadJson() {
         return contentFreePayloadJson;
     }
@@ -142,9 +145,19 @@ public class LifecycleFactEntity {
     public String getTaskId() { return taskId; }
     public String getSessionId() { return sessionId; }
     public String getOperationId() { return operationId; }
+    public String getPhysicalWorkerId() { return physicalWorkerId; }
+    public String getStateGeneration() { return stateGeneration; }
+    public String getInstanceEpoch() { return instanceEpoch; }
+    public String getProviderTaskId() { return providerTaskId; }
     public String getDispatchId() { return dispatchId; }
+    public String getSafeBindingDigestVersion() {
+        return safeBindingDigestVersion;
+    }
+    public String getSafeBindingDigest() { return safeBindingDigest; }
     public String getOwnershipMode() { return ownershipMode; }
     public Long getSourceSequence() { return sourceSequence; }
+    public String getIdempotencyKey() { return idempotencyKey; }
+    public String getSafeReasonCode() { return safeReasonCode; }
 
     public void setOwnershipMode(String ownershipMode) {
         this.ownershipMode = ownershipMode;

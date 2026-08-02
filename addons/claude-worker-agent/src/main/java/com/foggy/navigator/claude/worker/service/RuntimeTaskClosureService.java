@@ -641,9 +641,11 @@ public class RuntimeTaskClosureService {
         boolean canonicalTerminal = ownerProjection
                 .map(TaskLifecycleProjectionPort.TaskLifecycleProjection::typedTerminal)
                 .orElseGet(() -> Boolean.TRUE.equals(canonicalTerminal(audit)));
-        boolean cleanupComplete = ownerProjection
-                .map(TaskLifecycleProjectionPort.TaskLifecycleProjection::cleanupComplete)
-                .orElseGet(() -> terminalCleanupComplete(audit));
+        // The lifecycle projection proves only core-owned closure. A terminal
+        // reconciliation conclusion also requires the independently observed
+        // token and registration cleanup facts, so a stale audit projection
+        // cannot turn an incomplete terminal into a no-action response.
+        boolean cleanupComplete = terminalCleanupComplete(audit);
         if (canonicalTerminal) {
             if (!cleanupComplete) {
                 return reconciliationResponse(
@@ -664,14 +666,20 @@ public class RuntimeTaskClosureService {
         if (ownerProjection.isPresent()
                 && ownerProjection.get().canonicalTerminal()
                 && !ownerProjection.get().typedTerminal()) {
+            // A terminal lifecycle snapshot with a recognized persisted task
+            // status still needs its tombstone/cleanup fence. Do not describe
+            // that as a status problem just because typedTerminal() requires
+            // every cleanup component as well.
+            boolean canonicalStatusTerminal = terminalTaskStatus(
+                    ownerProjection.get().canonicalTaskStatus());
             return reconciliationResponse(
                     originalClientRequestId, taskId, audit, snapshot,
                     RuntimeTaskReconciliationState.AMBIGUOUS,
                     originalOutcome,
                     stableText(snapshot.status()),
-                    ownerProjection.get().cleanupComplete()
-                            ? "CANONICAL_STATUS_NOT_TERMINAL"
-                            : "TERMINAL_CLEANUP_INCOMPLETE",
+                    canonicalStatusTerminal
+                            ? "TERMINAL_CLEANUP_INCOMPLETE"
+                            : "CANONICAL_STATUS_NOT_TERMINAL",
                     true);
         }
         if (originalOutcome == RuntimeTaskTerminationOutcome.ALREADY_TERMINAL) {
@@ -1052,8 +1060,24 @@ public class RuntimeTaskClosureService {
     private boolean terminalCleanupComplete(RuntimeTaskAuditDTO audit) {
         RuntimeTaskFactsDTO facts = facts(audit);
         return facts != null
-                && "REVOKED".equalsIgnoreCase(facts.getTaskTokenStatus())
+                && Boolean.TRUE.equals(facts.getLifecycleCanonicalTerminal())
+                && Boolean.TRUE.equals(facts.getTerminalTombstonePresent())
+                && Boolean.TRUE.equals(facts.getLifecycleCleanupComplete())
+                && tokenCleared(facts.getTaskTokenStatus())
                 && Boolean.FALSE.equals(facts.getActiveTaskRegistrationPresent());
+    }
+
+    private boolean terminalTaskStatus(String status) {
+        return switch (stableText(status)) {
+            case "COMPLETED", "FAILED", "ABORTED", "CANCELLED", "REJECTED",
+                 "TIMED_OUT", "TIMEOUT" -> true;
+            default -> false;
+        };
+    }
+
+    /** Only a durable revoke is public proof of task-token closure. */
+    private boolean tokenCleared(String status) {
+        return "REVOKED".equalsIgnoreCase(status);
     }
 
     private boolean terminationMayBeInFlight(

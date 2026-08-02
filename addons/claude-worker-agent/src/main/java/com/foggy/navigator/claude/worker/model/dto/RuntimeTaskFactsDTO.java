@@ -12,6 +12,12 @@ import java.util.List;
 public class RuntimeTaskFactsDTO {
     private String taskId;
     private Boolean terminal;
+    /** Canonical lifecycle terminal fact when the lifecycle projection is available. */
+    private Boolean lifecycleCanonicalTerminal;
+    /** Monotonic lifecycle tombstone fact; null means the projection was unavailable. */
+    private Boolean terminalTombstonePresent;
+    /** Durable lifecycle cleanup completeness; distinct from canonical terminal. */
+    private Boolean lifecycleCleanupComplete;
     private String status;
     private String sanitizedErrorCode;
     private String taskTokenStatus;

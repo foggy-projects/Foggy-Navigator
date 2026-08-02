@@ -2643,7 +2643,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("\"reconciliationTriggered\" : false"));
         JsonNode root = assertDoesNotThrow(() -> OBJECT_MAPPER.readTree(output));
         assertRuntimeSideEffectsRemainBoolean(root.path("auditSideEffects"));
-        assertEquals("[REDACTED]", root.path("diagnostic").textValue());
+        assertTrue(root.path("diagnostic").isMissingNode());
         String errorOutput = stderr.toString(StandardCharsets.UTF_8);
         assertEquals("", errorOutput);
         assertFalse(output.contains("cli-json-private-sentinel"));
@@ -2687,12 +2687,13 @@ class UpstreamCliTest {
     }
 
     @Test
-    void runtimeTaskReconcileCarriesExpectedWorkerDispatchAndConfirmWithOneRequest() {
+    void runtimeTaskReconcileUsesOnlyTaskBodyAndOriginalRequestIdHeader() {
         responseOverride = """
                 {"code":200,"data":{
                   "taskId":"task-existing",
-                  "reconciliationChanged":false,
-                  "reconcileRequired":false
+                  "reconciliationState":"ACCEPTED",
+                  "readOnly":true,
+                  "newClientRequestIdAllowed":false
                 }}
                 """;
 
@@ -2701,49 +2702,69 @@ class UpstreamCliTest {
                 "--client-app-key", "cak-test",
                 "--upstream-user-id", "upstream-request",
                 "--task-id", "task-existing",
-                "--expected-physical-worker-id", "worker-durable",
-                "--expected-dispatch-count", "1",
-                "--confirm-task-id", "task-existing",
+                "--replay-client-request-id", "original-termination-request-1",
                 "--json"}, env(
                 "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
 
         assertEquals(0, code);
         assertEquals("POST", lastMethod);
         assertEquals("/api/v1/open/runtime/task-reconcile", lastPath);
-        assertTrue(lastBody.contains("\"expectedPhysicalWorkerId\":\"worker-durable\""));
-        assertTrue(lastBody.contains("\"expectedDispatchCount\":1"));
-        assertTrue(lastBody.contains("\"confirmTaskId\":\"task-existing\""));
+        assertEquals("{\"taskId\":\"task-existing\"}", lastBody);
+        assertFalse(lastBody.contains("expectedPhysicalWorkerId"));
+        assertFalse(lastBody.contains("expectedDispatchCount"));
+        assertFalse(lastBody.contains("dryRun"));
+        assertFalse(lastBody.contains("confirmTaskId"));
+        assertEquals("original-termination-request-1", lastClientRequestIdHeader);
         assertEquals(1, requestPaths.size());
-        assertNotNull(lastClientRequestIdHeader);
     }
 
     @Test
-    void runtimeTaskReconcileCanReplayTheExactPrintedClientRequestId() {
+    void terminalCleanupRepairDryRunThenSameIdConfirmUseDedicatedRoute() {
         responseOverride = """
                 {"code":200,"data":{
                   "taskId":"task-existing",
-                  "reconciliationChanged":false,
-                  "alreadyConsistent":true
+                  "outcome":"READY",
+                  "reasonCode":"NAVIGATOR_TERMINAL_REPUBLISH_READY",
+                  "workerCommandDispatched":false,
+                  "terminationTriggered":false
                 }}
                 """;
 
-        int code = run(new String[]{"upstream", "runtime", "task-reconcile",
+        int dryRunCode = run(new String[]{"upstream", "runtime", "task-terminal-cleanup-repair",
                 "--base-url", baseUrl(),
                 "--client-app-key", "cak-test",
                 "--upstream-user-id", "upstream-request",
                 "--task-id", "task-existing",
                 "--expected-physical-worker-id", "worker-durable",
-                "--expected-dispatch-count", "1",
-                "--confirm-task-id", "task-existing",
-                "--replay-client-request-id", "request-reconcile-replay-1",
+                "--dry-run",
                 "--json"}, env(
                 "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
 
-        assertEquals(0, code, stderr.toString(StandardCharsets.UTF_8));
-        assertEquals(1, requestPaths.size());
-        assertEquals("request-reconcile-replay-1", lastClientRequestIdHeader);
+        assertEquals(0, dryRunCode, stderr.toString(StandardCharsets.UTF_8));
+        String dryRunRequestId = lastClientRequestIdHeader;
+        assertNotNull(dryRunRequestId);
+        assertEquals("/api/v1/open/runtime/task-terminal-cleanup-repair", lastPath);
+        assertTrue(lastBody.contains("\"dryRun\":true"));
+        assertTrue(lastBody.contains("\"confirmTaskId\":null"));
+
+        int confirmCode = run(new String[]{"upstream", "runtime", "task-terminal-cleanup-repair",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--confirm-task-id", "task-existing",
+                "--replay-client-request-id", dryRunRequestId,
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(0, confirmCode, stderr.toString(StandardCharsets.UTF_8));
+        assertEquals(2, requestPaths.size());
+        assertEquals(dryRunRequestId, lastClientRequestIdHeader);
+        assertTrue(lastBody.contains("\"dryRun\":false"));
+        assertTrue(lastBody.contains("\"confirmTaskId\":\"task-existing\""));
         assertTrue(stdout.toString(StandardCharsets.UTF_8)
-                .startsWith("clientRequestId=request-reconcile-replay-1"));
+                .contains("clientRequestId=" + dryRunRequestId));
     }
 
     @Test
@@ -2753,15 +2774,30 @@ class UpstreamCliTest {
                 "--client-app-key", "cak-test",
                 "--upstream-user-id", "upstream-request",
                 "--task-id", "task-existing",
-                "--expected-physical-worker-id", "worker-durable",
-                "--expected-dispatch-count", "1",
-                "--confirm-task-id", "task-existing",
                 "--replay-client-request-id", "invalid request id",
                 "--json"}, env(
                 "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
 
         assertEquals(2, code);
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void terminalCleanupRepairRejectsConfirmWithoutDryRunRequestIdBeforeNetwork() {
+        int code = run(new String[]{"upstream", "runtime", "task-terminal-cleanup-repair",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--upstream-user-id", "upstream-request",
+                "--task-id", "task-existing",
+                "--expected-physical-worker-id", "worker-durable",
+                "--confirm-task-id", "task-existing",
+                "--json"}, env(
+                "NAVI_CLIENT_APP_SECRET", "cas-runtime-secret"));
+
+        assertEquals(2, code);
+        assertTrue(requestPaths.isEmpty());
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("confirmation requires the dry-run --replay-client-request-id"));
     }
 
     @Test

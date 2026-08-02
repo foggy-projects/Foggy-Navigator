@@ -250,6 +250,21 @@ public class BusinessTaskScopedTokenLifecycleService {
                 taskId.trim(), tenantId.trim()).isEmpty();
     }
 
+    /**
+     * Returns whether every capability ever issued for this task is now
+     * durably revoked.  No token row is also complete: there is no remaining
+     * capability for terminal cleanup to revoke.
+     */
+    @Transactional(readOnly = true)
+    public boolean taskScopedTokensRevokedOrAbsent(String tenantId, String taskId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(taskId, "taskId is required");
+        return tokenRepository.findByTaskIdAndTenantId(
+                        taskId.trim(), tenantId.trim())
+                .stream()
+                .allMatch(this::isRevoked);
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int revokeTaskScopedTokensForWorkerTask(
             String tenantId, String workerTaskId, String revokedBy, String reason) {

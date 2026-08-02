@@ -24,11 +24,24 @@ public record TaskLifecycleFact(
         }
         if (exactTerminalAuthority
                 && (type != TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED
-                && type != TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED)) {
+                && type != TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED
+                && type != TaskLifecycleFactType.SERVER_PRE_EFFECT_ADMISSION_REJECTED)) {
             throw new IllegalArgumentException("LIFECYCLE_TERMINAL_AUTHORITY_NOT_APPLICABLE");
         }
         if (exactTerminalAuthority && binding == null) {
             throw new IllegalArgumentException("LIFECYCLE_TERMINAL_AUTHORITY_BINDING_REQUIRED");
+        }
+        if (exactTerminalAuthority
+                && type == TaskLifecycleFactType.TASK_PROVIDER_TERMINAL_OBSERVED
+                && binding.providerTaskId() == null) {
+            throw new IllegalArgumentException(
+                    "LIFECYCLE_PROVIDER_TERMINAL_PROVIDER_TASK_ID_REQUIRED");
+        }
+        if (exactTerminalAuthority
+                && type == TaskLifecycleFactType.SERVER_PRE_EFFECT_ADMISSION_REJECTED
+                && binding.providerTaskId() != null) {
+            throw new IllegalArgumentException(
+                    "LIFECYCLE_SERVER_PRE_EFFECT_PROVIDER_TASK_ID_FORBIDDEN");
         }
     }
 
@@ -94,6 +107,23 @@ public record TaskLifecycleFact(
         return new TaskLifecycleFact(
                 id,
                 TaskLifecycleFactType.TASK_NEVER_ACCEPTED_CONFIRMED,
+                sequence,
+                null,
+                Objects.requireNonNull(binding, "binding"),
+                true);
+    }
+
+    /**
+     * A Navigator-owned admission fence rejected the task before any provider
+     * call. This is deliberately distinct from a Worker never-accepted
+     * observation: no Worker/provider identity is claimed beyond the reserved
+     * server binding and the provider task id must remain null.
+     */
+    public static TaskLifecycleFact serverPreEffectAdmissionRejection(
+            String id, long sequence, TaskLifecycleBinding binding) {
+        return new TaskLifecycleFact(
+                id,
+                TaskLifecycleFactType.SERVER_PRE_EFFECT_ADMISSION_REJECTED,
                 sequence,
                 null,
                 Objects.requireNonNull(binding, "binding"),
