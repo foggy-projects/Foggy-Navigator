@@ -4,12 +4,18 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from activation_target import canonical_controller_digest
-from bounded_local_dev_target import ObservationDenied, validate_manifest, write_atomic
+from bounded_local_dev_target import (
+    ObservationDenied,
+    manifest_owned_worker_pid,
+    validate_manifest,
+    write_atomic,
+)
 
 
 class BoundedLocalDevelopmentTargetTest(unittest.TestCase):
@@ -63,6 +69,70 @@ class BoundedLocalDevelopmentTargetTest(unittest.TestCase):
                 validate_manifest(manifest, manifest_path)
             with self.assertRaises(ObservationDenied):
                 write_atomic(root.parent / "outside.json", {}, root)
+
+    def test_selects_target_owned_worker_when_another_installation_is_running(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            pid_file = root / "worker.pid"
+            pid_file.write_text("200\n", encoding="utf-8")
+            pid_file.chmod(0o600)
+            target = {"root": str(root), "workerPidFile": str(pid_file)}
+
+            def wsl_output(_prefix, args, _reason):
+                if args == ["pgrep", "-f", "^node dist/index.js$"]:
+                    return "100\n200"
+                if args == ["readlink", "-f", "/proc/100/cwd"]:
+                    return "/home/navigator/.codex-worker"
+                if args == ["readlink", "-f", "/proc/200/cwd"]:
+                    return "/tmp/activation-run/worker"
+                self.fail(f"unexpected WSL command: {args}")
+
+            with patch("bounded_local_dev_target.wsl_command", side_effect=wsl_output):
+                pid = manifest_owned_worker_pid(
+                    target, ["wsl"], "/tmp/activation-run/worker"
+                )
+
+            self.assertEqual("200", pid)
+
+    def test_rejects_duplicate_or_pid_drift_in_manifest_worker_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            pid_file = root / "worker.pid"
+            pid_file.write_text("200\n", encoding="utf-8")
+            pid_file.chmod(0o600)
+            target = {"root": str(root), "workerPidFile": str(pid_file)}
+
+            def duplicate_root(_prefix, args, _reason):
+                if args == ["pgrep", "-f", "^node dist/index.js$"]:
+                    return "200\n201"
+                if args == ["readlink", "-f", "/proc/200/cwd"]:
+                    return "/tmp/activation-run/worker"
+                if args == ["readlink", "-f", "/proc/201/cwd"]:
+                    return "/tmp/activation-run/worker"
+                self.fail(f"unexpected WSL command: {args}")
+
+            with patch("bounded_local_dev_target.wsl_command", side_effect=duplicate_root):
+                with self.assertRaisesRegex(
+                    ObservationDenied, "BOUNDED_LOCAL_DEV_WORKER_PROCESS_MISMATCH"
+                ):
+                    manifest_owned_worker_pid(
+                        target, ["wsl"], "/tmp/activation-run/worker"
+                    )
+
+            def pid_drift(_prefix, args, _reason):
+                if args == ["pgrep", "-f", "^node dist/index.js$"]:
+                    return "201"
+                self.fail(f"unexpected WSL command: {args}")
+
+            with patch("bounded_local_dev_target.wsl_command", side_effect=pid_drift):
+                with self.assertRaisesRegex(
+                    ObservationDenied, "BOUNDED_LOCAL_DEV_WORKER_PROCESS_MISMATCH"
+                ):
+                    manifest_owned_worker_pid(
+                        target, ["wsl"], "/tmp/activation-run/worker"
+                    )
 
 
 if __name__ == "__main__":

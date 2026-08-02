@@ -125,3 +125,26 @@ task audit dispatch projections consistent.
 - boundary: no historical Task, Session, target or proof was repaired, replayed,
   reconciled, or reused. The bilateral evidence remains limited to a fresh
   disposable fixture.
+
+### SIM-NAVI-001 fresh-Worker observer correction (2026-08-02)
+
+- root_cause: the bounded local-development observer treated the global count
+  of `node dist/index.js` processes in a WSL distribution as the target Worker
+  identity. A fresh target-owned Worker therefore could not coexist with the
+  unrelated existing 3151 Worker, even when their installation roots, ports and
+  physical identities differed.
+- correction: global `pgrep` remains discovery-only. The observer now requires
+  the target-owned `workerPidFile`, verifies that PID is the sole matching
+  process in the manifest's exact `workerInstallRoot`, then retains the existing
+  physical Worker health identity, build/capability, loopback socket PID/port,
+  profile mode and configured-port checks. A duplicate process in the same
+  install root, stale PID or cwd drift still fails closed.
+- focused_validation:
+  `PYTHONPATH=tools/arch001-activation python3 -m unittest tools/arch001-activation/tests/test_bounded_local_dev_target.py`
+  -> 4 tests passed. The regression includes an unrelated Node Worker in a
+  different install root plus duplicate-root and stale-PID rejections.
+- boundary: no target, proof, Worker binding, credential/profile, Task, model
+  dispatch, termination or historical data was created, changed or inspected.
+  The quarantined pre-effect target remains unused. This correction only
+  unblocks creating a later fresh disposable target for the SIM-owned one-Task
+  AC-13 smoke.

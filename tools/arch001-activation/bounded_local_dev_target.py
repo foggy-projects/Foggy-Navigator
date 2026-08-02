@@ -228,6 +228,52 @@ def wsl_command(prefix: list[str], args: list[str], reason: str) -> str:
     return result.stdout.strip()
 
 
+def manifest_owned_worker_pid(target: dict[str, Any], prefix: list[str],
+                              install_root: str) -> str:
+    """Return the single target-owned Worker process without trusting global count.
+
+    ``pgrep`` is intentionally only a discovery mechanism: another local WSL
+    installation may legitimately run the same Node entrypoint.  The selected
+    process must still be the target-owned PID and the sole matching process in
+    the manifest's exact installation root.
+    """
+    pid_file = Path(required_text(target.get("workerPidFile"),
+                                  "BOUNDED_LOCAL_DEV_WORKER_PIDFILE_REQUIRED"))
+    root = Path(required_text(target.get("root"), "BOUNDED_LOCAL_DEV_ROOT_REQUIRED"))
+    require_owned_file(pid_file, root)
+    try:
+        raw_pid = pid_file.read_text(encoding="utf-8").strip()
+        if not raw_pid.isdecimal():
+            raise ValueError
+        expected_pid = str(int(raw_pid))
+        if int(expected_pid) <= 0:
+            raise ValueError
+    except (OSError, ValueError):
+        deny("BOUNDED_LOCAL_DEV_WORKER_PIDFILE_INVALID")
+
+    pids = wsl_command(prefix, ["pgrep", "-f", "^node dist/index.js$"],
+                       "BOUNDED_LOCAL_DEV_WORKER_PROCESS_UNAVAILABLE").splitlines()
+    if expected_pid not in pids:
+        deny("BOUNDED_LOCAL_DEV_WORKER_PROCESS_MISMATCH")
+
+    matching_pids: list[str] = []
+    expected_cwd: str | None = None
+    for pid in pids:
+        if not pid.isdecimal() or int(pid) <= 0:
+            deny("BOUNDED_LOCAL_DEV_WORKER_PROCESS_MISMATCH")
+        cwd = wsl_command(prefix, ["readlink", "-f", f"/proc/{pid}/cwd"],
+                          "BOUNDED_LOCAL_DEV_WORKER_CWD_UNAVAILABLE")
+        if pid == expected_pid:
+            expected_cwd = cwd
+        if cwd == install_root:
+            matching_pids.append(pid)
+    if expected_cwd != install_root:
+        deny("BOUNDED_LOCAL_DEV_WORKER_CWD_MISMATCH")
+    if len(matching_pids) != 1 or matching_pids[0] != expected_pid:
+        deny("BOUNDED_LOCAL_DEV_WORKER_PROCESS_MISMATCH")
+    return expected_pid
+
+
 def observe_worker(exact: dict[str, Any], target: dict[str, Any], worker: dict[str, Any],
                    local: dict[str, Any], require_idle: bool) -> None:
     port = int(target["workerPort"])
@@ -252,17 +298,12 @@ def observe_worker(exact: dict[str, Any], target: dict[str, Any], worker: dict[s
     prefix = wsl_prefix(distribution)
     version = wsl_command(prefix, ["cat", f"{install_root}/VERSION"],
                           "BOUNDED_LOCAL_DEV_WORKER_VERSION_UNAVAILABLE")
-    pids = wsl_command(prefix, ["pgrep", "-f", "^node dist/index.js$"],
-                       "BOUNDED_LOCAL_DEV_WORKER_PROCESS_UNAVAILABLE").splitlines()
-    if version != worker.get("version") or len(pids) != 1:
+    if version != worker.get("version"):
         deny("BOUNDED_LOCAL_DEV_WORKER_PROCESS_MISMATCH")
-    cwd = wsl_command(prefix, ["readlink", "-f", f"/proc/{pids[0]}/cwd"],
-                      "BOUNDED_LOCAL_DEV_WORKER_CWD_UNAVAILABLE")
-    if cwd != install_root:
-        deny("BOUNDED_LOCAL_DEV_WORKER_CWD_MISMATCH")
+    pid = manifest_owned_worker_pid(target, prefix, install_root)
     sockets = wsl_command(prefix, ["ss", "-ltnp"],
                           "BOUNDED_LOCAL_DEV_WORKER_SOCKET_UNAVAILABLE")
-    if f":{port} " not in sockets or f"pid={pids[0]}," not in sockets:
+    if f":{port} " not in sockets or f"pid={pid}," not in sockets:
         deny("BOUNDED_LOCAL_DEV_WORKER_SOCKET_MISMATCH")
     mode = wsl_command(prefix, ["stat", "-c", "%a", f"{install_root}/.env"],
                        "BOUNDED_LOCAL_DEV_WORKER_PROFILE_UNAVAILABLE")
