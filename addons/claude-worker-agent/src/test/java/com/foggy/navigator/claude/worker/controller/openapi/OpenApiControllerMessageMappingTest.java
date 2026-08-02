@@ -3791,7 +3791,18 @@ class OpenApiControllerMessageMappingTest {
         ObjectProvider<A2AgentResourceResolver> resourceResolverProvider = mock(ObjectProvider.class);
         when(resourceResolverProvider.getIfAvailable()).thenReturn(resourceResolver);
         TaskDispatchFacade taskDispatchFacade = defaultTaskDispatchFacade(agentResolver);
+        AgentSubmitPipeline agentSubmitPipeline = defaultAgentSubmitPipeline(taskDispatchFacade);
         ClaudeWorkerRepository workerRepository = mock(ClaudeWorkerRepository.class);
+        OpenApiRuntimeTaskLaunchPlanner launchPlanner =
+                new OpenApiRuntimeTaskLaunchPlanner(workerRepository);
+        OpenApiRuntimeTaskCreateFacade createFacade = new OpenApiRuntimeTaskCreateFacade(
+                codingAgentRepository,
+                agentResolver,
+                agentSubmitPipeline,
+                sessionQueryService,
+                auditProvider,
+                taskProvider,
+                sessionProvider);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -3804,7 +3815,6 @@ class OpenApiControllerMessageMappingTest {
                 mock(WorkerHealthChecker.class),
                 agentResolver,
                 taskDispatchFacade,
-                defaultAgentSubmitPipeline(taskDispatchFacade),
                 mock(TaskStateReconciler.class),
                 sessionQueryService,
                 new ObjectMapper(),
@@ -3823,7 +3833,8 @@ class OpenApiControllerMessageMappingTest {
                 frameReportProvider,
                 controlCredentialProvider,
                 resourceResolverProvider,
-                new OpenApiRuntimeTaskLaunchPlanner(workerRepository)
+                launchPlanner,
+                createFacade
         );
     }
 
