@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: cross-module
 version: 1.4.3-SNAPSHOT
 ticket: BUG-040
-status: IN_PROGRESS
+status: READY_FOR_SIGNOFF
 canonical: true
 approved_by: repository-owner
 approved_at: 2026-08-02
@@ -34,17 +34,17 @@ task audit dispatch projections consistent.
 
 ## Acceptance criteria
 
-- [ ] `gpt-5.6-luna` and granted `codex-luna:high` pass both reservation and
+- [x] `gpt-5.6-luna` and granted `codex-luna:high` pass both reservation and
   canonical persisted-task admission.
-- [ ] Different/malformed model families and all other binding mismatches fail
+- [x] Different/malformed model families and all other binding mismatches fail
   before provider effect and atomically leave zero enrollment writes.
-- [ ] Provider-effect admission failure quarantines the one-shot target/proof.
-- [ ] Lifecycle pre-effect FAILED is definitive, zero-dispatch and drives task
+- [x] Provider-effect admission failure quarantines the one-shot target/proof.
+- [x] Lifecycle pre-effect FAILED is definitive, zero-dispatch and drives task
   token/tombstone closure; genuinely recoverable provider failures remain
   recoverable.
-- [ ] Request audit and task audit derive provider/model dispatch from
+- [x] Request audit and task audit derive provider/model dispatch from
   server-observed providerTaskId/terminal facts rather than Task creation.
-- [ ] Focused affected tests, launcher package and restarted 8112 provenance/
+- [x] Focused affected tests, launcher package and restarted 8112 provenance/
   health pass.
 
 ## Implementation result
@@ -62,8 +62,13 @@ task audit dispatch projections consistent.
   - runtime request audit and terminal listener: 41 passed.
   - Codex task and stream relay: 199 passed.
   - OpenAPI mapping and runtime state audit: 73 passed.
-  - launcher package/restart: pending.
+  - launcher 14-module package: passed.
+  - restarted 8112: health/database `UP`; actuator provenance matched the
+    packaged clean `main` commit.
 - residual_runtime_disposition: retain Task audit; formally reconcile the
   pre-effect terminal Task to revoke its existing capability, and quarantine
-  target `-03` before creating a fresh immutable one-shot target.
-- readiness: IN_PROGRESS
+  target `-03` before creating a fresh immutable one-shot target. Restart-time
+  controller drift has already quarantined `-03` and its proof without reusing
+  the reservation; the retained Task token still requires the formal
+  zero-provider-dispatch terminal republish path.
+- readiness: READY_FOR_SIGNOFF
