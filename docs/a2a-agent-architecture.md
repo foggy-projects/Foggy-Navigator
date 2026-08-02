@@ -178,7 +178,7 @@ Stage 2.2~2.5 后：
 
 | Provider | providerType | 主要模块 | 说明 |
 | --- | --- | --- | --- |
-| Claude Worker | `claude-worker` | `addons/claude-worker-agent` | Claude Worker、目录、文件、跨项目、OpenAPI 任务主通道。 |
+| Claude Worker | `claude-worker` | `addons/claude-worker-agent` | Claude Worker 的 SSH/终端、目录、文件、Git 与 OpenAPI 任务主通道；另保留历史 CrossProject 记录的 owner-scoped 只读兼容面。 |
 | Codex Worker | `codex-worker` | `addons/codex-worker-agent` | Codex CLI Worker 任务通道，复用工作目录治理。 |
 | Codex App Server Worker | `codex-app-server-worker` | `addons/codex-worker-agent` | Codex app-server 独立任务通道；Session/Task 只能续接 App Server Thread/Turn。 |
 | Codex Biz Route | `codex-biz-worker` | `addons/codex-worker-agent` | OpenAPI / 业务侧 Codex 直连路由，无独立可发现 Agent；可复用 `OPENAI_CODEX` modelConfig。 |
@@ -238,7 +238,7 @@ TaskDispatchFacade
 
 ## 10. 当前边界与风险
 
-1. A2A 架构不是通用工作流引擎；跨项目阶段编排仍由专门模块承担。
+1. A2A 架构不是通用工作流引擎；CrossProject 阶段 mutation 已退役，不是当前 A2A 能力，仅保留既有记录的 owner-scoped 只读兼容面。
 2. `TaskDispatchFacade` 当前仍是统一分发入口；Stage 2.1~2.5 已抽出 Provider 查找、创建目标推导、统一投影、capability fan-out 和任务操作路由，但 Provider 状态 schema 与 SPI 端口拆分仍需继续治理。
 3. Provider route / backend 的核心映射已收敛到 `ProviderRouteRegistry`；后续新增 Provider 应优先扩展该注册表和对应回归，而不是在业务模块复制常量。
 4. `providerStateJson` 与 `taskStateJson` 需要 schema 化，避免恢复、回退和跨版本兼容依赖隐式字段。

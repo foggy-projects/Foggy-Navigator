@@ -5,7 +5,7 @@ status: int001-rejected-bug008-accepted-with-risks-bug009-rejected
 canonical_delivery_spec: workitems/GOV-001-dev-s1-s2-integration-mvp.md
 external_enablement: no
 production_enablement: no
-last_updated: 2026-07-31
+last_updated: 2026-08-03
 ---
 
 # Foggy Navigator 1.4.3-SNAPSHOT
@@ -21,6 +21,7 @@ last_updated: 2026-07-31
 ## Current Status
 
 - phase: int001-rejected-bug008-accepted-with-risks-bug009-rejected
+- navi_core_s2_04_cross_project_retirement_handoff: HANDOFF_READY
 - architecture_review: passed-with-complexity-guardrails
 - p0_5_status: complete
 - implementation_started: p1a-accepted-p1b-a-accepted-p1b-b0-accepted-p1c-a-accepted
@@ -120,6 +121,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 
 | Workitem | Scope | Status |
 |---|---|---|
+| [NAVI-CORE-001 S2-04 CrossProject retirement handoff](./workitems/NAVI-CORE-001-S2-04-cross-project-retirement-handoff.md) | 当前文档对齐 mutation 默认 410、owner-scoped GET、旧 UI redirect 与仓库外 Skill tombstone owner handoff | HANDOFF_READY；服务端 gate 独立生效，外部 Skill/marketplace 未在本 workitem 修改 |
 | [ARCH-001 Unified Session and Task Lifecycle Owner](./workitems/ARCH-001-unified-session-task-lifecycle-owner.md) | Codex SDK MVP-A 的 Session/Task/termination/Worker 分层 owner、Worker v1、offline freeze、Sentinel 与 deterministic reducer | APPROVED；Round 7 独立复审 0/0/0，Source Slice 0–8 可按顺序实现；真实 controller/process、首次非 fixture ENFORCED 与 live SIM 仍需单独授权 |
 | [ARCH-001-ACT-002 Bounded Local-Development Lifecycle Activation](./workitems/ARCH-001-ACT-002-bounded-local-development-activation.md) | 当前 8112 与既有隔离 WSL 3151 的显式、一次性、默认关闭 activation authority | READY_FOR_SIGNOFF；不创建 Task、不调用模型、不发送 termination |
 | [GOV-001 开发期 S1/S2 联调 MVP](./workitems/GOV-001-dev-s1-s2-integration-mvp.md) | SIM 专属实例和 TMS 平台/租户的本地联调路径；动态 tenant ClientApp list、CLI lane 提示、runtime-only 交付手册 | ACCEPTED；仅本地 preflight，非 live/runtime acceptance |
@@ -208,7 +210,7 @@ P1A 的历史 [首次签核](./evidence/GOV-001-p1a-independent-signoff.md) `rej
 - 2026-07-18 已完成方案级 `navi.authorization.v1` 冻结：服务端 canonical context/decision、typed credential/token/platform-grant claim、CLI whoami/permissions/explain、离线三态检查与 legacy 不自动提升边界均已落档；尚无实现或运行证据。
 - 2026-07-18 主流架构与复杂度复核结论为 `passed-with-complexity-guardrails`：S1/S2 的 instance/account admin、delegated SaaS admin、credential lane、capability token、ownership/binding 分离均符合常见 IAM/PAM/Zero-Trust 方向；P0.5 明确禁止通用 RBAC/ABAC DSL、全量 credential/token 物理合表和一次性全路由切换。
 - 2026-07-18 P0.5 冻结了 typed management 的最小物理模型、lane API、legacy adapter、shadow/cutover/rollback 和治理责任；该日尚不构成实现授权，后续 gate 关闭与授权状态见 2026-07-19 记录。
-- 2026-07-18 已完成原始 [414 条 method-level route/action manifest](./evidence/GOV-001-p0.5-method-route-manifest.csv) 静态基线及其 [静态评审](./evidence/GOV-001-p0.5-method-route-manifest-review.md)：397 条 launcher MVC、12 条 Observer BFF MVC、1 条 WebSocket、4 条 Actuator family；244 条非 GET MVC 无未分类项。该历史基线不是运行测试或 production readiness 证明。
+- 2026-07-18 已完成原始 414 条 method-level route/action manifest 静态基线及其 [静态评审](./evidence/GOV-001-p0.5-method-route-manifest-review.md)：397 条 launcher MVC、12 条 Observer BFF MVC、1 条 WebSocket、4 条 Actuator family；244 条非 GET MVC 无未分类项。该 review 是历史 route-count/disposition 快照，不是当前 catalog、运行测试或 production readiness 证明。当前 manifest evidence 见同路径 [CSV](./evidence/GOV-001-p0.5-method-route-manifest.csv)，CrossProject retirement addendum 与 digest 见 [NAVI-CORE-001 S2-04 handoff](./workitems/NAVI-CORE-001-S2-04-cross-project-retirement-handoff.md)。
 - 同次复核确认 Observer BFF 的 12 条入口均须 `LOCAL_TOOL_RESTRICT`；`NAVIGATOR_EXTERNAL_ENABLED` 只影响其后续下游 Navigator `/open` 请求，不能保护或 production-enable BFF ingress。
 - 2026-07-19 已完成 [seed/legacy mapping 静态复核](./evidence/GOV-001-p0.5-seed-legacy-mapping-review.md)：没有任何 legacy record 可自动提升；upstream-admin 唯一合法 canonical adapter 为 `UPSTREAM_SYSTEM_ADMIN + LEGACY_UPSTREAM_ADMIN`。未查询实际数据库或读取 secret，实际脱敏 inventory 固定为 P1B seed 前置。
 - 2026-07-19 Project Owner 已确认 canonical contract，并只授权 P1A foundation/shadow；P1B typed seed/credential 与 P1C cutover/CLI/SKILL 仍需后续明确授权。

@@ -1,98 +1,49 @@
-# 跨项目任务平台能力测试方案
+# 跨项目退役契约检查方案
 
-## 测试边界
+## 检查边界
 
-验证 Navigator 跨项目任务页面和 HTTP API 的生命周期：
+本方案只验证 CrossProjectTask 的退役、只读和兼容边界，不再验收“创建 → 启动 → 推进 → 完成”的编排生命周期，也不要求修复或生成历史数据。
 
-`创建 → 启动 → Phase 执行 → 审查/交接 → 推进 → 完成或取消`
+## 1. 默认 mutation gate
 
-`cross-project-task` Agent Skill 已移除。测试不得要求 Claude/Codex 通过 Skill、裸 `@Agent` 或自然语言自动编排跨项目任务；平台 UI/API 仍作为独立功能保留。
+对下列六条已认证 mutation 分别使用新建 disposable fixture 或无资源依赖的 controller/service fixture 检查：
 
-## 前置条件
+- create
+- start
+- review
+- update handoff
+- advance
+- cancel
 
-| 条件 | 检查方式 |
-|------|---------|
-| 后端运行中 | `curl http://localhost:8112/actuator/health` |
-| 前端运行中 | 浏览器打开 `http://localhost:5174` |
-| Claude Worker 运行中 | `curl http://localhost:3031/health` |
-| Worker 已注册且 ONLINE | Workers 页面可见至少一个在线 Worker |
-| Worker 下已有两个 Git 工作目录 | Workers 页展开目录树验证 |
-| 已注册两个 Coding Agent | 分别绑定到两个工作目录 |
-| 已登录 | 能访问 `/cross-tasks` |
+预期：HTTP `410`、`Cache-Control: no-store`、reason code `CROSS_PROJECT_TASK_MUTATION_RETIRED`，并且 repository lookup、dispatch、worktree、event 与 state mutation 均为零。
 
-## 场景一：Agent 和目录准备
+## 2. 认证优先
 
-1. 在 Workers 页面注册 `test-api-agent`，绑定后端目录。
-2. 注册 `test-frontend-agent`，绑定前端目录。
-3. 确认两个 Agent 都有可用的默认模型配置。
+未认证或无权限调用上述 route 时，预期仍由现有认证/授权边界先返回 `401/403`，不得提前暴露退役状态或目标是否存在。
 
-预期：两个 Agent 可被跨项目任务表单精确选择，不依赖名称模糊匹配。
+## 3. Owner-scoped 只读查询
 
-## 场景二：通过 UI 创建和启动
+仅验证以下 GET：
 
-1. 打开 `/cross-tasks`。
-2. 创建任务“添加用户注册功能”。
-3. 添加两个阶段：
-   - `test-api-agent` 实现后端注册接口。
-   - `test-frontend-agent` 根据交接信息实现注册页面。
-4. 保存后启动任务。
+- `GET /api/v1/cross-project-tasks/page`
+- `GET /api/v1/cross-project-tasks/{contextId}`
 
-预期：
+预期：只能读取当前 owner 可见的既有记录，且无 dispatch、worktree、event 或 state mutation。禁止为通过检查而回填、清洗、重放、reconcile、删除或修改旧 rows。
 
-- 任务状态从 `DRAFT` 进入 `RUNNING`。
-- 第一阶段进入 `RUNNING`，第二阶段保持 `PENDING`。
-- 页面显示稳定的 `contextId` 和阶段顺序。
+## 4. UI 兼容
 
-## 场景三：通过 API 创建和启动
+- 顶部导航不展示 `任务` 或 `跨项目`。
+- `/tasks` 与 `/cross-tasks` 使用 named route 重定向到 Workers。
+- Workers 日常工作台、普通 Task / Session 深链，以及 Claude Worker 的 SSH、终端、目录、文件和 Git 能力继续可用。
 
-使用登录态 Bearer Token 调用：
+## 5. 显式 rollback
 
-```bash
-curl -s -X POST http://localhost:8112/api/v1/cross-project-tasks \
-  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary @cross-project-task.json
-```
+默认配置必须保持 `NAVIGATOR_CROSS_PROJECT_TASK_MUTATIONS_ENABLED=false`。只有单独批准的临时 rollback 检查才可显式设为 `true`；不得由自动恢复、旧 Skill 或测试默认值开启。
 
-请求体包含标题、描述，以及带精确 `agentId`、`directoryId` 和 Prompt 的两个 phases。记录返回的 `contextId`，然后调用：
+## 6. 外部 Skill 交接
 
-```bash
-curl -s -X POST http://localhost:8112/api/v1/cross-project-tasks/$CONTEXT_ID/start \
-  -H "Authorization: Bearer $NAVIGATOR_TOKEN"
-```
+活动的仓库外 `navigator-cross-project-task` Skill 需要由其制品 owner 替换为 no-HTTP deprecated tombstone。服务端 gate 的验收不得依赖该外部动作，也不得把两条 GET 重新包装成 orchestration Skill。交接记录见 [NAVI-CORE-001 S2-04](../version-tracker/1.4.3-SNAPSHOT/workitems/NAVI-CORE-001-S2-04-cross-project-retirement-handoff.md)。
 
-预期：API 返回成功，UI 能看到同一任务，且不会生成或部署任何 Agent Skill。
+## 7. 验证预算
 
-## 场景四：Phase 完成、审查和推进
-
-1. 等待当前 Phase 对应的 ClaudeTask 完成。
-2. 检查任务进入 `PAUSED` 或待审查状态。
-3. 查看结果、成本和交接信息。
-4. 通过 UI 或 API 推进下一阶段。
-
-预期：
-
-- 已完成阶段保持 `COMPLETED`。
-- 下一阶段获得明确的上游交接上下文并进入 `RUNNING`。
-- 最后一阶段推进后任务进入 `COMPLETED`。
-- 重复推进请求不会启动重复 Phase。
-
-## 场景五：取消和异常
-
-覆盖以下情况：
-
-- `DRAFT`、`RUNNING`、`PAUSED` 任务取消。
-- Agent、Worker 或目录不可用。
-- 工作目录不是 Git 仓库，无法创建 worktree。
-- Phase 执行失败。
-- 非任务所有者访问或修改任务。
-
-预期：状态和错误信息明确，未执行阶段被跳过，权限边界不因 API 直调而放宽。
-
-## 回归检查
-
-- `/cross-tasks` 页面刷新后状态一致。
-- 列表分页、详情、阶段顺序和成本汇总正确。
-- `CrossProjectTaskControllerTest` 与 `CrossProjectTaskServiceTest` 通过。
-- `~/.agents/skills`、`~/.agent/skills` 和 `~/.claude/skills` 中不存在 `cross-project-task/SKILL.md`。
-- 普通 Codex/Claude Prompt 不会发现或自动调用跨项目任务 Skill。
+实现阶段默认运行 focused tests 和 affected lane；全量测试只在用户明确授权的收口节点运行。本次文档同步不运行产品测试。

@@ -25,7 +25,7 @@
 | [PC Workers 操作与体验检查清单](./test-cases/pc-workers-experience-checklist.md) | 当前有效 | 桌面端 Workers 页面操作路径、验收清单与 Playwright 执行口径 |
 | [会话协作中心](./02-modules/session-collaboration.md) | 当前有效 | 会话、消息、委派、分享能力说明 |
 | [任务治理中心](./02-modules/task-governance.md) | 当前有效 | 统一任务分发与治理说明 |
-| [跨项目编排](./02-modules/cross-project-orchestration.md) | 当前有效 | 多项目任务编排说明 |
+| [跨项目退役与只读边界](./02-modules/cross-project-orchestration.md) | 当前有效 | mutation 默认 410、历史记录 owner-scoped 只读及旧 UI route redirect |
 | [平台设置与资源治理](./02-modules/platform-governance.md) | 当前有效 | Git、LLM、凭证、记忆、Worker、助手治理说明 |
 | [用户与访问控制](./02-modules/user-and-access-control.md) | 当前有效 | 登录、用户、角色、API Key 说明 |
 | [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md) | 当前有效 | SSE、日志/健康检查、受控 Open API、SDK 说明；旧自研 Monitoring 已移除 |
@@ -65,7 +65,7 @@
 | [02-modules/memory-adapter-layer.md](./02-modules/memory-adapter-layer.md) | 早期规划色彩较重，需确认是否仍存在对应适配层职责 |
 | [02-modules/rag-module.md](./02-modules/rag-module.md) | 与当前主轴不完全一致，需确认是否仍为当前产品能力 |
 | [02-modules/orchestration-layer.md](./02-modules/orchestration-layer.md) | 早期编排抽象可能已被当前 TaskDispatch/A2A 链路替代 |
-| [02-modules/task-orchestration-module.md](./02-modules/task-orchestration-module.md) | 与当前任务治理/跨项目编排文档存在重叠，需合并或归档 |
+| [02-modules/task-orchestration-module.md](./02-modules/task-orchestration-module.md) | 历史规划，与当前 CrossProject 退役只读边界不一致，待归档 |
 | [02-modules/claude-agent-teams-guide.md](./02-modules/claude-agent-teams-guide.md) | 仍可能有局部价值，但 Worker 类型已扩展，需避免只按 Claude Teams 口径理解 |
 | [02-modules/claude-agent-teams-internals.md](./02-modules/claude-agent-teams-internals.md) | 仍可能有局部价值，但需按当前 Provider 与 Worker 实现复核 |
 | [agent-framework-guide.md](./agent-framework-guide.md) | 较早的底座说明，需按当前 Provider/TaskDispatch/Skill 实现重审 |

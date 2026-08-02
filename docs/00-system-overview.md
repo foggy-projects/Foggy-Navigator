@@ -13,7 +13,7 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 2. 以 Worker 和目录为中心的远程编程工作台  
    用户可以管理远程 Worker、工作目录、Git 状态、Worktree、文件浏览、终端与编程任务。
 3. 以任务和事件为中心的平台治理能力  
-   平台提供统一任务分发、跨项目阶段编排、通知、用户与配置治理能力。
+   平台提供统一任务分发、通知、用户与配置治理能力。Task / Session 仍是核心运行对象，但旧 `任务`、`跨项目` 顶部入口已退出日常工作台。
 
 ## 2. 当前功能架构
 
@@ -23,8 +23,8 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 |------|------|------|------|
 | 工作区与 Worker 中心 | `Workers` | 管理远程 Worker、目录、文件、Git 与编程执行环境 | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`packages/navigator-frontend` |
 | 会话协作中心 | `Workers` 内任务会话、`/c/:id` 深链 | 统一承接 Worker 任务会话、消息流、SSE、绑定与委派跳转 | `session-module`、`agent-framework` |
-| 任务治理中心 | `任务` | 统一查看和治理平台侧 Agent Task / Worker Task | `session-module` |
-| 跨项目编排 | `跨项目` | 把一个目标拆成多阶段、多目录、多 Agent 的串行协作流程 | `addons/claude-worker-agent` |
+| 任务治理中心 | Workers 内任务历史、深链与 API | 统一查看和治理平台侧 Agent Task / Worker Task | `session-module` |
+| 历史跨项目记录 | 无顶部入口；仅 owner-scoped GET | 只读查看既有跨项目记录；mutation surface 默认退役 | `addons/claude-worker-agent` |
 | 平台设置与资源治理 | `设置` | 管理 Git、LLM、Worker、凭证、记忆、业务 Agent、Agent 模型覆盖等 | `metadata-config-module`、`business-agent-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
 | 用户与访问控制 | `登录`、`用户` | 登录认证、用户管理、角色状态、API Key 管理 | `user-auth-module` |
 | 通知与开放集成 | SSE、Open API | 提供通知流、对外 SDK、上游接入与嵌入式聊天入口 | `session-module`、`navigator-open-sdk`、`business-agent-module`、`tools/navigator-chat-observer-bff`、`addons/claude-worker-agent` |
@@ -35,9 +35,9 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 
 - `/`：Workers，主工作台
 - `/chat`：旧独立会话入口，当前重定向到 Workers
-- `/c/:id`：会话深链兼容入口，主要用于跨项目阶段回跳等历史路径
-- `/tasks`：任务看板
-- `/cross-tasks`：跨项目任务
+- `/c/:id`：会话深链兼容入口
+- `/tasks`：旧任务入口，按 named route 重定向到 Workers
+- `/cross-tasks`：旧跨项目入口，按 named route 重定向到 Workers
 - `/users`：用户管理
 - `/settings`：平台设置
 - `/files`：文件浏览器
@@ -113,7 +113,7 @@ Launcher
 
 | 模块 | 职责 |
 |------|------|
-| `addons/claude-worker-agent` | 远程 Claude Worker、目录、文件浏览、跨项目任务、Open API |
+| `addons/claude-worker-agent` | 远程 Claude Worker、SSH/终端、目录、文件与 Git 能力、Open API，以及历史跨项目记录的只读兼容面 |
 | `addons/codex-worker-agent` | Codex Worker 任务和进程治理 |
 | `addons/gemini-worker-agent` | Gemini Worker 任务和进程治理 |
 | `addons/langgraph-biz-worker` | LangGraph Biz Worker 接入与业务 Agent 执行通道 |
@@ -146,16 +146,23 @@ Launcher
   -> 用户在历史区查看任务状态、回复、重连、回溯、同步
 ```
 
-### 4.3 跨项目编排流程
+### 4.3 历史跨项目记录边界
 
 ```text
-用户创建跨项目任务
-  -> 定义多个阶段
-  -> 为阶段绑定 Agent、目录、Prompt、分支
-  -> 系统按阶段推进
-  -> 阶段完成后产出 handoff 信息
-  -> 人工审核后推进下一阶段
+旧 /cross-tasks 路由
+  -> 重定向 Workers
+
+已认证 owner 调用历史查询 API
+  -> GET 列表或详情
+  -> 只读返回既有记录
+
+任一 create/start/review/handoff/advance/cancel mutation
+  -> 认证优先
+  -> 默认 HTTP 410 + no-store + CROSS_PROJECT_TASK_MUTATION_RETIRED
+  -> 不进入 repository、dispatch、worktree、event 或 state mutation
 ```
+
+旧记录保持原样，不做回填、清洗或修复。`NAVIGATOR_CROSS_PROJECT_TASK_MUTATIONS_ENABLED=true` 仅是需要显式开启的临时 rollback 开关，不是常规能力或自动兼容路径。
 
 ### 4.4 平台治理流程
 
@@ -176,7 +183,7 @@ Launcher
 - 统一任务分发与任务面板
 - Claude / Codex / Gemini / LangGraph Biz Worker 接入与工作区管理
 - 文件浏览、Git diff、Git history、搜索
-- 跨项目阶段式任务编排
+- 历史跨项目记录的 owner-scoped 只读访问与默认关闭的 mutation 兼容桩
 - 平台级 Git/LLM/凭证/记忆治理
 - 用户管理与 API Key
 - 应用日志、健康检查、有限指标与运行审计
@@ -210,13 +217,13 @@ Launcher
 - [工作区与 Worker 中心](./02-modules/worker-workspace-center.md)
 - [会话协作中心](./02-modules/session-collaboration.md)
 - [任务治理中心](./02-modules/task-governance.md)
-- [跨项目编排](./02-modules/cross-project-orchestration.md)
+- [跨项目退役与只读边界](./02-modules/cross-project-orchestration.md)
 - [平台设置与资源治理](./02-modules/platform-governance.md)
 - [用户与访问控制](./02-modules/user-and-access-control.md)
 - [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md)
 
 ---
 
-**文档版本**: 4.1.1
-**更新日期**: 2026-07-14
+**文档版本**: 4.2.0
+**更新日期**: 2026-08-03
 **基准**: 当前仓库代码结构、前端路由、Provider 实现、控制器接口与模块依赖

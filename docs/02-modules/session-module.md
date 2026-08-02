@@ -165,7 +165,7 @@ Task 是执行视角的主对象，负责表达：
 | `agent-framework` | 会话消息链路中的 Agent 调用底座 |
 | `metadata-config-module` | 任务分发时会读取模型配置与资源配置 |
 | `user-auth-module` | 所有会话与任务能力依赖用户身份 |
-| `addons/claude-worker-agent` | 提供 Worker 执行能力、目录会话与跨项目会话来源 |
+| `addons/claude-worker-agent` | 提供 Worker 执行能力与目录会话；历史 CrossProject 仅提供 owner-scoped 只读投影，不是新会话来源 |
 | `addons/codex-worker-agent` | 分别提供 `codex-worker` SDK 与 `codex-app-server-worker` App Server 执行能力，共享任务投影但不互相 fallback |
 | `addons/task-assistant` | 通过事件和 SSE 向会话侧发通知 |
 

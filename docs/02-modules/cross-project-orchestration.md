@@ -1,83 +1,56 @@
-# 跨项目编排
+# 跨项目退役与只读边界
 
-## 1. 功能定位
+## 1. 当前定位
 
-跨项目编排是当前平台里最接近“复杂流程管理”的能力，用来把一个较大的目标拆成多个阶段推进。
+旧 CrossProjectTask 阶段编排不再是当前产品能力。PC 顶部 `跨项目` 入口已移除，旧 `/cross-tasks` named route 重定向到 Workers；普通 Task / Session、Workers 工作台以及 Claude Worker 的 SSH、终端、目录、文件和 Git 能力不受影响。
 
-对应前端入口：
+本模块当前只保留两类兼容面：
 
-- `跨项目`
+- 对既有记录的 owner-scoped 只读查询；
+- 对旧 mutation route 的默认关闭退役桩，避免旧客户端误触发副作用。
 
-对应后端模块：
+## 2. HTTP 契约
 
-- `addons/claude-worker-agent`
+### 2.1 保留的只读查询
 
-## 2. 功能范围
+以下两条 GET 继续使用既有 `UserContext` owner resolver：
 
-### 2.1 任务建模
+- `GET /api/v1/cross-project-tasks/page`
+- `GET /api/v1/cross-project-tasks/{contextId}`
 
-- 创建跨项目任务
-- 设置标题和描述
-- 配置多阶段列表
+查询不得产生 dispatch、worktree、event 或 state mutation。既有 rows 保持原样；本退役不授权回填、清洗、重放、reconcile、删除或其他历史数据修复。
 
-### 2.2 阶段建模
+### 2.2 默认退役的 mutation
 
-每个阶段可绑定：
+以下六条 route 保留稳定 route/action/principal/owner identity，但默认处于 `RETIRED_STUB`：
 
-- `phaseName`
-- `prompt`
-- `agentId`
-- `directoryId`
-- `worktreeBranch`
+- `POST /api/v1/cross-project-tasks`
+- `POST /api/v1/cross-project-tasks/{contextId}/start`
+- `POST /api/v1/cross-project-tasks/{contextId}/review`
+- `PUT /api/v1/cross-project-tasks/{contextId}/phases/{phaseId}/handoff`
+- `POST /api/v1/cross-project-tasks/{contextId}/advance`
+- `POST /api/v1/cross-project-tasks/{contextId}/cancel`
 
-### 2.3 阶段推进
+请求先经过认证；认证成功后，默认由服务端 gate 在读取 repository 或触发 target/provider/event effect 前返回：
 
-- 启动任务
-- 触发 review
-- 编辑 handoff
-- 推进到下一阶段
-- 取消整个任务
+- HTTP `410 Gone`
+- `Cache-Control: no-store`
+- stable reason code `CROSS_PROJECT_TASK_MUTATION_RETIRED`
 
-### 2.4 阶段追踪
+未认证或无权限请求仍先返回原有 `401/403`，不得利用退役响应探测资源。
 
-- 查看阶段状态
-- 查看阶段目录、Agent、分支
-- 回跳阶段会话
-- 查看成本和耗时
+## 3. Rollback 边界
 
-## 3. 设计特点
+`NAVIGATOR_CROSS_PROJECT_TASK_MUTATIONS_ENABLED=true` 是唯一显式 rollback opt-in。默认值为 `false`；它不得由恢复流程、旧客户端、Skill 或文档示例自动开启，也不代表该能力重新进入产品主线。
 
-### 3.1 这是“带人工审核点”的流程编排
+若未来确需临时启用，必须由部署 owner 单独批准、限定环境和退出时间，并沿用既有 owner resolution。关闭开关后仍不得修改历史 rows 以“修复”兼容性。
 
-和普通任务不同，跨项目任务不是一次发出去等结果，而是：
+## 4. 外部 Skill
 
-1. 阶段执行
-2. 生成 handoff
-3. 人工审核
-4. 再推进下一阶段
+仓库外仍有活动的 `navigator-cross-project-task` Skill 宣称通过 HTTP 创建、启动、推进和取消任务。Navigator 服务端 gate 是独立安全边界，不依赖该 Skill 先完成下线。
 
-### 3.2 目录和分支是一等上下文
+外部制品的 owner handoff、当前 digest 与停用验收见 [NAVI-CORE-001 S2-04 交接](../version-tracker/1.4.3-SNAPSHOT/workitems/NAVI-CORE-001-S2-04-cross-project-retirement-handoff.md)。不得把保留的两个 GET 包装成新的 orchestration Skill。
 
-每个阶段都可以把执行约束到特定目录和 worktree 分支，适合多仓、多目录、长链路任务。
+## 5. 历史说明
 
-### 3.3 阶段会话可追溯
-
-每个阶段都可以关联到具体会话，便于复盘和上下文承接。
-
-## 4. 适用场景
-
-- 多目录联动修改
-- 跨仓库交付流程
-- 先分析后实现再验证的链式任务
-- 需要人工卡点审核的复杂编程任务
-
-## 5. 当前边界
-
-它更像“阶段式执行编排”，而不是通用 BPM 引擎。
-
-当前重点仍然是：
-
-- Agent 协作
-- 目录上下文
-- handoff 审核
-- 会话可追溯
+旧阶段模型、handoff、目录和分支字段仅用于解释既有记录，不再构成可创建或可推进的当前能力。历史文档与 evidence 可以保留当时事实，但不得覆盖本页当前契约。

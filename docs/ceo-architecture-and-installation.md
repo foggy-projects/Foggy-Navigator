@@ -8,7 +8,7 @@ Foggy Navigator 是一个面向企业研发与业务自动化场景的多 Agent 
 
 当前系统主轴可以概括为三层：
 
-1. **统一入口**：提供登录、会话、任务、Workers、跨项目任务和设置页面。
+1. **统一入口**：以 Workers 为日常工作台，并提供登录、设置和用户治理；Task / Session 仍是核心底座，但旧 `任务`、`跨项目` 顶部入口已退役。
 2. **Agent 编排平台**：负责会话管理、任务分发、Agent 发现、模型配置、权限治理和实时事件推送。
 3. **Worker 执行网络**：连接 Claude、Codex、Gemini、LangGraph 业务 Worker 等执行端，把具体任务落到远程机器、项目目录或业务流程中。
 
@@ -22,7 +22,7 @@ Foggy Navigator 是一个面向企业研发与业务自动化场景的多 Agent 
 
 表现层
   -> packages/navigator-frontend
-  -> 登录、Workers、会话、任务、跨项目、设置、用户管理
+  -> 登录、Workers、设置、用户管理；Task / Session 由工作台与开放接口承载
 
 平台服务层
   -> launcher
@@ -66,9 +66,8 @@ Web 控制台是平台的主要使用入口，面向研发用户、管理员和�
 | 功能入口 | 说明 |
 |------|------|
 | Workers | 管理远程 Worker、项目目录、worktree、文件浏览、Git diff、任务历史 |
-| 会话 | 统一 Agent 对话入口，支持消息流、委派、分享和上下文延续 |
-| 任务 | 从平台视角查看、取消、恢复、重连和同步 Agent / Worker 任务 |
-| 跨项目 | 把复杂目标拆成多阶段、多目录、多 Agent 的可审核流程 |
+| Task / Session 底座 | 在 Workers、深链和开放接口中支持消息流、委派、查询、取消、恢复、重连与同步 |
+| 历史兼容 | `/tasks`、`/cross-tasks` 重定向 Workers；既有 CrossProject 记录仅保留 owner-scoped GET，六条 mutation 默认 410 |
 | 设置 | 管理 Git Provider、LLM 模型、凭证、记忆、Worker 和助手配置 |
 | 用户 | 管理用户、角色、状态和 API Key |
 
@@ -385,8 +384,8 @@ Claude Worker 可以把 `AGENT_WORKER_ANTHROPIC_BASE_URL` 指向本地 Proxy，�
 2. 在设置页确认模型、凭证和 Worker 可用。
 3. 在 Workers 页面选择 Worker 和项目目录。
 4. 初始化或同步项目目录。
-5. 发起编程任务、业务任务或跨项目任务。
-6. 在任务历史、会话页或任务看板中查看执行状态。
+5. 发起编程任务或业务任务。
+6. 在 Workers 任务历史或会话深链中查看执行状态。
 7. 需要时通过文件浏览、Git diff、Git history 审查结果。
 8. 对外部系统场景，使用 Open API、SDK 或 Sharing Key 派发任务和查询结果。
 

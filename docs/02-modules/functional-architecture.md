@@ -11,8 +11,9 @@
 
 主业务能力
   -> Workers
-  -> 任务
-  -> 跨项目
+
+核心运行底座
+  -> Session / Task / A2A
 
 平台治理能力
   -> 设置
@@ -43,7 +44,7 @@
 
 ### 2.2 会话底座
 
-目标：为 Worker 任务、跨项目阶段和开放集成提供统一的 Session、消息历史、SSE 与 Agent/Provider 绑定能力。它不再作为 PC 顶部主导航里的独立入口。
+目标：为 Worker 任务和开放集成提供统一的 Session、消息历史、SSE 与 Agent/Provider 绑定能力。它不再作为 PC 顶部主导航里的独立入口。
 
 包含能力：
 
@@ -55,7 +56,7 @@
 
 ### 2.3 任务
 
-目标：从平台视角统一查看 Agent Task 和 Worker Task 的运行情况。
+目标：从平台视角统一查看 Agent Task 和 Worker Task 的运行情况。Task 能力继续保留，但旧 `任务` 顶部入口及 `/tasks` 页面已退出，访问旧路由会重定向到 Workers。
 
 包含能力：
 
@@ -64,17 +65,17 @@
 - 任务恢复、取消、重连、重同步
 - 目录级或 Worker 级任务查询
 
-### 2.4 跨项目
+### 2.4 历史跨项目记录
 
-目标：用阶段化流程管理复杂任务，而不是只靠单轮对话。
+目标：在不修复或改写旧数据的前提下，为既有跨项目记录保留最小只读访问；不再提供新的阶段编排入口。
 
 包含能力：
 
-- 创建多阶段任务
-- 阶段绑定 Agent、目录、Prompt、worktree 分支
-- 阶段 handoff 编辑与审核
-- 任务启动、推进、取消
-- 阶段会话回跳
+- 两条 GET 继续提供 owner-scoped 列表与详情查询
+- 六条 mutation 默认在认证后返回 HTTP `410`、`Cache-Control: no-store` 和 `CROSS_PROJECT_TASK_MUTATION_RETIRED`
+- `/cross-tasks` 旧路由重定向到 Workers，顶部入口不再展示
+- `NAVIGATOR_CROSS_PROJECT_TASK_MUTATIONS_ENABLED=true` 只允许作为显式临时 rollback，不是默认能力
+- 旧记录保持只读，不自动回填、清洗、重放或修复
 
 ### 2.5 设置
 
@@ -127,8 +128,8 @@
 ### 3.1 主业务能力
 
 - Workers
-- 任务
-- 跨项目
+
+Task / Session / A2A 是 Workers 和开放集成依赖的核心运行底座，不因旧顶部入口退役而删除。
 
 ### 3.2 平台治理能力
 
@@ -169,7 +170,7 @@
 2. [工作区与 Worker 中心](./worker-workspace-center.md)
 3. [会话协作中心](./session-collaboration.md)
 4. [任务治理中心](./task-governance.md)
-5. [跨项目编排](./cross-project-orchestration.md)
+5. [跨项目退役与只读边界](./cross-project-orchestration.md)
 6. [平台设置与资源治理](./platform-governance.md)
 7. [用户与访问控制](./user-and-access-control.md)
 8. [通知、基础观测与开放集成](./observability-notification-integration.md)

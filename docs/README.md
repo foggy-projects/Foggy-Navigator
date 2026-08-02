@@ -31,7 +31,7 @@
 | [工作区与 Worker 中心](./02-modules/worker-workspace-center.md) | 远程 Worker、目录、Git、文件与任务工作台 |
 | [会话协作中心](./02-modules/session-collaboration.md) | 会话、消息、委派、分享与实时协作 |
 | [任务治理中心](./02-modules/task-governance.md) | 统一任务分发、查询、恢复与治理 |
-| [跨项目编排](./02-modules/cross-project-orchestration.md) | 多阶段、多目录、多 Agent 任务编排 |
+| [跨项目退役与只读边界](./02-modules/cross-project-orchestration.md) | mutation 默认退役、历史记录 owner-scoped 只读及旧 UI 路由兼容 |
 | [平台设置与资源治理](./02-modules/platform-governance.md) | Git/LLM/凭证/记忆/Worker/助手治理 |
 | [用户与访问控制](./02-modules/user-and-access-control.md) | 登录、用户、角色与 API Key 管理 |
 | [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md) | SSE、日志/健康检查、受控 Open API 与 SDK |
