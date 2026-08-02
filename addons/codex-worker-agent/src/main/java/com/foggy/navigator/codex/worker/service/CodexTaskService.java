@@ -145,6 +145,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private final ApplicationEventPublisher eventPublisher;
     private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskRuntimeStateService taskRuntimeStateService;
+    private final CodexTaskQueryService taskQueryService;
     private final CodexTaskProjectionMapper taskProjectionMapper = new CodexTaskProjectionMapper();
 
     @Autowired(required = false)
@@ -933,7 +934,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .providerConfig(providerConfig)
                 .build());
 
-        return toDispatchDTO(entity);
+        return taskQueryService.projectTask(entity);
     }
 
     private void persistTaskModelConfig(
@@ -1072,49 +1073,41 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      * 获取任务详情
      */
     public DispatchTaskDTO getTask(String userId, String taskId) {
-        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        return toDispatchDTO(entity);
+        return taskQueryService.getTask(userId, taskId);
     }
 
     public DispatchTaskDTO getTaskForProvider(String userId, String taskId, String providerType) {
-        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        requireTaskProvider(entity, providerType);
-        return toDispatchDTO(entity);
+        return taskQueryService.getTaskForProvider(userId, taskId, providerType);
     }
 
     /**
      * 获取任务 Entity（内部使用）
      */
     public CodexTaskEntity getTaskEntity(String taskId) {
-        return taskRepository.findByTaskId(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        return taskQueryService.getTaskEntity(taskId);
     }
 
     /**
      * 列出用户的所有任务
      */
     public List<DispatchTaskDTO> listTasks(String userId) {
-        return toDispatchDTOs(taskRepository.findByUserIdOrderByCreatedAtDesc(userId));
+        return taskQueryService.listTasks(userId);
     }
 
     public List<DispatchTaskDTO> listTasksForProvider(String userId, String providerType) {
-        return toDispatchDTOs(filterTasksByProvider(
-                taskRepository.findByUserIdOrderByCreatedAtDesc(userId), providerType));
+        return taskQueryService.listTasksForProvider(userId, providerType);
     }
 
     /**
      * 列出 Worker 下的任务
      */
     public List<DispatchTaskDTO> listTasksByWorker(String userId, String workerId) {
-        return toDispatchDTOs(taskRepository.findByWorkerIdAndUserId(workerId, userId));
+        return taskQueryService.listTasksByWorker(userId, workerId);
     }
 
     public List<DispatchTaskDTO> listTasksByWorkerForProvider(
             String userId, String workerId, String providerType) {
-        return toDispatchDTOs(filterTasksByProvider(
-                taskRepository.findByWorkerIdAndUserId(workerId, userId), providerType));
+        return taskQueryService.listTasksByWorkerForProvider(userId, workerId, providerType);
     }
 
     @Override
@@ -3631,133 +3624,80 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
-        return getTaskByIdForProvider(taskId, AGENT_ID);
+        return taskQueryService.getTaskById(taskId);
     }
 
     @Override
     public Optional<DispatchTaskDTO> getTaskByIdAndUser(String taskId, String userId) {
-        return getTaskByIdAndUserForProvider(taskId, userId, AGENT_ID);
+        return taskQueryService.getTaskByIdAndUser(taskId, userId);
     }
 
     @Override
     public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
-        return listTasksBySessionForProvider(sessionId, AGENT_ID);
+        return taskQueryService.listTasksBySession(sessionId);
     }
 
     public Optional<DispatchTaskDTO> getTaskByIdForProvider(String taskId, String providerType) {
-        return taskRepository.findByTaskId(taskId)
-                .filter(entity -> matchesProvider(entity, providerType))
-                .map(this::toDispatchDTO);
+        return taskQueryService.getTaskByIdForProvider(taskId, providerType);
     }
 
     public Optional<DispatchTaskDTO> getTaskByIdAndUserForProvider(String taskId, String userId, String providerType) {
-        return taskRepository.findByTaskIdAndUserId(taskId, userId)
-                .filter(entity -> matchesProvider(entity, providerType))
-                .map(this::toDispatchDTO);
+        return taskQueryService.getTaskByIdAndUserForProvider(taskId, userId, providerType);
     }
 
     public List<DispatchTaskDTO> listTasksBySessionForProvider(String sessionId, String providerType) {
-        return taskRepository.findBySessionId(sessionId).stream()
-                .filter(entity -> matchesProvider(entity, providerType))
-                .map(this::toDispatchDTO)
-                .toList();
+        return taskQueryService.listTasksBySessionForProvider(sessionId, providerType);
     }
 
     @Override
     public List<DispatchTaskDTO> listActiveDispatchTasks(String userId) {
-        return listActiveDispatchTasksForProvider(userId, AGENT_ID);
+        return taskQueryService.listActiveDispatchTasks(userId);
     }
 
     public List<DispatchTaskDTO> listActiveDispatchTasksForProvider(String userId, String providerType) {
-        return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                        userId, List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT", "CANCEL_REQUESTED")).stream()
-                .filter(entity -> matchesProvider(entity, providerType))
-                .map(this::toDispatchDTO)
-                .toList();
+        return taskQueryService.listActiveDispatchTasksForProvider(userId, providerType);
     }
 
     @Override
     public TaskPageResult listTaskPage(String userId, int page, int size, String state) {
-        return listTasksPagedForProvider(userId, page, size, state, AGENT_ID);
+        return taskQueryService.listTaskPage(userId, page, size, state);
     }
 
     public TaskPageResult listTasksPagedForProvider(String userId, int page, int size, String state, String providerType) {
-        List<CodexTaskEntity> tasks = taskRepository.findByUserIdOrderByCreatedAtDesc(userId);
-        tasks = filterTasksByProvider(tasks, providerType);
-        return buildSessionPage(tasks, page, size, state);
+        return taskQueryService.listTasksPagedForProvider(
+                userId, page, size, state, providerType);
     }
 
     public TaskPageResult listTasksPagedForProvider(String userId, String tenantId,
                                                      int page, int size, String state,
                                                      String workerId,
                                                      String providerType) {
-        List<CodexTaskEntity> tasks = taskRepository
-                .findByUserIdAndTenantIdOrderByCreatedAtDesc(userId, tenantId);
-        tasks = filterTasksByProvider(tasks, providerType);
-        if (workerId != null && !workerId.isBlank()) {
-            String normalizedWorkerId = workerId.trim();
-            tasks = tasks.stream()
-                    .filter(task -> normalizedWorkerId.equals(task.getWorkerId()))
-                    .toList();
-        }
-        return buildSessionPage(tasks, page, size, state);
+        return taskQueryService.listTasksPagedForProvider(
+                userId, tenantId, page, size, state, workerId, providerType);
     }
 
     @Override
     public TaskPageResult listDirectoryTaskPage(String userId, String directoryId, int page, int size, String state) {
-        return listTasksByDirectoryPagedForProvider(userId, directoryId, page, size, state, AGENT_ID);
+        return taskQueryService.listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
     public TaskPageResult listTasksByDirectoryPagedForProvider(String userId, String directoryId, int page, int size,
                                                                String state, String providerType) {
-        List<CodexTaskEntity> tasks = taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId);
-        tasks = filterTasksByProvider(tasks, providerType);
-        return buildSessionPage(tasks, page, size, state);
+        return taskQueryService.listTasksByDirectoryPagedForProvider(
+                userId, directoryId, page, size, state, providerType);
     }
 
     @Override
     public TaskSearchResult searchSessionPage(String userId, String keyword, String workerId,
                                               String directoryId, int page, int size) {
-        boolean hasFilter = (keyword != null && !keyword.isBlank())
-                || (workerId != null && !workerId.isBlank())
-                || (directoryId != null && !directoryId.isBlank());
-        if (!hasFilter) {
-            return TaskSearchResult.empty(page, size);
-        }
-
-        String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(Locale.ROOT) : null;
-        return searchSessionsForProvider(userId, normalizedKeyword, workerId, directoryId, page, size, AGENT_ID);
+        return taskQueryService.searchSessionPage(
+                userId, keyword, workerId, directoryId, page, size);
     }
 
     public TaskSearchResult searchSessionsForProvider(String userId, String normalizedKeyword, String workerId,
                                                       String directoryId, int page, int size, String providerType) {
-        List<List<CodexTaskEntity>> sessions = new ArrayList<>(groupTasksBySession(
-                filterTasksByProvider(taskRepository.findByUserIdOrderByCreatedAtDesc(userId), providerType)
-        ).values());
-
-        List<Map<String, Object>> filtered = sessions.stream()
-                .filter(tasks -> matchesSessionFilters(tasks, normalizedKeyword, workerId, directoryId))
-                .map(this::toSearchResult)
-                .sorted((a, b) -> compareNullableTime((LocalDateTime) b.get("updatedAt"), (LocalDateTime) a.get("updatedAt")))
-                .toList();
-
-        long total = filtered.size();
-        int from = Math.min(page * size, filtered.size());
-        int to = Math.min(from + size, filtered.size());
-        return TaskSearchResult.of(filtered.subList(from, to), total, page, size);
-    }
-
-    private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity) {
-        return toDispatchDTO(entity, resolveProviderType(entity));
-    }
-
-    private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity, String providerType) {
-        String agentId = resolveLogicalAgentId(entity);
-        String contextId = resolveTaskContextId(entity);
-        ErrorEnvelope error = resolveErrorEnvelope(entity);
-        LocalDateTime observedAt = LocalDateTime.now();
-        return taskProjectionMapper.toDispatchTask(
-                entity, agentId, providerType, contextId, error, observedAt);
+        return taskQueryService.searchSessionsForProvider(
+                userId, normalizedKeyword, workerId, directoryId, page, size, providerType);
     }
 
     @Override
@@ -3875,93 +3815,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return Map.of("status", "RESYNCED", "action", "RECONNECTED", "taskId", taskId);
     }
 
-    private TaskPageResult buildSessionPage(List<CodexTaskEntity> tasks, int page, int size, String interactionState) {
-        Set<String> states = parseInteractionStates(interactionState);
-        List<List<CodexTaskEntity>> sessions = new ArrayList<>(groupTasksBySession(tasks).values());
-        if (!states.isEmpty()) {
-            sessions = sessions.stream()
-                    .filter(sessionTasks -> states.contains(deriveInteractionState(sessionTasks.get(0).getStatus())))
-                    .toList();
-        }
-
-        long totalSessions = sessions.size();
-        int from = Math.min(page * size, sessions.size());
-        int to = Math.min(from + size, sessions.size());
-        List<DispatchTaskDTO> content = sessions.subList(from, to).stream()
-                .flatMap(Collection::stream)
-                .map(this::toDispatchDTO)
-                .toList();
-
-        return TaskPageResult.of(content, totalSessions, page, size);
-    }
-
-    private Map<String, List<CodexTaskEntity>> groupTasksBySession(List<CodexTaskEntity> tasks) {
-        Map<String, List<CodexTaskEntity>> grouped = new LinkedHashMap<>();
-        for (CodexTaskEntity task : tasks) {
-            String sessionKey = (task.getSessionId() != null && !task.getSessionId().isBlank())
-                    ? task.getSessionId()
-                    : "task:" + task.getTaskId();
-            grouped.computeIfAbsent(sessionKey, ignored -> new ArrayList<>()).add(task);
-        }
-        return grouped;
-    }
-
-    private Set<String> parseInteractionStates(String interactionState) {
-        if (interactionState == null || interactionState.isBlank()) {
-            return Set.of();
-        }
-        return Arrays.stream(interactionState.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toSet());
-    }
-
-    private boolean matchesSessionFilters(List<CodexTaskEntity> tasks, String keyword, String workerId, String directoryId) {
-        CodexTaskEntity latestTask = tasks.get(0);
-        if (workerId != null && !workerId.isBlank() && !workerId.equals(latestTask.getWorkerId())) {
-            return false;
-        }
-        if (directoryId != null && !directoryId.isBlank() && !directoryId.equals(latestTask.getDirectoryId())) {
-            return false;
-        }
-        if (keyword == null || keyword.isBlank()) {
-            return true;
-        }
-        return tasks.stream().anyMatch(task -> containsIgnoreCase(task.getPrompt(), keyword))
-                || tasks.stream().anyMatch(task -> containsIgnoreCase(task.getResultText(), keyword));
-    }
-
-    private Map<String, Object> toSearchResult(List<CodexTaskEntity> tasks) {
-        CodexTaskEntity latestTask = tasks.get(0);
-        CodexTaskEntity earliestTask = tasks.get(tasks.size() - 1);
-        BigDecimal totalCost = tasks.stream()
-                .map(task -> task.getCostUsd() != null ? task.getCostUsd() : BigDecimal.ZERO)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        LocalDateTime updatedAt = tasks.stream()
-                .map(CodexTaskEntity::getUpdatedAt)
-                .filter(java.util.Objects::nonNull)
-                .max(LocalDateTime::compareTo)
-                .orElse(latestTask.getUpdatedAt());
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("sessionId", latestTask.getSessionId());
-        result.put("workerId", latestTask.getWorkerId());
-        result.put("directoryId", latestTask.getDirectoryId());
-        result.put("firstPrompt", truncate(earliestTask.getPrompt(), 200));
-        result.put("customTitle", null);
-        result.put("tags", List.of());
-        result.put("interactionState", deriveInteractionState(latestTask.getStatus()));
-        result.put("latestTaskId", latestTask.getTaskId());
-        result.put("latestStatus", latestTask.getStatus());
-        result.put("model", latestTask.getModel());
-        result.put("cwd", latestTask.getCwd());
-        result.put("source", latestTask.getSource());
-        result.put("totalCost", totalCost);
-        result.put("createdAt", earliestTask.getCreatedAt());
-        result.put("updatedAt", updatedAt);
-        return result;
-    }
-
     private String deriveInteractionState(String taskStatus) {
         return taskProjectionMapper.interactionState(taskStatus);
     }
@@ -4034,30 +3887,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 || "LIFECYCLE_ACTIVATION_AUTHORITY_UNAVAILABLE".equals(error)
                 || (error != null
                 && error.startsWith("LIFECYCLE_ACTIVATION_"));
-    }
-
-    private boolean containsIgnoreCase(String value, String keyword) {
-        return value != null && value.toLowerCase(Locale.ROOT).contains(keyword);
-    }
-
-    private String truncate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength);
-    }
-
-    private int compareNullableTime(LocalDateTime left, LocalDateTime right) {
-        if (left == null && right == null) {
-            return 0;
-        }
-        if (left == null) {
-            return -1;
-        }
-        if (right == null) {
-            return 1;
-        }
-        return left.compareTo(right);
     }
 
     private CodexTaskEntity persistTask(CodexTaskEntity entity) {
@@ -4185,20 +4014,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         putIfNotBlank(state, ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE,
                 entity.getRuntimeAcceptanceState());
         return ProviderStateCodec.mergeTaskValues(existingJson, resolveProviderType(entity), state);
-    }
-
-    private String resolveTaskContextId(CodexTaskEntity entity) {
-        if (entity.getContextId() != null && !entity.getContextId().isBlank()) {
-            return entity.getContextId();
-        }
-        if (sessionTaskRepository == null || entity.getTaskId() == null || entity.getTaskId().isBlank()) {
-            return null;
-        }
-        return sessionTaskRepository.findByTaskId(entity.getTaskId())
-                .map(SessionTaskEntity::getTaskStateJson)
-                .map(json -> ProviderStateCodec.readStringOrNull(json, ProviderStateCodec.FIELD_CONTEXT_ID))
-                .filter(contextId -> contextId != null && !contextId.isBlank())
-                .orElse(null);
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {
@@ -4945,16 +4760,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         form.setCodexHomeKey(codexHomeKey);
     }
 
-    private boolean matchesProvider(CodexTaskEntity entity, String providerType) {
-        return normalizeProviderType(providerType).equals(resolveProviderType(entity));
-    }
-
-    private List<CodexTaskEntity> filterTasksByProvider(List<CodexTaskEntity> tasks, String providerType) {
-        return tasks.stream()
-                .filter(entity -> matchesProvider(entity, providerType))
-                .toList();
-    }
-
     private String resolveProviderType(CodexTaskEntity entity) {
         if (entity == null) {
             return AGENT_ID;
@@ -4967,51 +4772,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         providerType = normalizeProviderType(providerType);
         entity.setProviderType(providerType);
         return providerType;
-    }
-
-    private Map<String, String> resolveProviderTypes(List<CodexTaskEntity> entities) {
-        Map<String, String> taskProviders = new LinkedHashMap<>();
-        Set<String> unresolvedTaskIds = entities.stream()
-                .filter(entity -> firstNonBlank(entity.getProviderType()) == null)
-                .map(CodexTaskEntity::getTaskId)
-                .filter(taskId -> taskId != null && !taskId.isBlank())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (sessionTaskRepository != null && !unresolvedTaskIds.isEmpty()) {
-            sessionTaskRepository.findByTaskIdIn(unresolvedTaskIds).forEach(sessionTask -> {
-                String providerType = firstNonBlank(sessionTask.getProviderType());
-                if (providerType != null) {
-                    taskProviders.put(sessionTask.getTaskId(), providerType);
-                }
-            });
-        }
-
-        Set<String> unresolvedSessionIds = entities.stream()
-                .filter(entity -> firstNonBlank(
-                        entity.getProviderType(), taskProviders.get(entity.getTaskId())) == null)
-                .map(CodexTaskEntity::getSessionId)
-                .filter(sessionId -> sessionId != null && !sessionId.isBlank())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        Map<String, String> sessionProviders = new LinkedHashMap<>();
-        if (sessionEntityRepository != null && !unresolvedSessionIds.isEmpty()) {
-            sessionEntityRepository.findAllById(unresolvedSessionIds).forEach(session -> {
-                String providerType = firstNonBlank(session.getProviderType());
-                if (providerType != null) {
-                    sessionProviders.put(session.getId(), providerType);
-                }
-            });
-        }
-
-        Map<String, String> resolved = new LinkedHashMap<>();
-        entities.forEach(entity -> {
-            String providerType = normalizeProviderType(firstNonBlank(
-                    entity.getProviderType(),
-                    taskProviders.get(entity.getTaskId()),
-                    sessionProviders.get(entity.getSessionId()),
-                    AGENT_ID));
-            entity.setProviderType(providerType);
-            resolved.put(entity.getTaskId(), providerType);
-        });
-        return resolved;
     }
 
     private String resolveSessionTaskProviderType(String taskId) {
@@ -5544,13 +5304,4 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private record ModelResolution(@Nullable String model, String source) {
     }
 
-    private List<DispatchTaskDTO> toDispatchDTOs(List<CodexTaskEntity> entities) {
-        if (entities.isEmpty()) {
-            return List.of();
-        }
-        Map<String, String> providerTypes = resolveProviderTypes(entities);
-        return entities.stream()
-                .map(entity -> toDispatchDTO(entity, providerTypes.get(entity.getTaskId())))
-                .toList();
-    }
 }

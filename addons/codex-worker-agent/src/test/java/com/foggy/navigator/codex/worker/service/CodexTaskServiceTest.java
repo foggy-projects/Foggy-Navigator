@@ -67,6 +67,7 @@ import jakarta.persistence.EntityManager;
 import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -182,12 +183,18 @@ class CodexTaskServiceTest {
     private CodexLifecycleBindingDigest lifecycleBindingDigest;
 
     private CodexTaskService service;
+    private CodexTaskQueryService taskQueryService;
 
     @BeforeEach
     void setUp() {
+        taskQueryService = new CodexTaskQueryService(taskRepository);
+        ReflectionTestUtils.setField(
+                taskQueryService, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(
+                taskQueryService, "sessionEntityRepository", sessionEntityRepository);
         service = new CodexTaskService(
                 taskRepository, workerManagementFacade, eventPublisher, clientFactory,
-                taskRuntimeStateService);
+                taskRuntimeStateService, taskQueryService);
         ReflectionTestUtils.setField(service, "llmModelManager", llmModelManager);
         ReflectionTestUtils.setField(service, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
@@ -208,6 +215,16 @@ class CodexTaskServiceTest {
                 service, "lifecycleBindingDigest", lifecycleBindingDigest);
 
         lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
+        lenient().when(sessionTaskRepository.findByTaskIdIn(any())).thenAnswer(invocation -> {
+            Collection<String> taskIds = invocation.getArgument(0);
+            if (taskIds == null) {
+                return List.of();
+            }
+            return taskIds.stream()
+                    .map(taskId -> sessionTaskRepository.findByTaskId(taskId).orElse(null))
+                    .filter(Objects::nonNull)
+                    .toList();
+        });
         lenient().when(sessionTaskRepository.findByTaskIdForUpdate(anyString()))
                 .thenAnswer(invocation -> sessionTaskRepository.findByTaskId(invocation.getArgument(0)));
         lenient().when(taskRepository.findByTaskIdForUpdate(anyString()))
@@ -218,6 +235,16 @@ class CodexTaskServiceTest {
             SessionEntity session = new SessionEntity();
             session.setId(invocation.getArgument(0));
             return Optional.of(session);
+        });
+        lenient().when(sessionEntityRepository.findAllById(any())).thenAnswer(invocation -> {
+            Iterable<String> sessionIds = invocation.getArgument(0);
+            if (sessionIds == null) {
+                return List.of();
+            }
+            List<SessionEntity> sessions = new java.util.ArrayList<>();
+            sessionIds.forEach(sessionId -> sessionEntityRepository.findById(sessionId)
+                    .ifPresent(sessions::add));
+            return sessions;
         });
         lenient().when(sessionEntityRepository.findResumeStateByIdAndUserId(anyString(), anyString()))
                 .thenAnswer(invocation -> sessionEntityRepository.findById(invocation.getArgument(0))
@@ -1017,6 +1044,89 @@ class CodexTaskServiceTest {
         } finally {
             TimeZone.setDefault(originalTimeZone);
         }
+    }
+
+    @Test
+    void publicQuerySurfaceDelegatesWithoutUsingTaskRepositoryDirectly() {
+        CodexTaskQueryService queryDelegate = mock(CodexTaskQueryService.class);
+        CodexTaskService delegating = new CodexTaskService(
+                taskRepository,
+                workerManagementFacade,
+                eventPublisher,
+                clientFactory,
+                taskRuntimeStateService,
+                queryDelegate);
+        DispatchTaskDTO expected = DispatchTaskDTO.builder().taskId("task-1").build();
+        when(queryDelegate.getTask("user-1", "task-1")).thenReturn(expected);
+
+        assertSame(expected, delegating.getTask("user-1", "task-1"));
+        delegating.getTaskForProvider("user-1", "task-1", "codex-biz-worker");
+        delegating.getTaskEntity("task-1");
+        delegating.listTasks("user-1");
+        delegating.listTasksForProvider("user-1", "codex-biz-worker");
+        delegating.listTasksByWorker("user-1", "worker-1");
+        delegating.listTasksByWorkerForProvider(
+                "user-1", "worker-1", "codex-biz-worker");
+        delegating.getTaskById("task-1");
+        delegating.getTaskByIdAndUser("task-1", "user-1");
+        delegating.listTasksBySession("session-1");
+        delegating.getTaskByIdForProvider("task-1", "codex-biz-worker");
+        delegating.getTaskByIdAndUserForProvider(
+                "task-1", "user-1", "codex-biz-worker");
+        delegating.listTasksBySessionForProvider("session-1", "codex-biz-worker");
+        delegating.listActiveDispatchTasks("user-1");
+        delegating.listActiveDispatchTasksForProvider("user-1", "codex-biz-worker");
+        delegating.listTaskPage("user-1", 0, 20, "PROCESSING");
+        delegating.listTasksPagedForProvider(
+                "user-1", 0, 20, "PROCESSING", "codex-biz-worker");
+        delegating.listTasksPagedForProvider(
+                "user-1", "tenant-1", 0, 20, "PROCESSING",
+                "worker-1", "codex-biz-worker");
+        delegating.listDirectoryTaskPage(
+                "user-1", "directory-1", 0, 20, "PROCESSING");
+        delegating.listTasksByDirectoryPagedForProvider(
+                "user-1", "directory-1", 0, 20, "PROCESSING", "codex-biz-worker");
+        delegating.searchSessionPage(
+                "user-1", "needle", "worker-1", "directory-1", 0, 20);
+        delegating.searchSessionsForProvider(
+                "user-1", "needle", "worker-1", "directory-1",
+                0, 20, "codex-biz-worker");
+
+        verify(queryDelegate).getTask("user-1", "task-1");
+        verify(queryDelegate).getTaskForProvider("user-1", "task-1", "codex-biz-worker");
+        verify(queryDelegate).getTaskEntity("task-1");
+        verify(queryDelegate).listTasks("user-1");
+        verify(queryDelegate).listTasksForProvider("user-1", "codex-biz-worker");
+        verify(queryDelegate).listTasksByWorker("user-1", "worker-1");
+        verify(queryDelegate).listTasksByWorkerForProvider(
+                "user-1", "worker-1", "codex-biz-worker");
+        verify(queryDelegate).getTaskById("task-1");
+        verify(queryDelegate).getTaskByIdAndUser("task-1", "user-1");
+        verify(queryDelegate).listTasksBySession("session-1");
+        verify(queryDelegate).getTaskByIdForProvider("task-1", "codex-biz-worker");
+        verify(queryDelegate).getTaskByIdAndUserForProvider(
+                "task-1", "user-1", "codex-biz-worker");
+        verify(queryDelegate).listTasksBySessionForProvider(
+                "session-1", "codex-biz-worker");
+        verify(queryDelegate).listActiveDispatchTasks("user-1");
+        verify(queryDelegate).listActiveDispatchTasksForProvider(
+                "user-1", "codex-biz-worker");
+        verify(queryDelegate).listTaskPage("user-1", 0, 20, "PROCESSING");
+        verify(queryDelegate).listTasksPagedForProvider(
+                "user-1", 0, 20, "PROCESSING", "codex-biz-worker");
+        verify(queryDelegate).listTasksPagedForProvider(
+                "user-1", "tenant-1", 0, 20, "PROCESSING",
+                "worker-1", "codex-biz-worker");
+        verify(queryDelegate).listDirectoryTaskPage(
+                "user-1", "directory-1", 0, 20, "PROCESSING");
+        verify(queryDelegate).listTasksByDirectoryPagedForProvider(
+                "user-1", "directory-1", 0, 20, "PROCESSING", "codex-biz-worker");
+        verify(queryDelegate).searchSessionPage(
+                "user-1", "needle", "worker-1", "directory-1", 0, 20);
+        verify(queryDelegate).searchSessionsForProvider(
+                "user-1", "needle", "worker-1", "directory-1",
+                0, 20, "codex-biz-worker");
+        verifyNoInteractions(taskRepository);
     }
 
     @Test
