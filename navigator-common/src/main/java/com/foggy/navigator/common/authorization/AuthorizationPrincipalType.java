@@ -7,6 +7,7 @@ public enum AuthorizationPrincipalType {
     CLIENT_APP,
     TASK_CAPABILITY,
     WORKER_PRINCIPAL,
+    SHARE_GRANTEE,
     INSTANCE_ROOT,
     SAAS_PLATFORM,
     UNKNOWN
