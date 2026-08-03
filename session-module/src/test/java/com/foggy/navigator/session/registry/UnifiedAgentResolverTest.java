@@ -236,6 +236,86 @@ class UnifiedAgentResolverTest {
     }
 
     @Test
+    void resolveAgentByProviderTypeExact_returnsUniqueMatchWithoutFallbackOrSecondResolution() {
+        AgentResolveContext context = ctx("user-1");
+        A2aAgentProvider exactMiss = mock(A2aAgentProvider.class);
+        A2aAgentProvider unrelated = mock(A2aAgentProvider.class);
+        A2aAgentProvider exactHit = mock(A2aAgentProvider.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        when(exactMiss.getProviderType()).thenReturn("codex-worker");
+        when(unrelated.getProviderType()).thenReturn("claude-worker");
+        when(exactHit.getProviderType()).thenReturn("codex-worker");
+        when(exactMiss.resolveAgent("agent-1", context)).thenReturn(Optional.empty());
+        when(exactHit.resolveAgent("agent-1", context)).thenReturn(Optional.of(agent));
+        UnifiedAgentResolver exactResolver = new UnifiedAgentResolver(
+                List.of(exactMiss, unrelated, exactHit), llmModelManager);
+
+        Optional<A2aAgent> result = exactResolver.resolveAgentByProviderTypeExact(
+                " codex-worker ", " agent-1 ", context);
+
+        assertSame(agent, result.orElseThrow());
+        verify(exactMiss, times(1)).resolveAgent("agent-1", context);
+        verify(exactHit, times(1)).resolveAgent("agent-1", context);
+        verify(unrelated, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+        verifyNoInteractions(llmModelManager);
+    }
+
+    @Test
+    void resolveAgentByProviderTypeExact_returnsEmptyWhenExactProviderOrAgentIsMissing() {
+        AgentResolveContext context = ctx("user-1");
+        A2aAgentProvider unrelated = mock(A2aAgentProvider.class);
+        when(unrelated.getProviderType()).thenReturn("claude-worker");
+        UnifiedAgentResolver noProviderResolver = new UnifiedAgentResolver(
+                List.of(unrelated), llmModelManager);
+
+        assertTrue(noProviderResolver.resolveAgentByProviderTypeExact(
+                "codex-worker", "agent-1", context).isEmpty());
+        verify(unrelated, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+
+        A2aAgentProvider exactMiss = mock(A2aAgentProvider.class);
+        when(exactMiss.getProviderType()).thenReturn("codex-worker");
+        when(exactMiss.resolveAgent("agent-1", context)).thenReturn(Optional.empty());
+        UnifiedAgentResolver noAgentResolver = new UnifiedAgentResolver(
+                List.of(exactMiss), llmModelManager);
+
+        assertTrue(noAgentResolver.resolveAgentByProviderTypeExact(
+                "codex-worker", "agent-1", context).isEmpty());
+        verify(exactMiss, times(1)).resolveAgent("agent-1", context);
+        verifyNoInteractions(llmModelManager);
+    }
+
+    @Test
+    void resolveAgentByProviderTypeExact_rejectsAmbiguityAndInvalidInput() {
+        AgentResolveContext context = ctx("user-1");
+        A2aAgentProvider exactOne = mock(A2aAgentProvider.class);
+        A2aAgentProvider exactTwo = mock(A2aAgentProvider.class);
+        when(exactOne.getProviderType()).thenReturn("codex-worker");
+        when(exactTwo.getProviderType()).thenReturn("codex-worker");
+        when(exactOne.resolveAgent("agent-1", context))
+                .thenReturn(Optional.of(mock(A2aAgent.class)));
+        when(exactTwo.resolveAgent("agent-1", context))
+                .thenReturn(Optional.of(mock(A2aAgent.class)));
+        UnifiedAgentResolver ambiguousResolver = new UnifiedAgentResolver(
+                List.of(exactOne, exactTwo), llmModelManager);
+
+        IllegalStateException ambiguity = assertThrows(IllegalStateException.class,
+                () -> ambiguousResolver.resolveAgentByProviderTypeExact(
+                        "codex-worker", "agent-1", context));
+
+        assertTrue(ambiguity.getMessage().contains("Ambiguous Agent resolution"));
+        verify(exactOne, times(1)).resolveAgent("agent-1", context);
+        verify(exactTwo, times(1)).resolveAgent("agent-1", context);
+        assertThrows(IllegalArgumentException.class,
+                () -> ambiguousResolver.resolveAgentByProviderTypeExact(" ", "agent-1", context));
+        assertThrows(IllegalArgumentException.class,
+                () -> ambiguousResolver.resolveAgentByProviderTypeExact("codex-worker", " ", context));
+        assertThrows(NullPointerException.class,
+                () -> ambiguousResolver.resolveAgentByProviderTypeExact(
+                        "codex-worker", "agent-1", null));
+        verifyNoInteractions(llmModelManager);
+    }
+
+    @Test
     void resolveAgent_prefersLangGraphProviderFromModelConfig() {
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")

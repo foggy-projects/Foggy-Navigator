@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -70,6 +71,42 @@ public class UnifiedAgentResolver {
     }
 
     /**
+     * Resolves one Agent only within the exact provider identity supplied by an
+     * already-authoritative target plan.
+     * <p>
+     * Every provider with that exact identity is consulted at most once. No
+     * model mapping, global provider scan or first-match fallback is allowed.
+     * Missing providers and missing Agents are represented by {@link Optional#empty()};
+     * more than one successful provider is an ambiguous configuration and fails closed.
+     */
+    public Optional<A2aAgent> resolveAgentByProviderTypeExact(
+            String providerType, String agentId, AgentResolveContext context) {
+        String exactProviderType = requireText(providerType, "providerType is required");
+        String exactAgentId = requireText(agentId, "agentId is required");
+        Objects.requireNonNull(context, "resolve context is required");
+
+        A2aAgent resolved = null;
+        for (A2aAgentProvider provider : providers) {
+            if (!exactProviderType.equals(provider.getProviderType())) {
+                continue;
+            }
+            Optional<A2aAgent> candidate = Objects.requireNonNull(
+                    provider.resolveAgent(exactAgentId, context),
+                    "provider returned null Agent resolution: " + exactProviderType);
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            if (resolved != null) {
+                throw new IllegalStateException(
+                        "Ambiguous Agent resolution for providerType=" + exactProviderType
+                                + ", agentId=" + exactAgentId);
+            }
+            resolved = candidate.get();
+        }
+        return Optional.ofNullable(resolved);
+    }
+
+    /**
      * 获取能解析指定 agentId 的 Provider 类型
      */
     public Optional<String> getProviderType(String agentId, AgentResolveContext context) {
@@ -102,5 +139,12 @@ public class UnifiedAgentResolver {
         return llmModelManager.getModelConfig(modelConfigId)
                 .flatMap(config -> ProviderRouteRegistry.providerTypeForWorkerBackend(config.getWorkerBackend()))
                 .orElse(null);
+    }
+
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.trim();
     }
 }
