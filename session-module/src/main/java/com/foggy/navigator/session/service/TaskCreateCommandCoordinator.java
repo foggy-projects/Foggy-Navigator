@@ -266,6 +266,18 @@ public final class TaskCreateCommandCoordinator {
             }
         };
 
+        /**
+         * Fresh-only mutation phase after the once-effect permit is durable but before route
+         * preparation can claim context, bind a Session, or reserve lifecycle state.
+         *
+         * <p>The default is deliberately empty so existing participants retain their exact
+         * route-then-prepare ordering. Credential lanes that must consume an admission capability
+         * before route mutation may override this hook.</p>
+         */
+        default void afterEffectPermitBeforeRoutePreparation() {
+            // Compatibility lane: no pre-route participant work.
+        }
+
         void prepareFreshTask();
 
         void completeFreshTask(DispatchTaskDTO freshTask);
@@ -414,6 +426,9 @@ public final class TaskCreateCommandCoordinator {
                 }
                 providerEffectPermitted = true;
             }
+            participants.afterEffectPermitBeforeRoutePreparation();
+            expectedPlan.requireMatches(request, context);
+            expectedBinding.requireActual(requireActualIdentity(actualIdentitySupplier));
             routePreparation.run();
             expectedPlan.requireMatches(request, context);
             expectedBinding.requireActual(requireActualIdentity(actualIdentitySupplier));
