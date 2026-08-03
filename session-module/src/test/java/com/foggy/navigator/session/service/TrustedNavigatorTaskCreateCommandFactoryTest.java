@@ -74,6 +74,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
 
     private VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority;
     private TrustedNavigatorTaskCreateCommandFactory factory;
+    private TrustedNavigatorCommandIngressAuthority ingressAuthority;
 
     @BeforeEach
     void setUp() {
@@ -81,8 +82,9 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
                 "test.policy.v1",
                 Clock.fixed(Instant.parse("2026-08-03T08:00:00Z"), ZoneOffset.UTC),
                 Duration.ofMinutes(5));
+        ingressAuthority = new TrustedNavigatorCommandIngressAuthority();
         factory = new TrustedNavigatorTaskCreateCommandFactory(
-                taskDispatchFacade, commandCoordinator, serverAuthority);
+                taskDispatchFacade, commandCoordinator, serverAuthority, ingressAuthority);
     }
 
     @AfterEach
