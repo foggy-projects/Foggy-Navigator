@@ -18,6 +18,7 @@ import com.foggy.navigator.session.lifecycle.SessionForegroundLaneService;
 import com.foggy.navigator.session.lifecycle.LifecycleIngressGate;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
+import com.foggy.navigator.session.repository.SessionCodingAgentRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
@@ -35,6 +36,7 @@ import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionSummary;
 import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -92,6 +94,14 @@ public class TaskDispatchFacade {
 
     @Autowired(required = false)
     @Nullable
+    private SessionCodingAgentRepository sessionCodingAgentRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private WorkerManagementFacade workerManagementFacade;
+
+    @Autowired(required = false)
+    @Nullable
     private ErrorDiagnosticService errorDiagnosticService;
 
     @Autowired(required = false)
@@ -141,9 +151,13 @@ public class TaskDispatchFacade {
     private TaskCreateTargetResolver createTargetResolver() {
         return new TaskCreateTargetResolver(
                 sessionRepository,
+                resourceAccessService,
                 workingDirectoryRepository,
+                sessionCodingAgentRepository,
                 taskQueryProviderRegistry,
-                llmModelManager);
+                llmModelManager,
+                workerManagementFacade,
+                agentResolver);
     }
 
     private UnifiedSessionTaskProjectionService projectionService() {
@@ -179,14 +193,14 @@ public class TaskDispatchFacade {
             return resumeTask(request, context);
         }
 
-        TaskCreateTargetResolver.CreateExecutionTarget target = createTargetResolver().resolveCreateExecutionTarget(request);
+        TaskCreateTargetResolver.CreateExecutionTarget target =
+                createTargetResolver().resolveCreateExecutionTarget(request);
         if (target.directProviderRoute()) {
             validateSessionProviderBeforeDispatch(request.getSessionId(), target.providerType());
             rejectBusyContextContinuationIfNeeded(target.providerType(), request, context);
             LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
             try {
-                DispatchTaskDTO dto =
-                        createTaskDirect(target.providerType(), request, context);
+                DispatchTaskDTO dto = createTaskDirect(target.providerType(), request, context);
                 confirmReservation(permit, dto);
                 return dto;
             } catch (RuntimeException failure) {
@@ -196,21 +210,104 @@ public class TaskDispatchFacade {
         }
 
         TaskCreateTargetResolver.AgentLookup lookup = target.agentLookup();
-
         A2aAgent agent = agentResolver.resolveAgent(lookup.lookupId, context)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + lookup.lookupId));
-
         String providerType = agentResolver.getProviderType(lookup.lookupId, context)
                 .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + lookup.lookupId));
-
         String agentId = resolveLogicalAgentId(agent, lookup.lookupId);
         TaskOperationRouter operations = operationRouter();
         operations.validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
         operations.validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
-        // 绑定校验
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            bindingService.getOrBind(request.getSessionId(), agentId, providerType, lookup.bindingSource);
+            bindingService.getOrBind(
+                    request.getSessionId(), agentId, providerType, lookup.bindingSource);
+        }
+
+        A2aMessage message = buildMessage(request);
+        LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
+        A2aTask a2aTask;
+        try {
+            a2aTask = agent.sendTask(message);
+        } catch (RuntimeException failure) {
+            releaseFailedReservation(permit);
+            throw failure;
+        }
+        log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
+                agentId, providerType, a2aTask.getId());
+
+        DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
+        persistTaskRequestFields(dto.getTaskId(), request);
+        persistContextBinding(dto, request, context, providerType);
+        confirmReservation(permit, dto);
+        return dto;
+    }
+
+    /** Content-free seam used by create ingress to resolve exactly one execution target. */
+    TaskCreateTargetResolver.CreateExecutionPlan resolveCreateExecutionPlan(
+            TaskDispatchRequest request, AgentResolveContext context) {
+        validateSessionOwnershipBeforeDispatch(request, context);
+        validateContextBindingBeforeDispatch(request, context);
+        bindContinuationFromContext(request, context);
+        if (request != null && request.isResume()) {
+            throw new IllegalArgumentException(
+                    "guarded CREATE cannot execute a resume continuation");
+        }
+        if (request != null && trimToNull(request.getContextAlias()) != null) {
+            throw new IllegalArgumentException(
+                    "guarded CREATE does not accept contextAlias");
+        }
+        return createTargetResolver().resolveCreateExecutionPlan(request, context);
+    }
+
+    /** Executes the exact pre-effect plan; package visibility keeps ingress adapters on one path. */
+    DispatchTaskDTO createTask(TaskDispatchRequest request,
+                               AgentResolveContext context,
+                               TaskCreateTargetResolver.CreateExecutionPlan plan) {
+        Objects.requireNonNull(plan, "create execution plan is required");
+        plan.requireMatches(request, context);
+        plan.applyCanonicalTarget(request);
+
+        if (plan.directProviderRoute()) {
+            validateSessionProviderBeforeDispatch(plan.sessionId(), plan.providerType());
+            rejectBusyContextContinuationIfNeeded(plan.providerType(), request, context);
+            LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
+            try {
+                DispatchTaskDTO dto =
+                        createTaskDirect(plan.providerType(), request, context);
+                confirmReservation(permit, dto);
+                return dto;
+            } catch (RuntimeException failure) {
+                releaseFailedReservation(permit);
+                throw failure;
+            }
+        }
+
+        TaskCreateTargetResolver.AgentLookup lookup = plan.agentLookup();
+        AgentResolveContext executionContext = executionContext(plan, context);
+
+        A2aAgent agent = agentResolver.resolveAgentByProviderTypeExact(
+                        plan.providerType(), lookup.lookupId(), executionContext)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + lookup.lookupId()));
+
+        A2aAgentCard actualCard = agent.getAgentCard();
+        String agentId = actualCard != null ? trimToNull(actualCard.getId()) : null;
+        if (agentId == null) {
+            throw new IllegalArgumentException(
+                    "Resolved Agent has no exact card id: " + lookup.lookupId());
+        }
+        if (!plan.logicalAgentId().equals(agentId)) {
+            throw new IllegalArgumentException("agentId " + agentId
+                    + " conflicts with resolved " + plan.logicalAgentId());
+        }
+
+        TaskOperationRouter operations = operationRouter();
+        operations.validateRequestedProviderTypeCompatibility(request.getProviderType(), plan.providerType());
+        operations.validateModelConfigProviderCompatibility(request.getModelConfigId(), plan.providerType());
+
+        // 绑定校验
+        if (plan.sessionId() != null) {
+            bindingService.getOrBind(plan.sessionId(), agentId, plan.providerType(), lookup.bindingSource());
         }
 
         // 构造 A2aMessage
@@ -227,11 +324,11 @@ public class TaskDispatchFacade {
             throw failure;
         }
         log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
-                agentId, providerType, a2aTask.getId());
+                agentId, plan.providerType(), a2aTask.getId());
 
-        DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
+        DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, plan.providerType(), request);
         persistTaskRequestFields(dto.getTaskId(), request);
-        persistContextBinding(dto, request, context, providerType);
+        persistContextBinding(dto, request, context, plan.providerType());
         confirmReservation(permit, dto);
         return dto;
     }
@@ -1468,6 +1565,20 @@ public class TaskDispatchFacade {
             return null;
         }
         return value.trim();
+    }
+
+    private AgentResolveContext executionContext(
+            TaskCreateTargetResolver.CreateExecutionPlan plan,
+            AgentResolveContext source) {
+        return AgentResolveContext.builder()
+                .userId(plan.ownerUserId())
+                .tenantId(plan.tenantId())
+                .sessionId(plan.sessionId())
+                .modelConfigId(plan.modelConfigId())
+                .requestSource(plan.agentLookup() != null
+                        ? plan.agentLookup().requestSource()
+                        : source.getRequestSource())
+                .build();
     }
 
     private String resolveLogicalAgentId(A2aAgent agent, String lookupId) {

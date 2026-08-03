@@ -8,6 +8,7 @@ import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -18,6 +19,7 @@ import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
+import com.foggy.navigator.session.repository.SessionCodingAgentRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -34,6 +36,7 @@ import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionSummary;
 import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -87,6 +90,10 @@ class TaskDispatchFacadeTest {
     @Mock
     private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock
+    private SessionCodingAgentRepository sessionCodingAgentRepository;
+    @Mock
+    private WorkerManagementFacade workerManagementFacade;
+    @Mock
     private AgentConversationContextRepository agentConversationContextRepository;
     @Mock
     private AgentContextStore agentContextStore;
@@ -110,7 +117,24 @@ class TaskDispatchFacadeTest {
                 providers,
                 llmModelManager);
         ReflectionTestUtils.setField(created, "agentContextStore", agentContextStore);
+        ReflectionTestUtils.setField(created, "sessionCodingAgentRepository", sessionCodingAgentRepository);
+        ReflectionTestUtils.setField(created, "workerManagementFacade", workerManagementFacade);
         return created;
+    }
+
+    private CodingAgentEntity ownedAgent(String agentId,
+                                         String userId,
+                                         String tenantId,
+                                         String agentType,
+                                         String workerId) {
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId(agentId);
+        entity.setUserId(userId);
+        entity.setTenantId(tenantId);
+        entity.setAgentType(agentType);
+        entity.setWorkerId(workerId);
+        entity.setEnabled(true);
+        return entity;
     }
 
     @Test
@@ -145,6 +169,243 @@ class TaskDispatchFacadeTest {
         assertEquals("agent-2", result.getAgentId());
         verify(agentResolver).resolveAgent(eq("agent-2"), any());
         verify(bindingService).getOrBind("session-1", "agent-2", "claude-worker", "SESSION_AGENT");
+    }
+
+    @Test
+    void createTaskConsumesTheSameResolvedPlanBeforeA2aEffect() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-plan-1")
+                .workerId("worker-1")
+                .prompt("planned a2a")
+                .metadata(Map.ofEntries(
+                        Map.entry("agentId", "agent-injected"),
+                        Map.entry("providerType", "provider-injected"),
+                        Map.entry("sessionId", "session-injected"),
+                        Map.entry("contextId", "context-injected"),
+                        Map.entry("workerId", "worker-injected"),
+                        Map.entry("directoryId", "directory-injected"),
+                        Map.entry("model", "model-injected"),
+                        Map.entry("modelConfigId", "config-injected"),
+                        Map.entry("userId", "user-injected"),
+                        Map.entry("tenantId", "tenant-injected"),
+                        Map.entry("trace", "trace-ok")))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-plan-1", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-plan-1", "user-1", null,
+                        "LOCAL_CLAUDE_WORKER", "worker-1")));
+
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                facade.resolveCreateExecutionPlan(request, context);
+        assertEquals(TaskCreateTargetResolver.ExecutionRoute.A2A, plan.executionRoute());
+        assertNull(request.getProviderType(), "resolution must not rewrite the request");
+
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-plan-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-plan-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-plan-a2a-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        DispatchTaskDTO result = facade.createTask(request, context, plan);
+
+        assertEquals("task-plan-a2a-1", result.getTaskId());
+        assertEquals("claude-worker", request.getProviderType());
+        assertEquals("worker-1", request.getWorkerId());
+        verify(agent).sendTask(argThat(message -> {
+            Map<String, Object> metadata = message.getMetadata();
+            return "agent-plan-1".equals(metadata.get("agentId"))
+                    && "claude-worker".equals(metadata.get("providerType"))
+                    && "worker-1".equals(metadata.get("workerId"))
+                    && "trace-ok".equals(metadata.get("trace"))
+                    && !metadata.containsKey("sessionId")
+                    && !metadata.containsKey("contextId")
+                    && !metadata.containsKey("directoryId")
+                    && !metadata.containsKey("model")
+                    && !metadata.containsKey("modelConfigId")
+                    && !metadata.containsKey("userId")
+                    && !metadata.containsKey("tenantId");
+        }));
+        verify(agentResolver).resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-plan-1"), any());
+        verify(agentResolver, never()).resolveAgent(any(), any());
+        verify(agentResolver, never()).getProviderType(any(), any());
+    }
+
+    @Test
+    void createTaskConsumesTheSameResolvedPlanBeforeDirectEffect() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .prompt("planned direct")
+                .metadata(Map.ofEntries(
+                        Map.entry("agentId", "agent-injected"),
+                        Map.entry("providerType", "provider-injected"),
+                        Map.entry("sessionId", "session-injected"),
+                        Map.entry("contextId", "context-injected"),
+                        Map.entry("workerId", "worker-injected"),
+                        Map.entry("directoryId", "directory-injected"),
+                        Map.entry("model", "model-injected"),
+                        Map.entry("modelConfigId", "config-injected"),
+                        Map.entry("userId", "user-injected"),
+                        Map.entry("tenantId", "tenant-injected"),
+                        Map.entry("trace", "trace-ok")))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1")))
+                .thenReturn(DispatchTaskDTO.builder()
+                        .taskId("task-plan-direct-1")
+                        .providerType("codex-worker")
+                        .workerId("worker-1")
+                        .build());
+
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                facade.resolveCreateExecutionPlan(request, context);
+        assertEquals(TaskCreateTargetResolver.ExecutionRoute.DIRECT, plan.executionRoute());
+
+        DispatchTaskDTO result = facade.createTask(request, context, plan);
+
+        assertEquals("task-plan-direct-1", result.getTaskId());
+        verify(workerManagementFacade).validateWorkerAccess("user-1", "tenant-1", "worker-1");
+        verify(taskQueryProvider).createTaskDirect(
+                argThat(params -> "codex-worker".equals(params.get("providerType"))
+                        && "worker-1".equals(params.get("workerId"))
+                        && "trace-ok".equals(params.get("trace"))
+                        && !params.containsKey("agentId")
+                        && !params.containsKey("sessionId")
+                        && !params.containsKey("contextId")
+                        && !params.containsKey("directoryId")
+                        && !params.containsKey("model")
+                        && !params.containsKey("modelConfigId")
+                        && !params.containsKey("userId")
+                        && !params.containsKey("tenantId")),
+                eq("user-1"), eq("tenant-1"));
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
+    void createTaskRejectsPlanDriftWithZeroProviderEffect() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .prompt("must not dispatch")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                facade.resolveCreateExecutionPlan(request, context);
+        request.setWorkerId("worker-2");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(request, context, plan));
+
+        assertTrue(error.getMessage().contains("workerId"));
+        request.setWorkerId("worker-1");
+        context.setUserId(null);
+        assertThrows(SecurityException.class, () -> facade.createTask(request, context, plan));
+        context.setUserId("user-1");
+        request.setContextAlias("alias-drift");
+        IllegalArgumentException aliasDrift = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(request, context, plan));
+        assertTrue(aliasDrift.getMessage().contains("contextAlias"));
+        request.setContextAlias(null);
+        request.setResume(true);
+        IllegalArgumentException resumeDrift = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(request, context, plan));
+        assertTrue(resumeDrift.getMessage().contains("resume continuation"));
+        request.setResume(false);
+
+        TaskDispatchRequest a2aRequest = TaskDispatchRequest.builder()
+                .agentId("agent-source-1")
+                .workerId("worker-1")
+                .build();
+        AgentResolveContext a2aContext = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-source-1", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-source-1", "user-1", null,
+                        "LOCAL_CLAUDE_WORKER", "worker-1")));
+        TaskCreateTargetResolver.CreateExecutionPlan a2aPlan =
+                facade.resolveCreateExecutionPlan(a2aRequest, a2aContext);
+        a2aContext.setRequestSource("OPEN_API");
+        assertThrows(SecurityException.class,
+                () -> facade.createTask(a2aRequest, a2aContext, a2aPlan));
+        a2aContext.setRequestSource("UI");
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-source-1"), any())).thenReturn(Optional.of(agent));
+        IllegalArgumentException missingCard = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(a2aRequest, a2aContext, a2aPlan));
+        assertTrue(missingCard.getMessage().contains("card id"));
+
+        verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
+        verify(agentResolver, never()).resolveAgent(any(), any());
+        verify(agentResolver, never()).getProviderType(any(), any());
+        verify(agent, never()).sendTask(any());
+    }
+
+    @Test
+    void resolveCreateExecutionPlanRejectsResumeContinuationBeforeTargetOrEffect() {
+        ReflectionTestUtils.setField(
+                facade, "agentConversationContextRepository", agentConversationContextRepository);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId("ctx-guarded-resume-1")
+                .resume(true)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        AgentConversationContextEntity boundContext = new AgentConversationContextEntity();
+        boundContext.setContextId("ctx-guarded-resume-1");
+        boundContext.setUserId("user-1");
+        boundContext.setTargetAgentId("agent-resume-1");
+        boundContext.setNavigatorSessionId("session-guarded-resume-1");
+        SessionEntity boundSession = new SessionEntity();
+        boundSession.setId("session-guarded-resume-1");
+        boundSession.setUserId("user-1");
+        boundSession.setTenantId("tenant-1");
+        boundSession.setAgentId("agent-resume-1");
+        boundSession.setProviderType("claude-worker");
+        boundSession.setCurrentWorkerId("worker-1");
+        boundSession.setCurrentDirectoryId("dir-1");
+        when(agentConversationContextRepository.findById("ctx-guarded-resume-1"))
+                .thenReturn(Optional.of(boundContext));
+        when(agentConversationContextRepository.findByContextIdAndUserId(
+                "ctx-guarded-resume-1", "user-1"))
+                .thenReturn(Optional.of(boundContext));
+        when(resourceAccessService.requireOwnedSession(
+                "session-guarded-resume-1", "user-1", "tenant-1"))
+                .thenReturn(boundSession);
+        when(sessionRepository.findById("session-guarded-resume-1"))
+                .thenReturn(Optional.of(boundSession));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> facade.resolveCreateExecutionPlan(request, context));
+
+        assertTrue(error.getMessage().contains("resume continuation"));
+        assertEquals("session-guarded-resume-1", request.getSessionId());
+        assertEquals("agent-resume-1", request.getAgentId());
+        assertEquals("claude-worker", request.getProviderType());
+        assertEquals("worker-1", request.getWorkerId());
+        assertEquals("dir-1", request.getDirectoryId());
+        verifyNoInteractions(sessionCodingAgentRepository, workerManagementFacade, agentResolver, agent);
+        verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
     }
 
     @Test
