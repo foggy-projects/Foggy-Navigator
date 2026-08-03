@@ -111,7 +111,17 @@ class BizWorkerControlPlaneAuthorizationTest {
 
     @Test
     void businessAgentTaskController_methods_requires_tenant_admin() throws NoSuchMethodException {
-        assertMethodRole(BusinessAgentTaskController.class.getMethod("createTask", String.class, String.class, com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm.class), "TENANT_ADMIN");
+        Method createTask = BusinessAgentTaskController.class.getMethod(
+                "createTask",
+                com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm.class,
+                String.class);
+        assertMethodRole(createTask, "TENANT_ADMIN");
+        org.springframework.web.bind.annotation.RequestHeader requestHeader =
+                createTask.getParameters()[1].getAnnotation(
+                        org.springframework.web.bind.annotation.RequestHeader.class);
+        assertNotNull(requestHeader);
+        assertEquals("X-Navigator-Client-Request-Id", requestHeader.value());
+        assertFalse(requestHeader.required());
         assertMethodRole(BusinessAgentTaskController.class.getMethod("getTask", String.class, String.class), "TENANT_ADMIN");
         assertMethodRole(BusinessAgentTaskController.class.getMethod("listTasksBySession", String.class, String.class), "TENANT_ADMIN");
     }
