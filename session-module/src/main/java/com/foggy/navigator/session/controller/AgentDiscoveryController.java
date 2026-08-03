@@ -12,6 +12,7 @@ import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -43,6 +44,7 @@ public class AgentDiscoveryController {
     private final ObjectMapper objectMapper;
     private final AgentSubmitPipeline agentSubmitPipeline;
     private final SessionTaskResourceAccessService resourceAccessService;
+    private final TaskDispatchFacade taskDispatchFacade;
 
     @GetMapping
     public RX<List<A2aAgentCard>> listAgents(
@@ -173,10 +175,8 @@ public class AgentDiscoveryController {
     public RX<String> cancelTask(
             @PathVariable String agentId,
             @PathVariable String taskId) {
-        requireOwnedAgentTask(agentId, taskId);
-        A2aAgent agent = agentResolver.resolveAgent(agentId, buildContext())
-                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-        agent.cancelTask(taskId);
+        SessionTaskEntity task = requireOwnedAgentTask(agentId, taskId);
+        taskDispatchFacade.cancelTask(taskId, task.getAgentId(), buildContext(), false);
         return RX.ok("Task cancel requested");
     }
 

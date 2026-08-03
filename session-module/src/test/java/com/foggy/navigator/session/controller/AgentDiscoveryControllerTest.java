@@ -13,6 +13,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
+import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
@@ -59,6 +60,8 @@ class AgentDiscoveryControllerTest {
     @Mock
     private SessionTaskResourceAccessService resourceAccessService;
     @Mock
+    private TaskDispatchFacade taskDispatchFacade;
+    @Mock
     private A2aAgent agent;
 
     private AgentDiscoveryController controller;
@@ -71,7 +74,8 @@ class AgentDiscoveryControllerTest {
                 sessionRepository,
                 new ObjectMapper(),
                 agentSubmitPipeline,
-                resourceAccessService);
+                resourceAccessService,
+                taskDispatchFacade);
         UserContext.setCurrentUser(CurrentUser.builder()
                 .userId(USER_ID)
                 .tenantId(TENANT_ID)
@@ -207,22 +211,25 @@ class AgentDiscoveryControllerTest {
         assertThrows(SecurityException.class,
                 () -> controller.cancelTask("agent-1", "task-other"));
 
-        verifyNoInteractions(agentResolver, agent);
+        verifyNoInteractions(agentResolver, agent, taskDispatchFacade);
     }
 
     @Test
     void cancelTask_authorizesTaskBeforeProviderMutation() {
         when(resourceAccessService.requireOwnedTask("task-1", USER_ID, TENANT_ID))
                 .thenReturn(ownedTask("task-1", "agent-1"));
-        when(agentResolver.resolveAgent(eq("agent-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(agent));
-
         controller.cancelTask("agent-1", "task-1");
 
-        InOrder ordered = inOrder(resourceAccessService, agentResolver, agent);
+        InOrder ordered = inOrder(resourceAccessService, taskDispatchFacade);
         ordered.verify(resourceAccessService).requireOwnedTask("task-1", USER_ID, TENANT_ID);
-        ordered.verify(agentResolver).resolveAgent(eq("agent-1"), any(AgentResolveContext.class));
-        ordered.verify(agent).cancelTask("task-1");
+        ordered.verify(taskDispatchFacade).cancelTask(
+                eq("task-1"),
+                eq("agent-1"),
+                argThat(context -> USER_ID.equals(context.getUserId())
+                        && TENANT_ID.equals(context.getTenantId())
+                        && "UI".equals(context.getRequestSource())),
+                eq(false));
+        verifyNoInteractions(agent);
     }
 
     @Test
@@ -233,7 +240,7 @@ class AgentDiscoveryControllerTest {
         assertThrows(SecurityException.class,
                 () -> controller.cancelTask("agent-other", "task-1"));
 
-        verifyNoInteractions(agentResolver, agent);
+        verifyNoInteractions(agentResolver, agent, taskDispatchFacade);
     }
 
     @Test
@@ -244,7 +251,7 @@ class AgentDiscoveryControllerTest {
         assertThrows(SecurityException.class,
                 () -> controller.cancelTask("agent-requested", "task-1"));
 
-        verifyNoInteractions(agentResolver, agent);
+        verifyNoInteractions(agentResolver, agent, taskDispatchFacade);
     }
 
     @Test
