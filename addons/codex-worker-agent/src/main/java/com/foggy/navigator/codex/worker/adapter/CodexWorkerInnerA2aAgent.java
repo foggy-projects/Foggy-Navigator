@@ -6,13 +6,16 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.RemoteTaskIdResolution;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +82,10 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         String requestedDirectoryId = stringMeta(meta, "directoryId");
         String modelConfigId = stringMeta(meta, "modelConfigId");
         String images = imagesMeta(meta.get("images"));
+        boolean initializeRuntimeAffinity =
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER.equals(providerType)
+                        && InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(meta);
+        message = withoutRuntimeAffinityMarker(message);
 
         String effectiveWorkerId = requestedWorkerId != null ? requestedWorkerId : entity.getWorkerId();
         String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
@@ -98,6 +105,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setModelConfigId(modelConfigId);
         form.setProviderType(providerType);
         form.setContextId(context.getContextId());
+        form.setInitializeRuntimeAffinity(initializeRuntimeAffinity);
 
         // 多轮会话：从已解析上下文获取 codexThreadId（使 Worker 恢复 Codex session）
         form.setCodexThreadId(context.getAgentSessionRef());
@@ -128,6 +136,25 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
                         .build())
                 .history(List.of(message))
                 .metadata(taskMeta)
+                .build();
+    }
+
+    private A2aMessage withoutRuntimeAffinityMarker(A2aMessage message) {
+        Map<String, Object> metadata = message.getMetadata();
+        if (metadata == null || !InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(metadata)) {
+            return message;
+        }
+        Map<String, Object> sanitized = new LinkedHashMap<>(metadata);
+        sanitized.entrySet().removeIf(entry ->
+                InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                        Collections.singletonMap(entry.getKey(), entry.getValue())));
+        return A2aMessage.builder()
+                .role(message.getRole())
+                .parts(message.getParts())
+                .taskId(message.getTaskId())
+                .contextId(message.getContextId())
+                .contextAlias(message.getContextAlias())
+                .metadata(sanitized.isEmpty() ? null : sanitized)
                 .build();
     }
 

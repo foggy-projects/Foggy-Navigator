@@ -6,10 +6,12 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -66,6 +69,13 @@ class CodexWorkerA2aAgentTest {
     private A2aAgent pipelineWithoutContextStore() {
         InnerA2aAgent inner = new CodexWorkerInnerA2aAgent(entity, taskService, "D:\\default");
         return new ContextResolvingA2aAgent(inner, null, entity);
+    }
+
+    private A2aAgent appServerPipelineWithoutContextStore() {
+        String providerType = ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER;
+        InnerA2aAgent inner = new CodexWorkerInnerA2aAgent(
+                entity, taskService, "D:\\default", providerType);
+        return new ContextResolvingA2aAgent(inner, null, entity, providerType);
     }
 
     private A2aMessage simpleMessage(String prompt) {
@@ -131,6 +141,88 @@ class CodexWorkerA2aAgentTest {
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertEquals("[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]",
                 captor.getValue().getImages());
+    }
+
+    @Test
+    void sendTask_mapsTrustedRuntimeAffinityMarkerToInternalCommand() {
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
+                .taskId("task-affinity-init")
+                .sessionId("session-affinity-init")
+                .workerId("worker-1")
+                .build());
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(metadata);
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("initialize app-server runtime")))
+                .metadata(metadata)
+                .build();
+
+        A2aTask result = appServerPipelineWithoutContextStore().sendTask(message);
+
+        ArgumentCaptor<CodexTaskCreateCommand> command =
+                ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
+        verify(taskService).createTask(eq("user-1"), eq("tenant-1"), command.capture());
+        assertTrue(command.getValue().isInitializeRuntimeAffinity());
+        assertFalse(InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                result.getHistory().get(0).getMetadata()));
+    }
+
+    @Test
+    void sendTask_rejectsForgedRuntimeAffinityMarkerValues() {
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
+                .taskId("task-affinity-forged")
+                .sessionId("session-affinity-forged")
+                .workerId("worker-1")
+                .build());
+        String markerKey = InternalTaskDispatchMarkers.class.getName()
+                + ".initializeRuntimeAffinity";
+        A2aMessage booleanForgery = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("forged boolean")))
+                .metadata(Map.of(markerKey, true))
+                .build();
+        A2aMessage stringForgery = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("forged string")))
+                .metadata(Map.of(markerKey, "true"))
+                .build();
+
+        appServerPipelineWithoutContextStore().sendTask(booleanForgery);
+        appServerPipelineWithoutContextStore().sendTask(stringForgery);
+
+        ArgumentCaptor<CodexTaskCreateCommand> commands =
+                ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
+        verify(taskService, times(2)).createTask(
+                eq("user-1"), eq("tenant-1"), commands.capture());
+        assertTrue(commands.getAllValues().stream()
+                .noneMatch(CodexTaskCreateCommand::isInitializeRuntimeAffinity));
+    }
+
+    @Test
+    void sendTask_keepsSdkAndOrdinaryA2aRuntimeAffinityInitializationDisabled() {
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
+                .taskId("task-affinity-ordinary")
+                .sessionId("session-affinity-ordinary")
+                .workerId("worker-1")
+                .build());
+        Map<String, Object> trustedMetadata = new LinkedHashMap<>();
+        InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(trustedMetadata);
+        A2aMessage sdkWithTrustedMarker = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("SDK must not initialize app-server affinity")))
+                .metadata(trustedMetadata)
+                .build();
+
+        pipelineWithoutContextStore().sendTask(sdkWithTrustedMarker);
+        appServerPipelineWithoutContextStore().sendTask(simpleMessage("ordinary app-server task"));
+
+        ArgumentCaptor<CodexTaskCreateCommand> commands =
+                ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
+        verify(taskService, times(2)).createTask(
+                eq("user-1"), eq("tenant-1"), commands.capture());
+        assertTrue(commands.getAllValues().stream()
+                .noneMatch(CodexTaskCreateCommand::isInitializeRuntimeAffinity));
     }
 
     @Test
