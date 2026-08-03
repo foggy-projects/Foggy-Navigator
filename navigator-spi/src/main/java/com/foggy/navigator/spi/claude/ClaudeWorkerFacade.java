@@ -61,6 +61,19 @@ public interface ClaudeWorkerFacade extends WorkerManagementFacade {
     }
 
     /**
+     * 同步工具查询（目录感知、无 Task/Session/receipt 持久化）。
+     * <p>
+     * 仅供通知、摘要等非任务型推理使用。实现必须使用目录绑定的认证和环境变量，
+     * 但不得为本次查询创建 durable Task、Foggy Session 或 lifecycle receipt。
+     */
+    default Map<String, Object> syncQueryUntracked(
+            String userId, String workerId, String prompt,
+            String cwd, String claudeSessionId, int maxTurns,
+            String model, String directoryId) {
+        throw new UnsupportedOperationException("DIRECTORY_AWARE_UNTRACKED_SYNC_NOT_SUPPORTED");
+    }
+
+    /**
      * 异步查询 — 30 分钟超时，适用于 A2A 长任务
      */
     default CompletableFuture<Map<String, Object>> asyncQuery(

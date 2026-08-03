@@ -166,6 +166,22 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     }
 
     @Override
+    public Map<String, Object> syncQueryUntracked(
+            String userId, String workerId, String prompt,
+            String cwd, String claudeSessionId, int maxTurns,
+            String model, String directoryId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found: " + workerId);
+        }
+
+        String[] auth = resolveDirectoryAuth(directoryId, userId);
+        Map<String, String> envVars = resolveDirectoryEnvVars(directoryId, userId);
+        return doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
+                auth[0], auth[1], auth[2], envVars);
+    }
+
+    @Override
     public Map<String, Object> syncQueryTracked(String userId, String workerId, String prompt,
                                                  String cwd, String claudeSessionId, int maxTurns,
                                                  String model, String sessionId, String directoryId) {

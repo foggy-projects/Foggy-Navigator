@@ -14,7 +14,8 @@ import java.util.Optional;
 public interface TaskAssistantFacade {
 
     /**
-     * 处理一批平台事件 — 创建 AgentTask 记录、调用 syncQuery、完成任务、推送通知
+     * 处理一批平台事件：执行非任务型工具推理并推送通知。
+     * 不创建 durable Task、Foggy Session 或 lifecycle receipt。
      */
     void processEvents(String userId, List<Map<String, Object>> events);
 

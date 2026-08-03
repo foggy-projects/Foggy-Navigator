@@ -6,9 +6,6 @@ import com.foggy.navigator.task.assistant.spi.TaskAssistantConfig;
 import com.foggy.navigator.task.assistant.spi.TaskAssistantFacade;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.notification.UserNotificationSender;
-import com.foggy.navigator.spi.task.AgentTaskManager;
-import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
-import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.task.assistant.entity.TaskAssistantConfigEntity;
 import com.foggy.navigator.task.assistant.repository.TaskAssistantConfigRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -26,18 +23,16 @@ import java.util.*;
 
 /**
  * 任务助手服务 — 基于 Claude Code Worker 的 AI 编程会话管理助手
- * 通过 ClaudeWorkerFacade.syncQuery() 调用远程 Worker 进行纯文本分析
+ * 通过 ClaudeWorkerFacade.syncQueryUntracked() 调用远程 Worker 进行纯文本分析。
  *
- * 每次执行（事件处理 / 日报）都创建 AgentTask 记录，可在 /tasks 页查看。
- * 使用同一个 Claude 会话持续累积上下文（claudeSessionId）。
+ * 事件处理与日报是非任务型工具推理，不创建 durable Task、Foggy Session 或 lifecycle receipt。
+ * Claude provider 会话只通过 claudeSessionId 连续累积上下文。
  */
 @Slf4j
 @Service
 public class TaskAssistantService implements TaskAssistantFacade {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final int PROMPT_SUMMARY_MAX_LENGTH = 200;
-
     /** 事件 Markdown 格式化时的已知字段集合，不在此集合中的字段归入"其他信息" */
     private static final Set<String> KNOWN_EVENT_FIELDS = Set.of(
             "type", "taskId", "externalTaskId", "status", "agent",
@@ -49,25 +44,16 @@ public class TaskAssistantService implements TaskAssistantFacade {
     private final UserNotificationSender notificationSender;
     @Nullable
     private final ClaudeWorkerFacade claudeWorkerFacade;
-    @Nullable
-    private final AgentTaskManager agentTaskManager;
-    @Nullable
-    private final SessionManager sessionManager;
 
     public TaskAssistantService(TaskAssistantConfigRepository configRepository,
                                  UserNotificationSender notificationSender,
-                                 @Nullable ClaudeWorkerFacade claudeWorkerFacade,
-                                 @Nullable AgentTaskManager agentTaskManager,
-                                 @Nullable SessionManager sessionManager) {
+                                 @Nullable ClaudeWorkerFacade claudeWorkerFacade) {
         this.configRepository = configRepository;
         this.notificationSender = notificationSender;
         this.claudeWorkerFacade = claudeWorkerFacade;
-        this.agentTaskManager = agentTaskManager;
-        this.sessionManager = sessionManager;
     }
 
-    // --- 新增：正式任务记录的事件处理 ---
-
+    // --- 非任务型事件分析 ---
     @Override
     public void processEvents(String userId, List<Map<String, Object>> events) {
         TaskAssistantConfigEntity config = configRepository.findByUserId(userId).orElse(null);
@@ -78,49 +64,21 @@ public class TaskAssistantService implements TaskAssistantFacade {
             return;
         }
 
-        // Lazy repair: fix stale cwd (~ not expanded) and re-bind auth
-        repairConfigIfNeeded(config);
-
-        // 1. 创建 AgentTask（正式记录）
-        String agentTaskId = null;
-        if (agentTaskManager != null) {
-            String promptSummary = truncate(events.size() + " platform events", PROMPT_SUMMARY_MAX_LENGTH);
-            agentTaskId = agentTaskManager.createTask(
-                    ensureFoggySession(config),
-                    userId,
-                    "task-assistant",   // sourceAgentId
-                    "task-assistant",   // targetAgentId
-                    "ASSISTANT_EVENT",  // taskType
-                    promptSummary,
-                    null,               // targetSessionId
-                    null                // externalTaskId
-            );
-        }
-
         try {
-            // 2. 构建 prompt（Markdown 格式化） + 调用 syncQuery
+            // 构建 prompt（Markdown 格式化）并执行目录感知的非任务型推理。
             String eventMarkdown = formatEventsAsMarkdown(events);
             String prompt = "分析以下平台事件并生成通知：\n\n" + eventMarkdown;
 
-            Map<String, Object> result = claudeWorkerFacade.syncQueryTracked(
+            Map<String, Object> result = claudeWorkerFacade.syncQueryUntracked(
                     userId, config.getWorkerId(), prompt,
                     config.getCwd(), config.getClaudeSessionId(), 4,
                     config.getModel(),
-                    ensureFoggySession(config),
                     config.getDirectoryId());
 
-            // 3. 更新 claudeSessionId（对话记忆连续性）
+            // 更新 provider 会话 ID（对话记忆连续性）。
             updateSessionId(config, result);
 
-            // 4. 完成 AgentTask
             String error = (String) result.get("error");
-            if (agentTaskId != null) {
-                agentTaskManager.completeTask(agentTaskId,
-                        error != null ? "FAILED" : "COMPLETED",
-                        truncate(resultOrError(result), PROMPT_SUMMARY_MAX_LENGTH));
-            }
-
-            // 5. 推送通知
             if (error == null) {
                 String responseText = (String) result.get("resultText");
                 if (responseText != null && !responseText.isBlank()) {
@@ -132,10 +90,6 @@ public class TaskAssistantService implements TaskAssistantFacade {
             }
         } catch (Exception e) {
             log.error("Task assistant processEvents failed for userId={}", userId, e);
-            if (agentTaskId != null) {
-                agentTaskManager.completeTask(agentTaskId, "FAILED",
-                        truncate(e.getMessage(), PROMPT_SUMMARY_MAX_LENGTH));
-            }
         }
     }
 
@@ -249,9 +203,6 @@ public class TaskAssistantService implements TaskAssistantFacade {
         entity.setEnabled(true);
         entity.setClaudeSessionId(null); // 新会话
 
-        // 确保关联 Foggy 会话
-        ensureFoggySession(entity);
-
         return toDTO(configRepository.save(entity));
     }
 
@@ -295,8 +246,6 @@ public class TaskAssistantService implements TaskAssistantFacade {
      * 1. 读取 progress.md 汇总当天活动
      * 2. 生成每日归档到 notes/daily/YYYY-MM-DD.md
      * 3. 返回通知 JSON 推送给用户
-     *
-     * 每次执行创建 AgentTask(DAILY_SUMMARY) 记录。
      */
     @Scheduled(cron = "0 30 23 * * *")
     public void dailySummary() {
@@ -321,23 +270,8 @@ public class TaskAssistantService implements TaskAssistantFacade {
     }
 
     private void executeDailySummary(TaskAssistantConfigEntity config, String today) {
-        // 1. 创建 AgentTask
-        String agentTaskId = null;
-        if (agentTaskManager != null) {
-            agentTaskId = agentTaskManager.createTask(
-                    ensureFoggySession(config),
-                    config.getUserId(),
-                    "task-assistant",   // sourceAgentId
-                    "task-assistant",   // targetAgentId
-                    "DAILY_SUMMARY",    // taskType
-                    "每日总结 " + today,
-                    null,               // targetSessionId
-                    null                // externalTaskId
-            );
-        }
-
         try {
-            // 2. syncQuery(maxTurns=5)
+            // 目录感知的非任务型同步推理（maxTurns=5）。
             String prompt = "现在是每日总结时间（" + today + "）。请执行以下操作：\n\n"
                     + "1. 读取 `progress.md`，汇总今天记录的所有任务活动\n"
                     + "2. 将今天的总结归档到 `notes/daily/" + today + ".md`，包含：\n"
@@ -348,25 +282,16 @@ public class TaskAssistantService implements TaskAssistantFacade {
                     + "4. 返回通知 JSON（severity 根据今天的整体情况判断）\n\n"
                     + "如果今天没有任何任务活动记录，返回 severity=info 的简短通知即可。";
 
-            Map<String, Object> result = claudeWorkerFacade.syncQueryTracked(
+            Map<String, Object> result = claudeWorkerFacade.syncQueryUntracked(
                     config.getUserId(), config.getWorkerId(), prompt,
                     config.getCwd(), config.getClaudeSessionId(), 5,
                     config.getModel(),
-                    ensureFoggySession(config),
                     config.getDirectoryId());
 
-            // 3. 更新 claudeSessionId
+            // 更新 provider 会话 ID。
             updateSessionId(config, result);
 
-            // 4. 完成 AgentTask
             String error = (String) result.get("error");
-            if (agentTaskId != null) {
-                agentTaskManager.completeTask(agentTaskId,
-                        error != null ? "FAILED" : "COMPLETED",
-                        truncate(resultOrError(result), PROMPT_SUMMARY_MAX_LENGTH));
-            }
-
-            // 5. 推送通知
             if (error != null) {
                 log.warn("Daily summary syncQuery error for userId={}: {}", config.getUserId(), error);
                 return;
@@ -384,10 +309,6 @@ public class TaskAssistantService implements TaskAssistantFacade {
             log.info("Daily summary completed for userId={}, date={}", config.getUserId(), today);
         } catch (Exception e) {
             log.error("Daily summary execution failed for userId={}", config.getUserId(), e);
-            if (agentTaskId != null) {
-                agentTaskManager.completeTask(agentTaskId, "FAILED",
-                        truncate(e.getMessage(), PROMPT_SUMMARY_MAX_LENGTH));
-            }
         }
     }
 
@@ -457,98 +378,12 @@ public class TaskAssistantService implements TaskAssistantFacade {
         Object v = m.get(key); if (v != null) sb.append("- **").append(label).append("**: ").append(v).append("\n");
     }
 
-    /**
-     * 确保 config 持有一个有效的 Foggy 会话 ID。
-     * 已有且存在则直接返回；已被删除或不存在则重建并持久化。创建失败时 fallback "task-assistant"。
-     */
-    private String ensureFoggySession(TaskAssistantConfigEntity config) {
-        if (config.getFoggySessionId() != null) {
-            if (sessionManager != null && sessionManager.getSession(config.getFoggySessionId()) == null) {
-                log.warn("Foggy session {} was deleted, recreating for userId={}",
-                        config.getFoggySessionId(), config.getUserId());
-                config.setFoggySessionId(null);
-                // fall through to recreate
-            } else {
-                return config.getFoggySessionId();
-            }
-        }
-        if (sessionManager == null) {
-            return "task-assistant";
-        }
-        try {
-            String foggySessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                    .userId(config.getUserId())
-                    .agentId("task-assistant")
-                    .taskName("任务助手")
-                    .build());
-            config.setFoggySessionId(foggySessionId);
-            configRepository.save(config);
-            log.info("Lazy-created foggy session {} for userId={}", foggySessionId, config.getUserId());
-            return foggySessionId;
-        } catch (Exception e) {
-            log.warn("Failed to create foggy session for userId={}, falling back", config.getUserId(), e);
-            return "task-assistant";
-        }
-    }
-
-    /**
-     * 修复旧配置：cwd 未展开（含 ~）时重新调用 initDirectory 获取展开路径，
-     * 同时重新绑定 modelConfig 确保 auth 状态正确。
-     */
-    private void repairConfigIfNeeded(TaskAssistantConfigEntity config) {
-        if (claudeWorkerFacade == null) return;
-        boolean needsSave = false;
-
-        // 1. cwd 含 ~ → 重新 initDirectory 获取展开路径 + 注册 allowed_cwds
-        if (config.getCwd() != null && config.getCwd().contains("~")) {
-            try {
-                Map<String, String> initFiles = loadInitFiles();
-                String directoryId = claudeWorkerFacade.initDirectory(
-                        config.getUserId(), config.getWorkerId(), config.getCwd(), initFiles);
-                String expandedPath = claudeWorkerFacade.getDirectoryPath(config.getUserId(), directoryId);
-                if (expandedPath != null && !expandedPath.equals(config.getCwd())) {
-                    log.info("Repaired cwd: {} → {} for userId={}", config.getCwd(), expandedPath, config.getUserId());
-                    config.setCwd(expandedPath);
-                    needsSave = true;
-                }
-            } catch (Exception e) {
-                log.warn("Failed to repair cwd for userId={}: {}", config.getUserId(), e.getMessage());
-            }
-        }
-
-        // 2. modelConfigId 设置但目录 auth 未绑定 → 重新 bindDirectoryModelConfig
-        if (config.getModelConfigId() != null && config.getDirectoryId() != null) {
-            try {
-                claudeWorkerFacade.bindDirectoryModelConfig(
-                        config.getUserId(), config.getDirectoryId(), config.getModelConfigId());
-            } catch (Exception e) {
-                log.debug("Failed to rebind directory model config: {}", e.getMessage());
-            }
-        }
-
-        if (needsSave) {
-            configRepository.save(config);
-        }
-    }
-
     private void updateSessionId(TaskAssistantConfigEntity config, Map<String, Object> result) {
         String newSessionId = (String) result.get("claudeSessionId");
         if (newSessionId != null && !newSessionId.equals(config.getClaudeSessionId())) {
             config.setClaudeSessionId(newSessionId);
             configRepository.save(config);
         }
-    }
-
-    private String resultOrError(Map<String, Object> result) {
-        String error = (String) result.get("error");
-        if (error != null) return "Error: " + error;
-        String text = (String) result.get("resultText");
-        return text != null ? text : "(no response)";
-    }
-
-    private String truncate(String text, int maxLength) {
-        if (text == null) return "(null)";
-        return text.length() <= maxLength ? text : text.substring(0, maxLength - 3) + "...";
     }
 
     @SuppressWarnings("unchecked")

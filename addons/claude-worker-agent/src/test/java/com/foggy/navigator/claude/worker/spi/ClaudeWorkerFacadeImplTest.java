@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
@@ -35,6 +37,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -110,6 +113,51 @@ class ClaudeWorkerFacadeImplTest {
         assertEquals(new BigDecimal("0.12"), result.get("costUsd"));
         assertEquals(true, result.get("resultObserved"));
         assertNull(result.get("error"));
+    }
+
+    @Test
+    void syncQueryUntrackedUsesDirectoryAuthAndEnvironmentWithoutTrackedTaskWrites() {
+        mockWorker("worker-1", "user-1");
+
+        WorkingDirectoryEntity directory = new WorkingDirectoryEntity();
+        directory.setDirectoryId("directory-1");
+        directory.setWorkerId("worker-1");
+        directory.setUserId("user-1");
+        directory.setDefaultModelConfigId("model-config-1");
+        directory.setCustomEnvVars("{\"SHARED\":\"directory\",\"DIRECTORY_ONLY\":\"directory-value\"}");
+        when(directoryRepository.findByDirectoryIdAndUserId("directory-1", "user-1"))
+                .thenReturn(Optional.of(directory));
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setHasApiKey(true);
+        modelConfig.setBaseUrl("https://model.example/v1");
+        modelConfig.setEnvVars(Map.of(
+                "SHARED", "model",
+                "MODEL_ONLY", "model-value"));
+        when(llmModelManager.getModelConfig("model-config-1"))
+                .thenReturn(Optional.of(modelConfig));
+        when(llmModelManager.getDecryptedApiKey("model-config-1"))
+                .thenReturn("model-api-key");
+
+        when(client.streamQuery(eq("summarize"), eq("D:/repo"), eq("claude-session-0"),
+                eq("sonnet"), eq(2), isNull(), isNull(), eq("model-api-key"), isNull(),
+                eq("https://model.example/v1"), eq("bypassPermissions"), isNull(), isNull(), isNull(),
+                eq(Map.of(
+                        "SHARED", "directory",
+                        "MODEL_ONLY", "model-value",
+                        "DIRECTORY_ONLY", "directory-value"))))
+                .thenReturn(Flux.just(sse("""
+                        {"type":"result","task_id":"worker-task-9","session_id":"claude-session-1","content":"Summary"}
+                        """)));
+
+        Map<String, Object> result = facade.syncQueryUntracked(
+                "user-1", "worker-1", "summarize", "D:/repo",
+                "claude-session-0", 2, "sonnet", "directory-1");
+
+        assertEquals("Summary", result.get("resultText"));
+        assertEquals("claude-session-1", result.get("claudeSessionId"));
+        verify(llmModelManager).validateModelAccessForWorker("model-config-1", "worker-1");
+        verifyNoInteractions(taskService);
     }
 
     @Test
