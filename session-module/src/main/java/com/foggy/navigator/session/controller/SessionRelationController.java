@@ -19,11 +19,19 @@ public class SessionRelationController {
     private final SessionForwardService sessionForwardService;
 
     @PostMapping("/forward")
-    public RX<SessionForwardCreateResponse> forwardToNewSession(@RequestBody SessionForwardCreateRequest request) {
+    public RX<SessionForwardCreateResponse> forwardToNewSession(
+            @RequestBody SessionForwardCreateRequest request,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId) {
+        if (clientRequestId != null && clientRequestId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "X_NAVIGATOR_CLIENT_REQUEST_ID_BLANK");
+        }
         return RX.ok(sessionForwardService.forwardToNewSession(
                 request,
                 UserContext.getCurrentUserId(),
-                UserContext.getCurrentTenantId()
+                UserContext.getCurrentTenantId(),
+                clientRequestId
         ));
     }
 
