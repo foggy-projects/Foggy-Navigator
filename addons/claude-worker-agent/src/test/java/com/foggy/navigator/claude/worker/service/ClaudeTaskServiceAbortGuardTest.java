@@ -12,6 +12,7 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.service.TerminationOperationService;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -105,6 +106,12 @@ class ClaudeTaskServiceAbortGuardTest {
         } catch (Exception e) {
             throw new RuntimeException("Failed to inject streamRelay", e);
         }
+    }
+
+    @Test
+    void capabilitiesAdvertiseNormalAndOwnerForceCancellation() {
+        assertTrue(service.supports(TaskQueryCapability.CANCEL_TASK));
+        assertTrue(service.supports(TaskQueryCapability.FORCE_CANCEL_TASK));
     }
 
     // -----------------------------------------------------------------------

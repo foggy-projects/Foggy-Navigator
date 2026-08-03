@@ -29,6 +29,7 @@ final class TaskTerminationCommandCoordinator {
     static final String TASK_TERMINATE_ACTION = "task.terminate";
     static final String TERMINATION_REQUEST_ACCEPTED = "TERMINATION_REQUEST_ACCEPTED";
     static final String TERMINATION_OUTCOME_UNKNOWN = "TERMINATION_OUTCOME_UNKNOWN";
+    static final String TERMINATION_EFFECT_AMBIGUOUS = "TERMINATION_EFFECT_AMBIGUOUS";
     private static final String ALREADY_TERMINAL_PREFIX = "TASK_ALREADY_TERMINAL_";
     private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
 
@@ -84,6 +85,8 @@ final class TaskTerminationCommandCoordinator {
                         envelope,
                         effectGate.requireEffectAttemptId(),
                         failure);
+                throw new IllegalStateException(
+                        TERMINATION_EFFECT_AMBIGUOUS, failure);
             }
             throw failure;
         }
@@ -124,10 +127,10 @@ final class TaskTerminationCommandCoordinator {
 
     private static void requirePrepared(CanonicalCommandReceiptPort.ReceiptSnapshot snapshot) {
         if (snapshot.state() == CanonicalCommandReceiptPort.ReceiptState.EFFECT_STARTED) {
-            throw conflict("TERMINATION_EFFECT_ALREADY_STARTED");
+            throw conflict(TERMINATION_EFFECT_AMBIGUOUS);
         }
         if (snapshot.state() == CanonicalCommandReceiptPort.ReceiptState.AMBIGUOUS) {
-            throw conflict("TERMINATION_EFFECT_AMBIGUOUS");
+            throw conflict(TERMINATION_EFFECT_AMBIGUOUS);
         }
         if (snapshot.state() != CanonicalCommandReceiptPort.ReceiptState.PREPARED) {
             throw conflict("TERMINATION_RECEIPT_STATE_CONFLICT");
@@ -410,11 +413,11 @@ final class TaskTerminationCommandCoordinator {
                 }
                 if (permit.disposition()
                         == CanonicalCommandReceiptPort.BeginEffectDisposition.ALREADY_STARTED) {
-                    throw conflict("TERMINATION_EFFECT_ALREADY_STARTED");
+                    throw conflict(TERMINATION_EFFECT_AMBIGUOUS);
                 }
                 if (permit.disposition()
                         == CanonicalCommandReceiptPort.BeginEffectDisposition.AMBIGUOUS) {
-                    throw conflict("TERMINATION_EFFECT_AMBIGUOUS");
+                    throw conflict(TERMINATION_EFFECT_AMBIGUOUS);
                 }
                 if (!permit.providerEffectPermitted()) {
                     throw conflict("TERMINATION_EFFECT_NOT_PERMITTED");

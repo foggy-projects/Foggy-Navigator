@@ -104,6 +104,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             TaskQueryCapability.REWIND_TASK,
             TaskQueryCapability.RESUME_TASK,
             TaskQueryCapability.CANCEL_TASK,
+            TaskQueryCapability.FORCE_CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK,
             TaskQueryCapability.SCAN_CHECKPOINTS,
             TaskQueryCapability.LIST_TASKS_PAGED,

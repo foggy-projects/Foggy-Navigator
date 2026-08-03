@@ -14,6 +14,7 @@ import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 
@@ -238,6 +239,7 @@ final class TaskOperationRouter {
                     .orElseThrow(() -> new IllegalArgumentException(
                             "Provider not found: " + providerType));
             requireTerminationProviderIdentity(provider, providerType);
+            requireTerminationCapability(provider, force);
             return new TaskTerminationCommandCoordinator.TerminationExecutionPlan(
                     identity,
                     context,
@@ -276,6 +278,27 @@ final class TaskOperationRouter {
                             identity.taskId(), identity.logicalAgentId());
                     return TaskTerminationCommandCoordinator.Outcome.accepted();
                 }));
+    }
+
+    private static void requireTerminationCapability(
+            TaskCommandProvider provider,
+            boolean force) {
+        Set<TaskQueryCapability> capabilities = Objects.requireNonNull(
+                provider.getCapabilities(), "provider capabilities must not be null");
+        boolean normalCancellationSupported = capabilities.contains(
+                TaskQueryCapability.CANCEL_TASK);
+        if (force) {
+            if (!normalCancellationSupported
+                    || !capabilities.contains(TaskQueryCapability.FORCE_CANCEL_TASK)) {
+                throw new UnsupportedOperationException(
+                        "TERMINATION_REQUEST_NOT_SUPPORTED");
+            }
+            return;
+        }
+        if (!capabilities.isEmpty() && !normalCancellationSupported) {
+            throw new UnsupportedOperationException(
+                    "TERMINATION_REQUEST_NOT_SUPPORTED");
+        }
     }
 
     @Nullable

@@ -14,6 +14,7 @@ public enum TaskQueryCapability {
     REWIND_TASK,
     RESUME_TASK,
     CANCEL_TASK,
+    FORCE_CANCEL_TASK,
     DELETE_TASK,
     SCAN_CHECKPOINTS,
     LIST_TASKS_PAGED,

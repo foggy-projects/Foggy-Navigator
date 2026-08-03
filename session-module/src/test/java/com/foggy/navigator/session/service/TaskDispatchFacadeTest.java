@@ -3997,6 +3997,89 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void canonicalTerminationRejectsExplicitlyUnsupportedCancelBeforePlanEffect() {
+        DispatchTaskDTO task = canonicalTerminationTask(
+                "RUNNING", "langgraph-biz-worker", "agent-1");
+        when(taskQueryProvider.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(taskQueryProvider.getCapabilities()).thenReturn(
+                Set.of(TaskQueryCapability.RESPOND_TO_TASK));
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        UnsupportedOperationException failure = assertThrows(
+                UnsupportedOperationException.class,
+                () -> facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", uiContext("user-1"), false));
+
+        assertEquals("TERMINATION_REQUEST_NOT_SUPPORTED", failure.getMessage());
+        verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
+        verifyNoInteractions(agentResolver, agent);
+    }
+
+    @Test
+    void canonicalTerminationAllowsEmptyLegacyCapabilitiesForNormalCancel() {
+        DispatchTaskDTO task = canonicalTerminationTask(
+                "RUNNING", "legacy-worker", "agent-1");
+        when(taskQueryProvider.getProviderType()).thenReturn("legacy-worker");
+        when(taskQueryProvider.getCapabilities()).thenReturn(Set.of());
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan plan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", uiContext("user-1"), false);
+        executeCanonicalTermination(plan);
+
+        verify(taskQueryProvider).cancelTaskDirect("task-canonical-1", "user-1");
+        verifyNoInteractions(agentResolver, agent);
+    }
+
+    @Test
+    void canonicalTerminationRejectsForceWithoutDedicatedCapabilityBeforePlanEffect() {
+        DispatchTaskDTO task = canonicalTerminationTask(
+                "RUNNING", "codex-worker", "agent-1");
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.getCapabilities()).thenReturn(
+                Set.of(TaskQueryCapability.CANCEL_TASK));
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        UnsupportedOperationException failure = assertThrows(
+                UnsupportedOperationException.class,
+                () -> facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", uiContext("user-1"), true));
+
+        assertEquals("TERMINATION_REQUEST_NOT_SUPPORTED", failure.getMessage());
+        verify(taskQueryProvider, never())
+                .cancelTaskDirect(anyString(), anyString(), anyBoolean());
+        verifyNoInteractions(agentResolver, agent);
+    }
+
+    @Test
+    void canonicalTerminationAllowsForceWithBothCapabilitiesAndExecutesOnce() {
+        DispatchTaskDTO task = canonicalTerminationTask(
+                "RUNNING", "claude-worker", "agent-1");
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.getCapabilities()).thenReturn(Set.of(
+                TaskQueryCapability.CANCEL_TASK,
+                TaskQueryCapability.FORCE_CANCEL_TASK));
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan plan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", uiContext("user-1"), true);
+        TaskTerminationCommandCoordinator.Outcome outcome =
+                executeCanonicalTermination(plan).outcome();
+
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_REQUEST_ACCEPTED,
+                outcome.safeCode());
+        verify(taskQueryProvider).cancelTaskDirect(
+                "task-canonical-1", "user-1", true);
+        verifyNoInteractions(agentResolver, agent);
+    }
+
+    @Test
     void canonicalTerminationPlanDriftFailsBeforeCapturedProviderEffect() {
         DispatchTaskDTO original = canonicalTerminationTask(
                 "RUNNING", "codex-worker", "agent-1");
@@ -4044,6 +4127,7 @@ class TaskDispatchFacadeTest {
         assertEquals("TASK_ALREADY_TERMINAL_COMPLETED", outcome.safeCode());
         assertEquals("COMPLETED", outcome.terminalStatus());
         verify(taskQueryProvider, never()).getProviderType();
+        verify(taskQueryProvider, never()).getCapabilities();
         verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
         verifyNoInteractions(agentResolver, agent);
 

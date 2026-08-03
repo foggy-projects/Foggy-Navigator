@@ -151,9 +151,7 @@ class TaskTerminationCommandCoordinatorTest {
                     () -> coordinator.execute(
                             command.plan(), command.envelope(), command.decision()));
 
-            assertEquals(state == CanonicalCommandReceiptPort.ReceiptState.EFFECT_STARTED
-                            ? "TERMINATION_EFFECT_ALREADY_STARTED"
-                            : "TERMINATION_EFFECT_AMBIGUOUS",
+            assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
                     failure.getMessage());
         }
         verifyNoInteractions(facade);
@@ -180,10 +178,7 @@ class TaskTerminationCommandCoordinatorTest {
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> coordinator.execute(
                             command.plan(), command.envelope(), command.decision()));
-            assertEquals(disposition
-                            == CanonicalCommandReceiptPort.BeginEffectDisposition.ALREADY_STARTED
-                            ? "TERMINATION_EFFECT_ALREADY_STARTED"
-                            : "TERMINATION_EFFECT_AMBIGUOUS",
+            assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
                     failure.getMessage());
             verify(facade).executeTerminationPlan(
                     eq(command.plan()),
@@ -240,7 +235,7 @@ class TaskTerminationCommandCoordinatorTest {
     @Test
     void postPermitEffectOrRecordFailureBecomesAmbiguousWithoutRetry() {
         Command effectFailureCommand = command(plan(false, () -> {
-            throw new IllegalStateException("PROVIDER_UNCONFIRMED");
+            throw new UnsupportedOperationException("provider detail");
         }));
         when(receipts.prepare(any(), any())).thenReturn(prepare(
                 CanonicalCommandReceiptPort.ReceiptState.PREPARED, null, null, null));
@@ -250,9 +245,14 @@ class TaskTerminationCommandCoordinatorTest {
                 ATTEMPT_ID, null, null));
         routeThroughGate(effectFailureCommand, null);
 
-        assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                effectFailureCommand.plan(), effectFailureCommand.envelope(),
-                effectFailureCommand.decision()));
+        IllegalStateException effectFailure = assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.execute(
+                        effectFailureCommand.plan(), effectFailureCommand.envelope(),
+                        effectFailureCommand.decision()));
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
+                effectFailure.getMessage());
+        assertInstanceOf(UnsupportedOperationException.class, effectFailure.getCause());
         verify(receipts).markAmbiguous(
                 REQUEST_ID, ATTEMPT_ID,
                 TaskTerminationCommandCoordinator.TERMINATION_OUTCOME_UNKNOWN);
@@ -272,9 +272,14 @@ class TaskTerminationCommandCoordinatorTest {
         when(receipts.recordResult(any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("RECORD_FAILED"));
 
-        assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                recordFailureCommand.plan(), recordFailureCommand.envelope(),
-                recordFailureCommand.decision()));
+        IllegalStateException recordFailure = assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.execute(
+                        recordFailureCommand.plan(), recordFailureCommand.envelope(),
+                        recordFailureCommand.decision()));
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
+                recordFailure.getMessage());
+        assertEquals("RECORD_FAILED", recordFailure.getCause().getMessage());
         verify(facade).executeTerminationPlan(
                 eq(recordFailureCommand.plan()),
                 any(TaskTerminationCommandCoordinator.TerminationEffectGate.class));
@@ -303,10 +308,61 @@ class TaskTerminationCommandCoordinatorTest {
                         conflictingRecordCommand.plan(),
                         conflictingRecordCommand.envelope(),
                         conflictingRecordCommand.decision()));
-        assertEquals("TERMINATION_RESULT_RECORD_CONFLICT", recordConflict.getMessage());
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
+                recordConflict.getMessage());
+        assertEquals("TERMINATION_RESULT_RECORD_CONFLICT",
+                recordConflict.getCause().getMessage());
         verify(receipts).markAmbiguous(
                 REQUEST_ID, ATTEMPT_ID,
                 TaskTerminationCommandCoordinator.TERMINATION_OUTCOME_UNKNOWN);
+
+        org.mockito.Mockito.reset(facade, receipts);
+        Command markFailureCommand = command(plan(false, () -> {
+            throw new IllegalStateException("PROVIDER_FAILED");
+        }));
+        when(receipts.prepare(any(), any())).thenReturn(prepare(
+                CanonicalCommandReceiptPort.ReceiptState.PREPARED,
+                null, null, null));
+        when(receipts.beginEffect(any(), any())).thenReturn(permit(
+                CanonicalCommandReceiptPort.BeginEffectDisposition.PERMITTED,
+                CanonicalCommandReceiptPort.ReceiptState.EFFECT_STARTED,
+                ATTEMPT_ID, null, null));
+        routeThroughGate(markFailureCommand, null);
+        doThrow(new IllegalStateException("MARK_FAILED"))
+                .when(receipts).markAmbiguous(
+                        REQUEST_ID, ATTEMPT_ID,
+                        TaskTerminationCommandCoordinator.TERMINATION_OUTCOME_UNKNOWN);
+
+        IllegalStateException safeFailure = assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.execute(
+                        markFailureCommand.plan(), markFailureCommand.envelope(),
+                        markFailureCommand.decision()));
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
+                safeFailure.getMessage());
+        assertEquals("PROVIDER_FAILED", safeFailure.getCause().getMessage());
+        assertEquals("MARK_FAILED",
+                safeFailure.getCause().getSuppressed()[0].getMessage());
+
+        when(receipts.prepare(
+                markFailureCommand.envelope(), markFailureCommand.decision()))
+                .thenReturn(prepare(
+                        CanonicalCommandReceiptPort.ReceiptState.EFFECT_STARTED,
+                        ATTEMPT_ID, null,
+                        TaskTerminationCommandCoordinator.TERMINATION_OUTCOME_UNKNOWN));
+
+        IllegalStateException retryFailure = assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.execute(
+                        markFailureCommand.plan(), markFailureCommand.envelope(),
+                        markFailureCommand.decision()));
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_EFFECT_AMBIGUOUS,
+                retryFailure.getMessage());
+        verify(facade).executeTerminationPlan(
+                eq(markFailureCommand.plan()),
+                any(TaskTerminationCommandCoordinator.TerminationEffectGate.class));
+        verify(receipts).beginEffect(
+                markFailureCommand.envelope(), markFailureCommand.decision());
     }
 
     @Test
