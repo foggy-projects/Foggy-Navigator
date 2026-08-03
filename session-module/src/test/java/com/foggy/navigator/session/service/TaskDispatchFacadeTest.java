@@ -3,7 +3,9 @@ package com.foggy.navigator.session.service;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
+import com.foggy.navigator.common.dto.a2a.A2aContext;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
+import com.foggy.navigator.common.dto.a2a.A2aPart;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
@@ -16,7 +18,9 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
+import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.session.lifecycle.LifecycleIngressGate;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
@@ -27,6 +31,7 @@ import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
+import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
@@ -49,6 +54,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.dao.DataIntegrityViolationException;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -60,6 +69,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -100,6 +110,10 @@ class TaskDispatchFacadeTest {
     private AgentConversationContextRepository agentConversationContextRepository;
     @Mock
     private AgentContextStore agentContextStore;
+    @Mock
+    private TaskLookupProvider codexSdkTaskLookupProvider;
+    @Mock
+    private TaskLookupProvider codexBizTaskLookupProvider;
 
     private TaskDispatchFacade facade;
 
@@ -179,6 +193,121 @@ class TaskDispatchFacadeTest {
         entity.setWorkerId(workerId);
         entity.setEnabled(true);
         return entity;
+    }
+
+    private TaskCreateContextNormalizer newContextNormalizer(EntityManager entityManager) {
+        PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
+        TransactionStatus status = mock(TransactionStatus.class);
+        lenient().when(manager.getTransaction(any(TransactionDefinition.class))).thenReturn(status);
+        lenient().when(taskQueryProvider.getProviderType())
+                .thenReturn(ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER);
+        lenient().when(taskQueryProvider.listTasksBySession(anyString()))
+                .thenReturn(List.of());
+        lenient().when(codexSdkTaskLookupProvider.getProviderType())
+                .thenReturn(ProviderRouteRegistry.PROVIDER_CODEX_WORKER);
+        lenient().when(codexSdkTaskLookupProvider.listTasksBySession(anyString()))
+                .thenReturn(List.of());
+        lenient().when(codexBizTaskLookupProvider.getProviderType())
+                .thenReturn(ProviderRouteRegistry.PROVIDER_CODEX_BIZ_WORKER);
+        lenient().when(codexBizTaskLookupProvider.listTasksBySession(anyString()))
+                .thenReturn(List.of());
+        lenient().when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(anyString()))
+                .thenReturn(List.of());
+        TaskCreateContextNormalizer normalizer = new TaskCreateContextNormalizer(
+                agentConversationContextRepository,
+                sessionRepository,
+                sessionTaskRepository,
+                sessionCodingAgentRepository,
+                resourceAccessService,
+                List.of(taskQueryProvider, codexSdkTaskLookupProvider,
+                        codexBizTaskLookupProvider),
+                manager);
+        ReflectionTestUtils.setField(normalizer, "entityManager", entityManager);
+        return normalizer;
+    }
+
+    private TaskCreateTargetResolver.CreateExecutionPlan normalizerPlan(
+            String ownerUserId,
+            String tenantId,
+            String logicalAgentId,
+            String providerType,
+            String physicalWorkerId,
+            String sessionId) {
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                mock(TaskCreateTargetResolver.CreateExecutionPlan.class);
+        lenient().when(plan.executionRoute()).thenReturn(TaskCreateTargetResolver.ExecutionRoute.A2A);
+        lenient().when(plan.ownerUserId()).thenReturn(ownerUserId);
+        lenient().when(plan.tenantId()).thenReturn(tenantId);
+        lenient().when(plan.logicalAgentId()).thenReturn(logicalAgentId);
+        lenient().when(plan.providerType()).thenReturn(providerType);
+        lenient().when(plan.physicalWorkerId()).thenReturn(physicalWorkerId);
+        lenient().when(plan.sessionId()).thenReturn(sessionId);
+        return plan;
+    }
+
+    private SessionEntity canonicalSession(
+            String sessionId,
+            String ownerUserId,
+            String tenantId,
+            String logicalAgentId,
+            String providerType,
+            String physicalWorkerId) {
+        SessionEntity session = new SessionEntity();
+        session.setId(sessionId);
+        session.setUserId(ownerUserId);
+        session.setTenantId(tenantId);
+        session.setAgentId(logicalAgentId);
+        session.setProviderType(providerType);
+        session.setCurrentWorkerId(physicalWorkerId);
+        session.setStatus("ACTIVE");
+        return session;
+    }
+
+    private TaskCreateContextNormalizer.CanonicalContextProof existingContextProof(
+            EntityManager entityManager,
+            String contextId,
+            String sessionId,
+            String agentId,
+            String providerType,
+            String physicalWorkerId,
+            String agentType) {
+        String userId = "user-proof";
+        String tenantId = "tenant-proof";
+        CodingAgentEntity agentEntity = ownedAgent(
+                agentId, userId, tenantId, agentType, physicalWorkerId);
+        SessionEntity session = canonicalSession(
+                sessionId, userId, tenantId, agentId, providerType,
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER.equals(providerType)
+                        ? null : physicalWorkerId);
+        AgentConversationContextEntity stored = new AgentConversationContextEntity();
+        stored.setContextId(contextId);
+        stored.setUserId(userId);
+        stored.setTargetAgentId(agentId);
+        stored.setAgentType(providerType);
+        stored.setNavigatorSessionId(sessionId);
+        when(agentConversationContextRepository.findById(contextId)).thenReturn(Optional.of(stored));
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId(agentId, userId))
+                .thenReturn(Optional.of(agentEntity));
+        when(resourceAccessService.requireOwnedSession(sessionId, userId, tenantId))
+                .thenReturn(session);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId(contextId)
+                .agentId(agentId)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId(userId)
+                .tenantId(tenantId)
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        assertNotNull(inspection);
+        inspection.applyForResolution(request, context);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
+                userId, tenantId, agentId, providerType, physicalWorkerId, sessionId);
+        return normalizer.sealForResolution(inspection, plan);
     }
 
     @Test
@@ -705,6 +834,577 @@ class TaskDispatchFacadeTest {
         assertEquals("dir-1", request.getDirectoryId());
         verifyNoInteractions(sessionCodingAgentRepository, workerManagementFacade, agentResolver, agent);
         verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
+    }
+
+    @Test
+    void normalizeAliasWinnerOverridesTemporaryContextWithoutMutatingExistingRows() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        CodingAgentEntity codingAgent = ownedAgent(
+                "agent-alias-1", "user-1", "tenant-1",
+                "LOCAL_CLAUDE_WORKER", "worker-1");
+        SessionEntity session = canonicalSession(
+                "session-alias-1", "user-1", "tenant-1", "agent-alias-1",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER, "worker-1");
+        AgentConversationContextEntity winner = new AgentConversationContextEntity();
+        winner.setContextId("ctx-alias-winner");
+        winner.setContextAlias("Order-A");
+        winner.setUserId("user-1");
+        winner.setTargetAgentId("agent-alias-1");
+        winner.setAgentType(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER);
+        winner.setNavigatorSessionId("session-alias-1");
+        when(agentConversationContextRepository.findById("temporary-ui-context"))
+                .thenReturn(Optional.empty());
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Order-A", "user-1", "agent-alias-1"))
+                .thenReturn(Optional.of(winner));
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-alias-1", "user-1"))
+                .thenReturn(Optional.of(codingAgent));
+        when(resourceAccessService.requireOwnedSession(
+                "session-alias-1", "user-1", "tenant-1"))
+                .thenReturn(session);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId("temporary-ui-context")
+                .contextAlias("Order-A")
+                .agentId("agent-alias-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        assertNotNull(inspection);
+        inspection.applyForResolution(request, context);
+        TaskCreateContextNormalizer.CanonicalContextProof proof =
+                normalizer.sealForResolution(inspection, normalizerPlan(
+                        "user-1", "tenant-1", "agent-alias-1",
+                        ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                        "worker-1", "session-alias-1"));
+
+        assertEquals("ctx-alias-winner", request.getContextId());
+        assertNull(request.getContextAlias());
+        assertEquals("session-alias-1", request.getSessionId());
+        assertEquals("Order-A", proof.contextAlias());
+        assertFalse(proof.currentRequestCreated());
+        verify(entityManager, never()).persist(any());
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
+    }
+
+    @Test
+    void normalizeAliasMissAtomicallyClaimsPristineAppServerSessionAndContext() {
+        EntityManager entityManager = mock(EntityManager.class);
+        List<Object> persisted = new ArrayList<>();
+        doAnswer(invocation -> {
+            persisted.add(invocation.getArgument(0));
+            return null;
+        }).when(entityManager).persist(any());
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Case-New", "user-1", "agent-app-1"))
+                .thenReturn(Optional.empty());
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-app-1", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-app-1", "user-1", "tenant-1",
+                        "LOCAL_CODEX_WORKER", "worker-app-1")));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextAlias("Case-New")
+                .agentId("agent-app-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        assertNotNull(inspection);
+        verifyNoInteractions(entityManager);
+        inspection.applyForResolution(request, context);
+        TaskCreateContextNormalizer.CanonicalContextProof proof =
+                normalizer.sealForResolution(inspection, normalizerPlan(
+                        "user-1", "tenant-1", "agent-app-1",
+                        ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                        "worker-app-1", request.getSessionId()));
+
+        assertEquals(2, persisted.size());
+        SessionEntity createdSession = persisted.stream()
+                .filter(SessionEntity.class::isInstance)
+                .map(SessionEntity.class::cast)
+                .findFirst().orElseThrow();
+        AgentConversationContextEntity createdContext = persisted.stream()
+                .filter(AgentConversationContextEntity.class::isInstance)
+                .map(AgentConversationContextEntity.class::cast)
+                .findFirst().orElseThrow();
+        assertEquals(ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                createdSession.getProviderType());
+        assertNull(createdSession.getCurrentWorkerId());
+        assertNull(createdSession.getLatestTaskId());
+        assertNull(createdSession.getProviderStateJson());
+        assertEquals(createdSession.getId(), createdContext.getNavigatorSessionId());
+        assertEquals("Case-New", createdContext.getContextAlias());
+        assertTrue(proof.currentRequestCreated());
+        assertTrue(proof.runtimeAffinityInitializationEligible());
+        verify(entityManager).flush();
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
+    }
+
+    @Test
+    void normalizeConcurrentFreshWinnerRequiresRetryWithoutRepairOrSecondEffect() {
+        EntityManager entityManager = mock(EntityManager.class);
+        doAnswer(invocation -> {
+            if (invocation.getArgument(0) instanceof AgentConversationContextEntity) {
+                throw new DataIntegrityViolationException("alias winner committed");
+            }
+            return null;
+        }).when(entityManager).persist(any());
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        AgentConversationContextEntity winner = new AgentConversationContextEntity();
+        winner.setContextId("ctx-race-winner");
+        winner.setContextAlias("Race-A");
+        winner.setUserId("user-1");
+        winner.setTargetAgentId("agent-race-1");
+        winner.setAgentType(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER);
+        winner.setNavigatorSessionId("session-race-winner");
+        SessionEntity winnerSession = canonicalSession(
+                "session-race-winner", "user-1", "tenant-1", "agent-race-1",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER, "worker-1");
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Race-A", "user-1", "agent-race-1"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-race-1", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-race-1", "user-1", "tenant-1",
+                        "LOCAL_CLAUDE_WORKER", "worker-1")));
+        when(resourceAccessService.requireOwnedSession(
+                "session-race-winner", "user-1", "tenant-1"))
+                .thenReturn(winnerSession);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextAlias("Race-A")
+                .agentId("agent-race-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        inspection.applyForResolution(request, context);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
+                "user-1", "tenant-1", "agent-race-1",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-1", request.getSessionId());
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> normalizer.sealForResolution(inspection, plan));
+
+        assertEquals("CONTEXT_CHANGED_CONCURRENTLY_RETRY", failure.getMessage());
+        verify(entityManager, times(2)).persist(any());
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
+    }
+
+    @Test
+    void normalizeFailsClosedForIncompleteOrMalformedExistingSessionsWithoutMutation() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        SessionEntity missingProvider = canonicalSession(
+                "session-incomplete", "user-1", "tenant-1", "agent-incomplete",
+                null, "worker-1");
+        when(resourceAccessService.requireOwnedSession(
+                "session-incomplete", "user-1", "tenant-1"))
+                .thenReturn(missingProvider);
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-incomplete", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-incomplete", "user-1", "tenant-1",
+                        "LOCAL_CLAUDE_WORKER", "worker-1")));
+        TaskDispatchRequest incompleteRequest = TaskDispatchRequest.builder()
+                .sessionId("session-incomplete")
+                .agentId("agent-incomplete")
+                .build();
+        AgentResolveContext incompleteContext = AgentResolveContext.builder()
+                .userId("user-1").tenantId("tenant-1").requestSource("UI").build();
+        TaskCreateContextNormalizer.Inspection incompleteInspection =
+                normalizer.inspect(incompleteRequest, incompleteContext, false);
+        incompleteInspection.applyForResolution(incompleteRequest, incompleteContext);
+        assertThrows(IllegalArgumentException.class, () -> normalizer.sealForResolution(
+                incompleteInspection,
+                normalizerPlan("user-1", "tenant-1", "agent-incomplete",
+                        ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                        "worker-1", "session-incomplete")));
+
+        SessionEntity malformedState = canonicalSession(
+                "session-malformed", "user-1", "tenant-1", "agent-malformed",
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER, null);
+        malformedState.setProviderStateJson("{not-json");
+        when(resourceAccessService.requireOwnedSession(
+                "session-malformed", "user-1", "tenant-1"))
+                .thenReturn(malformedState);
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-malformed", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-malformed", "user-1", "tenant-1",
+                        "LOCAL_CODEX_WORKER", "worker-app-1")));
+        TaskDispatchRequest malformedRequest = TaskDispatchRequest.builder()
+                .sessionId("session-malformed")
+                .agentId("agent-malformed")
+                .build();
+        AgentResolveContext malformedContext = AgentResolveContext.builder()
+                .userId("user-1").tenantId("tenant-1").requestSource("UI").build();
+        TaskCreateContextNormalizer.Inspection malformedInspection =
+                normalizer.inspect(malformedRequest, malformedContext, false);
+        malformedInspection.applyForResolution(malformedRequest, malformedContext);
+        assertThrows(IllegalArgumentException.class, () -> normalizer.sealForResolution(
+                malformedInspection,
+                normalizerPlan("user-1", "tenant-1", "agent-malformed",
+                        ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                        "worker-app-1", "session-malformed")));
+
+        verifyNoInteractions(entityManager);
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
+    }
+
+    @Test
+    void guardedDecoratorConsumesSealedProofWithZeroStoreDuplicateOrProofLeak() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer.CanonicalContextProof proof = existingContextProof(
+                entityManager,
+                "ctx-proof-claude", "session-proof-claude", "agent-proof-claude",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-proof-1", "LOCAL_CLAUDE_WORKER");
+        InnerA2aAgent inner = mock(InnerA2aAgent.class);
+        AtomicReference<A2aContext> observed = new AtomicReference<>();
+        when(inner.sendTask(any(A2aContext.class))).thenAnswer(invocation -> {
+            A2aContext actual = invocation.getArgument(0);
+            observed.set(actual);
+            assertFalse(actual.getMessage().getMetadata()
+                    .containsKey(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY));
+            return A2aTask.builder()
+                    .id("task-proof-claude")
+                    .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                    .history(List.of(actual.getMessage()))
+                    .build();
+        });
+        CodingAgentEntity agentEntity = ownedAgent(
+                "agent-proof-claude", "user-proof", "tenant-proof",
+                "LOCAL_CLAUDE_WORKER", "worker-proof-1");
+        ContextResolvingA2aAgent decorator = new ContextResolvingA2aAgent(
+                inner, agentContextStore, agentEntity,
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER);
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("trace", "safe");
+        metadata.put("agentId", "agent-proof-claude");
+        metadata.put("providerType", ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER);
+        metadata.put("sessionId", "session-proof-claude");
+        metadata.put("contextId", "ctx-proof-claude");
+        metadata.put("workerId", "worker-proof-1");
+        metadata.put(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY, proof);
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("run")))
+                .contextId("ctx-proof-claude")
+                .metadata(metadata)
+                .build();
+
+        A2aTask task = decorator.sendTask(message);
+
+        assertEquals("ctx-proof-claude", task.getContextId());
+        assertEquals("session-proof-claude", observed.get().getNavigatorSessionId());
+        assertEquals("user-proof", observed.get().getUserId());
+        assertFalse(task.getHistory().get(0).getMetadata()
+                .containsKey(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY));
+        verifyNoInteractions(agentContextStore);
+        verify(inner, never()).findRecentDuplicate(any());
+        verify(inner, never()).rememberDuplicate(any(), any());
+    }
+
+    @Test
+    void guardedAppServerUsesTemporaryAffinityMarkerWithoutProofOrTokenLeak() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer.CanonicalContextProof proof = existingContextProof(
+                entityManager,
+                "ctx-proof-app", "session-proof-app", "agent-proof-app",
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                "worker-app-1", "LOCAL_CODEX_WORKER");
+        assertTrue(proof.runtimeAffinityInitializationEligible());
+        InnerA2aAgent inner = mock(InnerA2aAgent.class);
+        AtomicReference<A2aContext> observed = new AtomicReference<>();
+        when(inner.sendTask(any(A2aContext.class))).thenAnswer(invocation -> {
+            A2aContext actual = invocation.getArgument(0);
+            observed.set(actual);
+            assertTrue(InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                    actual.getMessage().getMetadata()));
+            assertFalse(actual.getMessage().getMetadata()
+                    .containsKey(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY));
+            return A2aTask.builder()
+                    .id("task-proof-app")
+                    .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                    .history(List.of(actual.getMessage()))
+                    .build();
+        });
+        CodingAgentEntity agentEntity = ownedAgent(
+                "agent-proof-app", "user-proof", "tenant-proof",
+                "LOCAL_CODEX_WORKER", "worker-app-1");
+        ContextResolvingA2aAgent decorator = new ContextResolvingA2aAgent(
+                inner, agentContextStore, agentEntity,
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER);
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("agentId", "agent-proof-app");
+        metadata.put("providerType", ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER);
+        metadata.put("sessionId", "session-proof-app");
+        metadata.put("contextId", "ctx-proof-app");
+        metadata.put("workerId", "worker-app-1");
+        metadata.put(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY, proof);
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("run app server")))
+                .contextId("ctx-proof-app")
+                .metadata(metadata)
+                .build();
+
+        A2aTask task = decorator.sendTask(message);
+
+        assertFalse(InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                observed.get().getMessage().getMetadata()));
+        assertFalse(task.getHistory().get(0).getMetadata()
+                .containsKey(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY));
+        assertFalse(InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                task.getHistory().get(0).getMetadata()));
+        verifyNoInteractions(agentContextStore);
+        verify(inner, never()).findRecentDuplicate(any());
+        verify(inner, never()).rememberDuplicate(any(), any());
+    }
+
+    @Test
+    void appServerPristineProofRequiresBothTaskStoresEmptyBeforeEffect() {
+        EntityManager entityManager = mock(EntityManager.class);
+        String sessionId = "session-proof-app-task-fence";
+        String contextId = "ctx-proof-app-task-fence";
+        String agentId = "agent-proof-app-task-fence";
+        String providerType = ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER;
+        String userId = "user-proof";
+        String tenantId = "tenant-proof";
+        CodingAgentEntity agentEntity = ownedAgent(
+                agentId, userId, tenantId, "LOCAL_CODEX_WORKER", "worker-app-1");
+        SessionEntity session = canonicalSession(
+                sessionId, userId, tenantId, agentId, providerType, null);
+        AgentConversationContextEntity stored = new AgentConversationContextEntity();
+        stored.setContextId(contextId);
+        stored.setUserId(userId);
+        stored.setTargetAgentId(agentId);
+        stored.setAgentType(providerType);
+        stored.setNavigatorSessionId(sessionId);
+        when(agentConversationContextRepository.findById(contextId))
+                .thenReturn(Optional.of(stored));
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId(agentId, userId))
+                .thenReturn(Optional.of(agentEntity));
+        when(resourceAccessService.requireOwnedSession(sessionId, userId, tenantId))
+                .thenReturn(session);
+        when(taskQueryProvider.getProviderType()).thenReturn(providerType);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId(contextId)
+                .agentId(agentId)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId(userId)
+                .tenantId(tenantId)
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        assertNotNull(inspection);
+        inspection.applyForResolution(request, context);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
+                userId, tenantId, agentId, providerType, "worker-app-1", sessionId);
+
+        when(taskQueryProvider.listTasksBySession(sessionId)).thenReturn(List.of(
+                DispatchTaskDTO.builder().taskId("provider-task").build()));
+        when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId))
+                .thenReturn(List.of());
+        assertThrows(IllegalArgumentException.class,
+                () -> normalizer.sealForResolution(inspection, plan));
+
+        when(taskQueryProvider.listTasksBySession(sessionId)).thenReturn(List.of());
+        when(codexSdkTaskLookupProvider.listTasksBySession(sessionId)).thenReturn(List.of(
+                DispatchTaskDTO.builder().taskId("sdk-provider-task").build()));
+        assertThrows(IllegalArgumentException.class,
+                () -> normalizer.sealForResolution(inspection, plan));
+
+        when(codexSdkTaskLookupProvider.listTasksBySession(sessionId)).thenReturn(List.of());
+        when(codexBizTaskLookupProvider.listTasksBySession(sessionId)).thenReturn(List.of(
+                DispatchTaskDTO.builder().taskId("biz-provider-task").build()));
+        assertThrows(IllegalArgumentException.class,
+                () -> normalizer.sealForResolution(inspection, plan));
+
+        when(codexBizTaskLookupProvider.listTasksBySession(sessionId)).thenReturn(List.of());
+        when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId))
+                .thenReturn(List.of(new SessionTaskEntity()));
+        assertThrows(IllegalArgumentException.class,
+                () -> normalizer.sealForResolution(inspection, plan));
+
+        when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId))
+                .thenReturn(List.of());
+        TaskCreateContextNormalizer.CanonicalContextProof proof =
+                normalizer.sealForResolution(inspection, plan);
+        assertTrue(proof.runtimeAffinityInitializationEligible());
+        verifyNoInteractions(entityManager);
+    }
+
+    @Test
+    void canonicalCompletionUsesExactTaskFencedCas() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer.CanonicalContextProof proof = existingContextProof(
+                entityManager,
+                "ctx-proof-cas", "session-proof-cas", "agent-proof-cas",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-proof-cas", "LOCAL_CLAUDE_WORKER");
+        Query query = mock(Query.class);
+        when(entityManager.createQuery(anyString())).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.executeUpdate()).thenReturn(1);
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+
+        normalizer.completeAgentSessionRef(proof, "task-proof-cas", "provider-ref-cas");
+
+        var jpql = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(entityManager).createQuery(jpql.capture());
+        assertTrue(jpql.getValue().contains("s.latestTaskId = :taskId"));
+        assertTrue(jpql.getValue().contains("s.currentWorkerId = :workerId"));
+        verify(query).setParameter("taskId", "task-proof-cas");
+        verify(query).setParameter("desiredRef", "provider-ref-cas");
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
+    }
+
+    @Test
+    void guardedFacadeSkipsCanonicalCompletionForSyntheticFailedTask() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer.CanonicalContextProof proof = existingContextProof(
+                entityManager,
+                "ctx-proof-failed", "session-proof-failed", "agent-proof-failed",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-proof-failed", "LOCAL_CLAUDE_WORKER");
+        TaskCreateContextNormalizer normalizer = mock(TaskCreateContextNormalizer.class);
+        ReflectionTestUtils.setField(facade, "taskCreateContextNormalizer", normalizer);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                "agent-proof-failed", ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                TaskCreateTargetResolver.ExecutionRoute.A2A, "session-proof-failed");
+        when(plan.canonicalContextProof()).thenReturn(proof);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-proof-failed")
+                .providerType(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER)
+                .workerId("worker-1")
+                .sessionId("session-proof-failed")
+                .contextId("ctx-proof-failed")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-proof-failed")
+                .requestSource("UI")
+                .build();
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER),
+                eq("agent-proof-failed"), any())).thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id("agent-proof-failed").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("error-preflight")
+                .contextId("ctx-proof-failed")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.FAILED).build())
+                .build());
+
+        DispatchTaskDTO result = facade.createTask(request, context, plan, passThroughGate());
+
+        assertEquals("error-preflight", result.getTaskId());
+        verify(normalizer, never()).completeAgentSessionRef(any(), anyString(), any());
+        verifyNoInteractions(agentContextStore);
+    }
+
+    @Test
+    void normalizeRejectsOwnerAgentTenantAndSessionMismatchWithoutMutation() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+
+        AgentConversationContextEntity foreignOwner = new AgentConversationContextEntity();
+        foreignOwner.setContextId("ctx-foreign-owner");
+        foreignOwner.setUserId("another-user");
+        foreignOwner.setTargetAgentId("agent-scope");
+        when(agentConversationContextRepository.findById("ctx-foreign-owner"))
+                .thenReturn(Optional.of(foreignOwner));
+        assertThrows(SecurityException.class, () -> normalizer.inspect(
+                TaskDispatchRequest.builder()
+                        .contextId("ctx-foreign-owner").agentId("agent-scope").build(),
+                AgentResolveContext.builder()
+                        .userId("user-1").tenantId("tenant-1").build(),
+                false));
+
+        AgentConversationContextEntity conflictingAgent = new AgentConversationContextEntity();
+        conflictingAgent.setContextId("ctx-agent-conflict");
+        conflictingAgent.setUserId("user-1");
+        conflictingAgent.setTargetAgentId("agent-other");
+        when(agentConversationContextRepository.findById("ctx-agent-conflict"))
+                .thenReturn(Optional.of(conflictingAgent));
+        assertThrows(IllegalArgumentException.class, () -> normalizer.inspect(
+                TaskDispatchRequest.builder()
+                        .contextId("ctx-agent-conflict").agentId("agent-scope").build(),
+                AgentResolveContext.builder()
+                        .userId("user-1").tenantId("tenant-1").build(),
+                false));
+
+        SessionEntity requestedSession = canonicalSession(
+                "session-requested", "user-1", "tenant-1", "agent-scope",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER, "worker-1");
+        AgentConversationContextEntity conflictingSession = new AgentConversationContextEntity();
+        conflictingSession.setContextId("ctx-session-conflict");
+        conflictingSession.setUserId("user-1");
+        conflictingSession.setTargetAgentId("agent-scope");
+        conflictingSession.setAgentType(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER);
+        conflictingSession.setNavigatorSessionId("session-other");
+        when(agentConversationContextRepository.findById("ctx-session-conflict"))
+                .thenReturn(Optional.of(conflictingSession));
+        when(resourceAccessService.requireOwnedSession(
+                "session-requested", "user-1", "tenant-1"))
+                .thenReturn(requestedSession);
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId("agent-scope", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-scope", "user-1", "tenant-1",
+                        "LOCAL_CLAUDE_WORKER", "worker-1")));
+        assertThrows(IllegalArgumentException.class, () -> normalizer.inspect(
+                TaskDispatchRequest.builder()
+                        .contextId("ctx-session-conflict")
+                        .sessionId("session-requested")
+                        .agentId("agent-scope")
+                        .build(),
+                AgentResolveContext.builder()
+                        .userId("user-1").tenantId("tenant-1").build(),
+                false));
+
+        SessionEntity foreignTenant = canonicalSession(
+                "session-foreign-tenant", "user-1", "tenant-other", "agent-scope",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER, "worker-1");
+        when(resourceAccessService.requireOwnedSession(
+                "session-foreign-tenant", "user-1", "tenant-1"))
+                .thenReturn(foreignTenant);
+        assertThrows(SecurityException.class, () -> normalizer.inspect(
+                TaskDispatchRequest.builder()
+                        .sessionId("session-foreign-tenant")
+                        .agentId("agent-scope")
+                        .build(),
+                AgentResolveContext.builder()
+                        .userId("user-1").tenantId("tenant-1").build(),
+                false));
+
+        verifyNoInteractions(entityManager);
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
     }
 
     @Test

@@ -114,6 +114,10 @@ public class TaskDispatchFacade {
 
     @Autowired(required = false)
     @Nullable
+    private TaskCreateContextNormalizer taskCreateContextNormalizer;
+
+    @Autowired(required = false)
+    @Nullable
     private PlatformTransactionManager transactionManager;
 
     @Autowired(required = false)
@@ -247,17 +251,50 @@ public class TaskDispatchFacade {
     TaskCreateTargetResolver.CreateExecutionPlan resolveCreateExecutionPlan(
             TaskDispatchRequest request, AgentResolveContext context) {
         validateSessionOwnershipBeforeDispatch(request, context);
-        validateContextBindingBeforeDispatch(request, context);
-        bindContinuationFromContext(request, context);
         if (request != null && request.isResume()) {
+            validateContextBindingBeforeDispatch(request, context);
+            bindContinuationFromContext(request, context);
             throw new IllegalArgumentException(
                     "guarded CREATE cannot execute a resume continuation");
         }
-        if (request != null && trimToNull(request.getContextAlias()) != null) {
-            throw new IllegalArgumentException(
-                    "guarded CREATE does not accept contextAlias");
+
+        TaskCreateContextNormalizer.Inspection contextInspection = null;
+        if (request != null && taskCreateContextNormalizer != null) {
+            String requestedProviderType = trimToNull(request.getProviderType());
+            boolean directProviderRequested = requestedProviderType != null
+                    && taskQueryProviderRegistry
+                    .findCommandProviderByType(requestedProviderType)
+                    .isPresent();
+            contextInspection = taskCreateContextNormalizer.inspect(
+                    request, context, directProviderRequested);
+            if (contextInspection != null) {
+                contextInspection.applyForResolution(request, context);
+            } else if (trimToNull(request.getContextAlias()) != null) {
+                throw new IllegalStateException(
+                        "contextAlias normalization produced no local A2A binding");
+            }
+        } else if (request != null && trimToNull(request.getContextAlias()) != null) {
+            if (taskCreateContextNormalizer == null) {
+                throw new IllegalStateException(
+                        "TaskCreateContextNormalizer is unavailable; contextAlias is fail-closed");
+            }
         }
-        return createTargetResolver().resolveCreateExecutionPlan(request, context);
+        if (contextInspection == null) {
+            validateContextBindingBeforeDispatch(request, context);
+            bindContinuationFromContext(request, context);
+        }
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                createTargetResolver().resolveCreateExecutionPlan(
+                        request, context, contextInspection);
+        if (contextInspection == null) {
+            return plan;
+        }
+        TaskCreateContextNormalizer.CanonicalContextProof proof =
+                taskCreateContextNormalizer.sealForResolution(contextInspection, plan);
+        TaskCreateTargetResolver.CreateExecutionPlan sealedPlan = plan.withCanonicalContext(proof);
+        sealedPlan.applyCanonicalTarget(request);
+        context.setSessionId(sealedPlan.sessionId());
+        return sealedPlan;
     }
 
     /** Executes the exact pre-effect plan; package visibility keeps ingress adapters on one path. */
@@ -317,6 +354,15 @@ public class TaskDispatchFacade {
 
         // 构造 A2aMessage
         A2aMessage message = buildMessage(request);
+        TaskCreateContextNormalizer.CanonicalContextProof contextProof =
+                plan.canonicalContextProof();
+        if (contextProof != null) {
+            Map<String, Object> metadata = message.getMetadata() == null
+                    ? new LinkedHashMap<>()
+                    : new LinkedHashMap<>(message.getMetadata());
+            metadata.put(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY, contextProof);
+            message.setMetadata(metadata);
+        }
 
         LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
         try {
@@ -329,14 +375,29 @@ public class TaskDispatchFacade {
                             agentId,
                             plan.providerType());
             A2aTask a2aTask = providerEffectGate.invoke(
-                    plan, effectIdentity, () -> agent.sendTask(message));
+                    plan, effectIdentity, () -> {
+                        A2aTask providerTask = agent.sendTask(message);
+                        if (contextProof != null && requiresContextCompletion(providerTask)) {
+                            if (taskCreateContextNormalizer == null) {
+                                throw new IllegalStateException(
+                                        "TaskCreateContextNormalizer disappeared before completion");
+                            }
+                            taskCreateContextNormalizer.completeAgentSessionRef(
+                                    contextProof,
+                                    providerTask == null ? null : providerTask.getId(),
+                                    providerSessionRef(providerTask));
+                        }
+                        return providerTask;
+                    });
 
             log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
                     agentId, plan.providerType(), a2aTask.getId());
 
             DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, plan.providerType(), request);
             persistTaskRequestFields(dto.getTaskId(), request);
-            persistContextBinding(dto, request, context, plan.providerType());
+            if (contextProof == null) {
+                persistContextBinding(dto, request, context, plan.providerType());
+            }
             confirmReservation(permit, dto);
             return dto;
         } catch (RuntimeException failure) {
@@ -766,6 +827,33 @@ public class TaskDispatchFacade {
                 .contextAlias(request.getContextAlias())
                 .metadata(metadata)
                 .build();
+    }
+
+    @Nullable
+    private String providerSessionRef(@Nullable A2aTask task) {
+        if (task == null || task.getMetadata() == null) {
+            return null;
+        }
+        String resolved = null;
+        for (String key : List.of("claudeSessionId", "codexThreadId", "geminiSessionId")) {
+            Object value = task.getMetadata().get(key);
+            String candidate = value == null ? null : value.toString();
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            if (resolved != null && !resolved.equals(candidate)) {
+                throw new IllegalStateException(
+                        "Provider returned conflicting session references");
+            }
+            resolved = candidate;
+        }
+        return resolved;
+    }
+
+    private boolean requiresContextCompletion(@Nullable A2aTask task) {
+        return task != null
+                && task.getStatus() != null
+                && task.getStatus().getState() != A2aTaskState.FAILED;
     }
 
     private TaskDispatchRequest toTaskDispatchRequest(AgentTaskSubmitRequest request) {

@@ -76,17 +76,27 @@ final class TaskCreateTargetResolver {
     }
 
     CreateExecutionPlan resolveCreateExecutionPlan(TaskDispatchRequest request, AgentResolveContext context) {
+        return resolveCreateExecutionPlan(request, context, null);
+    }
+
+    CreateExecutionPlan resolveCreateExecutionPlan(
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            @Nullable TaskCreateContextNormalizer.Inspection contextInspection) {
         Objects.requireNonNull(request, "request must not be null");
         Objects.requireNonNull(context, "resolve context must not be null");
         String ownerUserId = requireText(context.getUserId(), "authenticated userId is required");
         String tenantId = trimToNull(context.getTenantId());
 
         String sessionId = mergeExact("sessionId", request.getSessionId(), context.getSessionId());
-        SessionEntity session = sessionId == null ? null
-                : requireOwnedSession(sessionId, ownerUserId, tenantId);
+        TaskCreateContextNormalizer.SessionFacts session = sessionId == null ? null
+                : contextInspection != null
+                ? contextInspection.sessionForResolution(sessionId)
+                : TaskCreateContextNormalizer.SessionFacts.from(
+                        requireOwnedSession(sessionId, ownerUserId, tenantId));
 
         String requestedAgentId = trimToNull(request.getAgentId());
-        String sessionAgentId = session == null ? null : trimToNull(session.getAgentId());
+        String sessionAgentId = session == null ? null : session.logicalAgentId();
         String selectedAgentId = mergeExact("agentId", requestedAgentId, sessionAgentId);
         String syntheticDirectoryId = selectedAgentId != null && DirectoryAgentId.isDirectoryAgent(selectedAgentId)
                 ? requireText(DirectoryAgentId.extractDirectoryId(selectedAgentId), "directory agent id is incomplete")
@@ -99,7 +109,7 @@ final class TaskCreateTargetResolver {
         String logicalAgentId = agent == null ? null : requireText(agent.getAgentId(), "Agent id is missing");
         String bindingSource = requestedAgentId != null ? "EXPLICIT_AGENT" : "SESSION_AGENT";
 
-        String sessionDirectoryId = session == null ? null : trimToNull(session.getCurrentDirectoryId());
+        String sessionDirectoryId = session == null ? null : session.directoryId();
         String selectedDirectoryId = mergeExact(
                 "directoryId", request.getDirectoryId(), syntheticDirectoryId, sessionDirectoryId);
         String directoryId = firstText(
@@ -108,7 +118,7 @@ final class TaskCreateTargetResolver {
                 : requireOwnedDirectory(directoryId, ownerUserId, tenantId);
 
         String boundWorkerId = mergeExact("workerId",
-                session == null ? null : session.getCurrentWorkerId(),
+                session == null ? null : session.currentWorkerId(),
                 directory == null ? null : directory.getWorkerId(),
                 localPhysicalWorkerId(agent));
         String requestedWorkerId = trimToNull(request.getWorkerId());
@@ -130,7 +140,7 @@ final class TaskCreateTargetResolver {
         String modelProviderType = providerType(modelConfig);
         String model = firstText(
                 request.getModel(),
-                session == null ? null : session.getLatestModel(),
+                session == null ? null : session.model(),
                 agent == null ? null : agent.getDefaultModel(),
                 modelConfig == null ? null : modelConfig.getModelName());
 
@@ -139,7 +149,7 @@ final class TaskCreateTargetResolver {
         ExecutionRoute executionRoute = explicitDirect || syntheticDirectoryId != null || logicalAgentId == null
                 ? ExecutionRoute.DIRECT : ExecutionRoute.A2A;
 
-        String sessionProviderType = session == null ? null : trimToNull(session.getProviderType());
+        String sessionProviderType = session == null ? null : session.providerType();
         String agentProviderType = resolveAgentProviderType(agent, tenantId);
         String providerType = executionRoute == ExecutionRoute.DIRECT
                 ? firstText(explicitDirect ? requestedProviderType : null, sessionProviderType,
@@ -211,7 +221,8 @@ final class TaskCreateTargetResolver {
                 sessionId,
                 directoryId,
                 executionRoute,
-                agentLookup);
+                agentLookup,
+                null);
     }
 
     private SessionEntity requireOwnedSession(String sessionId, String ownerUserId, @Nullable String tenantId) {
@@ -294,11 +305,11 @@ final class TaskCreateTargetResolver {
     @Nullable
     private String resolveModelConfigId(TaskDispatchRequest request,
                                         AgentResolveContext context,
-                                        @Nullable SessionEntity session,
+                                        @Nullable TaskCreateContextNormalizer.SessionFacts session,
                                         @Nullable WorkingDirectoryEntity directory,
                                         @Nullable CodingAgentEntity agent) {
         String requested = mergeExact("modelConfigId", request.getModelConfigId(), context.getModelConfigId());
-        String sessionBound = session == null ? null : trimToNull(session.getAuthModelConfigId());
+        String sessionBound = session == null ? null : session.modelConfigId();
         if (sessionBound != null) {
             requireCompatible("modelConfigId", requested, sessionBound);
             return sessionBound;
@@ -591,6 +602,8 @@ final class TaskCreateTargetResolver {
         private final ExecutionRoute executionRoute;
         @Nullable
         private final AgentLookup agentLookup;
+        @Nullable
+        private final TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof;
 
         private CreateExecutionPlan(@Nullable String tenantId,
                                     String ownerUserId,
@@ -602,7 +615,8 @@ final class TaskCreateTargetResolver {
                                     @Nullable String sessionId,
                                     @Nullable String directoryId,
                                     ExecutionRoute executionRoute,
-                                    @Nullable AgentLookup agentLookup) {
+                                    @Nullable AgentLookup agentLookup,
+                                    @Nullable TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof) {
             this.tenantId = trimToNull(tenantId);
             this.ownerUserId = requireText(ownerUserId, "ownerUserId is required");
             this.logicalAgentId = trimToNull(logicalAgentId);
@@ -614,6 +628,7 @@ final class TaskCreateTargetResolver {
             this.directoryId = trimToNull(directoryId);
             this.executionRoute = Objects.requireNonNull(executionRoute, "executionRoute is required");
             this.agentLookup = agentLookup;
+            this.canonicalContextProof = canonicalContextProof;
             if (executionRoute == ExecutionRoute.A2A) {
                 if (this.logicalAgentId == null || agentLookup == null
                         || !this.logicalAgentId.equals(agentLookup.lookupId())) {
@@ -653,6 +668,11 @@ final class TaskCreateTargetResolver {
 
         @Nullable
         AgentLookup agentLookup() { return agentLookup; }
+
+        @Nullable
+        TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof() {
+            return canonicalContextProof;
+        }
 
         boolean directProviderRoute() {
             return executionRoute == ExecutionRoute.DIRECT;
@@ -694,6 +714,17 @@ final class TaskCreateTargetResolver {
             } else {
                 requireCompatible("agentId", requestedAgentId, logicalAgentId);
             }
+            if (canonicalContextProof != null) {
+                requireExactContextId(request.getContextId(), canonicalContextProof.contextId());
+                requireCompatible(
+                        "sessionId", canonicalContextProof.navigatorSessionId(), sessionId);
+                if (!ownerUserId.equals(canonicalContextProof.ownerUserId())
+                        || !Objects.equals(tenantId, canonicalContextProof.tenantId())
+                        || !Objects.equals(logicalAgentId, canonicalContextProof.logicalAgentId())
+                        || !providerType.equals(canonicalContextProof.providerType())) {
+                    throw new SecurityException("Resource access denied");
+                }
+            }
         }
 
         void applyCanonicalTarget(TaskDispatchRequest request) {
@@ -709,6 +740,43 @@ final class TaskCreateTargetResolver {
             request.setModel(model);
             request.setSessionId(sessionId);
             request.setDirectoryId(directoryId);
+            if (canonicalContextProof != null) {
+                request.setContextId(canonicalContextProof.contextId());
+                request.setContextAlias(null);
+            }
+        }
+
+        CreateExecutionPlan withCanonicalContext(
+                TaskCreateContextNormalizer.CanonicalContextProof proof) {
+            Objects.requireNonNull(proof, "canonical context proof is required");
+            if (executionRoute != ExecutionRoute.A2A
+                    || !ownerUserId.equals(proof.ownerUserId())
+                    || !Objects.equals(tenantId, proof.tenantId())
+                    || !Objects.equals(logicalAgentId, proof.logicalAgentId())
+                    || !providerType.equals(proof.providerType())) {
+                throw new SecurityException("Resource access denied");
+            }
+            return new CreateExecutionPlan(
+                    tenantId,
+                    ownerUserId,
+                    logicalAgentId,
+                    providerType,
+                    physicalWorkerId,
+                    modelConfigId,
+                    model,
+                    proof.navigatorSessionId(),
+                    directoryId,
+                    executionRoute,
+                    agentLookup,
+                    proof);
+        }
+
+        private static void requireExactContextId(
+                @Nullable String actual,
+                String expected) {
+            if (!expected.equals(actual)) {
+                throw conflict("contextId", actual, expected);
+            }
         }
     }
 }

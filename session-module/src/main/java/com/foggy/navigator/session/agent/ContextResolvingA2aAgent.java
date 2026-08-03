@@ -5,9 +5,12 @@ import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.exception.ContextAgentMismatchException;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
+import com.foggy.navigator.session.service.TaskCreateContextNormalizer;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -60,6 +64,18 @@ public class ContextResolvingA2aAgent implements A2aAgent {
 
     @Override
     public A2aTask sendTask(A2aMessage message) {
+        if (message == null) {
+            throw new IllegalArgumentException("A2A message is required");
+        }
+        Object proofValue = message.getMetadata() == null ? null
+                : message.getMetadata().get(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY);
+        if (proofValue instanceof TaskCreateContextNormalizer.CanonicalContextProof proof) {
+            return sendTaskWithCanonicalProof(message, proof);
+        }
+        return sendTaskLegacy(withoutCanonicalProof(message));
+    }
+
+    private A2aTask sendTaskLegacy(A2aMessage message) {
         String userId = agentEntity.getUserId();
         String agentId = agentEntity.getAgentId();
         String contextId = message.getContextId();
@@ -181,6 +197,120 @@ public class ContextResolvingA2aAgent implements A2aAgent {
         return task;
     }
 
+    private A2aTask sendTaskWithCanonicalProof(
+            A2aMessage message,
+            TaskCreateContextNormalizer.CanonicalContextProof proof) {
+        requireCanonicalProofMatches(message, proof);
+        A2aMessage sanitizedMessage = withoutCanonicalProof(message);
+        String contextId = proof.contextId();
+        String agentSessionRef = proof.agentSessionRef();
+
+        if (agentSessionRef != null && inner.isSessionBusy(agentSessionRef)) {
+            return buildFailedTask(contextId,
+                    "Session has a running task, please wait for it to complete or cancel it first.");
+        }
+
+        A2aMessage effectiveMessage = applyPromptPolicy(
+                sanitizedMessage, proof.firstTurn(), contextId);
+        if (effectiveMessage == null) {
+            return buildFailedTask(contextId,
+                    "Agent does not support systemPrompt; use firstMsg for first-turn visible context instead.");
+        }
+
+        A2aContext context = A2aContext.builder()
+                .message(effectiveMessage)
+                .contextId(contextId)
+                .contextAlias(proof.contextAlias())
+                .agentSessionRef(agentSessionRef)
+                .navigatorSessionId(proof.navigatorSessionId())
+                .userId(proof.ownerUserId())
+                .tenantId(proof.tenantId())
+                .agentId(proof.logicalAgentId())
+                .build();
+
+        Map<String, Object> providerMetadata = null;
+        Map<String, Object> cleanMetadata = null;
+        if (proof.runtimeAffinityInitializationEligible()) {
+            cleanMetadata = effectiveMessage.getMetadata() == null
+                    ? new HashMap<>() : new HashMap<>(effectiveMessage.getMetadata());
+            providerMetadata = new HashMap<>(cleanMetadata);
+            InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(providerMetadata);
+            effectiveMessage.setMetadata(providerMetadata);
+        }
+
+        A2aTask task;
+        try {
+            task = inner.sendTask(context);
+        } finally {
+            if (providerMetadata != null) {
+                providerMetadata.clear();
+                providerMetadata.putAll(cleanMetadata);
+                effectiveMessage.setMetadata(providerMetadata);
+            }
+        }
+        if (task == null) {
+            throw new IllegalStateException("Provider returned no A2A task");
+        }
+        if (task.getContextId() == null) {
+            task.setContextId(contextId);
+        } else if (!contextId.equals(task.getContextId())) {
+            throw new IllegalStateException("Provider returned a conflicting canonical contextId");
+        }
+        return task;
+    }
+
+    private void requireCanonicalProofMatches(
+            A2aMessage message,
+            TaskCreateContextNormalizer.CanonicalContextProof proof) {
+        Map<String, Object> metadata = message.getMetadata();
+        if (!proof.contextId().equals(message.getContextId())
+                || (message.getContextAlias() != null && !message.getContextAlias().isBlank())
+                || !Objects.equals(proof.ownerUserId(), trimToNull(agentEntity.getUserId()))
+                || !Objects.equals(proof.tenantId(), trimToNull(agentEntity.getTenantId()))
+                || !Objects.equals(proof.logicalAgentId(), trimToNull(agentEntity.getAgentId()))
+                || !Objects.equals(proof.physicalWorkerId(), trimToNull(agentEntity.getWorkerId()))
+                || !Objects.equals(proof.providerType(), trimToNull(providerType))
+                || !Boolean.TRUE.equals(agentEntity.getEnabled())) {
+            throw new SecurityException("Canonical context proof does not match the resolved Agent");
+        }
+        requireCanonicalMetadata(metadata, "agentId", proof.logicalAgentId());
+        requireCanonicalMetadata(metadata, "providerType", proof.providerType());
+        requireCanonicalMetadata(metadata, "sessionId", proof.navigatorSessionId());
+        requireCanonicalMetadata(metadata, "contextId", proof.contextId());
+        requireCanonicalMetadata(metadata, "workerId", proof.physicalWorkerId());
+        requireCanonicalMetadata(metadata, "directoryId", proof.directoryId());
+        requireCanonicalMetadata(metadata, "modelConfigId", proof.sessionModelConfigId());
+        requireCanonicalMetadata(metadata, "model", proof.model());
+        if (proof.runtimeAffinityInitializationEligible()
+                && !ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER.equals(proof.providerType())) {
+            throw new SecurityException("Runtime affinity initialization proof targets the wrong provider");
+        }
+    }
+
+    private void requireCanonicalMetadata(
+            Map<String, Object> metadata,
+            String key,
+            String expected) {
+        Object actual = metadata == null ? null : metadata.get(key);
+        if (!Objects.equals(expected, actual)) {
+            throw new SecurityException("Canonical context proof does not match message metadata: " + key);
+        }
+    }
+
+    private A2aMessage withoutCanonicalProof(A2aMessage message) {
+        Map<String, Object> metadata = message.getMetadata() == null
+                ? new HashMap<>() : new HashMap<>(message.getMetadata());
+        metadata.remove(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY);
+        return A2aMessage.builder()
+                .role(message.getRole())
+                .parts(message.getParts())
+                .taskId(message.getTaskId())
+                .contextId(message.getContextId())
+                .contextAlias(message.getContextAlias())
+                .metadata(metadata)
+                .build();
+    }
+
     @Override
     public Optional<A2aTask> getTask(String taskId) {
         return inner.getTask(taskId);
@@ -268,6 +398,10 @@ public class ContextResolvingA2aAgent implements A2aAgent {
         }
         String text = value.toString();
         return text.isBlank() ? null : text;
+    }
+
+    private static String trimToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private static String deriveProviderType(CodingAgentEntity entity) {
