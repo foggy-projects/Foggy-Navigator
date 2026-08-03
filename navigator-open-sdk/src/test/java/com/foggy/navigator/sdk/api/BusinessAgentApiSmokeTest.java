@@ -708,7 +708,46 @@ public class BusinessAgentApiSmokeTest {
         assertTrue(lastBody.contains("\"workdir\":\"/home/sa/workspace/app\""));
         assertTrue(lastBody.contains("\"allowed_dirs\":[\"/home/sa/workspace\"]"));
         assertTrue(lastBody.contains("\"allowed_tools\":[\"read_file\",\"invoke_business_function\"]"));
+        assertNull(lastClientRequestIdHeader);
         assertCommon();
+    }
+
+    @Test
+    public void testCreateBusinessAgentTaskWithClientRequestId() {
+        CreateBusinessAgentTaskForm form = new CreateBusinessAgentTaskForm();
+        form.setClientAppId("app-explicit");
+        form.setSkillId("skill-explicit");
+        String clientRequestId = "request-id-is-transported-without-sdk-parsing";
+
+        responseOverride = "{\"taskId\":\"task-explicit\", \"taskScopedToken\":\"token-explicit\"}";
+        CreatedBusinessAgentTaskDTO task = client.businessAgent()
+                .createBusinessAgentTask(clientRequestId, form);
+
+        assertNotNull(task);
+        assertEquals("task-explicit", task.getTaskId());
+        assertEquals("token-explicit", task.getTaskScopedToken());
+        assertEquals("/api/v1/business-agent/tasks", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals(clientRequestId, lastClientRequestIdHeader);
+        assertTrue(lastBody.contains("\"clientAppId\":\"app-explicit\""));
+        assertTrue(lastBody.contains("\"skillId\":\"skill-explicit\""));
+        assertCommon();
+    }
+
+    @Test
+    public void testCreateBusinessAgentTaskRejectsMissingClientRequestIdBeforeHttp() {
+        CreateBusinessAgentTaskForm form = new CreateBusinessAgentTaskForm();
+        form.setClientAppId("app-never-sent");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> client.businessAgent().createBusinessAgentTask(null, form));
+        assertThrows(IllegalArgumentException.class,
+                () -> client.businessAgent().createBusinessAgentTask("   ", form));
+
+        assertNull(lastPath);
+        assertNull(lastMethod);
+        assertNull(lastClientRequestIdHeader);
+        assertNull(lastBody);
     }
 
     @Test

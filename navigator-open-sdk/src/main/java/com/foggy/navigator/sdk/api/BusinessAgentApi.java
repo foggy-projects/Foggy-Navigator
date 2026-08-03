@@ -1042,6 +1042,17 @@ public class BusinessAgentApi {
         return http.post("/api/v1/business-agent/tasks", form, new TypeReference<>() {});
     }
 
+    public CreatedBusinessAgentTaskDTO createBusinessAgentTask(
+            String clientRequestId,
+            CreateBusinessAgentTaskForm form) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            throw new IllegalArgumentException("clientRequestId must not be blank");
+        }
+        return http.post("/api/v1/business-agent/tasks", form, Map.of(
+                "X-Navigator-Client-Request-Id", clientRequestId
+        ), new TypeReference<>() {});
+    }
+
     public BusinessAgentTaskDTO getBusinessAgentTask(String taskId) {
         return http.get("/api/v1/business-agent/tasks/" + taskId, new TypeReference<>() {});
     }
