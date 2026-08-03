@@ -5,6 +5,7 @@ import com.foggy.navigator.auth.util.JwtUtil;
 import com.foggy.navigator.common.authorization.AuthorizationCredentialLane;
 import com.foggy.navigator.common.authorization.AuthorizationPrincipalType;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.UserDTO;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
@@ -42,6 +43,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -483,6 +488,160 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
     }
 
     @Test
+    void forwardPreauthorizationIsReadOnlySingleUseAndPipelineRechecksCredentials()
+            throws Exception {
+        BoundRequest approved = bindJwt(
+                "jwt-forward-preauth", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope approvedScope =
+                factory.mintForwardScope(null, "9".repeat(64));
+        approved.submitRequest().setClientRequestId(approvedScope.clientRequestId());
+        factory.preauthorizeForwardScope(approvedScope, approved.submitRequest());
+        assertThrows(IllegalStateException.class,
+                () -> factory.preauthorizeForwardScope(
+                        approvedScope, approved.submitRequest()));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        approvedScope,
+                        approved.submitRequest(),
+                        noOpForwardParticipants(),
+                        () -> "duplicate-preauthorization-was-not-fail-closed"));
+
+        BoundRequest apiKey = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope apiKeyScope =
+                factory.mintForwardScope(null, "8".repeat(64));
+        apiKey.submitRequest().setClientRequestId(apiKeyScope.clientRequestId());
+        factory.preauthorizeForwardScope(apiKeyScope, apiKey.submitRequest());
+
+        BoundRequest mixed = bindJwt(
+                "jwt-forward-preauth-mixed", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        mixed.httpRequest().addHeader("X-Task-Token", "foreign");
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope mixedScope =
+                factory.mintForwardScope(null, "7".repeat(64));
+        mixed.submitRequest().setClientRequestId(mixedScope.clientRequestId());
+        assertThrows(SecurityException.class,
+                () -> factory.preauthorizeForwardScope(
+                        mixedScope, mixed.submitRequest()));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        mixedScope,
+                        mixed.submitRequest(),
+                        noOpForwardParticipants(),
+                        () -> "rejected-preauthorization-was-reused"));
+
+        BoundRequest credentialDrift = bindJwt(
+                "jwt-forward-preauth-drift", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope driftScope =
+                factory.mintForwardScope(null, "6".repeat(64));
+        credentialDrift.submitRequest().setClientRequestId(driftScope.clientRequestId());
+        factory.preauthorizeForwardScope(driftScope, credentialDrift.submitRequest());
+        credentialDrift.httpRequest().addHeader("X-Worker-Token", "late-foreign");
+        DefaultAgentSubmitPipeline pipeline =
+                new DefaultAgentSubmitPipeline(List.of(factory));
+        assertThrows(SecurityException.class,
+                () -> factory.executeForwardScoped(
+                        driftScope,
+                        credentialDrift.submitRequest(),
+                        noOpForwardParticipants(),
+                        () -> pipeline.submit(credentialDrift.submitRequest())));
+
+        verifyNoInteractions(taskDispatchFacade, commandCoordinator, chain);
+    }
+
+    @Test
+    void concurrentLateDuplicateCannotPoisonClaimedForwardExecution() throws Exception {
+        BoundRequest bound = bindJwt(
+                "jwt-forward-concurrent", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        CurrentUser currentUser = UserContext.getCurrentUser();
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
+                factory.mintForwardScope(null, "5".repeat(64));
+        bound.submitRequest().setClientRequestId(scope.clientRequestId());
+        factory.preauthorizeForwardScope(scope, bound.submitRequest());
+
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-forward-concurrent");
+        when(taskDispatchFacade.toTaskDispatchRequest(same(bound.submitRequest())))
+                .thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(
+                same(dispatchRequest), same(bound.submitRequest().getResolveContext())))
+                .thenReturn(plan);
+        when(commandCoordinator.execute(any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                            invocation.getArgument(5);
+                    participants.prepareFreshTask();
+                    participants.completeFreshTask(task);
+                    return new TaskCreateCommandCoordinator.Executed(
+                            new TaskCreateCommandCoordinator.TaskReference(task.getTaskId()), task);
+                });
+        when(taskDispatchFacade.toA2aTask(same(task)))
+                .thenReturn(A2aTask.builder().id(task.getTaskId()).build());
+        DefaultAgentSubmitPipeline pipeline =
+                new DefaultAgentSubmitPipeline(List.of(factory));
+        CountDownLatch claimed = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<AgentTaskSubmitResult> first = pool.submit(() -> {
+                UserContext.setCurrentUser(currentUser);
+                RequestContextHolder.setRequestAttributes(
+                        new ServletRequestAttributes(bound.httpRequest()));
+                try {
+                    return factory.executeForwardScoped(
+                            scope,
+                            bound.submitRequest(),
+                            noOpForwardParticipants(),
+                            () -> {
+                                claimed.countDown();
+                                try {
+                                    assertTrue(release.await(5, TimeUnit.SECONDS));
+                                } catch (InterruptedException interrupted) {
+                                    Thread.currentThread().interrupt();
+                                    throw new IllegalStateException(interrupted);
+                                }
+                                return pipeline.submit(bound.submitRequest());
+                            });
+                } finally {
+                    UserContext.clear();
+                    RequestContextHolder.resetRequestAttributes();
+                }
+            });
+            assertTrue(claimed.await(5, TimeUnit.SECONDS));
+            Future<IllegalStateException> duplicate = pool.submit(() -> assertThrows(
+                    IllegalStateException.class,
+                    () -> factory.executeForwardScoped(
+                            scope,
+                            bound.submitRequest(),
+                            noOpForwardParticipants(),
+                            () -> "duplicate")));
+            assertEquals("FORWARD_TASK_CREATE_SCOPE_ALREADY_USED",
+                    duplicate.get(5, TimeUnit.SECONDS).getMessage());
+            release.countDown();
+
+            assertSame(task, first.get(10, TimeUnit.SECONDS).getDispatchTask());
+            verify(commandCoordinator, times(1)).execute(
+                    same(dispatchRequest), any(), same(plan), any(), any(), any());
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void forwardScopedJwtFreshBindsSemanticReceiptAndParticipantsExactlyOnce()
             throws Exception {
         String requestId = "550e8400-e29b-41d4-a716-446655440010";
@@ -495,6 +654,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
                 factory.mintForwardScope(requestId, semanticFingerprint);
         bound.submitRequest().setClientRequestId(scope.clientRequestId());
+        factory.preauthorizeForwardScope(scope, bound.submitRequest());
         TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
         TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
         DispatchTaskDTO task = exactTask("task-forward-fresh");
@@ -572,6 +732,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
                 factory.mintForwardScope(requestId, "b".repeat(64));
         bound.submitRequest().setClientRequestId(scope.clientRequestId());
+        factory.preauthorizeForwardScope(scope, bound.submitRequest());
         TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
         TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
         DispatchTaskDTO task = exactTask("task-forward-replay");
@@ -638,6 +799,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
             TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
                     factory.mintForwardScope(requestId, fingerprint);
             bound.submitRequest().setClientRequestId(scope.clientRequestId());
+            factory.preauthorizeForwardScope(scope, bound.submitRequest());
             DefaultAgentSubmitPipeline pipeline =
                     new DefaultAgentSubmitPipeline(List.of(factory));
             factory.executeForwardScoped(
@@ -665,46 +827,89 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
     }
 
     @Test
-    void forwardScopeRejectsInvalidDigestMissingStageNestedAndReuse() {
-        AgentTaskSubmitRequest request = AgentTaskSubmitRequest.builder()
-                .resolveContext(AgentResolveContext.builder()
-                        .requestSource(TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE)
-                        .build())
-                .build();
+    void forwardScopeRejectsInvalidDigestMissingPreauthorizationStageNestedAndReuse()
+            throws Exception {
         assertThrows(IllegalArgumentException.class,
                 () -> factory.mintForwardScope(null, "A".repeat(64)));
         assertThrows(IllegalArgumentException.class,
                 () -> factory.mintForwardScope(null, "a".repeat(63)));
 
-        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope unused =
+        BoundRequest bound = bindJwt(
+                "jwt-forward-scope", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope missing =
                 factory.mintForwardScope(null, "e".repeat(64));
+        bound.submitRequest().setClientRequestId(missing.clientRequestId());
         assertThrows(IllegalStateException.class,
                 () -> factory.executeForwardScoped(
-                        unused, request, noOpForwardParticipants(), () -> "stage-skipped"));
-        assertFalse(factory.supports(request));
+                        missing, bound.submitRequest(), noOpForwardParticipants(), () -> "unapproved"));
+        assertThrows(IllegalStateException.class,
+                () -> factory.preauthorizeForwardScope(
+                        missing, bound.submitRequest()));
+
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope unused =
+                factory.mintForwardScope(null, "5".repeat(64));
+        bound.submitRequest().setClientRequestId(unused.clientRequestId());
+        factory.preauthorizeForwardScope(unused, bound.submitRequest());
         assertThrows(IllegalStateException.class,
                 () -> factory.executeForwardScoped(
-                        unused, request, noOpForwardParticipants(), () -> "reused"));
+                        unused, bound.submitRequest(), noOpForwardParticipants(), () -> "stage-skipped"));
+        assertFalse(factory.supports(bound.submitRequest()));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        unused, bound.submitRequest(), noOpForwardParticipants(), () -> "reused"));
 
         TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope outer =
                 factory.mintForwardScope(null, "f".repeat(64));
         TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope inner =
                 factory.mintForwardScope(null, "1".repeat(64));
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope late =
+                factory.mintForwardScope(null, "0".repeat(64));
+        AgentTaskSubmitRequest outerRequest = AgentTaskSubmitRequest.builder()
+                .agentId("agent-1")
+                .clientRequestId(outer.clientRequestId())
+                .resolveContext(bound.submitRequest().getResolveContext())
+                .build();
+        AgentTaskSubmitRequest innerRequest = AgentTaskSubmitRequest.builder()
+                .agentId("agent-1")
+                .clientRequestId(inner.clientRequestId())
+                .resolveContext(bound.submitRequest().getResolveContext())
+                .build();
+        AgentTaskSubmitRequest lateRequest = AgentTaskSubmitRequest.builder()
+                .agentId("agent-1")
+                .clientRequestId(late.clientRequestId())
+                .resolveContext(bound.submitRequest().getResolveContext())
+                .build();
+        factory.preauthorizeForwardScope(outer, outerRequest);
+        factory.preauthorizeForwardScope(inner, innerRequest);
         assertThrows(IllegalStateException.class,
                 () -> factory.executeForwardScoped(
                         outer,
-                        request,
+                        outerRequest,
                         noOpForwardParticipants(),
                         () -> {
                             assertThrows(IllegalStateException.class,
+                                    () -> factory.preauthorizeForwardScope(
+                                            late, lateRequest));
+                            assertThrows(IllegalStateException.class,
                                     () -> factory.executeForwardScoped(
                                             inner,
-                                            request,
+                                            innerRequest,
                                             noOpForwardParticipants(),
                                             () -> "nested"));
                             return "nested-caught";
                         }));
-        assertFalse(factory.supports(request));
+        assertThrows(IllegalStateException.class,
+                () -> factory.preauthorizeForwardScope(late, lateRequest));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        inner,
+                        innerRequest,
+                        noOpForwardParticipants(),
+                        () -> "nested-candidate-was-reused"));
+        assertFalse(factory.supports(outerRequest));
         verifyNoInteractions(taskDispatchFacade, commandCoordinator, chain);
     }
 
@@ -722,11 +927,8 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
                 factory.mintForwardScope(null, "2".repeat(64));
         routeDrift.submitRequest().setClientRequestId(routeScope.clientRequestId());
         assertThrows(SecurityException.class,
-                () -> factory.executeForwardScoped(
-                        routeScope,
-                        routeDrift.submitRequest(),
-                        noOpForwardParticipants(),
-                        () -> pipeline.submit(routeDrift.submitRequest())));
+                () -> factory.preauthorizeForwardScope(
+                        routeScope, routeDrift.submitRequest()));
         assertFalse(factory.supports(routeDrift.submitRequest()));
 
         BoundRequest identity = bindJwt(
@@ -737,6 +939,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope identityScope =
                 factory.mintForwardScope(null, "3".repeat(64));
         identity.submitRequest().setClientRequestId(identityScope.clientRequestId());
+        factory.preauthorizeForwardScope(identityScope, identity.submitRequest());
         AgentTaskSubmitRequest replacement = AgentTaskSubmitRequest.builder()
                 .clientRequestId(identityScope.clientRequestId())
                 .resolveContext(identity.submitRequest().getResolveContext())
@@ -757,6 +960,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope incompleteScope =
                 factory.mintForwardScope(null, "4".repeat(64));
         incomplete.submitRequest().setClientRequestId(incompleteScope.clientRequestId());
+        factory.preauthorizeForwardScope(incompleteScope, incomplete.submitRequest());
         TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
         TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
         DispatchTaskDTO task = exactTask("task-forward-incomplete");

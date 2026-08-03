@@ -130,6 +130,31 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                 semanticFingerprint);
     }
 
+    void preauthorizeForwardScope(
+            ForwardCommandScope scope,
+            AgentTaskSubmitRequest expectedRequest) {
+        ActiveForwardScope existing = activeForwardScope.get();
+        if (existing != null) {
+            existing.poison();
+            if (scope != null) {
+                scope.poisonRejectedCandidate();
+            }
+            throw conflict("FORWARD_TASK_CREATE_SCOPE_NESTED");
+        }
+        Objects.requireNonNull(scope, "forward command scope must not be null");
+        Objects.requireNonNull(expectedRequest, "expected submit request must not be null");
+        scope.requireIssuer(forwardScopeIssuer);
+        scope.beginPreauthorization(expectedRequest);
+        try {
+            scope.requireClientRequest(expectedRequest.getClientRequestId());
+            requireTrustedIngress(expectedRequest, true);
+            scope.completePreauthorization(expectedRequest);
+        } catch (RuntimeException | Error failure) {
+            scope.rejectPreauthorization();
+            throw failure;
+        }
+    }
+
     <T> T executeForwardScoped(
             ForwardCommandScope scope,
             AgentTaskSubmitRequest expectedRequest,
@@ -138,6 +163,9 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         ActiveForwardScope existing = activeForwardScope.get();
         if (existing != null) {
             existing.poison();
+            if (scope != null) {
+                scope.poisonRejectedCandidate();
+            }
             throw conflict("FORWARD_TASK_CREATE_SCOPE_NESTED");
         }
         Objects.requireNonNull(scope, "forward command scope must not be null");
@@ -145,7 +173,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         Objects.requireNonNull(participants, "forward fresh participants must not be null");
         Objects.requireNonNull(submission, "forward scoped submission must not be null");
         scope.requireIssuer(forwardScopeIssuer);
-        scope.claimExecution();
+        scope.claimPreauthorizedExecution(expectedRequest);
         ActiveForwardScope active = new ActiveForwardScope(
                 forwardScopeIssuer, scope, expectedRequest, participants);
         activeForwardScope.set(active);
@@ -206,7 +234,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                 active.requireAdapter(forwardScopeIssuer);
                 active.claim(request);
             }
-            TrustedIngress ingress = requireTrustedIngress(request, active);
+            TrustedIngress ingress = requireTrustedIngress(request, active != null);
             if (ingress.deferredLegacy()) {
                 return chain.proceed(request);
             }
@@ -343,7 +371,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
 
     private TrustedIngress requireTrustedIngress(
             AgentTaskSubmitRequest request,
-            @Nullable ActiveForwardScope active) {
+            boolean forwardScoped) {
         HttpServletRequest servletRequest = Objects.requireNonNull(
                 currentServletRequest(), "trusted Navigator MVC request is unavailable");
         NavigatorCredentialSource credentialSource =
@@ -371,7 +399,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                 HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         String route = routeAttribute == null ? null : routeAttribute.toString();
         String source = context.getRequestSource();
-        if (active != null) {
+        if (forwardScoped) {
             if (FORWARD_ROUTE.equals(route) && UI_FORWARD_SOURCE.equals(source)) {
                 return new TrustedIngress(
                         CanonicalCommandEnvelope.CommandIngress.DIRECT,
@@ -555,6 +583,11 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         private final Object issuer;
         private final String clientRequestId;
         private final String semanticFingerprint;
+        @Nullable
+        private AgentTaskSubmitRequest preauthorizedRequest;
+        private boolean preauthorizationAttempted;
+        private boolean preauthorizationApproved;
+        private boolean preauthorizationPoisoned;
         private boolean executionClaimed;
 
         private ForwardCommandScope(
@@ -582,17 +615,70 @@ public final class TrustedNavigatorTaskCreateCommandFactory
             }
         }
 
-        private synchronized void claimExecution() {
-            if (executionClaimed) {
-                throw conflict("FORWARD_TASK_CREATE_SCOPE_ALREADY_USED");
-            }
-            executionClaimed = true;
-        }
-
         private void requireClientRequest(@Nullable String actualClientRequestId) {
             if (!clientRequestId.equals(actualClientRequestId)) {
                 throw conflict("FORWARD_TASK_CREATE_SCOPE_REQUEST_ID_CONFLICT");
             }
+        }
+
+        private synchronized void beginPreauthorization(
+                AgentTaskSubmitRequest expectedRequest) {
+            if (executionClaimed) {
+                throw conflict("FORWARD_TASK_CREATE_SCOPE_ALREADY_USED");
+            }
+            if (preauthorizationPoisoned || preauthorizationAttempted) {
+                preauthorizationPoisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_PREAUTH_ALREADY_ATTEMPTED");
+            }
+            preauthorizationAttempted = true;
+            preauthorizedRequest = Objects.requireNonNull(
+                    expectedRequest, "expected submit request must not be null");
+        }
+
+        private synchronized void completePreauthorization(
+                AgentTaskSubmitRequest expectedRequest) {
+            if (preauthorizationPoisoned
+                    || !preauthorizationAttempted
+                    || preauthorizedRequest != expectedRequest
+                    || preauthorizationApproved) {
+                preauthorizationPoisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_PREAUTH_COMPLETION_CONFLICT");
+            }
+            preauthorizationApproved = true;
+        }
+
+        private synchronized void rejectPreauthorization() {
+            poison();
+        }
+
+        private synchronized void poison() {
+            preauthorizationPoisoned = true;
+            preauthorizationApproved = false;
+        }
+
+        private synchronized void poisonRejectedCandidate() {
+            if (!executionClaimed) {
+                poison();
+            }
+        }
+
+        private synchronized void claimPreauthorizedExecution(
+                AgentTaskSubmitRequest expectedRequest) {
+            if (executionClaimed) {
+                throw conflict("FORWARD_TASK_CREATE_SCOPE_ALREADY_USED");
+            }
+            if (preauthorizationPoisoned
+                    || !preauthorizationAttempted
+                    || !preauthorizationApproved
+                    || preauthorizedRequest == null) {
+                preauthorizationPoisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_PREAUTH_MISSING");
+            }
+            if (preauthorizedRequest != expectedRequest) {
+                preauthorizationPoisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_PREAUTH_REQUEST_CONFLICT");
+            }
+            executionClaimed = true;
         }
 
         @Override
