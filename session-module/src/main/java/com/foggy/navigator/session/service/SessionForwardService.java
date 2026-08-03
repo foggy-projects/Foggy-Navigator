@@ -2,8 +2,6 @@ package com.foggy.navigator.session.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
-import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
@@ -13,7 +11,6 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
-import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.dto.SessionForwardCreateResponse;
 import com.foggy.navigator.session.dto.SessionRelationDTO;
@@ -21,14 +18,12 @@ import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRelationRepository;
-import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
-import com.foggy.navigator.spi.agent.TaskStateRepairedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -36,6 +31,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -49,22 +45,51 @@ public class SessionForwardService {
     private static final TypeReference<List<DirectoryMilestoneDTO>> MILESTONE_LIST_TYPE =
             new TypeReference<>() {};
 
-    private final SessionRepository sessionRepository;
     private final SessionMessageRepository sessionMessageRepository;
     private final SessionRelationRepository sessionRelationRepository;
     private final SessionTaskRepository sessionTaskRepository;
     private final WorkingDirectoryRepository workingDirectoryRepository;
-    private final SessionManager sessionManager;
     private final TaskDispatchFacade taskDispatchFacade;
     private final AgentSubmitPipeline agentSubmitPipeline;
     private final SessionTaskResourceAccessService resourceAccessService;
+    private final SessionForwardTransactionBoundary transactionBoundary;
+    private final TrustedNavigatorTaskCreateCommandFactory forwardCommandFactory;
+    private final SessionForwardTargetSessionReservationService targetReservationService;
+    private final SessionForwardOutcomeStore outcomeStore;
 
-    @Transactional(isolation = Isolation.READ_COMMITTED,
-            noRollbackFor = TaskStateRepairedException.class)
     public SessionForwardCreateResponse forwardToNewSession(
             SessionForwardCreateRequest request,
             String userId,
             String tenantId
+    ) {
+        return forwardToNewSession(request, userId, tenantId, null);
+    }
+
+    public SessionForwardCreateResponse forwardToNewSession(
+            SessionForwardCreateRequest request,
+            String userId,
+            String tenantId,
+            @Nullable String clientRequestId
+    ) {
+        Objects.requireNonNull(request, "forward request must not be null");
+        String targetMode = normalizeTargetMode(request.getTargetMode());
+        return switch (targetMode) {
+            case "EXISTING_SESSION" -> transactionBoundary.executeExistingTarget(
+                    () -> forwardWithinBoundary(
+                            request, userId, tenantId, targetMode, clientRequestId));
+            case "NEW_SESSION" -> transactionBoundary.executeNewTarget(
+                    () -> forwardWithinBoundary(
+                            request, userId, tenantId, targetMode, clientRequestId));
+            default -> throw new IllegalArgumentException("Unsupported targetMode: " + targetMode);
+        };
+    }
+
+    private SessionForwardCreateResponse forwardWithinBoundary(
+            SessionForwardCreateRequest request,
+            String userId,
+            String tenantId,
+            String targetMode,
+            @Nullable String clientRequestId
     ) {
         SessionEntity sourceSession = findOwnedSession(request.getSourceSessionId(), userId, tenantId,
                 "Source session not found: ");
@@ -76,10 +101,16 @@ public class SessionForwardService {
         }
 
         String prompt = resolvePrompt(request, sourceMessage);
-        String targetMode = normalizeTargetMode(request.getTargetMode());
         return switch (targetMode) {
             case "EXISTING_SESSION" -> forwardToExistingSession(request, userId, tenantId, sourceSession, sourceMessage, prompt);
-            case "NEW_SESSION" -> forwardCreatingNewSession(request, userId, tenantId, sourceSession, sourceMessage, prompt);
+            case "NEW_SESSION" -> forwardCreatingNewSession(
+                    request,
+                    userId,
+                    tenantId,
+                    sourceSession,
+                    sourceMessage,
+                    prompt,
+                    clientRequestId);
             default -> throw new IllegalArgumentException("Unsupported targetMode: " + targetMode);
         };
     }
@@ -99,7 +130,11 @@ public class SessionForwardService {
                     throw new IllegalArgumentException("Source message not found: " + sourceMessageId);
                 }
                 return new ForwardSourceProjection(
-                        message.getId(), message.getRole(), message.getContent(), message.getTaskId());
+                        SessionForwardNewSessionPlan.SourceKind.MESSAGE,
+                        message.getId(),
+                        message.getRole(),
+                        message.getContent(),
+                        message.getTaskId());
             }
         }
 
@@ -130,6 +165,7 @@ public class SessionForwardService {
         }
 
         return new ForwardSourceProjection(
+                SessionForwardNewSessionPlan.SourceKind.TASK_RESULT,
                 recoveredTaskResultMessageId(sourceSession.getId(), sourceTaskId),
                 "ASSISTANT",
                 resultText,
@@ -164,73 +200,120 @@ public class SessionForwardService {
             String tenantId,
             SessionEntity sourceSession,
             ForwardSourceProjection sourceMessage,
-            String prompt
+            String prompt,
+            @Nullable String clientRequestId
     ) {
-        WorkingDirectoryEntity targetDirectory = resolveTargetDirectory(request, userId);
-        normalizeTargetContext(request, targetDirectory);
-        String targetMilestoneId = resolveTargetMilestoneId(request, sourceSession, targetDirectory);
-
         String rootSessionId = resolveRootSessionId(sourceSession, userId, tenantId);
-        String targetSessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                .userId(userId)
-                .tenantId(tenantId)
-                .agentId(blankToNull(request.getAgentId()))
-                .parentSessionId(rootSessionId)
-                .taskName(truncate(prompt, 120))
-                .build());
-
-        SessionEntity targetSession = sessionRepository.findById(targetSessionId)
-                .orElseThrow(() -> new IllegalStateException("Created session not found: " + targetSessionId));
-        // The first provider task establishes Worker/runtime affinity atomically. Pre-seeding
-        // currentWorkerId here makes a new app-server session look like a legacy SDK session.
-        targetSession.setCurrentDirectoryId(blankToNull(request.getDirectoryId()));
-        targetSession.setMilestoneId(targetMilestoneId);
-        targetSession.setLatestModel(blankToNull(request.getModel()));
-        sessionRepository.save(targetSession);
-
-        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder()
-                .sessionId(targetSessionId)
-                .workerId(request.getWorkerId())
-                .directoryId(request.getDirectoryId())
+        List<String> images = SessionForwardNewSessionPlan.imagesFromWire(request.getImages());
+        TaskDispatchRequest provisionalRequest = TaskDispatchRequest.builder()
+                .workerId(blankToNull(request.getWorkerId()))
+                .directoryId(blankToNull(request.getDirectoryId()))
                 .cwd(request.getCwd())
                 .prompt(prompt)
-                .model(request.getModel())
-                .modelConfigId(request.getModelConfigId())
-                .permissionMode(request.getPermissionMode())
-                .agentId(request.getAgentId())
+                .model(blankToNull(request.getModel()))
+                .modelConfigId(blankToNull(request.getModelConfigId()))
+                .permissionMode(blankToNull(request.getPermissionMode()))
+                .agentId(blankToNull(request.getAgentId()))
                 .maxTurns(request.getMaxTurns())
-                .agentTeamsConfigId(request.getAgentTeamsConfigId())
+                .agentTeamsConfigId(blankToNull(request.getAgentTeamsConfigId()))
                 .agentTeamsJson(request.getAgentTeamsJson())
-                .images(parseImagesList(request.getImages()))
+                .images(images)
                 .initializeRuntimeAffinity(true)
                 .build();
+        AgentResolveContext provisionalContext = buildContext(
+                userId, tenantId, null, request.getModelConfigId());
+        TaskCreateTargetResolver.CreateExecutionPlan resolvedTarget =
+                taskDispatchFacade.resolveCreateExecutionPlan(
+                        provisionalRequest, provisionalContext);
+        resolvedTarget.requireMatches(provisionalRequest, provisionalContext);
+        requireSessionlessResolvedTarget(resolvedTarget, userId, tenantId);
 
-        AgentResolveContext context = buildContext(userId, tenantId, targetSessionId, request.getModelConfigId());
-        AgentTaskSubmitResult submitResult = agentSubmitPipeline.submit(toSubmitRequest(dispatchRequest, context));
+        String targetWorkerId = blankToNull(resolvedTarget.physicalWorkerId());
+        if (targetWorkerId == null) {
+            throw new IllegalArgumentException("workerId is required");
+        }
+        WorkingDirectoryEntity targetDirectory = resolveCanonicalTargetDirectory(
+                resolvedTarget.directoryId(), userId, tenantId, targetWorkerId);
+        String targetCwd = request.getCwd();
+        if (isBlank(targetCwd) && targetDirectory != null) {
+            targetCwd = targetDirectory.getPath();
+        }
+        String targetMilestoneId = resolveTargetMilestoneId(
+                request, sourceSession, targetDirectory);
+
+        SessionForwardNewSessionPlan plan = new SessionForwardNewSessionPlan(
+                userId,
+                tenantId,
+                new SessionForwardNewSessionPlan.SourceSnapshot(
+                        sourceSession.getId(),
+                        sourceMessage.kind(),
+                        sourceMessage.referenceId(),
+                        sourceMessage.sourceTaskId(),
+                        sourceMessage.content(),
+                        sourceSession.getCurrentWorkerId(),
+                        sourceSession.getCurrentDirectoryId(),
+                        sourceSession.getMilestoneId()),
+                rootSessionId,
+                prompt,
+                new SessionForwardNewSessionPlan.TargetExecution(
+                        targetWorkerId,
+                        resolvedTarget.directoryId(),
+                        targetCwd,
+                        resolvedTarget.logicalAgentId(),
+                        targetMilestoneId,
+                        resolvedTarget.model(),
+                        resolvedTarget.modelConfigId(),
+                        request.getPermissionMode(),
+                        request.getMaxTurns(),
+                        request.getAgentTeamsConfigId(),
+                        request.getAgentTeamsJson(),
+                        images));
+
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
+                forwardCommandFactory.mintForwardScope(
+                        clientRequestId, plan.semanticFingerprint());
+        String targetSessionId =
+                SessionForwardTargetSessionReservationService.deriveSessionId(
+                        scope.clientRequestId(), plan.ownerUserId(), plan.tenantId());
+        AgentTaskSubmitRequest submitRequest = plan.toSubmitRequest(
+                scope.clientRequestId(), targetSessionId);
+        forwardCommandFactory.preauthorizeForwardScope(scope, submitRequest);
+
+        SessionForwardTargetSessionReservationService.ReservationResult reservation =
+                targetReservationService.reserve(
+                        scope.clientRequestId(), plan.reservationSpec());
+        if (!targetSessionId.equals(reservation.sessionId())) {
+            throw new IllegalStateException("FORWARD_SESSION_RESERVATION_ID_CONFLICT");
+        }
+
+        ForwardOutcomeParticipants participants = new ForwardOutcomeParticipants(
+                plan,
+                scope.clientRequestId(),
+                targetSessionId,
+                submitRequest,
+                outcomeStore);
+        AgentTaskSubmitResult submitResult = forwardCommandFactory.executeForwardScoped(
+                scope,
+                submitRequest,
+                participants,
+                () -> agentSubmitPipeline.submit(submitRequest));
         DispatchTaskDTO task = submitResult.getDispatchTask();
         if (task == null) {
             throw new IllegalStateException("Agent submit pipeline did not return dispatch task");
         }
-
-        SessionRelationEntity relation = saveRelation(
-                "NEW_SESSION",
-                sourceSession,
-                sourceMessage,
-                targetSessionId,
-                blankToNull(request.getWorkerId()),
-                blankToNull(request.getDirectoryId()),
-                targetMilestoneId,
-                firstNonBlank(task.getModelConfigId(), request.getModelConfigId()),
-                task.getProviderType(),
-                prompt,
-                userId,
-                tenantId
-        );
+        SessionForwardOutcomeStore.OutcomeSnapshot outcome =
+                participants.requireOutcome(task);
 
         log.info("Forwarded assistant message to new session: sourceSessionId={}, sourceMessageId={}, targetSessionId={}, taskId={}",
                 sourceSession.getId(), sourceMessage.referenceId(), targetSessionId, task.getTaskId());
 
-        return buildResponse(relation.getId(), "NEW_SESSION", sourceSession.getId(), sourceMessage.referenceId(), targetSessionId, task);
+        return buildResponse(
+                outcome.relationId(),
+                "NEW_SESSION",
+                plan.source().sessionId(),
+                plan.source().referenceId(),
+                targetSessionId,
+                task);
     }
 
     private SessionForwardCreateResponse forwardToExistingSession(
@@ -323,32 +406,6 @@ public class SessionForwardService {
                 .build();
     }
 
-    private AgentTaskSubmitRequest toSubmitRequest(TaskDispatchRequest request, AgentResolveContext context) {
-        return AgentTaskSubmitRequest.builder()
-                .agentId(request.getAgentId())
-                .providerType(request.getProviderType())
-                .resolveContext(context)
-                .sessionId(request.getSessionId())
-                .workerId(request.getWorkerId())
-                .prompt(request.getPrompt())
-                .cwd(request.getCwd())
-                .directoryId(request.getDirectoryId())
-                .model(request.getModel())
-                .modelConfigId(request.getModelConfigId())
-                .maxTurns(request.getMaxTurns())
-                .permissionMode(request.getPermissionMode())
-                .images(request.getImages())
-                .attachments(request.getAttachments())
-                .agentTeamsConfigId(request.getAgentTeamsConfigId())
-                .agentTeamsJson(request.getAgentTeamsJson())
-                .contextId(request.getContextId())
-                .context(request.getContext())
-                .metadata(request.getMetadata())
-                .contextAlias(request.getContextAlias())
-                .initializeRuntimeAffinity(request.isInitializeRuntimeAffinity())
-                .build();
-    }
-
     private SessionRelationEntity saveRelation(
             String targetMode,
             SessionEntity sourceSession,
@@ -401,32 +458,62 @@ public class SessionForwardService {
                 .build();
     }
 
-    private WorkingDirectoryEntity resolveTargetDirectory(SessionForwardCreateRequest request, String userId) {
-        String directoryId = blankToNull(request.getDirectoryId());
+    private void requireSessionlessResolvedTarget(
+            TaskCreateTargetResolver.CreateExecutionPlan resolvedTarget,
+            String userId,
+            String tenantId) {
+        if (!Objects.equals(userId, resolvedTarget.ownerUserId())
+                || !Objects.equals(blankToNull(tenantId), resolvedTarget.tenantId())) {
+            throw new SecurityException("Resource access denied");
+        }
+        String resolvedSessionId = blankToNull(resolvedTarget.sessionId());
+        TaskCreateContextNormalizer.PendingContextClaim pendingContextClaim =
+                resolvedTarget.pendingContextClaim();
+        if (resolvedTarget.canonicalContextProof() != null) {
+            throw new IllegalStateException("FORWARD_TARGET_PREPLAN_SESSION_CONFLICT");
+        }
+        if (resolvedSessionId == null) {
+            if (pendingContextClaim != null) {
+                throw new IllegalStateException("FORWARD_TARGET_PREPLAN_SESSION_CONFLICT");
+            }
+            return;
+        }
+        if (pendingContextClaim == null
+                || !resolvedSessionId.equals(pendingContextClaim.navigatorSessionId())) {
+            throw new IllegalStateException("FORWARD_TARGET_PREPLAN_SESSION_CONFLICT");
+        }
+        if (!Objects.equals(userId, pendingContextClaim.ownerUserId())
+                || !Objects.equals(
+                        blankToNull(tenantId), pendingContextClaim.tenantId())
+                || !Objects.equals(
+                        resolvedTarget.logicalAgentId(),
+                        pendingContextClaim.logicalAgentId())) {
+            throw new SecurityException("Resource access denied");
+        }
+    }
+
+    private WorkingDirectoryEntity resolveCanonicalTargetDirectory(
+            @Nullable String resolvedDirectoryId,
+            String userId,
+            String tenantId,
+            String resolvedWorkerId) {
+        String directoryId = blankToNull(resolvedDirectoryId);
         if (directoryId == null) {
             return null;
         }
-        return workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+        WorkingDirectoryEntity directory = workingDirectoryRepository
+                .findByDirectoryIdAndUserId(directoryId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Working directory not found: " + directoryId));
-    }
-
-    private void normalizeTargetContext(SessionForwardCreateRequest request, WorkingDirectoryEntity targetDirectory) {
-        if (targetDirectory != null) {
-            if (isBlank(request.getWorkerId())) {
-                request.setWorkerId(targetDirectory.getWorkerId());
-            } else if (!targetDirectory.getWorkerId().equals(request.getWorkerId())) {
-                throw new IllegalArgumentException("Working directory does not belong to worker: " + request.getDirectoryId());
-            }
-            if (isBlank(request.getCwd())) {
-                request.setCwd(targetDirectory.getPath());
-            }
-            if (isBlank(request.getAgentId())) {
-                request.setAgentId(DirectoryAgentId.of(targetDirectory.getDirectoryId()));
-            }
+        if (!Objects.equals(directoryId, blankToNull(directory.getDirectoryId()))
+                || !Objects.equals(userId, blankToNull(directory.getUserId()))
+                || !Objects.equals(
+                        blankToNull(tenantId), blankToNull(directory.getTenantId()))
+                || !Boolean.TRUE.equals(directory.getEnabled())
+                || !Objects.equals(blankToNull(directory.getWorkerId()), resolvedWorkerId)) {
+            throw new IllegalStateException(
+                    "FORWARD_TARGET_DIRECTORY_CHANGED_BEFORE_PLAN_FREEZE");
         }
-        if (isBlank(request.getWorkerId())) {
-            throw new IllegalArgumentException("workerId is required");
-        }
+        return directory;
     }
 
     private String resolveTargetMilestoneId(
@@ -598,7 +685,93 @@ public class SessionForwardService {
         return List.of(normalized);
     }
 
+    private static final class ForwardOutcomeParticipants
+            implements TrustedNavigatorTaskCreateCommandFactory.ForwardFreshParticipants {
+
+        private final SessionForwardNewSessionPlan plan;
+        private final String clientRequestId;
+        private final String targetSessionId;
+        private final AgentTaskSubmitRequest submitRequest;
+        private final SessionForwardOutcomeStore outcomeStore;
+
+        private ParticipantState state = ParticipantState.INITIAL;
+        private DispatchTaskDTO completedTask;
+        private SessionForwardOutcomeStore.OutcomeSnapshot freshOutcome;
+
+        private ForwardOutcomeParticipants(
+                SessionForwardNewSessionPlan plan,
+                String clientRequestId,
+                String targetSessionId,
+                AgentTaskSubmitRequest submitRequest,
+                SessionForwardOutcomeStore outcomeStore) {
+            this.plan = Objects.requireNonNull(plan, "forward plan must not be null");
+            this.clientRequestId = Objects.requireNonNull(
+                    clientRequestId, "client request ID must not be null");
+            this.targetSessionId = Objects.requireNonNull(
+                    targetSessionId, "target session ID must not be null");
+            this.submitRequest = Objects.requireNonNull(
+                    submitRequest, "submit request must not be null");
+            this.outcomeStore = Objects.requireNonNull(
+                    outcomeStore, "outcome store must not be null");
+        }
+
+        @Override
+        public synchronized void prepareFreshTask() {
+            plan.requireExactPreparedSubmitRequest(
+                    submitRequest,
+                    clientRequestId,
+                    targetSessionId);
+            if (state != ParticipantState.INITIAL) {
+                throw new IllegalStateException("FORWARD_OUTCOME_PREPARATION_CONFLICT");
+            }
+            state = ParticipantState.PREPARED;
+        }
+
+        @Override
+        public synchronized void completeFreshTask(DispatchTaskDTO freshTask) {
+            if (state != ParticipantState.PREPARED) {
+                throw new IllegalStateException("FORWARD_OUTCOME_COMPLETION_CONFLICT");
+            }
+            SessionForwardOutcomeStore.OutcomeSpec expected =
+                    SessionForwardOutcomeStore.OutcomeSpec.from(
+                            plan, targetSessionId, freshTask);
+            SessionForwardOutcomeStore.OutcomeSnapshot inserted =
+                    outcomeStore.insertFresh(expected);
+            if (!expected.equals(inserted.spec())) {
+                throw new IllegalStateException("FORWARD_OUTCOME_INSERT_CONFLICT");
+            }
+            completedTask = freshTask;
+            freshOutcome = inserted;
+            state = ParticipantState.COMPLETED;
+        }
+
+        private synchronized SessionForwardOutcomeStore.OutcomeSnapshot requireOutcome(
+                DispatchTaskDTO task) {
+            Objects.requireNonNull(task, "dispatch task must not be null");
+            SessionForwardOutcomeStore.OutcomeSpec expected =
+                    SessionForwardOutcomeStore.OutcomeSpec.from(
+                            plan, targetSessionId, task);
+            if (state == ParticipantState.INITIAL) {
+                return outcomeStore.requireExactReplay(expected);
+            }
+            if (state != ParticipantState.COMPLETED
+                    || completedTask != task
+                    || freshOutcome == null
+                    || !expected.equals(freshOutcome.spec())) {
+                throw new IllegalStateException("FORWARD_OUTCOME_STATE_CONFLICT");
+            }
+            return freshOutcome;
+        }
+
+        private enum ParticipantState {
+            INITIAL,
+            PREPARED,
+            COMPLETED
+        }
+    }
+
     private record ForwardSourceProjection(
+            SessionForwardNewSessionPlan.SourceKind kind,
             String referenceId,
             String role,
             String content,

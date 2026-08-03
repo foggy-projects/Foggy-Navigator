@@ -9,6 +9,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -105,6 +106,56 @@ record SessionForwardNewSessionPlan(
                 .clientRequestId(clientRequestId)
                 .initializeRuntimeAffinity(true)
                 .build();
+    }
+
+    void requireExactPreparedSubmitRequest(
+            AgentTaskSubmitRequest actual,
+            String canonicalClientRequestId,
+            String deterministicTargetSessionId) {
+        Objects.requireNonNull(actual, "submit request must not be null");
+        AgentTaskSubmitRequest expected = toSubmitRequest(
+                canonicalClientRequestId, deterministicTargetSessionId);
+        AgentResolveContext actualContext = actual.getResolveContext();
+        AgentResolveContext expectedContext = expected.getResolveContext();
+        Map<String, Object> expectedMetadata = target.directoryId() == null
+                ? null
+                : Map.of("directoryId", target.directoryId());
+
+        boolean exact = Objects.equals(actual.getAgentId(), expected.getAgentId())
+                && actual.getProviderType() == null
+                && Objects.equals(actual.getSessionId(), expected.getSessionId())
+                && Objects.equals(actual.getWorkerId(), expected.getWorkerId())
+                && Objects.equals(actual.getPrompt(), expected.getPrompt())
+                && Objects.equals(actual.getCwd(), expected.getCwd())
+                && Objects.equals(actual.getDirectoryId(), expected.getDirectoryId())
+                && Objects.equals(actual.getModel(), expected.getModel())
+                && Objects.equals(actual.getModelConfigId(), expected.getModelConfigId())
+                && Objects.equals(actual.getMaxTurns(), expected.getMaxTurns())
+                && Objects.equals(actual.getPermissionMode(), expected.getPermissionMode())
+                && Objects.equals(actual.getImages(), expected.getImages())
+                && actual.getAttachments() == null
+                && Objects.equals(
+                        actual.getAgentTeamsConfigId(), expected.getAgentTeamsConfigId())
+                && Objects.equals(actual.getAgentTeamsJson(), expected.getAgentTeamsJson())
+                && actual.getMessage() == null
+                && actual.getContextId() == null
+                && actual.getContext() == null
+                && actual.getContextAlias() == null
+                && Objects.equals(actual.getMetadata(), expectedMetadata)
+                && Objects.equals(
+                        actual.getClientRequestId(), expected.getClientRequestId())
+                && actual.isInitializeRuntimeAffinity()
+                && actualContext != null
+                && Objects.equals(actualContext.getUserId(), expectedContext.getUserId())
+                && Objects.equals(actualContext.getTenantId(), expectedContext.getTenantId())
+                && Objects.equals(actualContext.getSessionId(), expectedContext.getSessionId())
+                && Objects.equals(
+                        actualContext.getModelConfigId(), expectedContext.getModelConfigId())
+                && Objects.equals(
+                        actualContext.getRequestSource(), expectedContext.getRequestSource());
+        if (!exact) {
+            throw new IllegalStateException("FORWARD_PLAN_PREPARED_REQUEST_CONFLICT");
+        }
     }
 
     /** Preserves the existing forward wire convention without parsing or rewriting image JSON. */

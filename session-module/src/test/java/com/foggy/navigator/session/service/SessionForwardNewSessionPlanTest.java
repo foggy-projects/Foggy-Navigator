@@ -1,5 +1,8 @@
 package com.foggy.navigator.session.service;
 
+import com.foggy.navigator.common.dto.a2a.A2aMessage;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitDirectoryResolutionPipelineStage;
+import com.foggy.navigator.session.repository.SessionCodingAgentRepository;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import org.junit.jupiter.api.Test;
@@ -17,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class SessionForwardNewSessionPlanTest {
 
@@ -69,6 +73,95 @@ class SessionForwardNewSessionPlanTest {
         assertEquals(TARGET_SESSION_ID, context.getSessionId());
         assertEquals("model-config-1", context.getModelConfigId());
         assertEquals("UI_FORWARD", context.getRequestSource());
+    }
+
+    @Test
+    void preparedMatcherAcceptsOnlyCanonicalDirectoryPipelineProjection() {
+        SessionForwardNewSessionPlan plan = plan();
+        AgentTaskSubmitRequest submit = plan.toSubmitRequest(
+                CLIENT_REQUEST_ID, TARGET_SESSION_ID);
+
+        assertEquals("FORWARD_PLAN_PREPARED_REQUEST_CONFLICT",
+                assertThrows(IllegalStateException.class,
+                        () -> plan.requireExactPreparedSubmitRequest(
+                                submit, CLIENT_REQUEST_ID, TARGET_SESSION_ID)).getMessage());
+
+        AgentSubmitDirectoryResolutionPipelineStage directoryStage =
+                new AgentSubmitDirectoryResolutionPipelineStage(
+                        mock(SessionCodingAgentRepository.class));
+        directoryStage.handle(submit, prepared -> {
+            plan.requireExactPreparedSubmitRequest(
+                    prepared, CLIENT_REQUEST_ID, TARGET_SESSION_ID);
+            return null;
+        });
+        assertEquals(Map.of("directoryId", "directory-1"), submit.getMetadata());
+
+        submit.setMetadata(Map.of("directory_id", "directory-1"));
+        assertPreparedConflict(plan, submit);
+        submit.setMetadata(Map.of(
+                "directoryId", "directory-1",
+                "extra", "forbidden"));
+        assertPreparedConflict(plan, submit);
+    }
+
+    @Test
+    void preparedMatcherAcceptsNullMetadataForDirectoryFreeTarget() {
+        SessionForwardNewSessionPlan plan = plan(source(), target(f -> {
+            f.logicalAgentId = null;
+            f.directoryId = null;
+        }));
+        AgentTaskSubmitRequest submit = plan.toSubmitRequest(
+                CLIENT_REQUEST_ID, TARGET_SESSION_ID);
+
+        assertNull(submit.getMetadata());
+        plan.requireExactPreparedSubmitRequest(
+                submit, CLIENT_REQUEST_ID, TARGET_SESSION_ID);
+    }
+
+    @Test
+    void preparedMatcherRejectsEveryEffectBearingOrContextDrift() {
+        Map<String, Consumer<AgentTaskSubmitRequest>> variants = new LinkedHashMap<>();
+        variants.put("agent", request -> request.setAgentId("agent-2"));
+        variants.put("provider", request -> request.setProviderType("codex-worker"));
+        variants.put("session", request -> request.setSessionId("session-2"));
+        variants.put("worker", request -> request.setWorkerId("worker-2"));
+        variants.put("prompt", request -> request.setPrompt("changed"));
+        variants.put("cwd", request -> request.setCwd("/workspace/other"));
+        variants.put("directory", request -> request.setDirectoryId("directory-2"));
+        variants.put("model", request -> request.setModel("gpt-5.7"));
+        variants.put("modelConfig", request -> request.setModelConfigId("model-config-2"));
+        variants.put("turns", request -> request.setMaxTurns(8));
+        variants.put("permission", request -> request.setPermissionMode("read-only"));
+        variants.put("images", request -> request.setImages(List.of("other")));
+        variants.put("attachments", request -> request.setAttachments(List.of(Map.of())));
+        variants.put("teamsConfig", request -> request.setAgentTeamsConfigId("teams-config-2"));
+        variants.put("teamsJson", request -> request.setAgentTeamsJson("{\"team\":\"beta\"}"));
+        variants.put("message", request -> request.setMessage(new A2aMessage()));
+        variants.put("contextId", request -> request.setContextId("context-1"));
+        variants.put("context", request -> request.setContext(Map.of("key", "value")));
+        variants.put("contextAlias", request -> request.setContextAlias("alias-1"));
+        variants.put("metadata", request -> request.setMetadata(Map.of("directoryId", "other")));
+        variants.put("clientRequest", request -> request.setClientRequestId(
+                "8ca523e7-c06e-47e6-be9e-bd1169e962d9"));
+        variants.put("affinity", request -> request.setInitializeRuntimeAffinity(false));
+        variants.put("contextMissing", request -> request.setResolveContext(null));
+        variants.put("contextOwner", request -> request.getResolveContext().setUserId("owner-2"));
+        variants.put("contextTenant", request -> request.getResolveContext().setTenantId("tenant-2"));
+        variants.put("contextSession", request -> request.getResolveContext().setSessionId("session-2"));
+        variants.put("contextModel", request -> request.getResolveContext().setModelConfigId("model-config-2"));
+        variants.put("contextSource", request -> request.getResolveContext().setRequestSource("UI"));
+
+        SessionForwardNewSessionPlan plan = plan();
+        variants.forEach((field, mutation) -> {
+            AgentTaskSubmitRequest request = preparedSubmit(plan);
+            mutation.accept(request);
+            IllegalStateException error = assertThrows(
+                    IllegalStateException.class,
+                    () -> plan.requireExactPreparedSubmitRequest(
+                            request, CLIENT_REQUEST_ID, TARGET_SESSION_ID),
+                    field);
+            assertEquals("FORWARD_PLAN_PREPARED_REQUEST_CONFLICT", error.getMessage(), field);
+        });
     }
 
     @Test
@@ -301,6 +394,23 @@ class SessionForwardNewSessionPlanTest {
                 () -> plan().toSubmitRequest(CLIENT_REQUEST_ID, " "));
         assertThrows(IllegalArgumentException.class,
                 () -> plan().toSubmitRequest(CLIENT_REQUEST_ID, "fwd_" + "a".repeat(60)));
+    }
+
+    private static AgentTaskSubmitRequest preparedSubmit(
+            SessionForwardNewSessionPlan plan) {
+        AgentTaskSubmitRequest request = plan.toSubmitRequest(
+                CLIENT_REQUEST_ID, TARGET_SESSION_ID);
+        request.setMetadata(Map.of("directoryId", plan.target().directoryId()));
+        return request;
+    }
+
+    private static void assertPreparedConflict(
+            SessionForwardNewSessionPlan plan,
+            AgentTaskSubmitRequest request) {
+        assertEquals("FORWARD_PLAN_PREPARED_REQUEST_CONFLICT",
+                assertThrows(IllegalStateException.class,
+                        () -> plan.requireExactPreparedSubmitRequest(
+                                request, CLIENT_REQUEST_ID, TARGET_SESSION_ID)).getMessage());
     }
 
     private static SessionForwardNewSessionPlan plan() {
