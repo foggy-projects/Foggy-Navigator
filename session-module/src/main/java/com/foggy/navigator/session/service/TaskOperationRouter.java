@@ -82,6 +82,19 @@ final class TaskOperationRouter {
     }
 
     DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
+        return createTaskDirect(providerType, request, context, null, null);
+    }
+
+    DispatchTaskDTO createTaskDirect(
+            String providerType,
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            TaskCreateTargetResolver.CreateExecutionPlan plan,
+            TaskCreateCommandCoordinator.ProviderEffectGate providerEffectGate) {
+        if ((plan == null) != (providerEffectGate == null)) {
+            throw new IllegalArgumentException(
+                    "create execution plan and provider effect gate must be supplied together");
+        }
         validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
         validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
@@ -91,7 +104,24 @@ final class TaskOperationRouter {
         if (request.isInitializeRuntimeAffinity()) {
             InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(params);
         }
-        DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
+        DispatchTaskDTO dto;
+        if (providerEffectGate == null) {
+            dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
+        } else {
+            plan.requireMatches(request, context);
+            TaskCreateCommandCoordinator.ProviderEffectIdentity effectIdentity =
+                    TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
+                            TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                            request,
+                            context,
+                            request.getAgentId(),
+                            provider.getProviderType());
+            dto = providerEffectGate.invoke(
+                    plan,
+                    effectIdentity,
+                    () -> provider.createTaskDirect(
+                            params, context.getUserId(), context.getTenantId()));
+        }
         log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
                 providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());
         return dto;

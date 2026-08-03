@@ -263,8 +263,10 @@ public class TaskDispatchFacade {
     /** Executes the exact pre-effect plan; package visibility keeps ingress adapters on one path. */
     DispatchTaskDTO createTask(TaskDispatchRequest request,
                                AgentResolveContext context,
-                               TaskCreateTargetResolver.CreateExecutionPlan plan) {
+                               TaskCreateTargetResolver.CreateExecutionPlan plan,
+                               TaskCreateCommandCoordinator.ProviderEffectGate providerEffectGate) {
         Objects.requireNonNull(plan, "create execution plan is required");
+        Objects.requireNonNull(providerEffectGate, "provider effect gate is required");
         plan.requireMatches(request, context);
         plan.applyCanonicalTarget(request);
 
@@ -274,11 +276,14 @@ public class TaskDispatchFacade {
             LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
             try {
                 DispatchTaskDTO dto =
-                        createTaskDirect(plan.providerType(), request, context);
+                        createTaskDirect(
+                                plan.providerType(), request, context, plan, providerEffectGate);
                 confirmReservation(permit, dto);
                 return dto;
             } catch (RuntimeException failure) {
-                releaseFailedReservation(permit);
+                if (!providerEffectGate.providerEffectPermitted()) {
+                    releaseFailedReservation(permit);
+                }
                 throw failure;
             }
         }
@@ -291,8 +296,8 @@ public class TaskDispatchFacade {
                 .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + lookup.lookupId()));
 
         A2aAgentCard actualCard = agent.getAgentCard();
-        String agentId = actualCard != null ? trimToNull(actualCard.getId()) : null;
-        if (agentId == null) {
+        String agentId = actualCard != null ? actualCard.getId() : null;
+        if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException(
                     "Resolved Agent has no exact card id: " + lookup.lookupId());
         }
@@ -314,23 +319,32 @@ public class TaskDispatchFacade {
         A2aMessage message = buildMessage(request);
 
         LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
-        A2aTask a2aTask;
         try {
-            // Provider effect is authorized only after the durable ingress
-            // reservation and offline preflight above.
-            a2aTask = agent.sendTask(message);
+            plan.requireMatches(request, context);
+            TaskCreateCommandCoordinator.ProviderEffectIdentity effectIdentity =
+                    TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
+                            TaskCreateTargetResolver.ExecutionRoute.A2A,
+                            request,
+                            context,
+                            agentId,
+                            plan.providerType());
+            A2aTask a2aTask = providerEffectGate.invoke(
+                    plan, effectIdentity, () -> agent.sendTask(message));
+
+            log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
+                    agentId, plan.providerType(), a2aTask.getId());
+
+            DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, plan.providerType(), request);
+            persistTaskRequestFields(dto.getTaskId(), request);
+            persistContextBinding(dto, request, context, plan.providerType());
+            confirmReservation(permit, dto);
+            return dto;
         } catch (RuntimeException failure) {
-            releaseFailedReservation(permit);
+            if (!providerEffectGate.providerEffectPermitted()) {
+                releaseFailedReservation(permit);
+            }
             throw failure;
         }
-        log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
-                agentId, plan.providerType(), a2aTask.getId());
-
-        DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, plan.providerType(), request);
-        persistTaskRequestFields(dto.getTaskId(), request);
-        persistContextBinding(dto, request, context, plan.providerType());
-        confirmReservation(permit, dto);
-        return dto;
     }
 
     /**
@@ -1151,6 +1165,19 @@ public class TaskDispatchFacade {
 
     private DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
         DispatchTaskDTO dto = operationRouter().createTaskDirect(providerType, request, context);
+        persistTaskRequestFields(dto.getTaskId(), request);
+        persistContextBinding(dto, request, context, providerType);
+        return dto;
+    }
+
+    private DispatchTaskDTO createTaskDirect(
+            String providerType,
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            TaskCreateTargetResolver.CreateExecutionPlan plan,
+            TaskCreateCommandCoordinator.ProviderEffectGate providerEffectGate) {
+        DispatchTaskDTO dto = operationRouter().createTaskDirect(
+                providerType, request, context, plan, providerEffectGate);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
         return dto;

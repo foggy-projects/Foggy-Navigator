@@ -17,6 +17,7 @@ import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
+import com.foggy.navigator.session.lifecycle.LifecycleIngressGate;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionCodingAgentRepository;
@@ -25,6 +26,7 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
+import com.foggy.navigator.spi.agent.InternalTaskDispatchMarkers;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
@@ -57,6 +59,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -120,6 +123,47 @@ class TaskDispatchFacadeTest {
         ReflectionTestUtils.setField(created, "sessionCodingAgentRepository", sessionCodingAgentRepository);
         ReflectionTestUtils.setField(created, "workerManagementFacade", workerManagementFacade);
         return created;
+    }
+
+    @SuppressWarnings("unchecked")
+    private TaskCreateCommandCoordinator.ProviderEffectGate passThroughGate() {
+        TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
+        lenient().doAnswer(invocation ->
+                        ((Supplier<Object>) invocation.getArgument(2)).get())
+                .when(gate).invoke(any(), any(), any());
+        lenient().when(gate.providerEffectPermitted()).thenReturn(true);
+        return gate;
+    }
+
+    private TaskCreateTargetResolver.CreateExecutionPlan guardedPlan(
+            String logicalAgentId,
+            String providerType,
+            TaskCreateTargetResolver.ExecutionRoute executionRoute) {
+        return guardedPlan(
+                logicalAgentId, providerType, executionRoute, "session-1");
+    }
+
+    private TaskCreateTargetResolver.CreateExecutionPlan guardedPlan(
+            String logicalAgentId,
+            String providerType,
+            TaskCreateTargetResolver.ExecutionRoute executionRoute,
+            String sessionId) {
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                mock(TaskCreateTargetResolver.CreateExecutionPlan.class);
+        lenient().when(plan.ownerUserId()).thenReturn("user-1");
+        lenient().when(plan.logicalAgentId()).thenReturn(logicalAgentId);
+        lenient().when(plan.providerType()).thenReturn(providerType);
+        lenient().when(plan.physicalWorkerId()).thenReturn("worker-1");
+        lenient().when(plan.sessionId()).thenReturn(sessionId);
+        lenient().when(plan.executionRoute()).thenReturn(executionRoute);
+        lenient().when(plan.directProviderRoute())
+                .thenReturn(executionRoute == TaskCreateTargetResolver.ExecutionRoute.DIRECT);
+        if (executionRoute == TaskCreateTargetResolver.ExecutionRoute.A2A) {
+            lenient().when(plan.agentLookup()).thenReturn(new TaskCreateTargetResolver.AgentLookup(
+                    logicalAgentId, "AGENT_ID", "UI"));
+        }
+        return plan;
     }
 
     private CodingAgentEntity ownedAgent(String agentId,
@@ -212,7 +256,7 @@ class TaskDispatchFacadeTest {
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
 
-        DispatchTaskDTO result = facade.createTask(request, context, plan);
+        DispatchTaskDTO result = facade.createTask(request, context, plan, passThroughGate());
 
         assertEquals("task-plan-a2a-1", result.getTaskId());
         assertEquals("claude-worker", request.getProviderType());
@@ -273,7 +317,7 @@ class TaskDispatchFacadeTest {
                 facade.resolveCreateExecutionPlan(request, context);
         assertEquals(TaskCreateTargetResolver.ExecutionRoute.DIRECT, plan.executionRoute());
 
-        DispatchTaskDTO result = facade.createTask(request, context, plan);
+        DispatchTaskDTO result = facade.createTask(request, context, plan, passThroughGate());
 
         assertEquals("task-plan-direct-1", result.getTaskId());
         verify(workerManagementFacade).validateWorkerAccess("user-1", "tenant-1", "worker-1");
@@ -310,21 +354,22 @@ class TaskDispatchFacadeTest {
         request.setWorkerId("worker-2");
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> facade.createTask(request, context, plan));
+                () -> facade.createTask(request, context, plan, passThroughGate()));
 
         assertTrue(error.getMessage().contains("workerId"));
         request.setWorkerId("worker-1");
         context.setUserId(null);
-        assertThrows(SecurityException.class, () -> facade.createTask(request, context, plan));
+        assertThrows(SecurityException.class,
+                () -> facade.createTask(request, context, plan, passThroughGate()));
         context.setUserId("user-1");
         request.setContextAlias("alias-drift");
         IllegalArgumentException aliasDrift = assertThrows(IllegalArgumentException.class,
-                () -> facade.createTask(request, context, plan));
+                () -> facade.createTask(request, context, plan, passThroughGate()));
         assertTrue(aliasDrift.getMessage().contains("contextAlias"));
         request.setContextAlias(null);
         request.setResume(true);
         IllegalArgumentException resumeDrift = assertThrows(IllegalArgumentException.class,
-                () -> facade.createTask(request, context, plan));
+                () -> facade.createTask(request, context, plan, passThroughGate()));
         assertTrue(resumeDrift.getMessage().contains("resume continuation"));
         request.setResume(false);
 
@@ -344,18 +389,272 @@ class TaskDispatchFacadeTest {
                 facade.resolveCreateExecutionPlan(a2aRequest, a2aContext);
         a2aContext.setRequestSource("OPEN_API");
         assertThrows(SecurityException.class,
-                () -> facade.createTask(a2aRequest, a2aContext, a2aPlan));
+                () -> facade.createTask(
+                        a2aRequest, a2aContext, a2aPlan, passThroughGate()));
         a2aContext.setRequestSource("UI");
         when(agentResolver.resolveAgentByProviderTypeExact(
                 eq("claude-worker"), eq("agent-source-1"), any())).thenReturn(Optional.of(agent));
         IllegalArgumentException missingCard = assertThrows(IllegalArgumentException.class,
-                () -> facade.createTask(a2aRequest, a2aContext, a2aPlan));
+                () -> facade.createTask(
+                        a2aRequest, a2aContext, a2aPlan, passThroughGate()));
         assertTrue(missingCard.getMessage().contains("card id"));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id(" agent-source-1 ").build());
+        IllegalArgumentException paddedCard = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(
+                        a2aRequest, a2aContext, a2aPlan, passThroughGate()));
+        assertTrue(paddedCard.getMessage().contains("conflicts with resolved"));
 
         verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
         verify(agentResolver, never()).resolveAgent(any(), any());
         verify(agentResolver, never()).getProviderType(any(), any());
         verify(agent, never()).sendTask(any());
+    }
+
+    @Test
+    void guardedA2aOrdersLifecycleReceiptProviderAndConfirm() {
+        LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
+        LifecycleIngressGate.IngressPermit ingressPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-gated-a2a-1")
+                .providerType("claude-worker")
+                .workerId("worker-1")
+                .sessionId("session-1")
+                .prompt("gated a2a")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                "agent-gated-a2a-1", "claude-worker",
+                TaskCreateTargetResolver.ExecutionRoute.A2A);
+        TaskCreateCommandCoordinator.ProviderEffectGate effectGate = passThroughGate();
+        when(lifecycleGate.reserveBeforeEffect("session-1", "worker-1"))
+                .thenReturn(ingressPermit);
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-gated-a2a-1"), any()))
+                .thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id("agent-gated-a2a-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-gated-a2a-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        DispatchTaskDTO result = facade.createTask(
+                request, context, plan, effectGate);
+
+        assertEquals("task-gated-a2a-1", result.getTaskId());
+        InOrder ordered = inOrder(lifecycleGate, effectGate, agent);
+        ordered.verify(lifecycleGate).reserveBeforeEffect("session-1", "worker-1");
+        ordered.verify(effectGate).invoke(
+                eq(plan),
+                argThat(identity -> "agent-gated-a2a-1".equals(identity.logicalAgentId())),
+                any());
+        ordered.verify(agent).sendTask(any());
+        ordered.verify(lifecycleGate).confirm(ingressPermit, "task-gated-a2a-1");
+        verify(lifecycleGate, never()).releaseFailed(any());
+    }
+
+    @Test
+    void guardedDirectOrdersLifecycleReceiptProviderAndConfirm() {
+        LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
+        LifecycleIngressGate.IngressPermit ingressPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-direct-1")
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .sessionId("session-1")
+                .prompt("gated direct")
+                .initializeRuntimeAffinity(true)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                "agent-direct-1", "codex-worker",
+                TaskCreateTargetResolver.ExecutionRoute.DIRECT);
+        TaskCreateCommandCoordinator.ProviderEffectGate effectGate = passThroughGate();
+        when(lifecycleGate.reserveBeforeEffect("session-1", "worker-1"))
+                .thenReturn(ingressPermit);
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), isNull()))
+                .thenReturn(DispatchTaskDTO.builder()
+                        .taskId("task-gated-direct-1")
+                        .providerType("codex-worker")
+                        .workerId("worker-1")
+                        .sessionId("session-1")
+                        .build());
+        clearInvocations(taskQueryProvider);
+
+        DispatchTaskDTO result = facade.createTask(
+                request, context, plan, effectGate);
+
+        assertEquals("task-gated-direct-1", result.getTaskId());
+        InOrder ordered = inOrder(lifecycleGate, taskQueryProvider, effectGate);
+        ordered.verify(lifecycleGate).reserveBeforeEffect("session-1", "worker-1");
+        ordered.verify(taskQueryProvider, atLeastOnce()).getProviderType();
+        ordered.verify(effectGate).invoke(
+                eq(plan),
+                argThat(identity -> "agent-direct-1".equals(identity.logicalAgentId())),
+                any());
+        ordered.verify(taskQueryProvider).createTaskDirect(
+                argThat(InternalTaskDispatchMarkers::requestsRuntimeAffinityInitialization),
+                eq("user-1"), isNull());
+        ordered.verify(lifecycleGate).confirm(ingressPermit, "task-gated-direct-1");
+        verify(lifecycleGate, never()).releaseFailed(any());
+    }
+
+    @Test
+    void guardedGateDenialReleasesReservationWithZeroProviderEffect() {
+        LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
+        LifecycleIngressGate.IngressPermit directPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        TaskDispatchRequest directRequest = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .sessionId("session-direct-denied")
+                .build();
+        AgentResolveContext directContext = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-direct-denied")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan directPlan = guardedPlan(
+                null, "codex-worker", TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                "session-direct-denied");
+        TaskCreateCommandCoordinator.ProviderEffectGate directGate =
+                mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
+        when(lifecycleGate.reserveBeforeEffect("session-direct-denied", "worker-1"))
+                .thenReturn(directPermit);
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        doThrow(new IllegalStateException("TASK_CREATE_EFFECT_IDENTITY_CONFLICT"))
+                .when(directGate).invoke(eq(directPlan), any(), any());
+        when(directGate.providerEffectPermitted()).thenReturn(false);
+
+        assertThrows(IllegalStateException.class, () -> facade.createTask(
+                directRequest, directContext, directPlan, directGate));
+
+        verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
+        verify(lifecycleGate).releaseFailed(directPermit);
+        verify(lifecycleGate, never()).confirm(eq(directPermit), any());
+
+        reset(lifecycleGate, agentResolver, agent);
+        LifecycleIngressGate.IngressPermit a2aPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        TaskDispatchRequest a2aRequest = TaskDispatchRequest.builder()
+                .agentId("agent-a2a-denied")
+                .providerType("claude-worker")
+                .workerId("worker-1")
+                .sessionId("session-a2a-denied")
+                .build();
+        AgentResolveContext a2aContext = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-a2a-denied")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan a2aPlan = guardedPlan(
+                "agent-a2a-denied", "claude-worker",
+                TaskCreateTargetResolver.ExecutionRoute.A2A,
+                "session-a2a-denied");
+        TaskCreateCommandCoordinator.ProviderEffectGate a2aGate =
+                mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
+        when(lifecycleGate.reserveBeforeEffect("session-a2a-denied", "worker-1"))
+                .thenReturn(a2aPermit);
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-a2a-denied"), any()))
+                .thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id("agent-a2a-denied").build());
+        doThrow(new IllegalStateException("TASK_CREATE_EFFECT_IDENTITY_CONFLICT"))
+                .when(a2aGate).invoke(eq(a2aPlan), any(), any());
+        when(a2aGate.providerEffectPermitted()).thenReturn(false);
+
+        assertThrows(IllegalStateException.class, () -> facade.createTask(
+                a2aRequest, a2aContext, a2aPlan, a2aGate));
+
+        verify(agent, never()).sendTask(any());
+        verify(lifecycleGate).releaseFailed(a2aPermit);
+        verify(lifecycleGate, never()).confirm(eq(a2aPermit), any());
+    }
+
+    @Test
+    void guardedPermittedProviderFailureRetainsReservationForBothRoutes() {
+        LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
+        LifecycleIngressGate.IngressPermit directPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        TaskDispatchRequest directRequest = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .sessionId("session-direct-uncertain")
+                .build();
+        AgentResolveContext directContext = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-direct-uncertain")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan directPlan = guardedPlan(
+                null, "codex-worker", TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                "session-direct-uncertain");
+        TaskCreateCommandCoordinator.ProviderEffectGate directGate = passThroughGate();
+        when(lifecycleGate.reserveBeforeEffect("session-direct-uncertain", "worker-1"))
+                .thenReturn(directPermit);
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), isNull()))
+                .thenThrow(new IllegalStateException("provider outcome unknown"));
+
+        assertThrows(IllegalStateException.class, () -> facade.createTask(
+                directRequest, directContext, directPlan, directGate));
+
+        verify(taskQueryProvider).createTaskDirect(any(), eq("user-1"), isNull());
+        verify(lifecycleGate, never()).releaseFailed(directPermit);
+        verify(lifecycleGate, never()).confirm(eq(directPermit), any());
+
+        reset(lifecycleGate, agentResolver, agent);
+        LifecycleIngressGate.IngressPermit a2aPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        TaskDispatchRequest a2aRequest = TaskDispatchRequest.builder()
+                .agentId("agent-a2a-uncertain")
+                .providerType("claude-worker")
+                .workerId("worker-1")
+                .sessionId("session-a2a-uncertain")
+                .build();
+        AgentResolveContext a2aContext = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-a2a-uncertain")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan a2aPlan = guardedPlan(
+                "agent-a2a-uncertain", "claude-worker",
+                TaskCreateTargetResolver.ExecutionRoute.A2A,
+                "session-a2a-uncertain");
+        TaskCreateCommandCoordinator.ProviderEffectGate a2aGate = passThroughGate();
+        when(lifecycleGate.reserveBeforeEffect("session-a2a-uncertain", "worker-1"))
+                .thenReturn(a2aPermit);
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-a2a-uncertain"), any()))
+                .thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id("agent-a2a-uncertain").build());
+        when(agent.sendTask(any()))
+                .thenThrow(new IllegalStateException("provider outcome unknown"));
+
+        assertThrows(IllegalStateException.class, () -> facade.createTask(
+                a2aRequest, a2aContext, a2aPlan, a2aGate));
+
+        verify(agent).sendTask(any());
+        verify(lifecycleGate, never()).releaseFailed(a2aPermit);
+        verify(lifecycleGate, never()).confirm(eq(a2aPermit), any());
     }
 
     @Test
