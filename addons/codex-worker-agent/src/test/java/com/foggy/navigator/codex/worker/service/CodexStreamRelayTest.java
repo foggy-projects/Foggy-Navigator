@@ -92,6 +92,7 @@ class CodexStreamRelayTest {
     private CodexRuntimeRegistryService runtimeRegistryService;
     private CodexTaskRuntimeStateService taskRuntimeStateService;
     private CodexAppServerAcceptanceService appServerAcceptanceService;
+    private CodexAppServerExecutionAdapter appServerExecutionAdapter;
     private CodexNativeSubtaskService nativeSubtaskService;
     private CodexWorkerClient client;
     private ApplicationEventPublisher eventPublisher;
@@ -111,6 +112,10 @@ class CodexStreamRelayTest {
         runtimeRegistryService = mock(CodexRuntimeRegistryService.class);
         taskRuntimeStateService = mock(CodexTaskRuntimeStateService.class);
         appServerAcceptanceService = new CodexAppServerAcceptanceService(taskRuntimeStateService);
+        appServerExecutionAdapter = new CodexAppServerExecutionAdapter(
+                new CodexAppServerRuntimeAffinityAdapter(runtimeRegistryService, clientFactory),
+                appServerAcceptanceService,
+                taskRuntimeStateService);
         nativeSubtaskService = mock(CodexNativeSubtaskService.class);
         client = mock(CodexWorkerClient.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
@@ -123,12 +128,9 @@ class CodexStreamRelayTest {
                 recoveryPolicyResolver, Clock.fixed(NOW, ZoneOffset.UTC));
 
         relay = new CodexStreamRelay(
-                clientFactory,
                 sdkExecutionAdapter,
                 taskService,
-                runtimeRegistryService,
-                taskRuntimeStateService,
-                appServerAcceptanceService,
+                appServerExecutionAdapter,
                 nativeSubtaskService,
                 taskRepository,
                 eventPublisher,
@@ -207,6 +209,53 @@ class CodexStreamRelayTest {
         verify(taskService, never()).completeTask(
                 eq("local-task-1"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            CodexTaskService.CODEX_PROVIDER_TYPE,
+            CodexTaskService.CODEX_BIZ_PROVIDER_TYPE
+    })
+    void sdkAndBizRawProviderCannotBorrowAppServerStatusFromRuntimeType(
+            String rawProviderType) {
+        CodexTaskEntity entity = legacyTask();
+        entity.setProviderType(rawProviderType);
+        entity.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1"))
+                .thenReturn(Optional.of(entity));
+
+        ReflectionTestUtils.invokeMethod(
+                relay,
+                "subscribeSseFlux",
+                Flux.empty(),
+                "local-task-1",
+                "session-1",
+                "worker-1",
+                rawProviderType,
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                0,
+                0);
+
+        verify(runtimeRegistryService, never())
+                .resolveBoundRuntime(any(), any(), any(), any());
+        verify(client, never()).getTaskStatus(any());
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void appServerRawProviderWithSpoofedSdkRuntimeFailsA1ClosedWithoutSdkFallback() {
+        CodexTaskEntity entity = stubAppServerTask("SUBSCRIBED");
+        entity.setRuntimeType(CodexRuntimeType.SDK_EXEC.name());
+        entity.setWorkerTaskId("worker-task-9");
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(runtimeRegistryService, never())
+                .resolveBoundRuntime(any(), any(), any(), any());
+        verifyNoInteractions(workerManagementFacade);
+        verifyNoInteractions(client);
     }
 
     @Test
