@@ -1,25 +1,22 @@
 package com.foggy.navigator.session.controller;
 
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
-import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
-import com.foggy.navigator.common.dto.a2a.A2aTaskState;
+import com.foggy.navigator.common.dto.CurrentUser;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
-import com.foggy.navigator.common.entity.SharingKeyEntity;
-import com.foggy.navigator.common.entity.UserEntity;
 import com.foggy.navigator.common.form.SharedAskForm;
-import com.foggy.navigator.auth.repository.UserRepository;
-import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
-import com.foggy.navigator.session.service.SharingKeyService;
+import com.foggy.navigator.session.service.ScopedSharedTaskCreateCommandAdapter;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
-import com.foggy.navigator.spi.agent.TaskSubmittingA2aAgent;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,15 +40,16 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class SharedAskController {
 
-    private final SharingKeyService sharingKeyService;
     private final UnifiedAgentResolver agentResolver;
     private final AgentConsultationRepository consultationRepository;
     private final AgentSubmitPipeline agentSubmitPipeline;
-    private final UserRepository userRepository;
+    private final ScopedSharedTaskCreateCommandAdapter scopedTaskCreateCommandAdapter;
 
     @PostMapping("/ask")
     public RX<A2aTask> ask(
             @RequestHeader("X-Sharing-Key") String sharingKey,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId,
             @RequestBody SharedAskForm form) {
 
         String question = form.getQuestion();
@@ -59,32 +57,42 @@ public class SharedAskController {
             return RX.failA("question is required");
         }
 
-        SharingKeyEntity keyEntity;
+        CurrentUser ambientUser = UserContext.getCurrentUser();
+        UserContext.clear();
         try {
-            keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
-            sharingKeyService.checkOperation(keyEntity, "ask");
+            return askWithSharedAuthority(
+                    sharingKey, clientRequestId, form, question);
+        } finally {
+            if (ambientUser == null) {
+                UserContext.clear();
+            } else {
+                UserContext.setCurrentUser(ambientUser);
+            }
+        }
+    }
+
+    private RX<A2aTask> askWithSharedAuthority(
+            String sharingKey,
+            String clientRequestId,
+            SharedAskForm form,
+            String question) {
+        ScopedSharedTaskCreateCommandAdapter.SharedCommandScope scope;
+        try {
+            scope = scopedTaskCreateCommandAdapter.mintScope(
+                    sharingKey, clientRequestId);
         } catch (IllegalArgumentException e) {
             return RX.failA(e.getMessage());
         }
 
-        AgentResolveContext context = buildSharedContext(keyEntity);
+        AgentResolveContext context = scope.newResolveContext();
         A2aAgent agent = agentResolver.resolveAgent(
-                keyEntity.getAgentId(), context)
+                scope.agentId(), context)
                 .orElse(null);
         if (agent == null) {
             return RX.failA("Shared agent not available");
         }
-        try {
-            keyEntity = sharingKeyService.validateOperationAndConsume(sharingKey, "ask");
-        } catch (IllegalArgumentException e) {
-            return RX.failA(e.getMessage());
-        }
-
         A2aAgentCard card = agent.getAgentCard();
         String systemPrompt = form.getSystemPrompt();
-        if (systemPrompt == null || systemPrompt.isBlank()) {
-            systemPrompt = keyEntity.getSystemPrompt();
-        }
         String firstMsg = form.getFirstMsg();
 
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(question)));
@@ -95,7 +103,6 @@ public class SharedAskController {
         message.setContextAlias(form.getContextAlias());
 
         Map<String, Object> metadata = new HashMap<>();
-        metadata.put("maxTurns", keyEntity.getMaxTurns());
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             metadata.put("systemPrompt", systemPrompt);
         }
@@ -105,62 +112,75 @@ public class SharedAskController {
         message.setMetadata(metadata);
 
         long start = System.currentTimeMillis();
-        TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
-                agent, agentSubmitPipeline, keyEntity.getAgentId(), context);
-        A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
-                .agentId(keyEntity.getAgentId())
+        AgentTaskSubmitRequest submitRequest = AgentTaskSubmitRequest.builder()
+                .clientRequestId(scope.clientRequestId())
+                .agentId(scope.agentId())
                 .resolveContext(context)
                 .message(message)
                 .prompt(question)
-                .maxTurns(keyEntity.getMaxTurns())
                 .contextId(contextId)
                 .contextAlias(form.getContextAlias())
                 .metadata(metadata)
-                .build());
-        long durationMs = System.currentTimeMillis() - start;
+                .build();
+        AgentTaskSubmitResult submitResult;
+        try {
+            submitResult = scopedTaskCreateCommandAdapter.executeScoped(
+                    scope,
+                    submitRequest,
+                    new ScopedSharedTaskCreateCommandAdapter.FreshParticipants() {
+                        @Override
+                        public void prepareFreshTask() {
+                            // Shared ask has no pre-Provider auxiliary mutation.
+                        }
+
+                        @Override
+                        public void completeFreshTask(DispatchTaskDTO freshTask) {
+                            recordSharedConsultation(
+                                    scope,
+                                    card.getName(),
+                                    question,
+                                    freshTask,
+                                    start,
+                                    contextId);
+                        }
+                    },
+                    () -> agentSubmitPipeline.submit(submitRequest));
+        } catch (ScopedSharedTaskCreateCommandAdapter
+                .SharedCommandAdmissionRejectedException rejection) {
+            return RX.failA(rejection.getMessage());
+        }
+        A2aTask task = submitResult.getTask();
 
         if (task.getContextId() == null && contextId != null && !contextId.isBlank()) {
             task.setContextId(contextId);
         }
 
-        recordSharedConsultation(keyEntity, card.getName(), question, task, durationMs, task.getContextId());
         return RX.ok(task);
     }
 
-    private AgentResolveContext buildSharedContext(SharingKeyEntity keyEntity) {
-        UserEntity owner = userRepository.findById(keyEntity.getOwnerUserId())
-                .orElseThrow(() -> new SecurityException("shared resource is not accessible"));
-        if (owner.getTenantId() == null || owner.getTenantId().isBlank()) {
-            throw new SecurityException("shared resource is not accessible");
-        }
-        return AgentResolveContext.builder()
-                .userId(keyEntity.getOwnerUserId())
-                .tenantId(owner.getTenantId())
-                .requestSource("SHARED_API")
-                .build();
-    }
-
-    private void recordSharedConsultation(SharingKeyEntity keyEntity, String agentName,
-                                          String question, A2aTask task,
-                                          long durationMs, String contextId) {
+    private void recordSharedConsultation(
+            ScopedSharedTaskCreateCommandAdapter.SharedCommandScope scope,
+            String agentName,
+            String question,
+            DispatchTaskDTO task,
+            long startedAtMs,
+            String requestedContextId) {
         try {
             AgentConsultationEntity entity = new AgentConsultationEntity();
             entity.setId(UUID.randomUUID().toString());
-            entity.setSessionId("shared-" + keyEntity.getId());
-            entity.setUserId(keyEntity.getOwnerUserId());
-            entity.setTargetAgentId(keyEntity.getAgentId());
+            entity.setSessionId("shared-" + scope.sharingKeyId());
+            entity.setUserId(scope.ownerUserId());
+            entity.setTargetAgentId(scope.agentId());
             entity.setTargetAgentName(agentName);
             entity.setQuestion(question);
-            entity.setDurationMs(durationMs);
-            entity.setContextId(contextId);
+            entity.setDurationMs(Math.max(0L, System.currentTimeMillis() - startedAtMs));
+            entity.setContextId(hasText(task.getContextId())
+                    ? task.getContextId() : requestedContextId);
             entity.setSource("SHARED");
-            entity.setSharingKeyId(keyEntity.getId());
+            entity.setSharingKeyId(scope.sharingKeyId());
+            entity.setAnswer(task.getResultText());
 
-            String answer = extractAnswer(task);
-            entity.setAnswer(answer);
-
-            boolean failed = task.getStatus() != null
-                    && task.getStatus().getState() == A2aTaskState.FAILED;
+            boolean failed = "FAILED".equals(task.getStatus());
             entity.setStatus(failed ? "FAILED" : "COMPLETED");
 
             consultationRepository.save(entity);
@@ -169,16 +189,7 @@ public class SharedAskController {
         }
     }
 
-    private String extractAnswer(A2aTask task) {
-        if (task.getArtifacts() == null) return null;
-        for (A2aArtifact artifact : task.getArtifacts()) {
-            if (artifact.getParts() == null) continue;
-            for (A2aPart part : artifact.getParts()) {
-                if ("text".equals(part.getType()) && part.getText() != null) {
-                    return part.getText();
-                }
-            }
-        }
-        return null;
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

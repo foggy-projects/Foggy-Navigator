@@ -3,22 +3,32 @@ package com.foggy.navigator.session.service;
 import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.common.authorization.AuthorizationCredentialLane;
 import com.foggy.navigator.common.authorization.AuthorizationPrincipalType;
+import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
+import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.entity.UserEntity;
+import com.foggy.navigator.common.form.SharedAskForm;
 import com.foggy.navigator.session.agent.pipeline.DefaultAgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipelineChain;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.agent.pipeline.TaskDispatchSubmitPipelineStage;
 import com.foggy.navigator.session.command.CommandOnceReceiptService;
+import com.foggy.navigator.session.controller.SharedAskController;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
+import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.command.CanonicalCommandEnvelope;
 import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
+import com.foggyframework.core.ex.RX;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +43,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -58,6 +69,8 @@ class ScopedSharedTaskCreateCommandAdapterTest {
     @Mock private SharingKeyGenerator keyGenerator;
     @Mock private UnifiedAgentResolver agentResolver;
     @Mock private UserRepository userRepository;
+    @Mock private AgentConsultationRepository consultationRepository;
+    @Mock private A2aAgent sharedAgent;
 
     private SharingKeyService sharingKeyService;
     private VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority;
@@ -80,6 +93,11 @@ class ScopedSharedTaskCreateCommandAdapterTest {
                 commandCoordinator,
                 serverAuthority,
                 sharingKeyService);
+    }
+
+    @AfterEach
+    void clearUserContext() {
+        UserContext.clear();
     }
 
     @Test
@@ -225,6 +243,189 @@ class ScopedSharedTaskCreateCommandAdapterTest {
         verify(taskDispatchFacade).submitTaskDispatch(same(unscopedShared));
         verifyNoInteractions(commandCoordinator, chain);
         verify(sharingKeyRepository, never()).findByIdForUpdate(anyString());
+    }
+
+    @Test
+    void sharedControllerSameRequestComposesRealPipelineFreshOnceThenRecordedReplay() {
+        TaskCreateCommandCoordinator realCoordinator =
+                new TaskCreateCommandCoordinator(taskDispatchFacade, receiptService);
+        ScopedSharedTaskCreateCommandAdapter realAdapter =
+                new ScopedSharedTaskCreateCommandAdapter(
+                        taskDispatchFacade,
+                        realCoordinator,
+                        serverAuthority,
+                        sharingKeyService);
+        DefaultAgentSubmitPipeline realPipeline = new DefaultAgentSubmitPipeline(List.of(
+                new TaskDispatchSubmitPipelineStage(taskDispatchFacade),
+                realAdapter));
+        SharedAskController controller = new SharedAskController(
+                agentResolver,
+                consultationRepository,
+                realPipeline,
+                realAdapter);
+
+        SharingKeyEntity preflight = sharingKeyEntity();
+        preflight.setMaxTurns(2);
+        preflight.setSystemPrompt("stale preflight default");
+        when(sharingKeyRepository.findBySharingKey("shk-secret"))
+                .thenReturn(Optional.of(preflight));
+        when(userRepository.findById("owner-1"))
+                .thenReturn(Optional.of(owner()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(sharedAgent));
+        when(sharedAgent.getAgentCard()).thenReturn(A2aAgentCard.builder()
+                .id("agent-1")
+                .name("Agent 1")
+                .build());
+
+        List<TaskDispatchRequest> canonicalRequests = new ArrayList<>();
+        when(taskDispatchFacade.toTaskDispatchRequest(any(AgentTaskSubmitRequest.class)))
+                .thenAnswer(invocation -> {
+                    assertNull(UserContext.getCurrentUser());
+                    AgentTaskSubmitRequest submit = invocation.getArgument(0);
+                    assertEquals(REQUEST_ID, submit.getClientRequestId());
+                    assertNull(submit.getMaxTurns());
+                    assertFalse(submit.getMetadata().containsKey("maxTurns"));
+                    assertFalse(submit.getMetadata().containsKey("systemPrompt"));
+                    TaskDispatchRequest canonical = TaskDispatchRequest.builder()
+                            .agentId("agent-1")
+                            .providerType("claude-worker")
+                            .workerId("worker-1")
+                            .modelConfigId("model-config-1")
+                            .model("claude-sonnet")
+                            .directoryId("directory-1")
+                            .prompt(submit.getPrompt())
+                            .contextId(submit.getContextId())
+                            .contextAlias(submit.getContextAlias())
+                            .metadata(new LinkedHashMap<>(submit.getMetadata()))
+                            .build();
+                    canonicalRequests.add(canonical);
+                    return canonical;
+                });
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan();
+        when(taskDispatchFacade.resolveCreateExecutionPlan(
+                any(TaskDispatchRequest.class), any(AgentResolveContext.class)))
+                .thenReturn(plan);
+        when(receiptService.prepare(any(), any())).thenReturn(
+                prepared(REQUEST_ID),
+                new CommandOnceReceiptService.PrepareResult(
+                        CommandOnceReceiptService.PrepareDisposition.EXACT_REPLAY,
+                        snapshot(
+                                REQUEST_ID,
+                                CommandOnceReceiptService.ReceiptState.RESULT_RECORDED,
+                                "attempt-controller",
+                                "TASK:task-controller")));
+        CommandOnceReceiptService.EffectPermit controllerPermit =
+                permitted(REQUEST_ID, "attempt-controller");
+        when(receiptService.beginEffect(any(), any()))
+                .thenReturn(controllerPermit);
+        SharingKeyEntity locked = sharingKeyEntity();
+        locked.setMaxTurns(8);
+        locked.setSystemPrompt("latest locked default");
+        when(sharingKeyRepository.findByIdForUpdate("key-1"))
+                .thenReturn(Optional.of(locked));
+
+        AtomicInteger route = new AtomicInteger();
+        AtomicInteger provider = new AtomicInteger();
+        DispatchTaskDTO fresh = exactTask("task-controller");
+        fresh.setResultText("done");
+        fresh.setStatus("COMPLETED");
+        when(taskDispatchFacade.createTask(
+                any(TaskDispatchRequest.class),
+                any(AgentResolveContext.class),
+                same(plan),
+                any(TaskCreateCommandCoordinator.ProviderEffectGate.class)))
+                .thenAnswer(invocation -> {
+                    TaskDispatchRequest canonical = invocation.getArgument(0);
+                    AgentResolveContext context = invocation.getArgument(1);
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    TaskCreateCommandCoordinator.ProviderEffectIdentity identity =
+                            TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
+                                    TaskCreateTargetResolver.ExecutionRoute.A2A,
+                                    canonical,
+                                    context,
+                                    "agent-1",
+                                    "claude-worker");
+                    return gate.invokePrepared(
+                            plan,
+                            () -> identity,
+                            () -> {
+                                route.incrementAndGet();
+                                assertEquals(8, canonical.getMaxTurns());
+                                assertEquals(8, canonical.getMetadata().get("maxTurns"));
+                                assertEquals("latest locked default",
+                                        canonical.getMetadata().get("systemPrompt"));
+                                assertEquals("first",
+                                        canonical.getMetadata().get("firstMsg"));
+                            },
+                            () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                    identity,
+                                    "captured-provider-input",
+                                    ignored -> {
+                                        provider.incrementAndGet();
+                                        return fresh;
+                                    }));
+                });
+        when(taskDispatchFacade.getTask(
+                eq("task-controller"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(fresh));
+        when(taskDispatchFacade.toA2aTask(same(fresh))).thenAnswer(invocation ->
+                A2aTask.builder().id("task-controller").build());
+
+        SharedAskForm form = new SharedAskForm();
+        form.setQuestion("hello");
+        form.setContextId("ctx-controller");
+        form.setContextAlias("alias-controller");
+        form.setFirstMsg("first");
+        CurrentUser ambient = CurrentUser.builder()
+                .userId("jwt-user")
+                .tenantId("jwt-tenant")
+                .roles("SUPER_ADMIN")
+                .build();
+        UserContext.setCurrentUser(ambient);
+
+        RX<A2aTask> first = controller.ask("shk-secret", REQUEST_ID, form);
+        RX<A2aTask> replay = controller.ask("shk-secret", REQUEST_ID, form);
+
+        assertTrue(first.isOk());
+        assertTrue(replay.isOk());
+        assertEquals("task-controller", first.getData().getId());
+        assertEquals("task-controller", replay.getData().getId());
+        assertEquals("ctx-controller", first.getData().getContextId());
+        assertEquals("ctx-controller", replay.getData().getContextId());
+        assertSame(ambient, UserContext.getCurrentUser());
+        assertEquals(2, canonicalRequests.size());
+        assertEquals(1, route.get());
+        assertEquals(1, provider.get());
+        verify(receiptService, times(2)).prepare(any(), any());
+        verify(receiptService, times(1)).beginEffect(any(), any());
+        verify(receiptService, times(1)).recordResult(
+                REQUEST_ID,
+                "attempt-controller",
+                "TASK:task-controller",
+                TaskCreateCommandCoordinator.TASK_CREATED);
+        verify(sharingKeyRepository, times(1)).findByIdForUpdate("key-1");
+        verify(sharingKeyRepository, times(1)).save(locked);
+        verify(taskDispatchFacade, times(1)).createTask(any(), any(), same(plan), any());
+        verify(taskDispatchFacade, times(1)).getTask(
+                eq("task-controller"), any(AgentResolveContext.class));
+        verify(taskDispatchFacade, never()).submitTaskDispatch(any());
+
+        ArgumentCaptor<AgentConsultationEntity> consultationCaptor =
+                ArgumentCaptor.forClass(AgentConsultationEntity.class);
+        verify(consultationRepository, times(1)).save(consultationCaptor.capture());
+        AgentConsultationEntity consultation = consultationCaptor.getValue();
+        assertEquals("shared-key-1", consultation.getSessionId());
+        assertEquals("owner-1", consultation.getUserId());
+        assertEquals("agent-1", consultation.getTargetAgentId());
+        assertEquals("Agent 1", consultation.getTargetAgentName());
+        assertEquals("hello", consultation.getQuestion());
+        assertEquals("done", consultation.getAnswer());
+        assertEquals("COMPLETED", consultation.getStatus());
+        assertEquals("ctx-controller", consultation.getContextId());
+        assertEquals("SHARED", consultation.getSource());
+        assertEquals("key-1", consultation.getSharingKeyId());
     }
 
     @Test
@@ -621,8 +822,9 @@ class ScopedSharedTaskCreateCommandAdapterTest {
                 });
         AtomicInteger callbacks = new AtomicInteger();
 
-        IllegalArgumentException failure = assertThrows(
-                IllegalArgumentException.class,
+        ScopedSharedTaskCreateCommandAdapter.SharedCommandAdmissionRejectedException failure =
+                assertThrows(
+                ScopedSharedTaskCreateCommandAdapter.SharedCommandAdmissionRejectedException.class,
                 () -> realAdapter.executeScoped(
                         scope,
                         bound.submitRequest,
@@ -630,6 +832,8 @@ class ScopedSharedTaskCreateCommandAdapterTest {
                         () -> realAdapter.handle(bound.submitRequest, chain)));
 
         assertTrue(failure.getMessage().contains("Daily call limit exceeded"));
+        assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+        assertEquals(failure.getMessage(), failure.getCause().getMessage());
         assertEquals(0, callbacks.get());
         assertEquals(0, route.get());
         assertEquals(0, provider.get());

@@ -382,6 +382,16 @@ public final class ScopedSharedTaskCreateCommandAdapter implements AgentSubmitPi
         void completeFreshTask(DispatchTaskDTO freshTask);
     }
 
+    /** Typed business rejection emitted only by the locked Sharing Key admission step. */
+    public static final class SharedCommandAdmissionRejectedException
+            extends IllegalArgumentException {
+        private static final long serialVersionUID = 1L;
+
+        private SharedCommandAdmissionRejectedException(IllegalArgumentException cause) {
+            super(cause.getMessage(), cause);
+        }
+    }
+
     /** One process-local, immutable authority scope with safe Controller preflight accessors. */
     public static final class SharedCommandScope {
         private final Object issuer;
@@ -524,7 +534,7 @@ public final class ScopedSharedTaskCreateCommandAdapter implements AgentSubmitPi
 
                 @Override
                 public void completeFreshTask(DispatchTaskDTO freshTask) {
-                    complete(canonicalRequest, freshTask);
+                    complete(freshTask);
                 }
             };
         }
@@ -537,9 +547,17 @@ public final class ScopedSharedTaskCreateCommandAdapter implements AgentSubmitPi
                 }
                 policyInvoked = true;
             }
+            SharingKeyService.SharedAskPolicySnapshot policy;
             try {
-                SharingKeyService.SharedAskPolicySnapshot policy =
-                        sharingKeyService.consumeAuthorizedAsk(scope.authority);
+                policy = sharingKeyService.consumeAuthorizedAsk(scope.authority);
+            } catch (IllegalArgumentException rejection) {
+                poison();
+                throw new SharedCommandAdmissionRejectedException(rejection);
+            } catch (RuntimeException | Error failure) {
+                poison();
+                throw failure;
+            }
+            try {
                 LockedPolicyProjection projection =
                         projectLockedPolicy(canonicalRequest, policy);
                 synchronized (this) {
@@ -576,9 +594,7 @@ public final class ScopedSharedTaskCreateCommandAdapter implements AgentSubmitPi
             }
         }
 
-        private void complete(
-                TaskDispatchRequest canonicalRequest,
-                DispatchTaskDTO freshTask) {
+        private void complete(DispatchTaskDTO freshTask) {
             Objects.requireNonNull(freshTask, "fresh task must not be null");
             synchronized (this) {
                 if (poisoned || !prepareCompleted || completionInvoked) {
