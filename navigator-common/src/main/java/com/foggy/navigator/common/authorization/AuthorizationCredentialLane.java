@@ -3,6 +3,7 @@ package com.foggy.navigator.common.authorization;
 /** Credential lanes remain deliberately separate; no lane is an authority inheritance shortcut. */
 public enum AuthorizationCredentialLane {
     NAVIGATOR_JWT,
+    NAVIGATOR_API_KEY,
     LEGACY_UPSTREAM_ADMIN,
     CLIENT_APP_CONTROL,
     CLIENT_APP_RUNTIME_CREDENTIAL,

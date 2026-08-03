@@ -47,13 +47,15 @@ public final class TrustedNavigatorTaskCreateCommandFactory
     private static final String AUTHORIZATION = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String QUERY_TOKEN = "token";
-    private static final String FINGERPRINT_DOMAIN =
+    private static final String API_KEY = "X-API-Key";
+    private static final String JWT_FINGERPRINT_DOMAIN =
             "navi.navigator-jwt-principal-fingerprint.v1";
+    private static final String API_KEY_FINGERPRINT_DOMAIN =
+            "navi.navigator-api-key-principal-fingerprint.v1";
     private static final Pattern STRICT_UUID = Pattern.compile(
             "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                     + "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
     private static final List<String> FOREIGN_CREDENTIAL_HEADERS = List.of(
-            "X-API-Key",
             "X-Navigator-API-Key",
             "X-Sharing-Key",
             "X-Navi-Principal-Credential",
@@ -125,7 +127,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                 HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE))) {
             return false;
         }
-        return servletRequest != null && hasJwtCandidate(servletRequest);
+        return servletRequest != null && hasNavigatorCredentialCandidate(servletRequest);
     }
 
     @Override
@@ -168,8 +170,10 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                         new CanonicalCommandEnvelope.Actor(
                                 CanonicalCommandEnvelope.ActorKind.AUTHENTICATED_PRINCIPAL,
                                 AuthorizationPrincipalType.NAVIGATOR_USER,
-                                AuthorizationCredentialLane.NAVIGATOR_JWT,
-                                principalFingerprint(ingress.ownerUserId()),
+                                ingress.credentialSource().lane,
+                                principalFingerprint(
+                                        ingress.ownerUserId(),
+                                        ingress.credentialSource().fingerprintDomain),
                                 null),
                         new CanonicalCommandEnvelope.Ownership(
                                 planBinding.tenantReference(),
@@ -237,8 +241,9 @@ public final class TrustedNavigatorTaskCreateCommandFactory
     private TrustedIngress requireTrustedIngress(AgentTaskSubmitRequest request) {
         HttpServletRequest servletRequest = Objects.requireNonNull(
                 currentServletRequest(), "trusted Navigator MVC request is unavailable");
-        JwtSource jwtSource = requireJwtSource(servletRequest);
-        rejectForeignCredentials(servletRequest, jwtSource);
+        NavigatorCredentialSource credentialSource =
+                requireNavigatorCredentialSource(servletRequest);
+        rejectForeignCredentials(servletRequest, credentialSource);
         CurrentUser currentUser = UserContext.getCurrentUser();
         if (currentUser == null || isBlank(currentUser.getUserId())) {
             throw rejected("TRUSTED_NAVIGATOR_CURRENT_USER_MISSING");
@@ -268,6 +273,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                     TASK_ROUTE,
                     currentUser.getUserId(),
                     currentUser.getTenantId(),
+                    credentialSource,
                     false);
         }
         if (AGENT_ASK_ROUTE.equals(route) && UI_SOURCE.equals(source)) {
@@ -277,6 +283,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                     AGENT_ASK_ROUTE,
                     currentUser.getUserId(),
                     currentUser.getTenantId(),
+                    credentialSource,
                     true);
         }
         if (AGENT_ASK_ROUTE.equals(route) && A2A_SOURCE.equals(source)) {
@@ -286,34 +293,60 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                     AGENT_ASK_ROUTE,
                     currentUser.getUserId(),
                     currentUser.getTenantId(),
+                    credentialSource,
                     false);
         }
         throw rejected("TRUSTED_NAVIGATOR_ROUTE_SOURCE_CONFLICT");
     }
 
-    private static JwtSource requireJwtSource(HttpServletRequest request) {
+    private static NavigatorCredentialSource requireNavigatorCredentialSource(
+            HttpServletRequest request) {
         String authorization = request.getHeader(AUTHORIZATION);
-        if (authorization != null && authorization.startsWith(BEARER_PREFIX)) {
+        String queryToken = request.getParameter(QUERY_TOKEN);
+        String apiKey = request.getHeader(API_KEY);
+        boolean bearerCandidate = authorization != null
+                && authorization.startsWith(BEARER_PREFIX);
+        boolean queryCandidate = queryToken != null && !queryToken.isEmpty();
+        boolean apiKeyCandidate = apiKey != null;
+        int candidates = (bearerCandidate ? 1 : 0)
+                + (queryCandidate ? 1 : 0)
+                + (apiKeyCandidate ? 1 : 0);
+        if (candidates > 1) {
+            throw rejected("TRUSTED_NAVIGATOR_MIXED_AUTHORIZATION");
+        }
+        if (bearerCandidate) {
             if (isBlank(authorization.substring(BEARER_PREFIX.length()))) {
                 throw rejected("TRUSTED_NAVIGATOR_BEARER_MISSING");
             }
-            return JwtSource.BEARER;
+            return NavigatorCredentialSource.BEARER;
         }
-        String queryToken = request.getParameter(QUERY_TOKEN);
-        if (queryToken != null && !queryToken.isEmpty()) {
+        if (queryCandidate) {
             if (isBlank(queryToken)) {
                 throw rejected("TRUSTED_NAVIGATOR_QUERY_TOKEN_MISSING");
             }
-            return JwtSource.QUERY_TOKEN;
+            return NavigatorCredentialSource.QUERY_TOKEN;
         }
-        throw rejected("TRUSTED_NAVIGATOR_JWT_SOURCE_MISSING");
+        if (apiKeyCandidate) {
+            if (isBlank(apiKey)) {
+                throw rejected("TRUSTED_NAVIGATOR_API_KEY_MISSING");
+            }
+            return NavigatorCredentialSource.API_KEY;
+        }
+        throw rejected("TRUSTED_NAVIGATOR_CREDENTIAL_SOURCE_MISSING");
     }
 
     private static void rejectForeignCredentials(
             HttpServletRequest request,
-            JwtSource jwtSource) {
-        if (jwtSource == JwtSource.QUERY_TOKEN
-                && !isBlank(request.getHeader(AUTHORIZATION))) {
+            NavigatorCredentialSource credentialSource) {
+        String authorization = request.getHeader(AUTHORIZATION);
+        String queryToken = request.getParameter(QUERY_TOKEN);
+        String apiKey = request.getHeader(API_KEY);
+        if ((credentialSource != NavigatorCredentialSource.BEARER
+                && !isBlank(authorization))
+                || (credentialSource != NavigatorCredentialSource.QUERY_TOKEN
+                && !isBlank(queryToken))
+                || (credentialSource != NavigatorCredentialSource.API_KEY
+                && !isBlank(apiKey))) {
             throw rejected("TRUSTED_NAVIGATOR_MIXED_AUTHORIZATION");
         }
         for (String header : FOREIGN_CREDENTIAL_HEADERS) {
@@ -332,13 +365,16 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         }
     }
 
-    private static boolean hasJwtCandidate(HttpServletRequest request) {
+    private static boolean hasNavigatorCredentialCandidate(HttpServletRequest request) {
         String authorization = request.getHeader(AUTHORIZATION);
         if (authorization != null && authorization.startsWith(BEARER_PREFIX)) {
             return true;
         }
         String queryToken = request.getParameter(QUERY_TOKEN);
-        return queryToken != null && !queryToken.isEmpty();
+        if (queryToken != null && !queryToken.isEmpty()) {
+            return true;
+        }
+        return request.getHeader(API_KEY) != null;
     }
 
     @Nullable
@@ -359,10 +395,10 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         return UUID.fromString(trimmed).toString();
     }
 
-    private static String principalFingerprint(String userId) {
+    private static String principalFingerprint(String userId, String domain) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            updateDigestField(digest, FINGERPRINT_DOMAIN);
+            updateDigestField(digest, domain);
             updateDigestField(digest, userId);
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException unavailable) {
@@ -391,9 +427,20 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         return new IllegalStateException(safeCode);
     }
 
-    private enum JwtSource {
-        BEARER,
-        QUERY_TOKEN
+    private enum NavigatorCredentialSource {
+        BEARER(AuthorizationCredentialLane.NAVIGATOR_JWT, JWT_FINGERPRINT_DOMAIN),
+        QUERY_TOKEN(AuthorizationCredentialLane.NAVIGATOR_JWT, JWT_FINGERPRINT_DOMAIN),
+        API_KEY(AuthorizationCredentialLane.NAVIGATOR_API_KEY, API_KEY_FINGERPRINT_DOMAIN);
+
+        private final AuthorizationCredentialLane lane;
+        private final String fingerprintDomain;
+
+        NavigatorCredentialSource(
+                AuthorizationCredentialLane lane,
+                String fingerprintDomain) {
+            this.lane = lane;
+            this.fingerprintDomain = fingerprintDomain;
+        }
     }
 
     private record TrustedIngress(
@@ -402,6 +449,7 @@ public final class TrustedNavigatorTaskCreateCommandFactory
             String routeId,
             String ownerUserId,
             @Nullable String tenantId,
+            NavigatorCredentialSource credentialSource,
             boolean deferredLegacy) {
     }
 }

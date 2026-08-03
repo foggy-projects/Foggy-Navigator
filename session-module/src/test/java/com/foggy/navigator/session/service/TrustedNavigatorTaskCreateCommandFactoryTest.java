@@ -300,17 +300,11 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
     }
 
     @Test
-    void apiKeyForeignSourcesAndCurrentUiAgentAskUseLegacyExactlyOnce() throws Exception {
+    void nonOwnedSourcesAndCurrentUiAgentAskUseLegacyExactlyOnce() throws Exception {
         AtomicInteger terminalCalls = new AtomicInteger();
         AgentSubmitPipelineStage terminal = terminalStage(terminalCalls);
         DefaultAgentSubmitPipeline pipeline =
                 new DefaultAgentSubmitPipeline(List.of(factory, terminal));
-
-        BoundRequest apiKey = bindApiKey(
-                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
-                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
-        assertFalse(factory.supports(apiKey.submitRequest()));
-        pipeline.submit(apiKey.submitRequest());
 
         BoundRequest openApi = bindJwt(
                 "jwt-openapi", false, TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
@@ -338,10 +332,145 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         assertFalse(factory.supports(mixedTransitionalAsk.submitRequest()));
         pipeline.submit(mixedTransitionalAsk.submitRequest());
 
-        assertEquals(5, terminalCalls.get());
+        assertEquals(4, terminalCalls.get());
         assertNull(transitionalAsk.submitRequest().getClientRequestId());
         assertNull(mixedTransitionalAsk.submitRequest().getClientRequestId());
         verifyNoInteractions(taskDispatchFacade, commandCoordinator);
+    }
+
+    @Test
+    void trustedApiKeyUiUsesDistinctLaneAndRecordedReplayNeverExposesRawKey()
+            throws Exception {
+        String requestId = "550e8400-e29b-41d4-a716-446655440001";
+        BoundRequest freshRequest = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
+        freshRequest.submitRequest().setClientRequestId(requestId);
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-api-key");
+        A2aTask a2aTask = A2aTask.builder().id("task-api-key").build();
+        when(taskDispatchFacade.toTaskDispatchRequest(any())).thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(any(), any())).thenReturn(plan);
+        when(commandCoordinator.execute(any(), any(), any(), any(), any()))
+                .thenReturn(
+                        new TaskCreateCommandCoordinator.Executed(
+                                new TaskCreateCommandCoordinator.TaskReference("task-api-key"),
+                                task),
+                        new TaskCreateCommandCoordinator.RecordedReplay(
+                                new TaskCreateCommandCoordinator.TaskReference("task-api-key")));
+        when(taskDispatchFacade.getTask(eq("task-api-key"), any()))
+                .thenReturn(Optional.of(task));
+        when(taskDispatchFacade.toA2aTask(same(task))).thenReturn(a2aTask);
+
+        AgentTaskSubmitResult fresh = factory.handle(freshRequest.submitRequest(), chain);
+
+        BoundRequest replayRequest = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
+        replayRequest.submitRequest().setClientRequestId(requestId);
+        AgentTaskSubmitResult replay = factory.handle(replayRequest.submitRequest(), chain);
+
+        assertTrue(factory.supports(replayRequest.submitRequest()));
+        assertSame(task, fresh.getDispatchTask());
+        assertSame(task, replay.getDispatchTask());
+        ArgumentCaptor<CanonicalCommandEnvelope> envelopes =
+                ArgumentCaptor.forClass(CanonicalCommandEnvelope.class);
+        verify(commandCoordinator, times(2)).execute(
+                same(dispatchRequest), any(AgentResolveContext.class), same(plan),
+                envelopes.capture(), any());
+        assertEquals(2, envelopes.getAllValues().size());
+        for (CanonicalCommandEnvelope envelope : envelopes.getAllValues()) {
+            assertEquals(CanonicalCommandEnvelope.CommandIngress.DIRECT,
+                    envelope.binding().ingress().ingress());
+            assertEquals(AuthorizationPrincipalType.NAVIGATOR_USER,
+                    envelope.binding().actor().principalType());
+            assertEquals(AuthorizationCredentialLane.NAVIGATOR_API_KEY,
+                    envelope.binding().actor().lane());
+            assertEquals(USER_ID, envelope.binding().ownership().ownerReference());
+            assertEquals("navi.tenant.present.v1:" + TENANT_ID,
+                    envelope.binding().ownership().tenantReference());
+            assertFalse(envelope.toString().contains("api-key"));
+            assertFalse(envelope.binding().actor().fingerprint().contains("api-key"));
+        }
+        assertEquals(envelopes.getAllValues().get(0).binding(),
+                envelopes.getAllValues().get(1).binding());
+        verify(taskDispatchFacade).getTask(eq("task-api-key"), any());
+        verifyNoInteractions(chain);
+    }
+
+    @Test
+    void trustedApiKeyA2aMintsCanonicalRequestAndKeepsA2aIngress() throws Exception {
+        BoundRequest bound = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.AGENT_ASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.A2A_SOURCE);
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-api-a2a");
+        when(taskDispatchFacade.toTaskDispatchRequest(any())).thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(any(), any())).thenReturn(plan);
+        when(commandCoordinator.execute(any(), any(), any(), any(), any()))
+                .thenReturn(new TaskCreateCommandCoordinator.Executed(
+                        new TaskCreateCommandCoordinator.TaskReference("task-api-a2a"), task));
+        when(taskDispatchFacade.toA2aTask(same(task)))
+                .thenReturn(A2aTask.builder().id("task-api-a2a").build());
+
+        factory.handle(bound.submitRequest(), chain);
+
+        assertDoesNotThrow(() -> UUID.fromString(bound.submitRequest().getClientRequestId()));
+        ArgumentCaptor<CanonicalCommandEnvelope> envelope =
+                ArgumentCaptor.forClass(CanonicalCommandEnvelope.class);
+        verify(commandCoordinator).execute(
+                same(dispatchRequest), same(bound.submitRequest().getResolveContext()), same(plan),
+                envelope.capture(), any());
+        assertEquals(CanonicalCommandEnvelope.CommandIngress.A2A,
+                envelope.getValue().binding().ingress().ingress());
+        assertEquals(AuthorizationCredentialLane.NAVIGATOR_API_KEY,
+                envelope.getValue().binding().actor().lane());
+        verifyNoInteractions(chain);
+    }
+
+    @Test
+    void invalidAndMixedApiKeysFailBeforePlanReceiptOrProvider() throws Exception {
+        BoundRequest foreign = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
+        foreign.httpRequest().addHeader("X-Task-Token", "foreign");
+        assertThrows(SecurityException.class,
+                () -> factory.handle(foreign.submitRequest(), chain));
+
+        BoundRequest mixedQuery = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
+        mixedQuery.httpRequest().addParameter("token", "foreign-query");
+        assertThrows(SecurityException.class,
+                () -> factory.handle(mixedQuery.submitRequest(), chain));
+
+        BoundRequest mixedBearer = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
+        mixedBearer.httpRequest().addHeader("Authorization", "Bearer foreign-jwt");
+        assertThrows(SecurityException.class,
+                () -> factory.handle(mixedBearer.submitRequest(), chain));
+
+        BoundRequest invalid = bindInvalidApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE);
+        assertTrue(factory.supports(invalid.submitRequest()));
+        assertThrows(SecurityException.class,
+                () -> factory.handle(invalid.submitRequest(), chain));
+
+        for (String invalidValue : List.of("", "   ")) {
+            BoundRequest blank = bindInvalidApiKey(
+                    TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                    TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE,
+                    invalidValue);
+            assertTrue(factory.supports(blank.submitRequest()));
+            assertThrows(SecurityException.class,
+                    () -> factory.handle(blank.submitRequest(), chain));
+        }
+
+        verifyNoInteractions(taskDispatchFacade, commandCoordinator, chain);
     }
 
     @Test
@@ -546,6 +675,37 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         user.setTenantId(TENANT_ID);
         user.setRoles(ROLES);
         when(userAuthService.getUserByApiKey("api-key")).thenReturn(Optional.of(user));
+        AuthInterceptor interceptor = new AuthInterceptor(jwtUtil, userAuthService);
+        assertTrue(interceptor.preHandle(request, response, new Object()));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
+        return new BoundRequest(
+                AgentTaskSubmitRequest.builder()
+                        .agentId("agent-1")
+                        .resolveContext(AgentResolveContext.builder()
+                                .userId(USER_ID)
+                                .tenantId(TENANT_ID)
+                                .requestSource(source)
+                                .build())
+                        .build(),
+                request);
+    }
+
+    private BoundRequest bindInvalidApiKey(String route, String source) throws Exception {
+        return bindInvalidApiKey(route, source, "revoked-api-key");
+    }
+
+    private BoundRequest bindInvalidApiKey(
+            String route,
+            String source,
+            String apiKey) throws Exception {
+        resetBoundContext();
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", concreteUri(route));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, route);
+        request.addHeader("X-API-Key", apiKey);
+        if (!apiKey.isEmpty()) {
+            when(userAuthService.getUserByApiKey(apiKey)).thenReturn(Optional.empty());
+        }
         AuthInterceptor interceptor = new AuthInterceptor(jwtUtil, userAuthService);
         assertTrue(interceptor.preHandle(request, response, new Object()));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
