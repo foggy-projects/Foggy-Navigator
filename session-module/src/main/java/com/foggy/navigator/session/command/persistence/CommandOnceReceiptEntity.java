@@ -229,7 +229,7 @@ public class CommandOnceReceiptEntity {
 
     @Version
     @Column(name = "row_version", nullable = false)
-    private long rowVersion;
+    private Long rowVersion;
 
     protected CommandOnceReceiptEntity() {
     }
@@ -475,5 +475,5 @@ public class CommandOnceReceiptEntity {
     public LocalDateTime getEffectStartedAt() { return effectStartedAt; }
     public LocalDateTime getResultRecordedAt() { return resultRecordedAt; }
     public LocalDateTime getAmbiguousAt() { return ambiguousAt; }
-    public long getRowVersion() { return rowVersion; }
+    public long getRowVersion() { return rowVersion == null ? 0L : rowVersion; }
 }
