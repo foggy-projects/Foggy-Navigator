@@ -31,6 +31,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.List;
 
@@ -222,6 +225,534 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
+    void resolveFreshCreatePlan_freezesSelectedWorkerWithoutMutationOrLaunch() {
+        form.setDirectoryId("dir_01");
+        form.setAllowedTools(List.of(" read_file ", "", "invoke_business_function"));
+
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+
+        BusinessAgentTaskCreatePlan plan = serviceWithLauncher.resolveFreshCreatePlan(
+                "tenant_01", "actor_01", form);
+
+        assertEquals("worker_01", plan.agentRoute().selectedWorkerId());
+        assertNotNull(plan.agentRoute().launcherType());
+        assertEquals("pool_01", plan.agentRoute().internalWorkerRouteId());
+        assertEquals("pool_01", plan.agentRoute().workerPoolId());
+        assertEquals("langgraph-biz-worker", plan.agentRoute().expectedProviderType());
+        assertEquals("model_01", plan.modelTarget().modelConfigId());
+        assertEquals("dir_01", plan.workspaceTarget().directoryId());
+        assertEquals("/home/sa/workspace/app", plan.workspaceTarget().workdir());
+        assertEquals(List.of("/home/sa/workspace"), plan.workspaceTarget().allowedDirs());
+        assertEquals(
+                List.of("read_file", "invoke_business_function"),
+                plan.inputBinding().allowedTools());
+
+        ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
+                ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
+        verify(workerTaskLauncher).resolveWorkerId(requestCaptor.capture());
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest = requestCaptor.getValue();
+        assertNull(selectionRequest.getBusinessTaskId());
+        assertNull(selectionRequest.getSelectedWorkerId());
+        assertNull(selectionRequest.getWorkerLeaseId());
+        assertNull(selectionRequest.getTaskScopedToken());
+        assertEquals("tenant_01", selectionRequest.getTenantId());
+        assertEquals("pool_01", selectionRequest.getWorkerPoolId());
+        assertEquals("LANGGRAPH_BIZ", selectionRequest.getWorkerBackend());
+        assertEquals("model_01", selectionRequest.getModelConfigId());
+        assertEquals("dir_01", selectionRequest.getDirectoryId());
+
+        verifyNoInteractions(taskRepository, tokenRepository, tokenLifecycleService, callerAuthorityService);
+        verify(businessAgentSessionService).resolveReusableContextId(
+                "tenant_01", "app_01", "user_01", null, "session_01");
+        verify(businessAgentSessionService).validateContextResourceCompatibility(
+                "tenant_01", "app_01", "user_01", null,
+                "agent_01", "skill_01", "dir_01", "model_01");
+        verify(businessAgentSessionService, never()).bindTask(any(), any(), any());
+        verify(workerTaskLauncher, never()).launch(any());
+        verifyNoInteractions(workerIdentityRepository);
+    }
+
+    @Test
+    void resolveFreshCreatePlan_whenWorkerResolutionFailsPerformsNoMutation() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenThrow(new IllegalStateException("worker selection failed"));
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> serviceWithLauncher.resolveFreshCreatePlan("tenant_01", "actor_01", form));
+
+        assertEquals("worker selection failed", error.getMessage());
+        verify(taskRepository, never()).save(any());
+        verifyNoInteractions(tokenRepository, tokenLifecycleService, callerAuthorityService);
+        verify(businessAgentSessionService, never()).bindTask(any(), any(), any());
+        verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void resolveFreshCreatePlan_freezesDirectPhysicalWorkerFacts() {
+        form.setDirectoryId("dir_01");
+        ClientAppEntity clientApp = new ClientAppEntity();
+        clientApp.setClientAppId("app_01");
+        clientApp.setTenantId("tenant_01");
+        clientApp.setUpstreamSystemId("foggy-world-sim");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(clientApp);
+        when(resourceResolver.resolveRequiredAgent(
+                "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "worker_01",
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "foggy-world-sim",
+                        "PHYSICAL_WORKER:UPSTREAM_SYSTEM",
+                        "model_01",
+                        null,
+                        "dir_01",
+                        "AGENT:CLIENT_APP"));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        "directory_worker_01",
+                        WorkspaceScope.CLIENT_APP_SHARED,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "/home/sa/workspace/app",
+                        List.of("/home/sa/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:CLIENT_APP_SHARED")));
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+
+        BusinessAgentTaskCreatePlan plan = serviceWithLauncher.resolveFreshCreatePlan(
+                "tenant_01", "actor_01", form);
+
+        assertNull(plan.agentRoute().workerPoolId());
+        assertEquals("worker_01", plan.agentRoute().internalWorkerRouteId());
+        assertEquals("worker_01", plan.agentRoute().agentPhysicalWorkerId());
+        assertEquals("worker_01", plan.agentRoute().launchPhysicalWorkerId());
+        assertEquals("worker_01", plan.agentRoute().selectedWorkerId());
+        assertEquals("directory_worker_01", plan.workspaceTarget().physicalWorkerId());
+        assertEquals("foggy-world-sim", plan.identity().upstreamSystemId());
+        assertTrue(plan.semanticFingerprint().matches("[0-9a-f]{64}"));
+        verify(taskRepository, never()).save(any());
+        verifyNoInteractions(tokenRepository, tokenLifecycleService, callerAuthorityService);
+        verify(businessAgentSessionService, never()).bindTask(any(), any(), any());
+        verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void resolveFreshCreatePlan_freezesStaleAndSelectedPhysicalWorkerFacts() {
+        form.setDirectoryId("dir_01");
+        ClientAppEntity clientApp = new ClientAppEntity();
+        clientApp.setClientAppId("app_01");
+        clientApp.setTenantId("tenant_01");
+        clientApp.setUpstreamSystemId("school-sim");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(clientApp);
+        when(resourceResolver.resolveRequiredAgent(
+                "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "directory_worker_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "AGENT_DEFAULT_DIRECTORY:CLIENT_APP_SHARED",
+                        "model_01",
+                        null,
+                        "dir_01",
+                        "AGENT:CLIENT_APP"));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        "directory_worker_01",
+                        WorkspaceScope.CLIENT_APP_SHARED,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "/home/sa/workspace/app",
+                        List.of("/home/sa/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:CLIENT_APP_SHARED")));
+        BizWorkerIdentityEntity identity = new BizWorkerIdentityEntity();
+        identity.setWorkerId("school-sim-wsl-biz");
+        when(workerIdentityRepository
+                .findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "school-sim",
+                        "LANGGRAPH_BIZ",
+                        BizWorkerPoolService.STATUS_ENABLED,
+                        BizWorkerPoolService.HEALTHY))
+                .thenReturn(List.of(identity));
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+
+        BusinessAgentTaskCreatePlan plan = serviceWithLauncher.resolveFreshCreatePlan(
+                "tenant_01", "actor_01", form);
+
+        assertEquals("directory_worker_01", plan.agentRoute().agentPhysicalWorkerId());
+        assertEquals("school-sim-wsl-biz", plan.agentRoute().launchPhysicalWorkerId());
+        assertEquals("school-sim-wsl-biz", plan.agentRoute().selectedWorkerId());
+        assertEquals("directory_worker_01", plan.workspaceTarget().physicalWorkerId());
+        assertEquals("school-sim", plan.identity().upstreamSystemId());
+        assertTrue(plan.semanticFingerprint().matches("[0-9a-f]{64}"));
+        verify(taskRepository, never()).save(any());
+        verifyNoInteractions(tokenRepository, tokenLifecycleService, callerAuthorityService);
+        verify(businessAgentSessionService, never()).bindTask(any(), any(), any());
+        verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void businessTaskCreatePlan_defensivelyCopiesListsKeepsGoldenFingerprintAndRedactsToString() {
+        ArrayList<String> allowedDirs = new ArrayList<>(List.of("/workspace", "/tmp"));
+        ArrayList<String> allowedTools = new ArrayList<>(
+                List.of("read_file", "invoke_business_function"));
+
+        BusinessAgentTaskCreatePlan plan = new BusinessAgentTaskCreatePlan(
+                new BusinessAgentTaskCreatePlan.Identity(
+                        "tenant_01", "actor_01", "app_01", "upstream_01",
+                        "user_01", "session_01", "context_01"),
+                new BusinessAgentTaskCreatePlan.AgentRoute(
+                        "agent_01", ResourceOwnerType.CLIENT_APP, "app_01", "app_01",
+                        "AGENT:CLIENT_APP", "skill_01", "skill_01", "pool_01",
+                        "pool_01", ResourceOwnerType.PLATFORM, "tenant_01",
+                        "WORKER_POOL:PLATFORM", "LANGGRAPH_BIZ", null, null, null,
+                        null, null, "worker_01", "launcher.Type", "langgraph-biz-worker"),
+                new BusinessAgentTaskCreatePlan.ModelTarget(
+                        "model_01", "qwen-plus", null, "model_01", null,
+                        LlmModelCategory.GENERAL, "MODEL_CONFIG_DEFAULT", "LANGGRAPH_BIZ",
+                        "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"),
+                new BusinessAgentTaskCreatePlan.WorkspaceTarget(
+                        "dir_01", "workspace_worker_01", WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.DELEGATED, "/workspace/secret",
+                        allowedDirs, false, "quota-policy-secret", "retention-policy-secret",
+                        "concurrency-policy-secret", "WORKING_DIRECTORY:USER_PRIVATE"),
+                new BusinessAgentTaskCreatePlan.InputBinding(
+                        "model_01", null, "dir_01", allowedTools, "client-context-secret"),
+                "caller-cannot-forge-this");
+        String fingerprint = plan.semanticFingerprint();
+
+        allowedDirs.add("/mutated");
+        allowedTools.clear();
+
+        assertEquals(List.of("/workspace", "/tmp"), plan.workspaceTarget().allowedDirs());
+        assertEquals(
+                List.of("read_file", "invoke_business_function"),
+                plan.inputBinding().allowedTools());
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> plan.workspaceTarget().allowedDirs().add("/forbidden"));
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> plan.inputBinding().allowedTools().add("forbidden_tool"));
+        assertEquals(fingerprint, plan.semanticFingerprint());
+        assertTrue(fingerprint.matches("[0-9a-f]{64}"));
+        assertEquals("d1341b71542e2baa6c925fabb6fcb5dd5362aee2f1e060ea9c797fdddbe91233", fingerprint);
+
+        BusinessAgentTaskCreatePlan reorderedTools = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                plan.agentRoute(),
+                plan.modelTarget(),
+                plan.workspaceTarget(),
+                new BusinessAgentTaskCreatePlan.InputBinding(
+                        "model_01", null, "dir_01",
+                        List.of("invoke_business_function", "read_file"),
+                        "client-context-secret"),
+                null);
+        BusinessAgentTaskCreatePlan nullRawInput = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                plan.agentRoute(),
+                plan.modelTarget(),
+                plan.workspaceTarget(),
+                new BusinessAgentTaskCreatePlan.InputBinding(
+                        null, null, "dir_01", plan.inputBinding().allowedTools(),
+                        "client-context-secret"),
+                null);
+        BusinessAgentTaskCreatePlan blankRawInput = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                plan.agentRoute(),
+                plan.modelTarget(),
+                plan.workspaceTarget(),
+                new BusinessAgentTaskCreatePlan.InputBinding(
+                        "", null, "dir_01", plan.inputBinding().allowedTools(),
+                        "client-context-secret"),
+                null);
+        assertNotEquals(fingerprint, reorderedTools.semanticFingerprint());
+        assertNotEquals(
+                nullRawInput.semanticFingerprint(),
+                blankRawInput.semanticFingerprint());
+
+        BusinessAgentTaskCreatePlan identityDrift = new BusinessAgentTaskCreatePlan(
+                new BusinessAgentTaskCreatePlan.Identity(
+                        plan.identity().tenantId(),
+                        plan.identity().actorUserId(),
+                        plan.identity().clientAppId(),
+                        plan.identity().upstreamSystemId(),
+                        plan.identity().upstreamUserId(),
+                        plan.identity().sessionId(),
+                        "context_02"),
+                plan.agentRoute(),
+                plan.modelTarget(),
+                plan.workspaceTarget(),
+                plan.inputBinding(),
+                null);
+        BusinessAgentTaskCreatePlan routeDrift = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                new BusinessAgentTaskCreatePlan.AgentRoute(
+                        plan.agentRoute().agentId(),
+                        plan.agentRoute().agentOwnerType(),
+                        plan.agentRoute().agentOwnerId(),
+                        plan.agentRoute().agentClientAppId(),
+                        plan.agentRoute().agentSource(),
+                        plan.agentRoute().skillId(),
+                        plan.agentRoute().skillName(),
+                        plan.agentRoute().internalWorkerRouteId(),
+                        plan.agentRoute().workerPoolId(),
+                        plan.agentRoute().workerPoolOwnerType(),
+                        plan.agentRoute().workerPoolOwnerId(),
+                        plan.agentRoute().workerPoolSource(),
+                        plan.agentRoute().workerBackend(),
+                        plan.agentRoute().agentPhysicalWorkerId(),
+                        plan.agentRoute().physicalWorkerOwnerType(),
+                        plan.agentRoute().physicalWorkerOwnerId(),
+                        plan.agentRoute().physicalWorkerSource(),
+                        plan.agentRoute().launchPhysicalWorkerId(),
+                        "worker_02",
+                        plan.agentRoute().launcherType(),
+                        plan.agentRoute().expectedProviderType()),
+                plan.modelTarget(),
+                plan.workspaceTarget(),
+                plan.inputBinding(),
+                null);
+        BusinessAgentTaskCreatePlan modelDrift = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                plan.agentRoute(),
+                new BusinessAgentTaskCreatePlan.ModelTarget(
+                        plan.modelTarget().modelConfigId(),
+                        "qwen-max",
+                        plan.modelTarget().visionModelConfigId(),
+                        plan.modelTarget().resolvedRequestedModelConfigId(),
+                        plan.modelTarget().resolvedRequestedModelVariant(),
+                        plan.modelTarget().category(),
+                        plan.modelTarget().modelNameSource(),
+                        plan.modelTarget().workerBackend(),
+                        plan.modelTarget().source()),
+                plan.workspaceTarget(),
+                plan.inputBinding(),
+                null);
+        BusinessAgentTaskCreatePlan workspaceDrift = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                plan.agentRoute(),
+                plan.modelTarget(),
+                new BusinessAgentTaskCreatePlan.WorkspaceTarget(
+                        plan.workspaceTarget().directoryId(),
+                        plan.workspaceTarget().physicalWorkerId(),
+                        plan.workspaceTarget().workspaceScope(),
+                        plan.workspaceTarget().resolverType(),
+                        "/workspace/drifted",
+                        plan.workspaceTarget().allowedDirs(),
+                        plan.workspaceTarget().readOnly(),
+                        plan.workspaceTarget().quotaPolicyDigest(),
+                        plan.workspaceTarget().retentionPolicyDigest(),
+                        plan.workspaceTarget().concurrencyPolicyDigest(),
+                        plan.workspaceTarget().source()),
+                plan.inputBinding(),
+                null);
+        assertNotEquals(fingerprint, identityDrift.semanticFingerprint());
+        assertNotEquals(fingerprint, routeDrift.semanticFingerprint());
+        assertNotEquals(fingerprint, modelDrift.semanticFingerprint());
+        assertNotEquals(fingerprint, workspaceDrift.semanticFingerprint());
+
+        BusinessAgentTaskCreatePlan equivalent = new BusinessAgentTaskCreatePlan(
+                plan.identity(),
+                plan.agentRoute(),
+                plan.modelTarget(),
+                plan.workspaceTarget(),
+                plan.inputBinding(),
+                "ignored-forged-fingerprint");
+        plan.requireExactRevalidation(equivalent);
+        SecurityException driftError = assertThrows(
+                SecurityException.class,
+                () -> plan.requireExactRevalidation(routeDrift));
+        assertEquals(BusinessAgentTaskCreatePlan.PLAN_DRIFT, driftError.getMessage());
+
+        Map<String, Object> policyAb = new LinkedHashMap<>();
+        policyAb.put("alpha", Map.of("two", 2, "one", 1));
+        policyAb.put("beta", true);
+        Map<String, Object> nestedBa = new LinkedHashMap<>();
+        nestedBa.put("one", 1);
+        nestedBa.put("two", 2);
+        Map<String, Object> policyBa = new LinkedHashMap<>();
+        policyBa.put("beta", true);
+        policyBa.put("alpha", nestedBa);
+        assertEquals(
+                BusinessAgentTaskCreatePlan.policyDigest(policyAb),
+                BusinessAgentTaskCreatePlan.policyDigest(policyBa));
+
+        String loneHighSurrogate = String.valueOf((char) 0xD800);
+        String loneLowSurrogate = String.valueOf((char) 0xDC00);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> BusinessAgentTaskCreatePlan.clientContextDigest(loneHighSurrogate));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> BusinessAgentTaskCreatePlan.clientContextDigest(loneLowSurrogate));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new BusinessAgentTaskCreatePlan(
+                        plan.identity(),
+                        plan.agentRoute(),
+                        plan.modelTarget(),
+                        plan.workspaceTarget(),
+                        new BusinessAgentTaskCreatePlan.InputBinding(
+                                loneHighSurrogate,
+                                null,
+                                "dir_01",
+                                plan.inputBinding().allowedTools(),
+                                "client-context-secret"),
+                        null));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new BusinessAgentTaskCreatePlan(
+                        plan.identity(),
+                        plan.agentRoute(),
+                        plan.modelTarget(),
+                        plan.workspaceTarget(),
+                        new BusinessAgentTaskCreatePlan.InputBinding(
+                                "model_01",
+                                null,
+                                "dir_01",
+                                List.of(loneLowSurrogate),
+                                "client-context-secret"),
+                        null));
+
+        String safeText = plan.toString();
+        assertTrue(safeText.contains("tenant_01"));
+        assertTrue(safeText.contains(fingerprint));
+        assertFalse(safeText.contains("/workspace/secret"));
+        assertFalse(safeText.contains("read_file"));
+        assertFalse(safeText.contains("client-context-secret"));
+        assertFalse(safeText.contains("quota-policy-secret"));
+        assertFalse(safeText.contains("retention-policy-secret"));
+        assertFalse(safeText.contains("concurrency-policy-secret"));
+    }
+
+    @Test
+    void resolveFreshCreatePlan_rejectsResumeBeforeAnyResolutionOrMutation() {
+        for (String suppliedResume : List.of("bt_old123", "", "  \t")) {
+            form.setResumeFromTaskId(suppliedResume);
+            IllegalArgumentException error = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> taskService.resolveFreshCreatePlan("tenant_01", "actor_01", form));
+            assertEquals(BusinessAgentTaskService.CREATE_RESUME_NOT_SUPPORTED, error.getMessage());
+        }
+        verifyNoInteractions(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                workerTaskLauncher);
+    }
+
+    @Test
     void createTask_whenOuterTransactionRollsBack_delegatesTokenRevocation() {
         when(resourceResolver.resolveRequiredModelForAgent(
                 eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
@@ -367,9 +898,10 @@ class BusinessAgentTaskServiceTest {
                 "worker_session_123",
                 "worker_01",
                 issuedToken.getWorkerLeaseId());
-        InOrder dispatchOrder = inOrder(workerTaskLauncher, tokenLifecycleService);
+        InOrder dispatchOrder = inOrder(workerTaskLauncher, taskRepository, tokenLifecycleService);
         dispatchOrder.verify(workerTaskLauncher)
                 .resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class));
+        dispatchOrder.verify(taskRepository).save(any(BusinessAgentTaskEntity.class));
         dispatchOrder.verify(tokenLifecycleService).issuePreboundToken(
                 any(BusinessTaskScopedTokenEntity.class),
                 eq(result.getTaskScopedToken()),
