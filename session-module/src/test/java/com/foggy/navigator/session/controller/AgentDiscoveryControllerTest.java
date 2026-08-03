@@ -13,7 +13,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
-import com.foggy.navigator.session.service.TaskDispatchFacade;
+import com.foggy.navigator.session.service.TrustedNavigatorTaskTerminationCommandAdapter;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
@@ -25,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.bind.annotation.RequestHeader;
 
 import java.util.List;
 import java.util.Map;
@@ -48,6 +49,8 @@ class AgentDiscoveryControllerTest {
 
     private static final String USER_ID = "user-1";
     private static final String TENANT_ID = "tenant-1";
+    private static final String REQUEST_ID =
+            "550e8400-e29b-41d4-a716-446655440000";
 
     @Mock
     private UnifiedAgentResolver agentResolver;
@@ -60,7 +63,7 @@ class AgentDiscoveryControllerTest {
     @Mock
     private SessionTaskResourceAccessService resourceAccessService;
     @Mock
-    private TaskDispatchFacade taskDispatchFacade;
+    private TrustedNavigatorTaskTerminationCommandAdapter taskTerminationCommandAdapter;
     @Mock
     private A2aAgent agent;
 
@@ -75,7 +78,7 @@ class AgentDiscoveryControllerTest {
                 new ObjectMapper(),
                 agentSubmitPipeline,
                 resourceAccessService,
-                taskDispatchFacade);
+                taskTerminationCommandAdapter);
         UserContext.setCurrentUser(CurrentUser.builder()
                 .userId(USER_ID)
                 .tenantId(TENANT_ID)
@@ -209,27 +212,61 @@ class AgentDiscoveryControllerTest {
         rejectTask("task-other");
 
         assertThrows(SecurityException.class,
-                () -> controller.cancelTask("agent-1", "task-other"));
+                () -> controller.cancelTask("agent-1", "task-other", REQUEST_ID));
 
-        verifyNoInteractions(agentResolver, agent, taskDispatchFacade);
+        verifyNoInteractions(agentResolver, agent, taskTerminationCommandAdapter);
     }
 
     @Test
-    void cancelTask_authorizesTaskBeforeProviderMutation() {
+    void cancelTask_declaresOptionalClientRequestIdHeader() throws Exception {
+        RequestHeader header = AgentDiscoveryController.class
+                .getMethod("cancelTask", String.class, String.class, String.class)
+                .getParameters()[2]
+                .getAnnotation(RequestHeader.class);
+
+        assertEquals("X-Navigator-Client-Request-Id", header.value());
+        assertEquals(false, header.required());
+    }
+
+    @Test
+    void cancelTask_authorizesTaskBeforeTrustedA2aAdapter() {
         when(resourceAccessService.requireOwnedTask("task-1", USER_ID, TENANT_ID))
                 .thenReturn(ownedTask("task-1", "agent-1"));
-        controller.cancelTask("agent-1", "task-1");
+        when(taskTerminationCommandAdapter.terminateA2aTask(
+                "agent-1", "task-1", REQUEST_ID))
+                .thenReturn(acceptedTermination());
 
-        InOrder ordered = inOrder(resourceAccessService, taskDispatchFacade);
+        RX<String> result = controller.cancelTask(
+                "agent-1", "task-1", REQUEST_ID);
+
+        assertEquals("Task cancel requested", result.getData());
+        InOrder ordered = inOrder(resourceAccessService, taskTerminationCommandAdapter);
         ordered.verify(resourceAccessService).requireOwnedTask("task-1", USER_ID, TENANT_ID);
-        ordered.verify(taskDispatchFacade).cancelTask(
-                eq("task-1"),
-                eq("agent-1"),
-                argThat(context -> USER_ID.equals(context.getUserId())
-                        && TENANT_ID.equals(context.getTenantId())
-                        && "UI".equals(context.getRequestSource())),
-                eq(false));
+        ordered.verify(taskTerminationCommandAdapter).terminateA2aTask(
+                "agent-1", "task-1", REQUEST_ID);
         verifyNoInteractions(agent);
+    }
+
+    @Test
+    void cancelTask_keepsWordingForAbsentBlankAndTerminalResults() {
+        when(resourceAccessService.requireOwnedTask("task-1", USER_ID, TENANT_ID))
+                .thenReturn(ownedTask("task-1", "agent-1"));
+        when(taskTerminationCommandAdapter.terminateA2aTask(
+                eq("agent-1"), eq("task-1"), any()))
+                .thenReturn(
+                        acceptedTermination(),
+                        new TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult(
+                                "TASK_ALREADY_TERMINAL_COMPLETED", "COMPLETED"));
+
+        RX<String> absent = controller.cancelTask("agent-1", "task-1", null);
+        RX<String> blank = controller.cancelTask("agent-1", "task-1", "  ");
+
+        assertEquals("Task cancel requested", absent.getData());
+        assertEquals("Task cancel requested", blank.getData());
+        verify(taskTerminationCommandAdapter).terminateA2aTask(
+                "agent-1", "task-1", null);
+        verify(taskTerminationCommandAdapter).terminateA2aTask(
+                "agent-1", "task-1", "  ");
     }
 
     @Test
@@ -238,9 +275,9 @@ class AgentDiscoveryControllerTest {
                 .thenReturn(ownedTask("task-1", "agent-owner"));
 
         assertThrows(SecurityException.class,
-                () -> controller.cancelTask("agent-other", "task-1"));
+                () -> controller.cancelTask("agent-other", "task-1", REQUEST_ID));
 
-        verifyNoInteractions(agentResolver, agent, taskDispatchFacade);
+        verifyNoInteractions(agentResolver, agent, taskTerminationCommandAdapter);
     }
 
     @Test
@@ -249,9 +286,9 @@ class AgentDiscoveryControllerTest {
                 .thenReturn(ownedTask("task-1", null));
 
         assertThrows(SecurityException.class,
-                () -> controller.cancelTask("agent-requested", "task-1"));
+                () -> controller.cancelTask("agent-requested", "task-1", REQUEST_ID));
 
-        verifyNoInteractions(agentResolver, agent, taskDispatchFacade);
+        verifyNoInteractions(agentResolver, agent, taskTerminationCommandAdapter);
     }
 
     @Test
@@ -298,5 +335,11 @@ class AgentDiscoveryControllerTest {
         task.setTaskId(taskId);
         task.setAgentId(agentId);
         return task;
+    }
+
+    private static TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult
+    acceptedTermination() {
+        return new TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult(
+                "TERMINATION_REQUEST_ACCEPTED", null);
     }
 }

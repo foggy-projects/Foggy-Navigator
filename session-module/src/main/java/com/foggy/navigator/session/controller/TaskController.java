@@ -10,6 +10,7 @@ import com.foggy.navigator.session.model.form.TaskCancelForm;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.session.service.NativeSubtaskQueryService;
+import com.foggy.navigator.session.service.TrustedNavigatorTaskTerminationCommandAdapter;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggyframework.core.ex.RX;
@@ -19,7 +20,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -37,6 +37,7 @@ public class TaskController {
     private final TaskDispatchFacade taskDispatchFacade;
     private final AgentSubmitPipeline agentSubmitPipeline;
     private final NativeSubtaskQueryService nativeSubtaskQueryService;
+    private final TrustedNavigatorTaskTerminationCommandAdapter taskTerminationCommandAdapter;
 
     /**
      * 创建任务（统一入口）
@@ -149,54 +150,42 @@ public class TaskController {
     /**
      * 取消任务
      */
-    private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
     private static final Pattern SAFE_TERMINATION_ERROR_CODE =
             Pattern.compile("TERMINATION_[A-Z0-9_]{1,128}");
 
     @PostMapping("/{taskId}/cancel")
-    public RX<String> cancelTask(@PathVariable String taskId,
-                                  @RequestBody(required = false) TaskCancelForm form) {
-        String userId = UserContext.getCurrentUserId();
-        String tenantId = UserContext.getCurrentTenantId();
-        AgentResolveContext context = AgentResolveContext.builder()
-                .userId(userId)
-                .tenantId(tenantId)
-                .requestSource("UI")
-                .build();
-
-        // 统一先查任务，用于 terminal-state guard 和 agentId 回填
-        DispatchTaskDTO task = taskDispatchFacade.getTask(taskId, context).orElse(null);
-        if (task == null) {
-            return RX.failA("Task not found: " + taskId);
-        }
-
-        // Terminal-state guard：已完成/失败/中止的任务直接返回成功（幂等）
-        if (task.getStatus() != null && TERMINAL_STATES.contains(task.getStatus())) {
-            log.info("cancelTask: task {} already in terminal state ({}), returning no-op", taskId, task.getStatus());
-            return RX.ok("Task already in terminal state: " + task.getStatus());
-        }
-
+    public RX<String> cancelTask(
+            @PathVariable String taskId,
+            @RequestBody(required = false) TaskCancelForm form,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId) {
+        boolean force = form != null && form.isForceRequested();
         try {
-            // The authorized task projection is the only routing authority;
-            // a request-body agentId must never redirect cancellation.
-            boolean force = form != null && form.isForceRequested();
-            taskDispatchFacade.cancelTask(taskId, task.getAgentId(), context, force);
+            TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult result =
+                    taskTerminationCommandAdapter.terminateUiTask(
+                            taskId, force, clientRequestId);
+            if (result.terminalStatus() != null) {
+                return RX.ok("Task already in terminal state: "
+                        + result.terminalStatus());
+            }
             return RX.ok(force ? "Force cancellation completed" : "Cancellation request accepted");
-        } catch (UnsupportedOperationException | IllegalArgumentException e) {
-            log.warn("cancelTask: unsupported or invalid request for task {}", taskId);
+        } catch (UnsupportedOperationException e) {
+            log.warn("cancelTask: unsupported request for task {}", taskId);
+            return RX.failA("TERMINATION_REQUEST_NOT_SUPPORTED");
+        } catch (IllegalArgumentException e) {
+            log.warn("cancelTask: invalid request for task {}", taskId);
+            String message = e.getMessage();
+            if (("Task not found: " + taskId).equals(message)
+                    || "clientRequestId must be a canonical UUID".equals(message)) {
+                return RX.failA(message);
+            }
             return RX.failA("TERMINATION_REQUEST_NOT_SUPPORTED");
         } catch (IllegalStateException e) {
             String safeCode = safeTerminationErrorCode(e.getMessage());
             log.warn("cancelTask: termination request failed for task {}: code={}", taskId, safeCode);
             return RX.failB(safeCode);
         } catch (org.springframework.dao.PessimisticLockingFailureException e) {
-            // 死锁兜底：cancel 线程与 SSE reactor 线程同时更新任务行导致 MySQL 死锁
-            // 重新查询状态 — 如果已是终态则视为取消成功（幂等）
-            log.warn("cancelTask: deadlock for task {}, re-checking status: {}", taskId, e.getMessage());
-            DispatchTaskDTO refreshed = taskDispatchFacade.getTask(taskId, context).orElse(null);
-            if (refreshed != null && TERMINAL_STATES.contains(refreshed.getStatus())) {
-                return RX.ok("Task already in terminal state: " + refreshed.getStatus());
-            }
+            log.warn("cancelTask: pre-effect concurrent update for task {}", taskId);
             return RX.failB("Failed to cancel task due to concurrent update, please retry");
         }
     }

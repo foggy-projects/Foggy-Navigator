@@ -12,8 +12,8 @@ import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
-import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
+import com.foggy.navigator.session.service.TrustedNavigatorTaskTerminationCommandAdapter;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
@@ -44,7 +44,7 @@ public class AgentDiscoveryController {
     private final ObjectMapper objectMapper;
     private final AgentSubmitPipeline agentSubmitPipeline;
     private final SessionTaskResourceAccessService resourceAccessService;
-    private final TaskDispatchFacade taskDispatchFacade;
+    private final TrustedNavigatorTaskTerminationCommandAdapter taskTerminationCommandAdapter;
 
     @GetMapping
     public RX<List<A2aAgentCard>> listAgents(
@@ -174,9 +174,12 @@ public class AgentDiscoveryController {
     @PostMapping("/{agentId}/tasks/{taskId}/cancel")
     public RX<String> cancelTask(
             @PathVariable String agentId,
-            @PathVariable String taskId) {
-        SessionTaskEntity task = requireOwnedAgentTask(agentId, taskId);
-        taskDispatchFacade.cancelTask(taskId, task.getAgentId(), buildContext(), false);
+            @PathVariable String taskId,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId) {
+        requireOwnedAgentTask(agentId, taskId);
+        taskTerminationCommandAdapter.terminateA2aTask(
+                agentId, taskId, clientRequestId);
         return RX.ok("Task cancel requested");
     }
 

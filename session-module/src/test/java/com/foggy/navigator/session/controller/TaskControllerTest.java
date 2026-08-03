@@ -10,6 +10,7 @@ import com.foggy.navigator.session.model.form.TaskCancelForm;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.session.service.NativeSubtaskQueryService;
+import com.foggy.navigator.session.service.TrustedNavigatorTaskTerminationCommandAdapter;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggyframework.core.ex.RX;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.bind.annotation.RequestHeader;
 
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,8 @@ class TaskControllerTest {
 
     private static final String USER_ID = "user-1";
     private static final String TENANT_ID = "tenant-1";
+    private static final String REQUEST_ID =
+            "550e8400-e29b-41d4-a716-446655440000";
 
     @Mock
     private TaskDispatchFacade taskDispatchFacade;
@@ -42,12 +46,18 @@ class TaskControllerTest {
     private AgentSubmitPipeline agentSubmitPipeline;
     @Mock
     private NativeSubtaskQueryService nativeSubtaskQueryService;
+    @Mock
+    private TrustedNavigatorTaskTerminationCommandAdapter taskTerminationCommandAdapter;
 
     private TaskController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new TaskController(taskDispatchFacade, agentSubmitPipeline, nativeSubtaskQueryService);
+        controller = new TaskController(
+                taskDispatchFacade,
+                agentSubmitPipeline,
+                nativeSubtaskQueryService,
+                taskTerminationCommandAdapter);
         UserContext.setCurrentUser(CurrentUser.builder()
                 .userId(USER_ID)
                 .tenantId(TENANT_ID)
@@ -208,136 +218,126 @@ class TaskControllerTest {
     }
 
     @Test
-    void cancelTask_success() {
-        DispatchTaskDTO dto = DispatchTaskDTO.builder()
-                .taskId("task-1")
-                .agentId("agent-1")
-                .status("RUNNING")
-                .build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(dto));
+    void cancelTask_declaresOptionalClientRequestIdHeader() throws Exception {
+        RequestHeader header = TaskController.class
+                .getMethod("cancelTask", String.class, TaskCancelForm.class, String.class)
+                .getParameters()[2]
+                .getAnnotation(RequestHeader.class);
 
-        RX<String> result = controller.cancelTask("task-1", null);
-
-        assertNotNull(result.getData());
-        verify(taskDispatchFacade).cancelTask(
-                eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
+        assertNotNull(header);
+        assertEquals("X-Navigator-Client-Request-Id", header.value());
+        assertFalse(header.required());
     }
 
     @Test
-    void cancelTask_ignoresCallerSuppliedAgentRoute() {
-        DispatchTaskDTO dto = DispatchTaskDTO.builder()
-                .taskId("task-1")
-                .agentId("agent-owner")
-                .status("RUNNING")
-                .build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(dto));
+    void cancelTask_passesRequestIdsAndNormalIntentToTrustedAdapter() {
+        when(taskTerminationCommandAdapter.terminateUiTask(
+                eq("task-1"), eq(false), any()))
+                .thenReturn(acceptedTermination());
 
-        TaskCancelForm form = new TaskCancelForm();
-        controller.cancelTask("task-1", form);
+        RX<String> absent = controller.cancelTask("task-1", null, null);
+        RX<String> blank = controller.cancelTask("task-1", null, "  ");
+        RX<String> explicit = controller.cancelTask("task-1", null, REQUEST_ID);
 
-        verify(taskDispatchFacade).cancelTask(
-                eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class), eq(false));
+        assertEquals("Cancellation request accepted", absent.getData());
+        assertEquals("Cancellation request accepted", blank.getData());
+        assertEquals("Cancellation request accepted", explicit.getData());
+        verify(taskTerminationCommandAdapter).terminateUiTask("task-1", false, null);
+        verify(taskTerminationCommandAdapter).terminateUiTask("task-1", false, "  ");
+        verify(taskTerminationCommandAdapter).terminateUiTask(
+                "task-1", false, REQUEST_ID);
+        verify(taskDispatchFacade, never()).getTask(eq("task-1"), any());
+        verify(taskDispatchFacade, never()).cancelTask(
+                anyString(), any(), any(), anyBoolean());
     }
 
     @Test
-    void cancelTask_propagatesOwnerForceIntentWithoutClientRoutingData() {
-        DispatchTaskDTO dto = DispatchTaskDTO.builder()
-                .taskId("task-1")
-                .agentId("agent-owner")
-                .providerType("claude-worker")
-                .status("CANCEL_REQUESTED")
-                .build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(dto));
+    void cancelTask_passesForceAndKeepsExistingSuccessWording() {
         TaskCancelForm form = new TaskCancelForm();
         form.setForce(true);
+        when(taskTerminationCommandAdapter.terminateUiTask(
+                "task-1", true, REQUEST_ID)).thenReturn(acceptedTermination());
 
-        RX<String> result = controller.cancelTask("task-1", form);
+        RX<String> result = controller.cancelTask("task-1", form, REQUEST_ID);
 
         assertEquals("Force cancellation completed", result.getData());
-        verify(taskDispatchFacade).cancelTask(
-                eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class), eq(true));
+        verify(taskTerminationCommandAdapter).terminateUiTask(
+                "task-1", true, REQUEST_ID);
+        verify(taskDispatchFacade, never()).cancelTask(
+                anyString(), any(), any(), anyBoolean());
     }
 
     @Test
-    void cancelTask_rejectsUnsupportedForceWithoutExposingProviderDetail() {
-        DispatchTaskDTO dto = DispatchTaskDTO.builder()
-                .taskId("task-1")
-                .agentId("agent-owner")
-                .providerType("codex-worker")
-                .status("CANCEL_REQUESTED")
-                .build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(dto));
-        doThrow(new UnsupportedOperationException("internal provider detail"))
-                .when(taskDispatchFacade).cancelTask(
-                        eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class), eq(true));
-        TaskCancelForm form = new TaskCancelForm();
-        form.setForce(true);
+    void cancelTask_mapsCanonicalTerminalWithoutControllerTaskRead() {
+        when(taskTerminationCommandAdapter.terminateUiTask(
+                "task-1", false, REQUEST_ID))
+                .thenReturn(new TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult(
+                        "TASK_ALREADY_TERMINAL_ABORTED", "ABORTED"));
 
-        RX<String> result = controller.cancelTask("task-1", form);
+        RX<String> result = controller.cancelTask("task-1", null, REQUEST_ID);
+
+        assertEquals("Task already in terminal state: ABORTED", result.getData());
+        verify(taskTerminationCommandAdapter).terminateUiTask(
+                "task-1", false, REQUEST_ID);
+        verify(taskDispatchFacade, never()).getTask(eq("task-1"), any());
+        verify(taskDispatchFacade, never()).cancelTask(
+                anyString(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    void cancelTask_distinguishesNotFoundInvalidUnsupportedAndStableFailures() {
+        when(taskTerminationCommandAdapter.terminateUiTask(
+                "task-1", false, REQUEST_ID))
+                .thenThrow(
+                        new IllegalArgumentException("Task not found: task-1"),
+                        new IllegalArgumentException(
+                                "clientRequestId must be a canonical UUID"),
+                        new UnsupportedOperationException("provider detail"),
+                        new IllegalStateException("TERMINATION_EFFECT_AMBIGUOUS"),
+                        new IllegalStateException("unsafe provider detail"));
+
+        RX<String> notFound = controller.cancelTask("task-1", null, REQUEST_ID);
+        RX<String> invalidId = controller.cancelTask("task-1", null, REQUEST_ID);
+        RX<String> unsupported = controller.cancelTask("task-1", null, REQUEST_ID);
+        RX<String> ambiguous = controller.cancelTask("task-1", null, REQUEST_ID);
+        RX<String> unsafe = controller.cancelTask("task-1", null, REQUEST_ID);
+
+        assertEquals("Task not found: task-1", notFound.getMsg());
+        assertEquals("clientRequestId must be a canonical UUID", invalidId.getMsg());
+        assertEquals("TERMINATION_REQUEST_NOT_SUPPORTED", unsupported.getMsg());
+        assertEquals("TERMINATION_EFFECT_AMBIGUOUS", ambiguous.getMsg());
+        assertEquals("TERMINATION_REQUEST_FAILED", unsafe.getMsg());
+        assertNull(ambiguous.getData());
+        verify(taskTerminationCommandAdapter, times(5)).terminateUiTask(
+                "task-1", false, REQUEST_ID);
+    }
+
+    @Test
+    void cancelTask_pessimisticFailureDoesNotRereadRetryOrClaimTerminal() {
+        when(taskTerminationCommandAdapter.terminateUiTask(
+                "task-1", false, REQUEST_ID))
+                .thenThrow(new org.springframework.dao.PessimisticLockingFailureException(
+                        "Deadlock"));
+
+        RX<String> result = controller.cancelTask("task-1", null, REQUEST_ID);
 
         assertNull(result.getData());
-        assertEquals("TERMINATION_REQUEST_NOT_SUPPORTED", result.getMsg());
+        assertEquals("Failed to cancel task due to concurrent update, please retry",
+                result.getMsg());
+        verify(taskTerminationCommandAdapter).terminateUiTask(
+                "task-1", false, REQUEST_ID);
+        verifyNoInteractions(taskDispatchFacade);
     }
 
     @Test
-    void cancelTaskReturnsStableTerminationFailureInsteadOfSuccess() {
-        DispatchTaskDTO dto = DispatchTaskDTO.builder()
-                .taskId("task-1")
-                .agentId("agent-1")
-                .status("CANCEL_REQUESTED")
-                .build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(dto));
-        doThrow(new IllegalStateException("TERMINATION_OPERATION_WORKER_UNCONFIGURED"))
-                .when(taskDispatchFacade).cancelTask(
-                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
+    void cancelTask_preservesSecurityFailure() {
+        SecurityException denied = new SecurityException("Resource access denied");
+        when(taskTerminationCommandAdapter.terminateUiTask(
+                "task-1", false, REQUEST_ID)).thenThrow(denied);
 
-        RX<String> result = controller.cancelTask("task-1", null);
-
-        assertNull(result.getData());
-        assertEquals("TERMINATION_OPERATION_WORKER_UNCONFIGURED", result.getMsg());
-    }
-
-    @Test
-    void cancelTask_deadlockFallback_terminalState() {
-        // First getTask call (before cancel) returns RUNNING
-        DispatchTaskDTO running = DispatchTaskDTO.builder()
-                .taskId("task-1").agentId("agent-1").status("RUNNING").build();
-        // Second getTask call (after deadlock) returns ABORTED (reactor thread won the race)
-        DispatchTaskDTO aborted = DispatchTaskDTO.builder()
-                .taskId("task-1").agentId("agent-1").status("ABORTED").build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(running))
-                .thenReturn(Optional.of(aborted));
-        doThrow(new org.springframework.dao.PessimisticLockingFailureException("Deadlock"))
-                .when(taskDispatchFacade).cancelTask(
-                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
-
-        RX<String> result = controller.cancelTask("task-1", null);
-
-        // Should return success (idempotent) since task is already in terminal state
-        assertNotNull(result.getData());
-        assertTrue(result.getData().contains("ABORTED"));
-    }
-
-    @Test
-    void cancelTask_deadlockFallback_nonTerminal() {
-        DispatchTaskDTO running = DispatchTaskDTO.builder()
-                .taskId("task-1").agentId("agent-1").status("RUNNING").build();
-        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
-                .thenReturn(Optional.of(running));
-        doThrow(new org.springframework.dao.PessimisticLockingFailureException("Deadlock"))
-                .when(taskDispatchFacade).cancelTask(
-                        eq("task-1"), eq("agent-1"), any(AgentResolveContext.class), eq(false));
-
-        RX<String> result = controller.cancelTask("task-1", null);
-
-        // Should return failure (task still not terminal after deadlock)
-        assertNull(result.getData());
+        assertSame(denied, assertThrows(SecurityException.class,
+                () -> controller.cancelTask("task-1", null, REQUEST_ID)));
+        verifyNoInteractions(taskDispatchFacade);
     }
 
     @Test
@@ -515,5 +515,11 @@ class TaskControllerTest {
 
         assertNull(result.getData());
         assertTrue(result.getMsg().contains("Worker not found"));
+    }
+
+    private static TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult
+    acceptedTermination() {
+        return new TrustedNavigatorTaskTerminationCommandAdapter.TerminationResult(
+                "TERMINATION_REQUEST_ACCEPTED", null);
     }
 }
