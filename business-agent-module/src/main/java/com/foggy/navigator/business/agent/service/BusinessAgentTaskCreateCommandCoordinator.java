@@ -41,7 +41,7 @@ public final class BusinessAgentTaskCreateCommandCoordinator {
         Objects.requireNonNull(envelope, "envelope must not be null");
         Objects.requireNonNull(decision, "decision must not be null");
 
-        PlanBinding binding = PlanBinding.from(prepared.plan());
+        PlanBinding binding = PlanBinding.from(prepared);
         binding.requireEnvelope(envelope);
         String clientRequestId = envelope.binding().request().clientRequestId();
 
@@ -320,7 +320,7 @@ public final class BusinessAgentTaskCreateCommandCoordinator {
         private static final String UPSTREAM_DIGEST_DOMAIN =
                 "navi.business-task-create-upstream.v1";
         private static final String SCOPE_PREFIX =
-                "BUSINESS_TASK_CREATE_SCOPE_SHA256_V1:";
+                "BUSINESS_TASK_CREATE_RECEIPT_SCOPE_SHA256_V1:";
 
         private final CanonicalCommandEnvelope.Ownership ownership;
         private final CanonicalCommandEnvelope.Target target;
@@ -335,8 +335,9 @@ public final class BusinessAgentTaskCreateCommandCoordinator {
             this.effect = effect;
         }
 
-        static PlanBinding from(BusinessAgentTaskCreatePlan plan) {
-            Objects.requireNonNull(plan, "plan must not be null");
+        static PlanBinding from(BusinessAgentTaskPreparedFreshCreate prepared) {
+            Objects.requireNonNull(prepared, "prepared must not be null");
+            BusinessAgentTaskCreatePlan plan = prepared.plan();
             BusinessAgentTaskCreatePlan.Identity identity = plan.identity();
             BusinessAgentTaskCreatePlan.AgentRoute route = plan.agentRoute();
             boolean launcherPresent = route.launcherType() != null;
@@ -357,7 +358,8 @@ public final class BusinessAgentTaskCreateCommandCoordinator {
                     identity.sessionId());
             CanonicalCommandEnvelope.Effect effect = new CanonicalCommandEnvelope.Effect(
                     BUSINESS_TASK_CREATE_ACTION,
-                    SCOPE_PREFIX + plan.semanticFingerprint());
+                    SCOPE_PREFIX
+                            + plan.receiptSemanticFingerprint(prepared.input().contextId()));
             return new PlanBinding(ownership, target, effect);
         }
 

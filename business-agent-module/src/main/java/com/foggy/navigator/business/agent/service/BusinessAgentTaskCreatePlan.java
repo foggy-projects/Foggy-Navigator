@@ -28,6 +28,8 @@ record BusinessAgentTaskCreatePlan(
 
     static final String PLAN_DRIFT = "BUSINESS_TASK_CREATE_PLAN_DRIFT";
     private static final String FINGERPRINT_DOMAIN = "navi.business-task-create-plan.v1";
+    private static final String RECEIPT_FINGERPRINT_DOMAIN =
+            "navi.business-task-create-receipt-plan.v1";
     private static final String CONTENT_DIGEST_DOMAIN = "navi.business-task-create-content.v1";
     private static final String POLICY_DIGEST_DOMAIN = "navi.business-task-create-policy.v1";
     private static final ObjectMapper OBJECT_MAPPER = JsonMapper.builder()
@@ -41,7 +43,24 @@ record BusinessAgentTaskCreatePlan(
         Objects.requireNonNull(modelTarget, "modelTarget must not be null");
         Objects.requireNonNull(inputBinding, "inputBinding must not be null");
         semanticFingerprint = fingerprint(
-                identity, agentRoute, modelTarget, workspaceTarget, inputBinding);
+                FINGERPRINT_DOMAIN,
+                identity.contextId(),
+                identity,
+                agentRoute,
+                modelTarget,
+                workspaceTarget,
+                inputBinding);
+    }
+
+    String receiptSemanticFingerprint(String rawRequestedContextId) {
+        return fingerprint(
+                RECEIPT_FINGERPRINT_DOMAIN,
+                rawRequestedContextId,
+                identity,
+                agentRoute,
+                modelTarget,
+                workspaceTarget,
+                inputBinding);
     }
 
     void requireExactRevalidation(BusinessAgentTaskCreatePlan current) {
@@ -187,19 +206,21 @@ record BusinessAgentTaskCreatePlan(
     }
 
     private static String fingerprint(
+            String domain,
+            String contextBinding,
             Identity identity,
             AgentRoute route,
             ModelTarget model,
             WorkspaceTarget workspace,
             InputBinding input) {
-        CanonicalDigest digest = new CanonicalDigest(FINGERPRINT_DOMAIN)
+        CanonicalDigest digest = new CanonicalDigest(domain)
                 .field(identity.tenantId())
                 .field(identity.actorUserId())
                 .field(identity.clientAppId())
                 .field(identity.upstreamSystemId())
                 .field(identity.upstreamUserId())
                 .field(identity.sessionId())
-                .field(identity.contextId())
+                .field(contextBinding)
                 .field(route.agentId())
                 .field(name(route.agentOwnerType()))
                 .field(route.agentOwnerId())
