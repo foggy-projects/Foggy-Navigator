@@ -856,7 +856,7 @@ public class TaskDispatchFacade {
                 && task.getStatus().getState() != A2aTaskState.FAILED;
     }
 
-    private TaskDispatchRequest toTaskDispatchRequest(AgentTaskSubmitRequest request) {
+    TaskDispatchRequest toTaskDispatchRequest(AgentTaskSubmitRequest request) {
         A2aMessage message = request.getMessage();
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (message != null && message.getMetadata() != null) {

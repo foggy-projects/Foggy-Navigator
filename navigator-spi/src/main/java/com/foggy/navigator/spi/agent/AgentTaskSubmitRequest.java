@@ -36,6 +36,7 @@ public class AgentTaskSubmitRequest {
     private Map<String, Object> context;
     private String contextAlias;
     private Map<String, Object> metadata;
+    private String clientRequestId;
     private boolean initializeRuntimeAffinity;
 
     public AgentTaskSubmitRequest() {
@@ -63,6 +64,7 @@ public class AgentTaskSubmitRequest {
         this.context = builder.context;
         this.contextAlias = builder.contextAlias;
         this.metadata = builder.metadata;
+        this.clientRequestId = builder.clientRequestId;
         this.initializeRuntimeAffinity = builder.initializeRuntimeAffinity;
     }
 
@@ -129,6 +131,9 @@ public class AgentTaskSubmitRequest {
     public Map<String, Object> getMetadata() { return metadata; }
     public void setMetadata(Map<String, Object> metadata) { this.metadata = metadata; }
 
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+
     public boolean isInitializeRuntimeAffinity() { return initializeRuntimeAffinity; }
     public void setInitializeRuntimeAffinity(boolean initializeRuntimeAffinity) {
         this.initializeRuntimeAffinity = initializeRuntimeAffinity;
@@ -158,6 +163,7 @@ public class AgentTaskSubmitRequest {
         private Map<String, Object> context;
         private String contextAlias;
         private Map<String, Object> metadata;
+        private String clientRequestId;
         private boolean initializeRuntimeAffinity;
 
         public Builder agentId(String agentId) { this.agentId = agentId; return this; }
@@ -181,6 +187,7 @@ public class AgentTaskSubmitRequest {
         public Builder context(Map<String, Object> context) { this.context = context; return this; }
         public Builder contextAlias(String contextAlias) { this.contextAlias = contextAlias; return this; }
         public Builder metadata(Map<String, Object> metadata) { this.metadata = metadata; return this; }
+        public Builder clientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; return this; }
         public Builder initializeRuntimeAffinity(boolean initializeRuntimeAffinity) {
             this.initializeRuntimeAffinity = initializeRuntimeAffinity;
             return this;
