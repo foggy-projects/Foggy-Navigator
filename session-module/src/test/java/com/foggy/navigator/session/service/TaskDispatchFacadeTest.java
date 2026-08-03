@@ -1,5 +1,7 @@
 package com.foggy.navigator.session.service;
 
+import com.foggy.navigator.common.authorization.AuthorizationCredentialLane;
+import com.foggy.navigator.common.authorization.AuthorizationPrincipalType;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
@@ -43,6 +45,9 @@ import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionSummary;
 import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.command.CanonicalCommandEnvelope;
+import com.foggy.navigator.spi.command.CanonicalCommandReceiptPort;
+import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,7 +66,11 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.Query;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -82,6 +91,9 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class TaskDispatchFacadeTest {
+
+    private static final String TERMINATION_REQUEST_ID =
+            "550e8400-e29b-41d4-a716-446655440001";
 
     @Mock
     private UnifiedAgentResolver agentResolver;
@@ -191,6 +203,104 @@ class TaskDispatchFacadeTest {
                     logicalAgentId, "AGENT_ID", "UI"));
         }
         return plan;
+    }
+
+    private TaskTerminationCommandCoordinator.TerminationCommandResult
+    executeCanonicalTermination(
+            TaskTerminationCommandCoordinator.TerminationExecutionPlan plan) {
+        CanonicalCommandReceiptPort receipts = mock(
+                CanonicalCommandReceiptPort.class,
+                withSettings().lenient());
+        TaskTerminationCommandCoordinator.PlanBinding planBinding =
+                TaskTerminationCommandCoordinator.PlanBinding.from(plan);
+        CanonicalCommandEnvelope.CommandBinding binding =
+                new CanonicalCommandEnvelope.CommandBinding(
+                        CanonicalCommandEnvelope.CommandKind.TERMINATE,
+                        new CanonicalCommandEnvelope.Ingress(
+                                CanonicalCommandEnvelope.CommandIngress.DIRECT,
+                                "NAVIGATOR_UI",
+                                "/api/v1/tasks/{taskId}/cancel"),
+                        new CanonicalCommandEnvelope.Request(
+                                TERMINATION_REQUEST_ID,
+                                TERMINATION_REQUEST_ID,
+                                TERMINATION_REQUEST_ID),
+                        new CanonicalCommandEnvelope.Actor(
+                                CanonicalCommandEnvelope.ActorKind.AUTHENTICATED_PRINCIPAL,
+                                AuthorizationPrincipalType.NAVIGATOR_USER,
+                                AuthorizationCredentialLane.NAVIGATOR_JWT,
+                                "principal-fingerprint",
+                                null),
+                        new CanonicalCommandEnvelope.Ownership(
+                                planBinding.tenantReference(), "user-1", null, null),
+                        planBinding.target(),
+                        planBinding.effect());
+        VerifiedCommandAuthorizationDecision.ServerAuthority authority =
+                new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                        "test.policy.v1",
+                        Clock.fixed(
+                                Instant.parse("2026-08-04T00:00:00Z"),
+                                ZoneOffset.UTC),
+                        Duration.ofMinutes(5));
+        VerifiedCommandAuthorizationDecision decision = authority.issue(binding);
+        CanonicalCommandEnvelope envelope = new CanonicalCommandEnvelope(
+                CanonicalCommandEnvelope.SCHEMA_VERSION,
+                binding,
+                decision.metadata());
+        CanonicalCommandReceiptPort.ReceiptSnapshot prepared =
+                terminationReceipt(
+                        CanonicalCommandReceiptPort.ReceiptState.PREPARED,
+                        null,
+                        null,
+                        null);
+        CanonicalCommandReceiptPort.ReceiptSnapshot permitted =
+                terminationReceipt(
+                        CanonicalCommandReceiptPort.ReceiptState.EFFECT_STARTED,
+                        "attempt-1",
+                        null,
+                        null);
+        lenient().when(receipts.prepare(envelope, decision)).thenReturn(
+                new CanonicalCommandReceiptPort.PrepareResult(
+                        CanonicalCommandReceiptPort.PrepareDisposition.CREATED,
+                        prepared));
+        lenient().when(receipts.beginEffect(envelope, decision)).thenReturn(
+                new CanonicalCommandReceiptPort.EffectPermit(
+                        CanonicalCommandReceiptPort.BeginEffectDisposition.PERMITTED,
+                        permitted));
+        lenient().when(receipts.recordResult(
+                        eq(TERMINATION_REQUEST_ID),
+                        eq("attempt-1"),
+                        anyString(),
+                        anyString()))
+                .thenAnswer(invocation -> terminationReceipt(
+                        CanonicalCommandReceiptPort.ReceiptState.RESULT_RECORDED,
+                        "attempt-1",
+                        invocation.getArgument(2),
+                        invocation.getArgument(3)));
+        return new TaskTerminationCommandCoordinator(facade, receipts)
+                .execute(plan, envelope, decision);
+    }
+
+    private CanonicalCommandReceiptPort.ReceiptSnapshot terminationReceipt(
+            CanonicalCommandReceiptPort.ReceiptState state,
+            String attemptId,
+            String reference,
+            String safeCode) {
+        return new CanonicalCommandReceiptPort.ReceiptSnapshot(
+                "receipt-1",
+                TERMINATION_REQUEST_ID,
+                state,
+                attemptId,
+                reference,
+                safeCode,
+                "decision-1",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0L);
     }
 
     private CodingAgentEntity ownedAgent(String agentId,
@@ -3858,6 +3968,150 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void canonicalTerminationPlanCapturesExactProviderAndExecutesItOnce() {
+        DispatchTaskDTO task = canonicalTerminationTask("RUNNING", "codex-worker", "agent-1");
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan plan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", context, false);
+        TaskTerminationCommandCoordinator.Outcome outcome =
+                executeCanonicalTermination(plan).outcome();
+
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_REQUEST_ACCEPTED,
+                outcome.safeCode());
+        assertNull(outcome.terminalStatus());
+        assertEquals("provider-task-1", plan.identity().providerTaskId());
+        assertEquals("runtime-1", plan.identity().runtimeId());
+        assertEquals(3, plan.identity().runtimeRevision());
+        assertEquals(7L, plan.identity().routingEpoch());
+        verify(taskQueryProvider).cancelTaskDirect("task-canonical-1", "user-1");
+        verify(agentResolver, never()).resolveAgent(anyString(), any());
+    }
+
+    @Test
+    void canonicalTerminationPlanDriftFailsBeforeCapturedProviderEffect() {
+        DispatchTaskDTO original = canonicalTerminationTask(
+                "RUNNING", "codex-worker", "agent-1");
+        DispatchTaskDTO drifted = canonicalTerminationTask(
+                "RUNNING", "codex-worker", "agent-1");
+        drifted.setWorkerId("worker-other");
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(original), Optional.of(drifted));
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan plan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", context, false);
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> executeCanonicalTermination(plan));
+
+        assertEquals("TERMINATION_PLAN_IDENTITY_CONFLICT", failure.getMessage());
+        verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
+        verifyNoInteractions(agentResolver, agent);
+    }
+
+    @Test
+    void canonicalTerminationTerminalNoOpDoesNotRequireProviderAvailability() {
+        DispatchTaskDTO task = canonicalTerminationTask(
+                "COMPLETED", "unavailable-provider", "agent-1");
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan plan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", context, false);
+        TaskTerminationCommandCoordinator.Outcome outcome =
+                executeCanonicalTermination(plan).outcome();
+
+        assertEquals("TASK_ALREADY_TERMINAL_COMPLETED", outcome.safeCode());
+        assertEquals("COMPLETED", outcome.terminalStatus());
+        verify(taskQueryProvider, never()).getProviderType();
+        verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
+        verifyNoInteractions(agentResolver, agent);
+
+        reset(taskQueryProvider, agentResolver, agent);
+        DispatchTaskDTO terminalLegacy = canonicalTerminationTask("ABORTED", null, null);
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(terminalLegacy));
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan legacyPlan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", context, true);
+        TaskTerminationCommandCoordinator.Outcome legacyOutcome =
+                executeCanonicalTermination(legacyPlan).outcome();
+        assertEquals("TASK_ALREADY_TERMINAL_ABORTED", legacyOutcome.safeCode());
+        verifyNoInteractions(agentResolver, agent);
+        verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
+    }
+
+    @Test
+    void canonicalTerminationCapturesA2aRouteWithoutProviderFallback() {
+        DispatchTaskDTO task = canonicalTerminationTask("RUNNING", null, "agent-a2a");
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(agentResolver.resolveAgent(eq("agent-a2a"), any()))
+                .thenReturn(Optional.of(agent));
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        TaskTerminationCommandCoordinator.TerminationExecutionPlan plan =
+                facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", context, false);
+        TaskTerminationCommandCoordinator.Outcome outcome =
+                executeCanonicalTermination(plan).outcome();
+
+        assertEquals(TaskTerminationCommandCoordinator.ExecutionRoute.A2A,
+                plan.identity().executionRoute());
+        assertEquals(TaskTerminationCommandCoordinator.TERMINATION_REQUEST_ACCEPTED,
+                outcome.safeCode());
+        verify(agent).cancelTask("task-canonical-1");
+        verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
+    }
+
+    @Test
+    void canonicalTerminationRejectsA2aForceBeforeAgentOrProviderEffect() {
+        DispatchTaskDTO task = canonicalTerminationTask("RUNNING", null, "agent-a2a");
+        when(taskQueryProvider.getTaskByIdAndUser("task-canonical-1", "user-1"))
+                .thenReturn(Optional.of(task));
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        UnsupportedOperationException failure = assertThrows(
+                UnsupportedOperationException.class,
+                () -> facade.resolveTerminationExecutionPlan(
+                        "task-canonical-1", context, true));
+
+        assertEquals(
+                "force cancel not supported by the A2A route for task task-canonical-1",
+                failure.getMessage());
+        verifyNoInteractions(agentResolver, agent);
+        verify(taskQueryProvider, never()).cancelTaskDirect(anyString(), anyString());
+    }
+
+    @Test
     void createTask_codexDirectRouteNotSkippedBySessionId() {
         // Codex 任务即使带 sessionId 也应走 direct route（非 claude-worker 不需要 A2a 解析）
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -3907,6 +4161,30 @@ class TaskDispatchFacadeTest {
                 () -> facade.cancelTask("task-codex-1", "codex-worker", context));
 
         verify(agent, never()).cancelTask(anyString());
+    }
+
+    private DispatchTaskDTO canonicalTerminationTask(
+            String status,
+            String providerType,
+            String agentId) {
+        return DispatchTaskDTO.builder()
+                .taskId("task-canonical-1")
+                .workerTaskId("provider-task-1")
+                .runtimeId("runtime-1")
+                .runtimeRevision(3)
+                .runtimeType("CODEX")
+                .runtimeInstanceId("instance-1")
+                .routingEpoch(7L)
+                .sessionId("session-1")
+                .workerId("worker-1")
+                .userId("user-1")
+                .agentId(agentId)
+                .providerType(providerType)
+                .directoryId("directory-1")
+                .status(status)
+                .model("gpt-5.4")
+                .modelConfigId("model-config-1")
+                .build();
     }
 
     @Test

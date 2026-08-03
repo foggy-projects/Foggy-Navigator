@@ -525,6 +525,20 @@ public class TaskDispatchFacade {
         operationRouter().cancelTask(taskId, agentId, context, force);
     }
 
+    TaskTerminationCommandCoordinator.TerminationExecutionPlan
+    resolveTerminationExecutionPlan(
+            String taskId,
+            AgentResolveContext context,
+            boolean force) {
+        return operationRouter().resolveTerminationExecutionPlan(taskId, context, force);
+    }
+
+    TaskTerminationCommandCoordinator.Outcome executeTerminationPlan(
+            TaskTerminationCommandCoordinator.TerminationExecutionPlan plan,
+            TaskTerminationCommandCoordinator.TerminationEffectGate effectGate) {
+        return operationRouter().executeTerminationPlan(plan, effectGate);
+    }
+
     // ── 任务操作（路由到 command provider） ──
 
     /**

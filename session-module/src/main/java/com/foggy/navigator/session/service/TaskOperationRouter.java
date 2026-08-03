@@ -206,6 +206,141 @@ final class TaskOperationRouter {
         }
     }
 
+    TaskTerminationCommandCoordinator.TerminationExecutionPlan
+    resolveTerminationExecutionPlan(
+            String taskId,
+            AgentResolveContext context,
+            boolean force) {
+        DispatchTaskDTO task = getTask(taskId, context)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        String terminalStatus = terminalStatus(task);
+        String providerType = task.getProviderType();
+        boolean providerRoute = providerType != null && !providerType.isBlank();
+        TaskTerminationCommandCoordinator.TerminationIdentity identity =
+                TaskTerminationCommandCoordinator.TerminationIdentity.from(
+                        task, context, force);
+        if (terminalStatus != null) {
+            return new TaskTerminationCommandCoordinator.TerminationExecutionPlan(
+                    identity, context, terminalStatus, null);
+        }
+        if (!providerRoute && force) {
+            throw new UnsupportedOperationException(
+                    "force cancel not supported by the A2A route for task " + taskId);
+        }
+        if (!providerRoute && (task.getAgentId() == null || task.getAgentId().isBlank())) {
+            throw new IllegalArgumentException(
+                    "Cannot cancel task " + taskId
+                            + ": agentId is missing and provider route is unavailable");
+        }
+
+        if (providerRoute) {
+            TaskCommandProvider provider = findTaskCommandProviderByType(providerType)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Provider not found: " + providerType));
+            requireTerminationProviderIdentity(provider, providerType);
+            return new TaskTerminationCommandCoordinator.TerminationExecutionPlan(
+                    identity,
+                    context,
+                    null,
+                    new TaskTerminationCommandCoordinator.CapturedTerminationEffect(() -> {
+                        requireTerminationProviderIdentity(provider, providerType);
+                        if (identity.force()) {
+                            provider.cancelTaskDirect(
+                                    identity.taskId(), identity.ownerUserId(), true);
+                        } else {
+                            provider.cancelTaskDirect(
+                                    identity.taskId(), identity.ownerUserId());
+                        }
+                        log.info("Canonical termination request accepted via captured Provider: "
+                                        + "taskId={}, providerType={}, force={}",
+                                identity.taskId(), identity.providerType(), identity.force());
+                        return TaskTerminationCommandCoordinator.Outcome.accepted();
+                    }));
+        }
+
+        A2aAgent agent = agentResolver.resolveAgent(task.getAgentId(), context)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Cannot cancel task " + taskId
+                                + ": no A2A agent found for agentId=" + task.getAgentId()));
+        if (context.getSessionId() != null) {
+            bindingService.validateBinding(context.getSessionId(), task.getAgentId());
+        }
+        return new TaskTerminationCommandCoordinator.TerminationExecutionPlan(
+                identity,
+                context,
+                null,
+                new TaskTerminationCommandCoordinator.CapturedTerminationEffect(() -> {
+                    agent.cancelTask(identity.taskId());
+                    log.info("Canonical termination request accepted via captured A2A Agent: "
+                                    + "taskId={}, agentId={}",
+                            identity.taskId(), identity.logicalAgentId());
+                    return TaskTerminationCommandCoordinator.Outcome.accepted();
+                }));
+    }
+
+    @Nullable
+    String requireTerminationPlanCurrent(
+            TaskTerminationCommandCoordinator.TerminationExecutionPlan plan) {
+        DispatchTaskDTO current = currentTerminationTask(plan);
+        String terminalStatus = terminalStatus(current);
+        if (plan.initiallyTerminalStatus() != null && terminalStatus == null) {
+            throw new IllegalStateException("TERMINATION_TERMINAL_STATE_REGRESSION");
+        }
+        if (terminalStatus == null
+                && plan.identity().executionRoute()
+                == TaskTerminationCommandCoordinator.ExecutionRoute.A2A
+                && plan.context().getSessionId() != null) {
+            bindingService.validateBinding(
+                    plan.context().getSessionId(), plan.identity().logicalAgentId());
+        }
+        return terminalStatus;
+    }
+
+    TaskTerminationCommandCoordinator.Outcome executeTerminationPlan(
+            TaskTerminationCommandCoordinator.TerminationExecutionPlan plan,
+            TaskTerminationCommandCoordinator.TerminationEffectGate effectGate) {
+        Objects.requireNonNull(effectGate, "termination effect gate must not be null");
+        String terminalStatus = requireTerminationPlanCurrent(plan);
+        if (terminalStatus != null) {
+            log.info("canonical termination: task {} already terminal ({})",
+                    plan.identity().taskId(), terminalStatus);
+        }
+        return effectGate.invoke(plan, () -> requireTerminationPlanCurrent(plan));
+    }
+
+    private DispatchTaskDTO currentTerminationTask(
+            TaskTerminationCommandCoordinator.TerminationExecutionPlan plan) {
+        Objects.requireNonNull(plan, "termination plan must not be null");
+        DispatchTaskDTO current = getTask(plan.identity().taskId(), plan.context())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_TASK_UNAVAILABLE"));
+        TaskTerminationCommandCoordinator.TerminationIdentity actual =
+                TaskTerminationCommandCoordinator.TerminationIdentity.from(
+                        current, plan.context(), plan.identity().force());
+        if (!plan.identity().equals(actual)) {
+            throw new IllegalStateException("TERMINATION_PLAN_IDENTITY_CONFLICT");
+        }
+        return current;
+    }
+
+    @Nullable
+    private static String terminalStatus(DispatchTaskDTO task) {
+        String status = task.getStatus();
+        return status != null && TERMINAL_STATES.contains(status) ? status : null;
+    }
+
+    private static void requireTerminationProviderIdentity(
+            TaskCommandProvider provider,
+            String expectedProviderType) {
+        String actualProviderType = provider.getProviderType();
+        if (actualProviderType == null
+                || actualProviderType.isBlank()
+                || !actualProviderType.equals(expectedProviderType)) {
+            throw new IllegalStateException(
+                    "TERMINATION_PROVIDER_IDENTITY_CHANGED");
+        }
+    }
+
     /**
      * 已知 providerType 的任务优先走 Provider 取消。
      * 统一任务投影中的 agentId 保存真实 logical agent，不能用它来判断是否需要 A2A。
