@@ -1,5 +1,6 @@
 package com.foggy.navigator.gemini.worker.client;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
@@ -20,6 +21,11 @@ import java.util.Map;
  */
 @Slf4j
 public class GeminiWorkerClient {
+
+    public record AbortReceipt(
+            @JsonProperty("task_id") String taskId,
+            String status) {
+    }
 
     private final WebClient webClient;
 
@@ -96,11 +102,11 @@ public class GeminiWorkerClient {
                 .timeout(Duration.ofSeconds(10));
     }
 
-    public Mono<Void> abortTask(String taskId) {
+    public Mono<AbortReceipt> abortTask(String taskId) {
         return webClient.post()
                 .uri("/api/v1/tasks/{taskId}/abort", taskId)
                 .retrieve()
-                .bodyToMono(Void.class)
+                .bodyToMono(AbortReceipt.class)
                 .timeout(Duration.ofSeconds(10));
     }
 

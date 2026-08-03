@@ -18,6 +18,7 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
+import com.foggy.navigator.gemini.worker.client.GeminiWorkerClient;
 import com.foggy.navigator.gemini.worker.model.dto.GeminiTaskDTO;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.model.form.CreateGeminiTaskForm;
@@ -399,21 +400,22 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
     @Transactional
     public void abortTask(String taskId) {
         GeminiTaskEntity entity = getTaskEntity(taskId);
-        if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
-            String previousStatus = entity.getStatus();
-            streamRelay.abortRemoteTask(entity);
-            streamRelay.abortStream(taskId);
-            entity.setStatus("ABORTED");
-            persistTask(entity);
-            publishStatusChange(entity, previousStatus);
-        }
+        abortActiveTask(entity);
     }
 
+    @Transactional
     public void doAbortWorkerTask(String taskId, String remoteTaskId) {
         GeminiTaskEntity entity = getTaskEntity(taskId);
-        applyWorkerMetadata(entity, remoteTaskId, null, null);
-        persistTask(entity);
-        streamRelay.abortRemoteTask(entity);
+        if (isAbortTerminalNoOp(entity.getStatus())) {
+            return;
+        }
+        String persistedRemoteTaskId = entity.getWorkerTaskId();
+        if (remoteTaskId == null
+                || remoteTaskId.isBlank()
+                || !remoteTaskId.equals(persistedRemoteTaskId)) {
+            throw new IllegalArgumentException("TERMINATION_REMOTE_TASK_MISMATCH");
+        }
+        abortActiveTask(entity);
     }
 
     public GeminiTaskDTO getTask(String userId, String taskId) {
@@ -466,12 +468,11 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     @Override
+    @Transactional
     public void cancelTaskDirect(String taskId, String userId) {
         GeminiTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
-            abortTask(taskId);
-        }
+        abortActiveTask(entity);
     }
 
     @Override
@@ -612,6 +613,35 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
                 .interactionState(mapInteractionState(entity.getStatus()))
                 .recoverable(isDefinitiveTerminalStatus(entity.getStatus()) ? Boolean.FALSE : null)
                 .build());
+    }
+
+    private void abortActiveTask(GeminiTaskEntity entity) {
+        if (isAbortTerminalNoOp(entity.getStatus()) || !isAbortActive(entity.getStatus())) {
+            return;
+        }
+        String previousStatus = entity.getStatus();
+        GeminiWorkerClient.AbortReceipt receipt = streamRelay.abortRemoteTask(
+                entity.getTaskId(), entity.getWorkerId(), entity.getWorkerTaskId());
+        if (receipt == null
+                || !Objects.equals(entity.getWorkerTaskId(), receipt.taskId())
+                || !"aborted".equals(receipt.status())) {
+            throw new IllegalStateException(
+                    GeminiStreamRelay.TERMINATION_GEMINI_UNCONFIRMED);
+        }
+        streamRelay.abortStream(entity.getTaskId());
+        entity.setStatus("ABORTED");
+        persistTask(entity);
+        publishStatusChange(entity, previousStatus);
+    }
+
+    private static boolean isAbortActive(String status) {
+        return "RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status);
+    }
+
+    private static boolean isAbortTerminalNoOp(String status) {
+        return "COMPLETED".equals(status)
+                || "FAILED".equals(status)
+                || "ABORTED".equals(status);
     }
 
     private boolean isDefinitiveTerminalStatus(String status) {

@@ -12,6 +12,7 @@ import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.gemini.worker.client.GeminiWorkerClient;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
@@ -22,6 +23,7 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -38,6 +40,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -52,6 +56,7 @@ class GeminiTaskServiceAuthResolutionTest {
     private com.foggy.navigator.agent.framework.session.SessionManager sessionManager;
     private SessionEntityRepository sessionEntityRepository;
     private SessionTaskRepository sessionTaskRepository;
+    private GeminiStreamRelay streamRelay;
     private GeminiTaskService taskService;
     private Map<String, GeminiTaskEntity> savedTasks;
 
@@ -64,11 +69,13 @@ class GeminiTaskServiceAuthResolutionTest {
         sessionManager = mock(com.foggy.navigator.agent.framework.session.SessionManager.class);
         sessionEntityRepository = mock(SessionEntityRepository.class);
         sessionTaskRepository = mock(SessionTaskRepository.class);
+        streamRelay = mock(GeminiStreamRelay.class);
         taskService = new GeminiTaskService(taskRepository, workerManagementFacade, eventPublisher);
         ReflectionTestUtils.setField(taskService, "llmModelManager", llmModelManager);
         ReflectionTestUtils.setField(taskService, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(taskService, "sessionEntityRepository", sessionEntityRepository);
         ReflectionTestUtils.setField(taskService, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(taskService, "streamRelay", streamRelay);
 
         // Wire save() and findByTaskId() to a shared map so flows that round-trip via
         // findByTaskId (e.g. createTaskDirect) see what was just persisted.
@@ -124,6 +131,154 @@ class GeminiTaskServiceAuthResolutionTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "FAILED".equals(event.getStatus())
                         && Boolean.FALSE.equals(event.getRecoverable())));
+    }
+
+    @Test
+    void cancelTaskDirectOwnerQualifiedReceiptCommitsAborted() {
+        GeminiTaskEntity task = terminalCandidate("task-abort-direct");
+        task.setWorkerTaskId("worker-task-abort-direct");
+        savedTasks.put(task.getTaskId(), task);
+        when(taskRepository.findByTaskIdAndUserId(task.getTaskId(), "user-1"))
+                .thenReturn(Optional.of(task));
+        when(streamRelay.abortRemoteTask(
+                task.getTaskId(), task.getWorkerId(), task.getWorkerTaskId()))
+                .thenReturn(new GeminiWorkerClient.AbortReceipt(
+                        task.getWorkerTaskId(), "aborted"));
+
+        taskService.cancelTaskDirect(task.getTaskId(), "user-1");
+
+        assertEquals("ABORTED", task.getStatus());
+        InOrder order = inOrder(streamRelay, taskRepository, eventPublisher);
+        order.verify(streamRelay).abortRemoteTask(
+                task.getTaskId(), task.getWorkerId(), task.getWorkerTaskId());
+        order.verify(streamRelay).abortStream(task.getTaskId());
+        order.verify(taskRepository).save(task);
+        order.verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                task.getTaskId().equals(event.getTaskId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "ABORTED".equals(event.getStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())));
+        verify(taskRepository, never()).findByTaskId(task.getTaskId());
+    }
+
+    @Test
+    void cancelTaskDirectTerminalNoOpSkipsAllEffects() {
+        for (String terminalStatus : new String[]{"COMPLETED", "FAILED", "ABORTED"}) {
+            GeminiTaskEntity task = terminalCandidate(
+                    "task-abort-terminal-" + terminalStatus.toLowerCase());
+            task.setStatus(terminalStatus);
+            task.setWorkerTaskId(null);
+            when(taskRepository.findByTaskIdAndUserId(task.getTaskId(), "user-1"))
+                    .thenReturn(Optional.of(task));
+
+            taskService.cancelTaskDirect(task.getTaskId(), "user-1");
+
+            assertEquals(terminalStatus, task.getStatus());
+        }
+        verifyNoInteractions(streamRelay);
+        verify(taskRepository, never()).save(any());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelTaskDirectRemoteFailureDoesNotMutate() {
+        GeminiTaskEntity task = terminalCandidate("task-abort-unconfirmed");
+        task.setWorkerTaskId("worker-task-abort-unconfirmed");
+        when(taskRepository.findByTaskIdAndUserId(task.getTaskId(), "user-1"))
+                .thenReturn(Optional.of(task));
+        doThrow(new IllegalStateException(
+                GeminiStreamRelay.TERMINATION_GEMINI_UNCONFIRMED))
+                .when(streamRelay).abortRemoteTask(
+                        task.getTaskId(), task.getWorkerId(), task.getWorkerTaskId());
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> taskService.cancelTaskDirect(task.getTaskId(), "user-1"));
+
+        assertEquals(GeminiStreamRelay.TERMINATION_GEMINI_UNCONFIRMED,
+                failure.getMessage());
+        assertEquals("RUNNING", task.getStatus());
+        verify(streamRelay, never()).abortStream(any());
+        verify(taskRepository, never()).save(any());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+
+        org.mockito.Mockito.reset(streamRelay);
+        when(streamRelay.abortRemoteTask(
+                task.getTaskId(), task.getWorkerId(), task.getWorkerTaskId()))
+                .thenReturn(new GeminiWorkerClient.AbortReceipt(
+                        "worker-task-other", "aborted"));
+
+        IllegalStateException receiptMismatch = assertThrows(IllegalStateException.class,
+                () -> taskService.cancelTaskDirect(task.getTaskId(), "user-1"));
+        assertEquals(GeminiStreamRelay.TERMINATION_GEMINI_UNCONFIRMED,
+                receiptMismatch.getMessage());
+        assertEquals("RUNNING", task.getStatus());
+        verify(streamRelay, never()).abortStream(any());
+        verify(taskRepository, never()).save(any());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelTaskDirectRejectsForeignOwnerWithZeroMutation() {
+        when(taskRepository.findByTaskIdAndUserId("task-foreign", "user-1"))
+                .thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> taskService.cancelTaskDirect("task-foreign", "user-1"));
+
+        verifyNoInteractions(streamRelay);
+        verify(taskRepository, never()).save(any());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void doAbortWorkerTaskRejectsCallerRemoteIdDrift() {
+        GeminiTaskEntity task = terminalCandidate("task-abort-a2a-mismatch");
+        task.setWorkerTaskId("worker-task-persisted");
+        savedTasks.put(task.getTaskId(), task);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> taskService.doAbortWorkerTask(
+                        task.getTaskId(), "worker-task-caller"));
+
+        assertEquals("TERMINATION_REMOTE_TASK_MISMATCH", failure.getMessage());
+        assertEquals("worker-task-persisted", task.getWorkerTaskId());
+        assertEquals("RUNNING", task.getStatus());
+        verifyNoInteractions(streamRelay);
+        verify(taskRepository, never()).save(any());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+
+        task.setStatus("COMPLETED");
+        task.setWorkerTaskId(null);
+        taskService.doAbortWorkerTask(task.getTaskId(), "worker-task-caller");
+        assertEquals("COMPLETED", task.getStatus());
+        assertEquals(null, task.getWorkerTaskId());
+        verifyNoInteractions(streamRelay);
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void doAbortWorkerTaskExactReceiptCommitsAborted() {
+        GeminiTaskEntity task = terminalCandidate("task-abort-a2a");
+        task.setWorkerTaskId("worker-task-a2a");
+        savedTasks.put(task.getTaskId(), task);
+        when(streamRelay.abortRemoteTask(
+                task.getTaskId(), task.getWorkerId(), task.getWorkerTaskId()))
+                .thenReturn(new GeminiWorkerClient.AbortReceipt(
+                        task.getWorkerTaskId(), "aborted"));
+
+        taskService.doAbortWorkerTask(task.getTaskId(), task.getWorkerTaskId());
+
+        assertEquals("ABORTED", task.getStatus());
+        verify(streamRelay).abortStream(task.getTaskId());
+        verify(taskRepository).save(task);
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                task.getTaskId().equals(event.getTaskId())
+                        && "ABORTED".equals(event.getStatus())));
     }
 
     @Test

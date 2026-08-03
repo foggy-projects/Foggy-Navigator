@@ -46,6 +46,8 @@ import java.util.concurrent.atomic.AtomicReference;
 public class GeminiStreamRelay {
 
     private static final long DURABLE_PERSISTENCE_RECOVERY_DELAY_MS = 1_000L;
+    static final String TERMINATION_GEMINI_UNCONFIRMED =
+            "TERMINATION_GEMINI_UNCONFIRMED";
 
     private final WorkerManagementFacade workerManagementFacade;
     private final GeminiWorkerClientFactory clientFactory;
@@ -151,16 +153,35 @@ public class GeminiStreamRelay {
         cancelDurablePersistenceRecovery(taskId);
     }
 
-    public void abortRemoteTask(GeminiTaskEntity task) {
-        if (task == null || task.getWorkerTaskId() == null || task.getWorkerTaskId().isBlank()) {
-            return;
+    public GeminiWorkerClient.AbortReceipt abortRemoteTask(
+            String localTaskId,
+            String workerId,
+            String workerTaskId) {
+        if (localTaskId == null || localTaskId.isBlank()
+                || workerId == null || workerId.isBlank()
+                || workerTaskId == null || workerTaskId.isBlank()) {
+            throw unconfirmed(null);
         }
+        GeminiWorkerClient.AbortReceipt receipt;
         try {
-            getGeminiClient(task.getWorkerId()).abortTask(task.getWorkerTaskId()).block(Duration.ofSeconds(10));
-        } catch (Exception e) {
-            log.warn("Failed to abort upstream Gemini task: localTaskId={}, workerTaskId={}, error={}",
-                    task.getTaskId(), task.getWorkerTaskId(), e.getMessage());
+            receipt = getGeminiClient(workerId)
+                    .abortTask(workerTaskId)
+                    .block(Duration.ofSeconds(10));
+        } catch (RuntimeException failure) {
+            throw unconfirmed(failure);
         }
+        if (receipt == null
+                || !workerTaskId.equals(receipt.taskId())
+                || !"aborted".equals(receipt.status())) {
+            throw unconfirmed(null);
+        }
+        return receipt;
+    }
+
+    private static IllegalStateException unconfirmed(Throwable cause) {
+        return cause == null
+                ? new IllegalStateException(TERMINATION_GEMINI_UNCONFIRMED)
+                : new IllegalStateException(TERMINATION_GEMINI_UNCONFIRMED, cause);
     }
 
     private void handleSseEvent(ServerSentEvent<String> sse, String taskId, String sessionId,

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -13,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class GeminiWorkerClientTest {
 
@@ -46,6 +48,30 @@ class GeminiWorkerClientTest {
         }
     }
 
+    @Test
+    void abortTaskReturnsExactWorkerReceipt() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            GeminiWorkerClient client = new GeminiWorkerClient(server.baseUrl(), "token");
+
+            GeminiWorkerClient.AbortReceipt receipt = client.abortTask("worker-task-1")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("worker-task-1", receipt.taskId());
+            assertEquals("aborted", receipt.status());
+        }
+    }
+
+    @Test
+    void abortTaskPropagatesNonSuccessResponse() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            GeminiWorkerClient client = new GeminiWorkerClient(server.baseUrl(), "token");
+
+            assertThrows(WebClientResponseException.class,
+                    () -> client.abortTask("worker-task-error")
+                            .block(Duration.ofSeconds(5)));
+        }
+    }
+
     private static class CaptureServer implements AutoCloseable {
         private final HttpServer server;
         private final AtomicReference<String> body = new AtomicReference<>();
@@ -62,6 +88,23 @@ class GeminiWorkerClientTest {
                 byte[] response = "data: {\"type\":\"done\"}\n\n".getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
                 exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
+            server.createContext("/api/v1/tasks/worker-task-1/abort", exchange -> {
+                byte[] response = ("{\"task_id\":\"worker-task-1\","
+                        + "\"status\":\"aborted\"}")
+                        .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
+            server.createContext("/api/v1/tasks/worker-task-error/abort", exchange -> {
+                byte[] response = "{\"error\":\"unavailable\"}"
+                        .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(503, response.length);
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });

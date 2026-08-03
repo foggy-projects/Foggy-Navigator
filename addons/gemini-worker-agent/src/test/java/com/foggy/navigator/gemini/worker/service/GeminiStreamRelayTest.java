@@ -20,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.InvocationTargetException;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -43,6 +45,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class GeminiStreamRelayTest {
@@ -420,6 +423,60 @@ class GeminiStreamRelayTest {
 
         verify(client).subscribeToTask("worker-task-21", 7);
         relay.abortStream("local-task-21");
+    }
+
+    @Test
+    void abortRemoteTaskUsesPersistedWorkerAndRemoteIdentity() {
+        GeminiWorkerClient client = abortClient("worker-22");
+        GeminiWorkerClient.AbortReceipt expected =
+                new GeminiWorkerClient.AbortReceipt("worker-task-22", "aborted");
+        when(client.abortTask("worker-task-22")).thenReturn(Mono.just(expected));
+
+        GeminiWorkerClient.AbortReceipt actual = relay.abortRemoteTask(
+                "local-task-22", "worker-22", "worker-task-22");
+
+        assertEquals(expected, actual);
+        verify(client).abortTask("worker-task-22");
+    }
+
+    @Test
+    void abortRemoteTaskRejectsMissingTimeoutAndMismatchedReceipts() {
+        IllegalStateException missingIdentity = assertThrows(IllegalStateException.class,
+                () -> relay.abortRemoteTask("local-task-23", "worker-23", null));
+        assertEquals(GeminiStreamRelay.TERMINATION_GEMINI_UNCONFIRMED,
+                missingIdentity.getMessage());
+        verifyNoInteractions(workerManagementFacade, clientFactory);
+
+        GeminiWorkerClient client = abortClient("worker-23");
+        when(client.abortTask("worker-task-23")).thenReturn(
+                Mono.empty(),
+                Mono.just(new GeminiWorkerClient.AbortReceipt(
+                        "worker-task-other", "aborted")),
+                Mono.just(new GeminiWorkerClient.AbortReceipt(
+                        "worker-task-23", "ABORTED")),
+                Mono.error(new TimeoutException("timeout")),
+                Mono.error(new IllegalStateException("http error")));
+
+        for (int attempt = 0; attempt < 5; attempt++) {
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> relay.abortRemoteTask(
+                            "local-task-23", "worker-23", "worker-task-23"));
+            assertEquals(GeminiStreamRelay.TERMINATION_GEMINI_UNCONFIRMED,
+                    failure.getMessage());
+        }
+        verify(client, times(5)).abortTask("worker-task-23");
+    }
+
+    private GeminiWorkerClient abortClient(String workerId) {
+        GeminiConfig config = GeminiConfig.builder()
+                .baseUrl("http://gemini-worker")
+                .build();
+        GeminiWorkerClient client = mock(GeminiWorkerClient.class);
+        when(workerManagementFacade.getGeminiConfig(workerId)).thenReturn(config);
+        when(clientFactory.getOrCreate(
+                eq(workerId + ":gemini"), eq("http://gemini-worker"), any()))
+                .thenReturn(client);
+        return client;
     }
 
     private void invokeRelayWorkerEvent(String sessionId, String taskId, WorkerEvent event, String geminiSessionId)
