@@ -57,6 +57,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import jakarta.persistence.Query;
 
 import java.math.BigDecimal;
@@ -146,6 +147,18 @@ class TaskDispatchFacadeTest {
         lenient().doAnswer(invocation ->
                         ((Supplier<Object>) invocation.getArgument(2)).get())
                 .when(gate).invoke(any(), any(), any());
+        lenient().doAnswer(invocation -> {
+                    Supplier<TaskCreateCommandCoordinator.ProviderEffectIdentity> identitySupplier =
+                            invocation.getArgument(1);
+                    Runnable routePreparation = invocation.getArgument(2);
+                    Supplier<TaskCreateCommandCoordinator.PreparedProviderEffect<Object>>
+                            preparedEffectSupplier = invocation.getArgument(3);
+                    identitySupplier.get();
+                    routePreparation.run();
+                    identitySupplier.get();
+                    return preparedEffectSupplier.get().execute();
+                })
+                .when(gate).invokePrepared(any(), any(), any(), any());
         lenient().when(gate.providerEffectPermitted()).thenReturn(true);
         return gate;
     }
@@ -545,12 +558,20 @@ class TaskDispatchFacadeTest {
         LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
         LifecycleIngressGate.IngressPermit ingressPermit =
                 mock(LifecycleIngressGate.IngressPermit.class);
+        TaskCreateContextNormalizer normalizer = mock(TaskCreateContextNormalizer.class);
+        TaskCreateContextNormalizer.PendingContextClaim pendingClaim =
+                mock(TaskCreateContextNormalizer.PendingContextClaim.class);
+        TaskCreateContextNormalizer.CanonicalContextProof contextProof =
+                mock(TaskCreateContextNormalizer.CanonicalContextProof.class);
         ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        ReflectionTestUtils.setField(facade, "taskCreateContextNormalizer", normalizer);
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .agentId("agent-gated-a2a-1")
                 .providerType("claude-worker")
                 .workerId("worker-1")
                 .sessionId("session-1")
+                .contextId("ctx-gated-a2a-1")
                 .prompt("gated a2a")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
@@ -561,7 +582,10 @@ class TaskDispatchFacadeTest {
         TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
                 "agent-gated-a2a-1", "claude-worker",
                 TaskCreateTargetResolver.ExecutionRoute.A2A);
+        when(plan.pendingContextClaim()).thenReturn(pendingClaim);
         TaskCreateCommandCoordinator.ProviderEffectGate effectGate = passThroughGate();
+        when(normalizer.claimPendingAfterPermit(pendingClaim, plan))
+                .thenReturn(contextProof);
         when(lifecycleGate.reserveBeforeEffect("session-1", "worker-1"))
                 .thenReturn(ingressPermit);
         when(agentResolver.resolveAgentByProviderTypeExact(
@@ -573,20 +597,118 @@ class TaskDispatchFacadeTest {
                 .id("task-gated-a2a-1")
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
+        SessionTaskEntity storedTask = new SessionTaskEntity();
+        storedTask.setTaskId("task-gated-a2a-1");
+        storedTask.setProviderType("claude-worker");
+        when(sessionTaskRepository.findByTaskIdForUpdate("task-gated-a2a-1"))
+                .thenReturn(Optional.of(storedTask));
 
         DispatchTaskDTO result = facade.createTask(
                 request, context, plan, effectGate);
 
         assertEquals("task-gated-a2a-1", result.getTaskId());
-        InOrder ordered = inOrder(lifecycleGate, effectGate, agent);
-        ordered.verify(lifecycleGate).reserveBeforeEffect("session-1", "worker-1");
-        ordered.verify(effectGate).invoke(
+        InOrder ordered = inOrder(
+                effectGate,
+                normalizer,
+                bindingService,
+                lifecycleGate,
+                agent,
+                sessionTaskRepository);
+        ordered.verify(effectGate).invokePrepared(
                 eq(plan),
-                argThat(identity -> "agent-gated-a2a-1".equals(identity.logicalAgentId())),
+                any(),
+                any(),
                 any());
+        ordered.verify(normalizer).claimPendingAfterPermit(pendingClaim, plan);
+        ordered.verify(bindingService).getOrBind(
+                "session-1", "agent-gated-a2a-1", "claude-worker", "AGENT_ID");
+        ordered.verify(lifecycleGate).reserveBeforeEffect("session-1", "worker-1");
         ordered.verify(agent).sendTask(any());
+        ordered.verify(sessionTaskRepository).findByTaskIdForUpdate("task-gated-a2a-1");
+        ordered.verify(sessionTaskRepository).save(storedTask);
+        ordered.verify(normalizer).completeAgentSessionRef(
+                eq(contextProof), eq("task-gated-a2a-1"), isNull());
         ordered.verify(lifecycleGate).confirm(ingressPermit, "task-gated-a2a-1");
         verify(lifecycleGate, never()).releaseFailed(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void guardedA2aCapturedPayloadAndPersistenceIgnoreMutableRequestDrift() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        Map<String, Object> nestedMetadata = new LinkedHashMap<>();
+        nestedMetadata.put("value", "metadata-original");
+        Map<String, Object> nestedContext = new LinkedHashMap<>();
+        nestedContext.put("value", "context-original");
+        Map<String, Object> attachment = new LinkedHashMap<>();
+        attachment.put("value", "attachment-original");
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-snapshot-a2a-1")
+                .providerType("claude-worker")
+                .workerId("worker-1")
+                .model("model-original")
+                .prompt("snapshot payload")
+                .metadata(Map.of("nested", nestedMetadata))
+                .context(Map.of("nested", nestedContext))
+                .attachments(List.of(attachment))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                "agent-snapshot-a2a-1",
+                "claude-worker",
+                TaskCreateTargetResolver.ExecutionRoute.A2A,
+                null);
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-snapshot-a2a-1"), any()))
+                .thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id("agent-snapshot-a2a-1").build());
+        when(agent.sendTask(any())).thenAnswer(invocation -> {
+            A2aMessage message = invocation.getArgument(0);
+            nestedMetadata.put("value", "metadata-caller-drift");
+            nestedContext.put("value", "context-caller-drift");
+            attachment.put("value", "attachment-caller-drift");
+            request.setModel("model-caller-drift");
+
+            Map<String, Object> messageNested = assertInstanceOf(
+                    Map.class, message.getMetadata().get("nested"));
+            Map<String, Object> messageContext = assertInstanceOf(
+                    Map.class, message.getMetadata().get("context"));
+            List<Map<String, Object>> messageAttachments = assertInstanceOf(
+                    List.class, message.getMetadata().get("attachments"));
+            assertEquals("metadata-original", messageNested.get("value"));
+            assertEquals("context-original",
+                    assertInstanceOf(Map.class, messageContext.get("nested")).get("value"));
+            assertEquals("attachment-original", messageAttachments.get(0).get("value"));
+
+            messageNested.put("value", "metadata-provider-drift");
+            ((Map<String, Object>) messageContext.get("nested"))
+                    .put("value", "context-provider-drift");
+            messageAttachments.get(0).put("value", "attachment-provider-drift");
+            return A2aTask.builder()
+                    .id("task-snapshot-a2a-1")
+                    .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                    .build();
+        });
+        SessionTaskEntity storedTask = new SessionTaskEntity();
+        storedTask.setTaskId("task-snapshot-a2a-1");
+        storedTask.setProviderType("claude-worker");
+        when(sessionTaskRepository.findByTaskIdForUpdate("task-snapshot-a2a-1"))
+                .thenReturn(Optional.of(storedTask));
+
+        DispatchTaskDTO result = facade.createTask(
+                request, context, plan, passThroughGate());
+
+        assertEquals("task-snapshot-a2a-1", result.getTaskId());
+        assertEquals("model-original", storedTask.getModel());
+        assertEquals("model-caller-drift", request.getModel());
+        assertEquals("metadata-caller-drift", nestedMetadata.get("value"));
+        assertEquals("context-caller-drift", nestedContext.get("value"));
+        assertEquals("attachment-caller-drift", attachment.get("value"));
+        verify(sessionTaskRepository).save(storedTask);
     }
 
     @Test
@@ -643,7 +765,7 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void guardedGateDenialReleasesReservationWithZeroProviderEffect() {
+    void guardedGateDenialReleasesDirectReservationButSkipsA2aPreparation() {
         LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
         LifecycleIngressGate.IngressPermit directPermit =
                 mock(LifecycleIngressGate.IngressPermit.class);
@@ -678,8 +800,6 @@ class TaskDispatchFacadeTest {
         verify(lifecycleGate, never()).confirm(eq(directPermit), any());
 
         reset(lifecycleGate, agentResolver, agent);
-        LifecycleIngressGate.IngressPermit a2aPermit =
-                mock(LifecycleIngressGate.IngressPermit.class);
         TaskDispatchRequest a2aRequest = TaskDispatchRequest.builder()
                 .agentId("agent-a2a-denied")
                 .providerType("claude-worker")
@@ -695,25 +815,83 @@ class TaskDispatchFacadeTest {
                 "agent-a2a-denied", "claude-worker",
                 TaskCreateTargetResolver.ExecutionRoute.A2A,
                 "session-a2a-denied");
+        TaskCreateContextNormalizer normalizer = mock(TaskCreateContextNormalizer.class);
+        TaskCreateContextNormalizer.PendingContextClaim pendingClaim =
+                mock(TaskCreateContextNormalizer.PendingContextClaim.class);
+        ReflectionTestUtils.setField(facade, "taskCreateContextNormalizer", normalizer);
+        lenient().when(a2aPlan.pendingContextClaim()).thenReturn(pendingClaim);
         TaskCreateCommandCoordinator.ProviderEffectGate a2aGate =
                 mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
-        when(lifecycleGate.reserveBeforeEffect("session-a2a-denied", "worker-1"))
-                .thenReturn(a2aPermit);
         when(agentResolver.resolveAgentByProviderTypeExact(
                 eq("claude-worker"), eq("agent-a2a-denied"), any()))
                 .thenReturn(Optional.of(agent));
         when(agent.getAgentCard()).thenReturn(
                 A2aAgentCard.builder().id("agent-a2a-denied").build());
         doThrow(new IllegalStateException("TASK_CREATE_EFFECT_IDENTITY_CONFLICT"))
-                .when(a2aGate).invoke(eq(a2aPlan), any(), any());
-        when(a2aGate.providerEffectPermitted()).thenReturn(false);
+                .when(a2aGate).invokePrepared(eq(a2aPlan), any(), any(), any());
 
         assertThrows(IllegalStateException.class, () -> facade.createTask(
                 a2aRequest, a2aContext, a2aPlan, a2aGate));
 
         verify(agent, never()).sendTask(any());
-        verify(lifecycleGate).releaseFailed(a2aPermit);
-        verify(lifecycleGate, never()).confirm(eq(a2aPermit), any());
+        verifyNoInteractions(lifecycleGate);
+        verifyNoInteractions(bindingService);
+        verify(normalizer, never()).claimPendingAfterPermit(any(), any());
+    }
+
+    @Test
+    void guardedA2aRoutePreparationFailureNeverReleasesOrDispatches() {
+        LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
+        TaskCreateContextNormalizer normalizer = mock(TaskCreateContextNormalizer.class);
+        TaskCreateContextNormalizer.PendingContextClaim pendingClaim =
+                mock(TaskCreateContextNormalizer.PendingContextClaim.class);
+        TaskCreateContextNormalizer.CanonicalContextProof contextProof =
+                mock(TaskCreateContextNormalizer.CanonicalContextProof.class);
+        ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        ReflectionTestUtils.setField(facade, "taskCreateContextNormalizer", normalizer);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-a2a-route-failure")
+                .providerType("claude-worker")
+                .workerId("worker-1")
+                .sessionId("session-a2a-route-failure")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-a2a-route-failure")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                "agent-a2a-route-failure",
+                "claude-worker",
+                TaskCreateTargetResolver.ExecutionRoute.A2A,
+                "session-a2a-route-failure");
+        when(plan.pendingContextClaim()).thenReturn(pendingClaim);
+        when(normalizer.claimPendingAfterPermit(pendingClaim, plan))
+                .thenReturn(contextProof);
+        when(agentResolver.resolveAgentByProviderTypeExact(
+                eq("claude-worker"), eq("agent-a2a-route-failure"), any()))
+                .thenReturn(Optional.of(agent));
+        when(agent.getAgentCard()).thenReturn(
+                A2aAgentCard.builder().id("agent-a2a-route-failure").build());
+        doThrow(new IllegalStateException("binding unavailable"))
+                .when(bindingService).getOrBind(
+                        "session-a2a-route-failure",
+                        "agent-a2a-route-failure",
+                        "claude-worker",
+                        "AGENT_ID");
+
+        assertThrows(IllegalStateException.class, () -> facade.createTask(
+                request, context, plan, passThroughGate()));
+
+        InOrder ordered = inOrder(normalizer, bindingService);
+        ordered.verify(normalizer).claimPendingAfterPermit(pendingClaim, plan);
+        ordered.verify(bindingService).getOrBind(
+                "session-a2a-route-failure",
+                "agent-a2a-route-failure",
+                "claude-worker",
+                "AGENT_ID");
+        verifyNoInteractions(lifecycleGate);
+        verify(agent, never()).sendTask(any());
     }
 
     @Test
@@ -895,7 +1073,183 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void normalizeAliasMissAtomicallyClaimsPristineAppServerSessionAndContext() {
+    void resolvePendingContextDefersMutationAndKeepsPlanBindingAcrossClaim() {
+        EntityManager entityManager = mock(EntityManager.class);
+        List<Object> persisted = new ArrayList<>();
+        doAnswer(invocation -> {
+            persisted.add(invocation.getArgument(0));
+            return null;
+        }).when(entityManager).persist(any());
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        ReflectionTestUtils.setField(facade, "taskCreateContextNormalizer", normalizer);
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Deferred-A", "user-1", "agent-deferred-1"))
+                .thenReturn(Optional.empty());
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId(
+                "agent-deferred-1", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-deferred-1",
+                        "user-1",
+                        "tenant-1",
+                        "LOCAL_CLAUDE_WORKER",
+                        "worker-1")));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextAlias("Deferred-A")
+                .agentId("agent-deferred-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        TaskCreateTargetResolver.CreateExecutionPlan plan =
+                facade.resolveCreateExecutionPlan(request, context);
+
+        assertNotNull(plan.pendingContextClaim());
+        assertNull(plan.canonicalContextProof());
+        assertEquals(plan.pendingContextClaim().canonicalContextId(), request.getContextId());
+        assertEquals(plan.pendingContextClaim().navigatorSessionId(), request.getSessionId());
+        assertEquals(request.getSessionId(), context.getSessionId());
+        plan.requireMatches(request, context);
+        TaskCreateCommandCoordinator.PlanBinding before =
+                TaskCreateCommandCoordinator.PlanBinding.from(plan);
+        assertTrue(persisted.isEmpty());
+        verifyNoInteractions(entityManager);
+
+        TaskCreateContextNormalizer.CanonicalContextProof proof =
+                normalizer.claimPendingAfterPermit(plan.pendingContextClaim(), plan);
+        TaskCreateCommandCoordinator.PlanBinding after =
+                TaskCreateCommandCoordinator.PlanBinding.from(plan);
+
+        assertEquals(request.getContextId(), proof.contextId());
+        assertEquals(request.getSessionId(), proof.navigatorSessionId());
+        assertEquals(before.tenantReference(), after.tenantReference());
+        assertEquals(before.target(), after.target());
+        assertEquals(before.effect(), after.effect());
+        assertEquals(2, persisted.size());
+        verify(entityManager).flush();
+    }
+
+    @Test
+    void deferredContextClaimRereadsAndRejectsExistingSessionIdentityDrift() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        SessionEntity inspectedSession = canonicalSession(
+                "session-deferred-existing",
+                "user-1",
+                "tenant-1",
+                "agent-deferred-existing",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-1");
+        SessionEntity driftedSession = canonicalSession(
+                "session-deferred-existing",
+                "user-1",
+                "tenant-1",
+                "agent-deferred-existing",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-2");
+        when(resourceAccessService.requireOwnedSession(
+                "session-deferred-existing", "user-1", "tenant-1"))
+                .thenReturn(inspectedSession);
+        when(entityManager.find(
+                SessionEntity.class,
+                "session-deferred-existing",
+                LockModeType.PESSIMISTIC_READ))
+                .thenReturn(driftedSession);
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Deferred-Existing", "user-1", "agent-deferred-existing"))
+                .thenReturn(Optional.empty());
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId(
+                "agent-deferred-existing", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-deferred-existing",
+                        "user-1",
+                        "tenant-1",
+                        "LOCAL_CLAUDE_WORKER",
+                        "worker-1")));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-deferred-existing")
+                .contextAlias("Deferred-Existing")
+                .agentId("agent-deferred-existing")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        inspection.applyForResolution(request, context);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
+                "user-1",
+                "tenant-1",
+                "agent-deferred-existing",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-1",
+                "session-deferred-existing");
+        TaskCreateContextNormalizer.PendingContextClaim claim =
+                normalizer.deferPendingForResolution(inspection, plan);
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> normalizer.claimPendingAfterPermit(claim, plan));
+
+        assertEquals("CONTEXT_CHANGED_CONCURRENTLY_RETRY", failure.getMessage());
+        verify(entityManager).clear();
+        verify(entityManager).find(
+                SessionEntity.class,
+                "session-deferred-existing",
+                LockModeType.PESSIMISTIC_READ);
+        verify(entityManager, never()).persist(any());
+        verify(entityManager, never()).flush();
+    }
+
+    @Test
+    void pendingContextCannotUsePrePermitSealWriteBypass() {
+        EntityManager entityManager = mock(EntityManager.class);
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Deferred-Permit", "user-1", "agent-deferred-permit"))
+                .thenReturn(Optional.empty());
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId(
+                "agent-deferred-permit", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-deferred-permit",
+                        "user-1",
+                        "tenant-1",
+                        "LOCAL_CLAUDE_WORKER",
+                        "worker-1")));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextAlias("Deferred-Permit")
+                .agentId("agent-deferred-permit")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        inspection.applyForResolution(request, context);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
+                "user-1",
+                "tenant-1",
+                "agent-deferred-permit",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-1",
+                request.getSessionId());
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class,
+                () -> normalizer.sealForResolution(inspection, plan));
+
+        assertTrue(failure.getMessage().contains("Provider-effect permit"));
+        verifyNoInteractions(entityManager);
+    }
+
+    @Test
+    void normalizeAliasMissDefersThenClaimsPristineAppServerSessionAndContext() {
         EntityManager entityManager = mock(EntityManager.class);
         List<Object> persisted = new ArrayList<>();
         doAnswer(invocation -> {
@@ -925,11 +1279,18 @@ class TaskDispatchFacadeTest {
         assertNotNull(inspection);
         verifyNoInteractions(entityManager);
         inspection.applyForResolution(request, context);
-        TaskCreateContextNormalizer.CanonicalContextProof proof =
-                normalizer.sealForResolution(inspection, normalizerPlan(
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
                         "user-1", "tenant-1", "agent-app-1",
                         ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
-                        "worker-app-1", request.getSessionId()));
+                        "worker-app-1", request.getSessionId());
+        TaskCreateContextNormalizer.PendingContextClaim claim =
+                normalizer.deferPendingForResolution(inspection, plan);
+
+        assertTrue(persisted.isEmpty());
+        verifyNoInteractions(entityManager);
+
+        TaskCreateContextNormalizer.CanonicalContextProof proof =
+                normalizer.claimPendingAfterPermit(claim, plan);
 
         assertEquals(2, persisted.size());
         SessionEntity createdSession = persisted.stream()
@@ -955,7 +1316,7 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void normalizeConcurrentFreshWinnerRequiresRetryWithoutRepairOrSecondEffect() {
+    void deferredContextClaimRejectsConcurrentFreshWinnerWithoutRepairOrSecondEffect() {
         EntityManager entityManager = mock(EntityManager.class);
         doAnswer(invocation -> {
             if (invocation.getArgument(0) instanceof AgentConversationContextEntity) {
@@ -1000,11 +1361,88 @@ class TaskDispatchFacadeTest {
                 "user-1", "tenant-1", "agent-race-1",
                 ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
                 "worker-1", request.getSessionId());
+        TaskCreateContextNormalizer.PendingContextClaim claim =
+                normalizer.deferPendingForResolution(inspection, plan);
+
+        verifyNoInteractions(entityManager);
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> normalizer.sealForResolution(inspection, plan));
+                () -> normalizer.claimPendingAfterPermit(claim, plan));
 
         assertEquals("CONTEXT_CHANGED_CONCURRENTLY_RETRY", failure.getMessage());
+        verify(entityManager, times(2)).persist(any());
+        verify(sessionRepository, never()).save(any());
+        verify(agentConversationContextRepository, never()).save(any());
+    }
+
+    @Test
+    void deferredContextClaimRejectsDifferentSettledWinnerIdentity() {
+        EntityManager entityManager = mock(EntityManager.class);
+        doAnswer(invocation -> {
+            if (invocation.getArgument(0) instanceof AgentConversationContextEntity) {
+                throw new DataIntegrityViolationException("alias winner committed");
+            }
+            return null;
+        }).when(entityManager).persist(any());
+        TaskCreateContextNormalizer normalizer = newContextNormalizer(entityManager);
+        AgentConversationContextEntity winner = new AgentConversationContextEntity();
+        winner.setContextId("ctx-settled-winner");
+        winner.setContextAlias("Race-Settled");
+        winner.setUserId("user-1");
+        winner.setTargetAgentId("agent-race-settled");
+        winner.setAgentType(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER);
+        winner.setNavigatorSessionId("session-settled-winner");
+        winner.setAgentSessionRef("provider-session-existing");
+        SessionEntity winnerSession = canonicalSession(
+                "session-settled-winner",
+                "user-1",
+                "tenant-1",
+                "agent-race-settled",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-1");
+        winnerSession.setLatestTaskId("task-existing");
+        when(agentConversationContextRepository.findByContextAliasAndUserIdAndTargetAgentId(
+                "Race-Settled", "user-1", "agent-race-settled"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        when(sessionCodingAgentRepository.findByAgentIdAndUserId(
+                "agent-race-settled", "user-1"))
+                .thenReturn(Optional.of(ownedAgent(
+                        "agent-race-settled",
+                        "user-1",
+                        "tenant-1",
+                        "LOCAL_CLAUDE_WORKER",
+                        "worker-1")));
+        when(resourceAccessService.requireOwnedSession(
+                "session-settled-winner", "user-1", "tenant-1"))
+                .thenReturn(winnerSession);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextAlias("Race-Settled")
+                .agentId("agent-race-settled")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateContextNormalizer.Inspection inspection =
+                normalizer.inspect(request, context, false);
+        inspection.applyForResolution(request, context);
+        TaskCreateTargetResolver.CreateExecutionPlan plan = normalizerPlan(
+                "user-1",
+                "tenant-1",
+                "agent-race-settled",
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                "worker-1",
+                request.getSessionId());
+        TaskCreateContextNormalizer.PendingContextClaim claim =
+                normalizer.deferPendingForResolution(inspection, plan);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> normalizer.claimPendingAfterPermit(claim, plan));
+
+        assertEquals("CONTEXT_CHANGED_CONCURRENTLY_RETRY", failure.getMessage());
+        assertNotEquals(claim.canonicalContextId(), winner.getContextId());
+        assertNotEquals(claim.navigatorSessionId(), winner.getNavigatorSessionId());
         verify(entityManager, times(2)).persist(any());
         verify(sessionRepository, never()).save(any());
         verify(agentConversationContextRepository, never()).save(any());

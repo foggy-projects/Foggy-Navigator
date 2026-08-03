@@ -13,6 +13,7 @@ import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import jakarta.persistence.EntityExistsException;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.lang.Nullable;
@@ -175,20 +176,49 @@ public class TaskCreateContextNormalizer {
     CanonicalContextProof sealForResolution(
             Inspection inspection,
             TaskCreateTargetResolver.CreateExecutionPlan plan) {
-        requirePlanMatchesInspection(inspection, plan);
-        if (inspection.existingContext != null) {
-            validateExistingContextPlan(inspection, plan);
-            boolean taskRowsPristine = requirePristineTaskRowsIfEligible(
-                    inspection.existingContext, inspection.sessionFacts, plan);
-            return proofFrom(
-                    inspection,
-                    inspection.existingContext,
-                    inspection.sessionFacts,
-                    plan,
-                    false,
-                    taskRowsPristine);
+        Objects.requireNonNull(inspection, "context inspection is required");
+        if (inspection.isPending()) {
+            throw conflict("pending context requires a Provider-effect permit");
         }
-        return claimPending(inspection, plan);
+        requirePlanMatchesInspection(inspection, plan);
+        validateExistingContextPlan(inspection, plan);
+        boolean taskRowsPristine = requirePristineTaskRowsIfEligible(
+                inspection.existingContext, inspection.sessionFacts, plan);
+        return proofFrom(
+                inspection,
+                inspection.existingContext,
+                inspection.sessionFacts,
+                plan,
+                false,
+                taskRowsPristine);
+    }
+
+    /**
+     * Freezes a pending context candidate without writing it. The returned claim contains only
+     * immutable scalar/session facts and is safe to carry in a pre-effect execution plan.
+     */
+    PendingContextClaim deferPendingForResolution(
+            Inspection inspection,
+            TaskCreateTargetResolver.CreateExecutionPlan plan) {
+        Objects.requireNonNull(inspection, "context inspection is required");
+        if (!inspection.isPending()) {
+            throw conflict("only a pending context can be deferred");
+        }
+        requirePlanMatchesInspection(inspection, plan);
+        validatePendingSessionPlan(
+                inspection.sessionFacts, plan, inspection.createSession);
+        return PendingContextClaim.from(inspection);
+    }
+
+    /** The only pending-context write entry used after the once-effect permit is granted. */
+    CanonicalContextProof claimPendingAfterPermit(
+            PendingContextClaim claim,
+            TaskCreateTargetResolver.CreateExecutionPlan plan) {
+        Objects.requireNonNull(claim, "pending context claim is required");
+        Inspection inspection = claim.toInspection();
+        CanonicalContextProof proof = claimPending(inspection, plan);
+        claim.requireExactProof(proof, plan);
+        return proof;
     }
 
     /**
@@ -230,33 +260,58 @@ public class TaskCreateContextNormalizer {
             TaskCreateTargetResolver.CreateExecutionPlan plan) {
         requirePlanMatchesInspection(inspection, plan);
         validatePendingSessionPlan(inspection.sessionFacts, plan, inspection.createSession);
-        SessionEntity sessionCandidate = inspection.createSession
-                ? newSessionCandidate(inspection, plan) : null;
-        SessionFacts finalSession = inspection.createSession
-                ? SessionFacts.from(sessionCandidate) : inspection.sessionFacts;
-        AgentConversationContextEntity contextCandidate =
-                newContextCandidate(inspection, plan, finalSession.id());
-        boolean taskRowsPristine = requirePristineTaskRowsIfEligible(
-                contextCandidate, finalSession, plan);
 
         try {
-            requiresNew(() -> {
+            return requiresNew(() -> {
+                SessionEntity sessionCandidate = inspection.createSession
+                        ? newSessionCandidate(inspection, plan) : null;
+                SessionFacts finalSession;
                 if (sessionCandidate != null) {
                     entityManager.persist(sessionCandidate);
+                    finalSession = SessionFacts.from(sessionCandidate);
+                } else {
+                    finalSession = requireLockedUnchangedSession(inspection, plan);
                 }
+                AgentConversationContextEntity contextCandidate =
+                        newContextCandidate(inspection, plan, finalSession.id());
+                boolean taskRowsPristine = requirePristineTaskRowsIfEligible(
+                        contextCandidate, finalSession, plan);
                 entityManager.persist(contextCandidate);
                 entityManager.flush();
-                return null;
+                return proofFrom(
+                        inspection, contextCandidate, finalSession, plan, true,
+                        taskRowsPristine);
             });
-            return proofFrom(
-                    inspection, contextCandidate, finalSession, plan, true,
-                    taskRowsPristine);
         } catch (RuntimeException failure) {
             if (!isIntegrityConflict(failure)) {
                 throw failure;
             }
             return requiresNew(() -> adoptWinner(inspection, plan, failure));
         }
+    }
+
+    /**
+     * Re-reads and locks an existing Session at the post-permit claim point. This prevents a
+     * Gate-time snapshot from authorizing a context insert after its durable execution identity
+     * has already changed.
+     */
+    private SessionFacts requireLockedUnchangedSession(
+            Inspection inspection,
+            TaskCreateTargetResolver.CreateExecutionPlan plan) {
+        entityManager.clear();
+        SessionEntity durableSession = entityManager.find(
+                SessionEntity.class,
+                inspection.sessionFacts.id(),
+                LockModeType.PESSIMISTIC_READ);
+        if (durableSession == null) {
+            throw contextChanged();
+        }
+        SessionFacts current = SessionFacts.from(durableSession);
+        if (!inspection.sessionFacts.equals(current)) {
+            throw contextChanged();
+        }
+        validatePendingSessionPlan(current, plan, false);
+        return current;
     }
 
     private CanonicalContextProof adoptWinner(
@@ -808,6 +863,105 @@ public class TaskCreateContextNormalizer {
 
         String canonicalContextId() {
             return canonicalContextId;
+        }
+
+        boolean isPending() {
+            return existingContext == null;
+        }
+    }
+
+    /** Immutable, process-local ticket for one pending context/session candidate. */
+    static final class PendingContextClaim {
+        @Nullable private final String requestedContextId;
+        private final String canonicalContextId;
+        @Nullable private final String requestAlias;
+        private final String ownerUserId;
+        @Nullable private final String tenantId;
+        private final String logicalAgentId;
+        private final SessionFacts sessionFacts;
+        private final boolean createSession;
+
+        private PendingContextClaim(
+                @Nullable String requestedContextId,
+                String canonicalContextId,
+                @Nullable String requestAlias,
+                String ownerUserId,
+                @Nullable String tenantId,
+                String logicalAgentId,
+                SessionFacts sessionFacts,
+                boolean createSession) {
+            this.requestedContextId = requestedContextId;
+            this.canonicalContextId = canonicalContextId;
+            this.requestAlias = requestAlias;
+            this.ownerUserId = ownerUserId;
+            this.tenantId = tenantId;
+            this.logicalAgentId = logicalAgentId;
+            this.sessionFacts = sessionFacts;
+            this.createSession = createSession;
+        }
+
+        private static PendingContextClaim from(Inspection inspection) {
+            return new PendingContextClaim(
+                    inspection.requestedContextId,
+                    inspection.canonicalContextId,
+                    inspection.requestAlias,
+                    inspection.ownerUserId,
+                    inspection.tenantId,
+                    inspection.logicalAgentId,
+                    inspection.sessionFacts,
+                    inspection.createSession);
+        }
+
+        private Inspection toInspection() {
+            return Inspection.pending(
+                    requestedContextId,
+                    canonicalContextId,
+                    requestAlias,
+                    ownerUserId,
+                    tenantId,
+                    logicalAgentId,
+                    sessionFacts,
+                    createSession);
+        }
+
+        String canonicalContextId() {
+            return canonicalContextId;
+        }
+
+        String navigatorSessionId() {
+            return sessionFacts.id();
+        }
+
+        String ownerUserId() {
+            return ownerUserId;
+        }
+
+        @Nullable
+        String tenantId() {
+            return tenantId;
+        }
+
+        String logicalAgentId() {
+            return logicalAgentId;
+        }
+
+        private void requireExactProof(
+                CanonicalContextProof proof,
+                TaskCreateTargetResolver.CreateExecutionPlan plan) {
+            if (!canonicalContextId.equals(proof.contextId())
+                    || !Objects.equals(requestAlias, proof.contextAlias())
+                    || !sessionFacts.id().equals(proof.navigatorSessionId())
+                    || !sessionFacts.id().equals(plan.sessionId())
+                    || !ownerUserId.equals(proof.ownerUserId())
+                    || !Objects.equals(tenantId, proof.tenantId())
+                    || !logicalAgentId.equals(proof.logicalAgentId())
+                    || !plan.providerType().equals(proof.providerType())
+                    || !Objects.equals(plan.physicalWorkerId(), proof.physicalWorkerId())
+                    || !Objects.equals(plan.directoryId(), proof.directoryId())
+                    || !Objects.equals(plan.modelConfigId(), proof.sessionModelConfigId())
+                    || !Objects.equals(plan.model(), proof.model())) {
+                throw contextChanged();
+            }
         }
     }
 

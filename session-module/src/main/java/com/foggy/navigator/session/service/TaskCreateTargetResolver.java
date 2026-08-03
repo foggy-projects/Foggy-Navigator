@@ -222,6 +222,7 @@ final class TaskCreateTargetResolver {
                 directoryId,
                 executionRoute,
                 agentLookup,
+                null,
                 null);
     }
 
@@ -604,6 +605,8 @@ final class TaskCreateTargetResolver {
         private final AgentLookup agentLookup;
         @Nullable
         private final TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof;
+        @Nullable
+        private final TaskCreateContextNormalizer.PendingContextClaim pendingContextClaim;
 
         private CreateExecutionPlan(@Nullable String tenantId,
                                     String ownerUserId,
@@ -616,7 +619,8 @@ final class TaskCreateTargetResolver {
                                     @Nullable String directoryId,
                                     ExecutionRoute executionRoute,
                                     @Nullable AgentLookup agentLookup,
-                                    @Nullable TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof) {
+                                    @Nullable TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof,
+                                    @Nullable TaskCreateContextNormalizer.PendingContextClaim pendingContextClaim) {
             this.tenantId = trimToNull(tenantId);
             this.ownerUserId = requireText(ownerUserId, "ownerUserId is required");
             this.logicalAgentId = trimToNull(logicalAgentId);
@@ -629,6 +633,11 @@ final class TaskCreateTargetResolver {
             this.executionRoute = Objects.requireNonNull(executionRoute, "executionRoute is required");
             this.agentLookup = agentLookup;
             this.canonicalContextProof = canonicalContextProof;
+            this.pendingContextClaim = pendingContextClaim;
+            if (canonicalContextProof != null && pendingContextClaim != null) {
+                throw new IllegalArgumentException(
+                        "A create plan cannot contain both a context proof and pending claim");
+            }
             if (executionRoute == ExecutionRoute.A2A) {
                 if (this.logicalAgentId == null || agentLookup == null
                         || !this.logicalAgentId.equals(agentLookup.lookupId())) {
@@ -672,6 +681,11 @@ final class TaskCreateTargetResolver {
         @Nullable
         TaskCreateContextNormalizer.CanonicalContextProof canonicalContextProof() {
             return canonicalContextProof;
+        }
+
+        @Nullable
+        TaskCreateContextNormalizer.PendingContextClaim pendingContextClaim() {
+            return pendingContextClaim;
         }
 
         boolean directProviderRoute() {
@@ -724,6 +738,16 @@ final class TaskCreateTargetResolver {
                         || !providerType.equals(canonicalContextProof.providerType())) {
                     throw new SecurityException("Resource access denied");
                 }
+            } else if (pendingContextClaim != null) {
+                requireExactContextId(
+                        request.getContextId(), pendingContextClaim.canonicalContextId());
+                requireCompatible(
+                        "sessionId", pendingContextClaim.navigatorSessionId(), sessionId);
+                if (!ownerUserId.equals(pendingContextClaim.ownerUserId())
+                        || !Objects.equals(tenantId, pendingContextClaim.tenantId())
+                        || !Objects.equals(logicalAgentId, pendingContextClaim.logicalAgentId())) {
+                    throw new SecurityException("Resource access denied");
+                }
             }
         }
 
@@ -743,6 +767,9 @@ final class TaskCreateTargetResolver {
             if (canonicalContextProof != null) {
                 request.setContextId(canonicalContextProof.contextId());
                 request.setContextAlias(null);
+            } else if (pendingContextClaim != null) {
+                request.setContextId(pendingContextClaim.canonicalContextId());
+                request.setContextAlias(null);
             }
         }
 
@@ -750,6 +777,7 @@ final class TaskCreateTargetResolver {
                 TaskCreateContextNormalizer.CanonicalContextProof proof) {
             Objects.requireNonNull(proof, "canonical context proof is required");
             if (executionRoute != ExecutionRoute.A2A
+                    || pendingContextClaim != null
                     || !ownerUserId.equals(proof.ownerUserId())
                     || !Objects.equals(tenantId, proof.tenantId())
                     || !Objects.equals(logicalAgentId, proof.logicalAgentId())
@@ -768,7 +796,35 @@ final class TaskCreateTargetResolver {
                     directoryId,
                     executionRoute,
                     agentLookup,
-                    proof);
+                    proof,
+                    null);
+        }
+
+        CreateExecutionPlan withPendingContextClaim(
+                TaskCreateContextNormalizer.PendingContextClaim claim) {
+            Objects.requireNonNull(claim, "pending context claim is required");
+            if (executionRoute != ExecutionRoute.A2A
+                    || canonicalContextProof != null
+                    || !ownerUserId.equals(claim.ownerUserId())
+                    || !Objects.equals(tenantId, claim.tenantId())
+                    || !Objects.equals(logicalAgentId, claim.logicalAgentId())
+                    || !Objects.equals(sessionId, claim.navigatorSessionId())) {
+                throw new SecurityException("Resource access denied");
+            }
+            return new CreateExecutionPlan(
+                    tenantId,
+                    ownerUserId,
+                    logicalAgentId,
+                    providerType,
+                    physicalWorkerId,
+                    modelConfigId,
+                    model,
+                    sessionId,
+                    directoryId,
+                    executionRoute,
+                    agentLookup,
+                    null,
+                    claim);
         }
 
         private static void requireExactContextId(

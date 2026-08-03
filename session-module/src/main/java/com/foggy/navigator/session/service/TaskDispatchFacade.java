@@ -289,12 +289,20 @@ public class TaskDispatchFacade {
         if (contextInspection == null) {
             return plan;
         }
-        TaskCreateContextNormalizer.CanonicalContextProof proof =
-                taskCreateContextNormalizer.sealForResolution(contextInspection, plan);
-        TaskCreateTargetResolver.CreateExecutionPlan sealedPlan = plan.withCanonicalContext(proof);
-        sealedPlan.applyCanonicalTarget(request);
-        context.setSessionId(sealedPlan.sessionId());
-        return sealedPlan;
+        TaskCreateTargetResolver.CreateExecutionPlan contextBoundPlan;
+        if (contextInspection.isPending()) {
+            TaskCreateContextNormalizer.PendingContextClaim claim =
+                    taskCreateContextNormalizer.deferPendingForResolution(
+                            contextInspection, plan);
+            contextBoundPlan = plan.withPendingContextClaim(claim);
+        } else {
+            TaskCreateContextNormalizer.CanonicalContextProof proof =
+                    taskCreateContextNormalizer.sealForResolution(contextInspection, plan);
+            contextBoundPlan = plan.withCanonicalContext(proof);
+        }
+        contextBoundPlan.applyCanonicalTarget(request);
+        context.setSessionId(contextBoundPlan.sessionId());
+        return contextBoundPlan;
     }
 
     /** Executes the exact pre-effect plan; package visibility keeps ingress adapters on one path. */
@@ -347,65 +355,45 @@ public class TaskDispatchFacade {
         operations.validateRequestedProviderTypeCompatibility(request.getProviderType(), plan.providerType());
         operations.validateModelConfigProviderCompatibility(request.getModelConfigId(), plan.providerType());
 
-        // 绑定校验
-        if (plan.sessionId() != null) {
-            bindingService.getOrBind(plan.sessionId(), agentId, plan.providerType(), lookup.bindingSource());
-        }
-
-        // 构造 A2aMessage
-        A2aMessage message = buildMessage(request);
-        TaskCreateContextNormalizer.CanonicalContextProof contextProof =
-                plan.canonicalContextProof();
-        if (contextProof != null) {
-            Map<String, Object> metadata = message.getMetadata() == null
-                    ? new LinkedHashMap<>()
-                    : new LinkedHashMap<>(message.getMetadata());
-            metadata.put(TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY, contextProof);
-            message.setMetadata(metadata);
-        }
-
-        LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
-        try {
-            plan.requireMatches(request, context);
-            TaskCreateCommandCoordinator.ProviderEffectIdentity effectIdentity =
-                    TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
-                            TaskCreateTargetResolver.ExecutionRoute.A2A,
-                            request,
-                            context,
+        GuardedA2aRoutePreparation routePreparation =
+                new GuardedA2aRoutePreparation(plan, agentId, lookup.bindingSource());
+        return providerEffectGate.invokePrepared(
+                plan,
+                () -> a2aEffectIdentity(plan, request, context, agentId),
+                routePreparation::prepare,
+                () -> {
+                    GuardedA2aRouteState route = routePreparation.requirePrepared();
+                    TaskDispatchRequest persistenceRequest = defensiveRequestSnapshot(request);
+                    TaskDispatchRequest messageRequest = defensiveRequestSnapshot(persistenceRequest);
+                    AgentResolveContext capturedContext = executionContext(plan, context);
+                    A2aMessage message = buildMessage(messageRequest);
+                    if (route.contextProof() != null) {
+                        Map<String, Object> metadata = message.getMetadata() == null
+                                ? new LinkedHashMap<>()
+                                : new LinkedHashMap<>(message.getMetadata());
+                        metadata.put(
+                                TaskCreateContextNormalizer.INTERNAL_PROOF_METADATA_KEY,
+                                route.contextProof());
+                        message.setMetadata(metadata);
+                    }
+                    CapturedA2aCreate captured = new CapturedA2aCreate(
+                            agent,
                             agentId,
-                            plan.providerType());
-            A2aTask a2aTask = providerEffectGate.invoke(
-                    plan, effectIdentity, () -> {
-                        A2aTask providerTask = agent.sendTask(message);
-                        if (contextProof != null && requiresContextCompletion(providerTask)) {
-                            if (taskCreateContextNormalizer == null) {
-                                throw new IllegalStateException(
-                                        "TaskCreateContextNormalizer disappeared before completion");
-                            }
-                            taskCreateContextNormalizer.completeAgentSessionRef(
-                                    contextProof,
-                                    providerTask == null ? null : providerTask.getId(),
-                                    providerSessionRef(providerTask));
-                        }
-                        return providerTask;
-                    });
-
-            log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
-                    agentId, plan.providerType(), a2aTask.getId());
-
-            DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, plan.providerType(), request);
-            persistTaskRequestFields(dto.getTaskId(), request);
-            if (contextProof == null) {
-                persistContextBinding(dto, request, context, plan.providerType());
-            }
-            confirmReservation(permit, dto);
-            return dto;
-        } catch (RuntimeException failure) {
-            if (!providerEffectGate.providerEffectPermitted()) {
-                releaseFailedReservation(permit);
-            }
-            throw failure;
-        }
+                            plan.providerType(),
+                            persistenceRequest,
+                            capturedContext,
+                            message,
+                            route.contextProof(),
+                            route.ingressPermit());
+                    return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                            a2aEffectIdentity(
+                                    plan,
+                                    persistenceRequest,
+                                    capturedContext,
+                                    agentId),
+                            captured,
+                            this::executeCapturedA2aCreate);
+                });
     }
 
     /**
@@ -812,6 +800,192 @@ public class TaskDispatchFacade {
     }
 
     // ── 内部方法 ──
+
+    private TaskCreateCommandCoordinator.ProviderEffectIdentity a2aEffectIdentity(
+            TaskCreateTargetResolver.CreateExecutionPlan plan,
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            String agentId) {
+        return TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
+                TaskCreateTargetResolver.ExecutionRoute.A2A,
+                request,
+                context,
+                agentId,
+                plan.providerType());
+    }
+
+    private DispatchTaskDTO executeCapturedA2aCreate(CapturedA2aCreate captured) {
+        A2aTask providerTask = captured.agent().sendTask(captured.message());
+        DispatchTaskDTO dto = toDispatchDTO(
+                providerTask,
+                captured.agentId(),
+                captured.providerType(),
+                captured.persistenceRequest());
+        persistTaskRequestFields(dto.getTaskId(), captured.persistenceRequest());
+        if (captured.contextProof() != null && requiresContextCompletion(providerTask)) {
+            if (taskCreateContextNormalizer == null) {
+                throw new IllegalStateException(
+                        "TaskCreateContextNormalizer disappeared before completion");
+            }
+            taskCreateContextNormalizer.completeAgentSessionRef(
+                    captured.contextProof(),
+                    providerTask == null ? null : providerTask.getId(),
+                    providerSessionRef(providerTask));
+        } else if (captured.contextProof() == null) {
+            persistContextBinding(
+                    dto,
+                    captured.persistenceRequest(),
+                    captured.resolveContext(),
+                    captured.providerType());
+        }
+        confirmReservation(captured.ingressPermit(), dto);
+        log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
+                captured.agentId(), captured.providerType(), dto.getTaskId());
+        return dto;
+    }
+
+    private TaskDispatchRequest defensiveRequestSnapshot(TaskDispatchRequest source) {
+        Objects.requireNonNull(source, "task dispatch request is required");
+        return TaskDispatchRequest.builder()
+                .agentId(source.getAgentId())
+                .providerType(source.getProviderType())
+                .sessionId(source.getSessionId())
+                .workerId(source.getWorkerId())
+                .prompt(source.getPrompt())
+                .cwd(source.getCwd())
+                .directoryId(source.getDirectoryId())
+                .model(source.getModel())
+                .modelConfigId(source.getModelConfigId())
+                .maxTurns(source.getMaxTurns())
+                .permissionMode(source.getPermissionMode())
+                .images(source.getImages() == null
+                        ? null : new ArrayList<>(source.getImages()))
+                .attachments(defensiveAttachments(source.getAttachments()))
+                .agentTeamsConfigId(source.getAgentTeamsConfigId())
+                .agentTeamsJson(source.getAgentTeamsJson())
+                .contextId(source.getContextId())
+                .context(defensiveJsonMap(source.getContext()))
+                .metadata(defensiveJsonMap(source.getMetadata()))
+                .contextAlias(source.getContextAlias())
+                .resume(source.isResume())
+                .initializeRuntimeAffinity(source.isInitializeRuntimeAffinity())
+                .build();
+    }
+
+    @Nullable
+    private Map<String, Object> defensiveJsonMap(@Nullable Map<String, Object> source) {
+        if (source == null) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.convertValue(
+                    source,
+                    new TypeReference<LinkedHashMap<String, Object>>() { });
+        } catch (IllegalArgumentException unsupported) {
+            throw new IllegalArgumentException(
+                    "task create structured payload is not JSON-safe", unsupported);
+        }
+    }
+
+    @Nullable
+    private List<Map<String, Object>> defensiveAttachments(
+            @Nullable List<Map<String, Object>> source) {
+        if (source == null) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.convertValue(
+                    source,
+                    new TypeReference<List<LinkedHashMap<String, Object>>>() { })
+                    .stream()
+                    .map(values -> (Map<String, Object>) values)
+                    .toList();
+        } catch (IllegalArgumentException unsupported) {
+            throw new IllegalArgumentException(
+                    "task create attachments are not JSON-safe", unsupported);
+        }
+    }
+
+    private final class GuardedA2aRoutePreparation {
+        private final TaskCreateTargetResolver.CreateExecutionPlan plan;
+        private final String agentId;
+        private final String bindingSource;
+        private boolean invoked;
+        @Nullable
+        private GuardedA2aRouteState prepared;
+
+        private GuardedA2aRoutePreparation(
+                TaskCreateTargetResolver.CreateExecutionPlan plan,
+                String agentId,
+                String bindingSource) {
+            this.plan = plan;
+            this.agentId = agentId;
+            this.bindingSource = bindingSource;
+        }
+
+        private synchronized void prepare() {
+            if (invoked) {
+                throw new IllegalStateException(
+                        "TASK_CREATE_A2A_ROUTE_PREPARATION_ALREADY_USED");
+            }
+            invoked = true;
+            TaskCreateContextNormalizer.CanonicalContextProof proof =
+                    plan.canonicalContextProof();
+            TaskCreateContextNormalizer.PendingContextClaim pendingClaim =
+                    plan.pendingContextClaim();
+            if (pendingClaim != null) {
+                if (taskCreateContextNormalizer == null) {
+                    throw new IllegalStateException(
+                            "TaskCreateContextNormalizer disappeared before pending claim");
+                }
+                proof = taskCreateContextNormalizer.claimPendingAfterPermit(
+                        pendingClaim, plan);
+            }
+            if (plan.sessionId() != null) {
+                bindingService.getOrBind(
+                        plan.sessionId(),
+                        agentId,
+                        plan.providerType(),
+                        bindingSource);
+            }
+            LifecycleIngressGate.IngressPermit ingressPermit = reserveBeforeEffect(
+                    plan.sessionId(), plan.physicalWorkerId());
+            prepared = new GuardedA2aRouteState(proof, ingressPermit);
+        }
+
+        private synchronized GuardedA2aRouteState requirePrepared() {
+            if (!invoked || prepared == null) {
+                throw new IllegalStateException(
+                        "TASK_CREATE_A2A_ROUTE_PREPARATION_MISSING");
+            }
+            return prepared;
+        }
+    }
+
+    private record GuardedA2aRouteState(
+            @Nullable TaskCreateContextNormalizer.CanonicalContextProof contextProof,
+            @Nullable LifecycleIngressGate.IngressPermit ingressPermit) {
+    }
+
+    private record CapturedA2aCreate(
+            A2aAgent agent,
+            String agentId,
+            String providerType,
+            TaskDispatchRequest persistenceRequest,
+            AgentResolveContext resolveContext,
+            A2aMessage message,
+            @Nullable TaskCreateContextNormalizer.CanonicalContextProof contextProof,
+            @Nullable LifecycleIngressGate.IngressPermit ingressPermit) {
+
+        private CapturedA2aCreate {
+            Objects.requireNonNull(agent, "A2A Agent is required");
+            Objects.requireNonNull(agentId, "A2A Agent id is required");
+            Objects.requireNonNull(providerType, "A2A Provider is required");
+            Objects.requireNonNull(persistenceRequest, "persistence request is required");
+            Objects.requireNonNull(resolveContext, "resolve context is required");
+            Objects.requireNonNull(message, "A2A message is required");
+        }
+    }
 
     private A2aMessage buildMessage(TaskDispatchRequest request) {
         List<A2aPart> parts = new ArrayList<>();
@@ -1273,9 +1447,15 @@ public class TaskDispatchFacade {
 
     private LifecycleIngressGate.IngressPermit reserveBeforeEffect(
             TaskDispatchRequest request) {
-        if (lifecycleIngressGate == null || request == null) return null;
-        return lifecycleIngressGate.reserveBeforeEffect(
-                request.getSessionId(), request.getWorkerId());
+        if (request == null) return null;
+        return reserveBeforeEffect(request.getSessionId(), request.getWorkerId());
+    }
+
+    private LifecycleIngressGate.IngressPermit reserveBeforeEffect(
+            @Nullable String sessionId,
+            @Nullable String workerId) {
+        if (lifecycleIngressGate == null) return null;
+        return lifecycleIngressGate.reserveBeforeEffect(sessionId, workerId);
     }
 
     private void confirmReservation(
