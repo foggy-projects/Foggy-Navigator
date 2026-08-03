@@ -70,7 +70,9 @@ public class AgentDiscoveryController {
     @PostMapping("/{agentId}/ask")
     public RX<A2aTask> askAgent(
             @PathVariable String agentId,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId) {
         CurrentUser currentUser = UserContext.getCurrentUser();
         String userId = currentUser.getUserId();
         String tenantId = currentUser.getTenantId();
@@ -87,7 +89,7 @@ public class AgentDiscoveryController {
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId(userId)
                 .tenantId(tenantId)
-                .requestSource("UI")
+                .requestSource("A2A")
                 .modelConfigId(body.get("modelConfigId"))
                 .build();
         A2aAgent agent = agentResolver.resolveAgent(agentId, context)
@@ -110,7 +112,6 @@ public class AgentDiscoveryController {
         if (sessionId != null && !sessionId.isBlank()) {
             metadata.put("tracked", true);
             metadata.put("sessionId", sessionId);
-            updateParticipatingAgents(sessionId, agentId);
         }
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             metadata.put("systemPrompt", systemPrompt);
@@ -134,11 +135,15 @@ public class AgentDiscoveryController {
                 .contextAlias(contextAlias)
                 .modelConfigId(body.get("modelConfigId"))
                 .metadata(metadata.isEmpty() ? null : metadata)
+                .clientRequestId(clientRequestId)
                 .build());
 
         // 确保返回值包含 contextId
         if (task.getContextId() == null) {
             task.setContextId(contextId);
+        }
+        if (sessionId != null && !sessionId.isBlank()) {
+            updateParticipatingAgents(sessionId, agentId);
         }
 
         return RX.ok(task);

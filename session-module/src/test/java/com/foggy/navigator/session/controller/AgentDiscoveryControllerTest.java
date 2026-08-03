@@ -5,6 +5,7 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
+import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
@@ -36,6 +37,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -82,16 +84,19 @@ class AgentDiscoveryControllerTest {
     }
 
     @Test
-    void askAgent_authorizesParentBeforeProviderResolutionAndMutation() {
+    void askAgent_submitsA2aSourceAndHeaderBeforeUpdatingParticipation() {
+        String clientRequestId = "550e8400-e29b-41d4-a716-446655440000";
         A2aTask task = A2aTask.builder().id("task-1").build();
+        SessionEntity session = new SessionEntity();
         when(agentResolver.resolveAgent(eq("agent-1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(agent));
-        when(sessionRepository.findById("session-1")).thenReturn(Optional.empty());
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
         when(agentSubmitPipeline.submit(any(AgentTaskSubmitRequest.class)))
                 .thenReturn(AgentTaskSubmitResult.of(task));
 
         RX<A2aTask> result = controller.askAgent(
-                "agent-1", Map.of("question", "help", "sessionId", "session-1"));
+                "agent-1", Map.of("question", "help", "sessionId", "session-1"),
+                clientRequestId);
 
         assertSame(task, result.getData());
         InOrder ordered = inOrder(
@@ -101,9 +106,20 @@ class AgentDiscoveryControllerTest {
         ordered.verify(agentResolver).resolveAgent(
                 eq("agent-1"),
                 argThat(context -> USER_ID.equals(context.getUserId())
-                        && TENANT_ID.equals(context.getTenantId())));
+                        && TENANT_ID.equals(context.getTenantId())
+                        && "A2A".equals(context.getRequestSource())));
+        ordered.verify(agentSubmitPipeline).submit(argThat(submitRequest ->
+                clientRequestId.equals(submitRequest.getClientRequestId())
+                        && submitRequest.getResolveContext() != null
+                        && "A2A".equals(submitRequest.getResolveContext().getRequestSource())
+                        && submitRequest.getMetadata() != null
+                        && Boolean.TRUE.equals(submitRequest.getMetadata().get("tracked"))
+                        && "session-1".equals(submitRequest.getMetadata().get("sessionId"))
+                        && !submitRequest.getMetadata().containsKey("clientRequestId")
+                        && !submitRequest.getMetadata().containsValue(clientRequestId)));
         ordered.verify(sessionRepository).findById("session-1");
-        ordered.verify(agentSubmitPipeline).submit(any(AgentTaskSubmitRequest.class));
+        ordered.verify(sessionRepository).save(session);
+        assertEquals("[\"agent-1\"]", session.getParticipatingAgentIds());
     }
 
     @Test
@@ -111,9 +127,46 @@ class AgentDiscoveryControllerTest {
         rejectSession("session-other");
 
         assertThrows(SecurityException.class, () -> controller.askAgent(
-                "agent-1", Map.of("question", "help", "sessionId", "session-other")));
+                "agent-1", Map.of("question", "help", "sessionId", "session-other"), null));
 
         verifyNoInteractions(agentResolver, sessionRepository, agentSubmitPipeline);
+    }
+
+    @Test
+    void askAgent_conflictDoesNotMutateParticipation() {
+        when(agentResolver.resolveAgent(eq("agent-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(agent));
+        when(agentSubmitPipeline.submit(any(AgentTaskSubmitRequest.class)))
+                .thenThrow(new IllegalStateException("TASK_CREATE_BINDING_CONFLICT"));
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> controller.askAgent(
+                        "agent-1",
+                        Map.of("question", "help", "sessionId", "session-1"),
+                        "550e8400-e29b-41d4-a716-446655440000"));
+
+        assertEquals("TASK_CREATE_BINDING_CONFLICT", failure.getMessage());
+        verifyNoInteractions(sessionRepository);
+    }
+
+    @Test
+    void askAgent_repeatedSuccessfulResultKeepsParticipationIdempotent() {
+        A2aTask recordedTask = A2aTask.builder().id("task-recorded-1").build();
+        SessionEntity session = new SessionEntity();
+        when(agentResolver.resolveAgent(eq("agent-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(agent));
+        when(agentSubmitPipeline.submit(any(AgentTaskSubmitRequest.class)))
+                .thenReturn(AgentTaskSubmitResult.of(recordedTask));
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        Map<String, String> body = Map.of("question", "help", "sessionId", "session-1");
+        String clientRequestId = "550e8400-e29b-41d4-a716-446655440000";
+
+        controller.askAgent("agent-1", body, clientRequestId);
+        controller.askAgent("agent-1", body, clientRequestId);
+
+        verify(sessionRepository, times(2)).findById("session-1");
+        verify(sessionRepository).save(session);
+        assertEquals("[\"agent-1\"]", session.getParticipatingAgentIds());
     }
 
     @Test

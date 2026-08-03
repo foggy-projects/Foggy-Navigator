@@ -17,6 +17,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -59,11 +60,13 @@ class TaskControllerTest {
     }
 
     @Test
-    void createTask_success() {
+    void createTask_passesOptionalClientRequestIdWithoutPayloadProjection() {
+        String clientRequestId = "550e8400-e29b-41d4-a716-446655440000";
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-1")
                 .workerId("worker-1")
                 .prompt("hello")
+                .metadata(Map.of("safe", "value"))
                 .build();
 
         DispatchTaskDTO dto = DispatchTaskDTO.builder()
@@ -75,17 +78,41 @@ class TaskControllerTest {
         when(agentSubmitPipeline.submit(any(AgentTaskSubmitRequest.class)))
                 .thenReturn(AgentTaskSubmitResult.of(null, dto));
 
-        RX<DispatchTaskDTO> result = controller.createTask(request);
+        RX<DispatchTaskDTO> result = controller.createTask(request, clientRequestId);
 
         assertNotNull(result.getData());
         assertEquals("task-1", result.getData().getTaskId());
+        ArgumentCaptor<AgentTaskSubmitRequest> submitCaptor =
+                ArgumentCaptor.forClass(AgentTaskSubmitRequest.class);
+        verify(agentSubmitPipeline).submit(submitCaptor.capture());
+        AgentTaskSubmitRequest submitted = submitCaptor.getValue();
+        assertEquals("session-1", submitted.getSessionId());
+        assertEquals("worker-1", submitted.getWorkerId());
+        assertEquals("hello", submitted.getPrompt());
+        assertNotNull(submitted.getResolveContext());
+        assertEquals("UI", submitted.getResolveContext().getRequestSource());
+        assertEquals(clientRequestId, submitted.getClientRequestId());
+        assertEquals(Map.of("safe", "value"), submitted.getMetadata());
+        assertFalse(submitted.getMetadata().containsKey("clientRequestId"));
+        assertFalse(submitted.getMetadata().containsValue(clientRequestId));
+        verify(taskDispatchFacade, never()).createTask(any(), any());
+    }
+
+    @Test
+    void createTask_withoutClientRequestIdLeavesCarrierAbsentForServerMint() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .prompt("hello")
+                .build();
+        DispatchTaskDTO dto = DispatchTaskDTO.builder().taskId("task-1").build();
+        when(agentSubmitPipeline.submit(any(AgentTaskSubmitRequest.class)))
+                .thenReturn(AgentTaskSubmitResult.of(null, dto));
+
+        controller.createTask(request, null);
+
         verify(agentSubmitPipeline).submit(argThat(submitRequest ->
-                "session-1".equals(submitRequest.getSessionId())
-                        && "worker-1".equals(submitRequest.getWorkerId())
-                        && "hello".equals(submitRequest.getPrompt())
+                submitRequest.getClientRequestId() == null
                         && submitRequest.getResolveContext() != null
                         && "UI".equals(submitRequest.getResolveContext().getRequestSource())));
-        verify(taskDispatchFacade, never()).createTask(any(), any());
     }
 
     @Test

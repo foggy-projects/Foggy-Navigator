@@ -42,7 +42,10 @@ public class TaskController {
      * 创建任务（统一入口）
      */
     @PostMapping
-    public RX<DispatchTaskDTO> createTask(@RequestBody TaskDispatchRequest request) {
+    public RX<DispatchTaskDTO> createTask(
+            @RequestBody TaskDispatchRequest request,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
 
@@ -54,7 +57,8 @@ public class TaskController {
                 .requestSource("UI")
                 .build();
 
-        AgentTaskSubmitResult submitResult = agentSubmitPipeline.submit(toSubmitRequest(request, context));
+        AgentTaskSubmitResult submitResult = agentSubmitPipeline.submit(
+                toSubmitRequest(request, context, clientRequestId));
         DispatchTaskDTO result = submitResult.getDispatchTask();
         if (result == null) {
             throw new IllegalStateException("Agent submit pipeline did not return dispatch task");
@@ -62,7 +66,10 @@ public class TaskController {
         return RX.ok(result);
     }
 
-    private AgentTaskSubmitRequest toSubmitRequest(TaskDispatchRequest request, AgentResolveContext context) {
+    private AgentTaskSubmitRequest toSubmitRequest(
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            String clientRequestId) {
         return AgentTaskSubmitRequest.builder()
                 .agentId(request.getAgentId())
                 .providerType(request.getProviderType())
@@ -84,6 +91,7 @@ public class TaskController {
                 .context(request.getContext())
                 .metadata(request.getMetadata())
                 .contextAlias(request.getContextAlias())
+                .clientRequestId(clientRequestId)
                 .build();
     }
 
