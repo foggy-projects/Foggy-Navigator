@@ -363,8 +363,24 @@ public final class TaskCreateCommandCoordinator {
                 TaskCreateTargetResolver.CreateExecutionPlan actualPlan,
                 Supplier<ProviderEffectIdentity> actualIdentitySupplier,
                 Supplier<PreparedProviderEffect<T>> preparedProviderEffectSupplier) {
+            return invokePrepared(
+                    actualPlan,
+                    actualIdentitySupplier,
+                    () -> {
+                        // Compatibility lane: no route preparation.
+                    },
+                    preparedProviderEffectSupplier);
+        }
+
+        <T> T invokePrepared(
+                TaskCreateTargetResolver.CreateExecutionPlan actualPlan,
+                Supplier<ProviderEffectIdentity> actualIdentitySupplier,
+                Runnable routePreparation,
+                Supplier<PreparedProviderEffect<T>> preparedProviderEffectSupplier) {
             Objects.requireNonNull(actualIdentitySupplier,
                     "provider effect identity supplier must not be null");
+            Objects.requireNonNull(routePreparation,
+                    "route preparation must not be null");
             Objects.requireNonNull(preparedProviderEffectSupplier,
                     "prepared provider effect supplier must not be null");
             synchronized (this) {
@@ -398,6 +414,9 @@ public final class TaskCreateCommandCoordinator {
                 }
                 providerEffectPermitted = true;
             }
+            routePreparation.run();
+            expectedPlan.requireMatches(request, context);
+            expectedBinding.requireActual(requireActualIdentity(actualIdentitySupplier));
             participants.prepareFreshTask();
             expectedPlan.requireMatches(request, context);
             PreparedProviderEffect<T> preparedProviderEffect = Objects.requireNonNull(

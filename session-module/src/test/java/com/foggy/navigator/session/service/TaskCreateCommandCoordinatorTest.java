@@ -166,6 +166,7 @@ class TaskCreateCommandCoordinatorTest {
         TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
         TaskDispatchRequest request = directRequest();
         AgentResolveContext context = directContext();
+        AtomicInteger routePreparations = new AtomicInteger();
         AtomicInteger providerEffects = new AtomicInteger();
 
         for (CommandOnceReceiptService.BeginEffectDisposition disposition
@@ -200,6 +201,7 @@ class TaskCreateCommandCoordinatorTest {
                         return gate.invokePrepared(
                                 plan,
                                 () -> actualIdentity(request, context),
+                                routePreparations::incrementAndGet,
                                 () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
                                         actualIdentity(request, context),
                                         Boolean.TRUE,
@@ -229,6 +231,86 @@ class TaskCreateCommandCoordinatorTest {
                         issued.decision(),
                         participants));
             }
+            assertEquals(0, routePreparations.get());
+            assertEquals(0, providerEffects.get());
+            verifyNoInteractions(participants);
+            verify(receiptService, never()).recordResult(any(), any(), any(), any());
+            verify(receiptService, never()).markAmbiguous(any(), any(), any());
+        }
+    }
+
+    @Test
+    void invalidEffectPermitsSkipRoutePreparationParticipantAndProvider() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        CommandOnceReceiptService.EffectPermit noProviderPermit = effectPermit(
+                CommandOnceReceiptService.BeginEffectDisposition.PERMITTED,
+                "request-invalid-permit-0",
+                CommandOnceReceiptService.ReceiptState.EFFECT_STARTED,
+                "attempt-invalid-permit-0",
+                null);
+        when(noProviderPermit.providerEffectPermitted()).thenReturn(false);
+        CommandOnceReceiptService.EffectPermit missingAttempt = effectPermit(
+                CommandOnceReceiptService.BeginEffectDisposition.PERMITTED,
+                "request-invalid-permit-1",
+                CommandOnceReceiptService.ReceiptState.EFFECT_STARTED,
+                null,
+                null);
+        CommandOnceReceiptService.EffectPermit blankAttempt = effectPermit(
+                CommandOnceReceiptService.BeginEffectDisposition.PERMITTED,
+                "request-invalid-permit-2",
+                CommandOnceReceiptService.ReceiptState.EFFECT_STARTED,
+                " ",
+                null);
+        CommandOnceReceiptService.EffectPermit[] invalidPermits = {
+                noProviderPermit, missingAttempt, blankAttempt
+        };
+
+        for (int index = 0; index < invalidPermits.length; index++) {
+            reset(receiptService, taskDispatchFacade);
+            String requestId = "request-invalid-permit-" + index;
+            Issued issued = issue(plan, requestId,
+                    CanonicalCommandEnvelope.CommandIngress.DIRECT);
+            AtomicInteger routePreparations = new AtomicInteger();
+            AtomicInteger artifactBuilds = new AtomicInteger();
+            AtomicInteger providerEffects = new AtomicInteger();
+            TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                    mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
+
+            when(receiptService.prepare(any(), any())).thenReturn(prepared(requestId));
+            when(receiptService.beginEffect(any(), any()))
+                    .thenReturn(invalidPermits[index]);
+            when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                    .thenAnswer(invocation -> {
+                        TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                                invocation.getArgument(3);
+                        return gate.invokePrepared(
+                                plan,
+                                () -> actualIdentity(request, context),
+                                routePreparations::incrementAndGet,
+                                () -> {
+                                    artifactBuilds.incrementAndGet();
+                                    return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                            actualIdentity(request, context),
+                                            Boolean.TRUE,
+                                            ignored -> {
+                                                providerEffects.incrementAndGet();
+                                                return exactTask("must-not-run");
+                                            });
+                                });
+                    });
+
+            assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                    request,
+                    context,
+                    plan,
+                    issued.envelope(),
+                    issued.decision(),
+                    participants));
+
+            assertEquals(0, routePreparations.get());
+            assertEquals(0, artifactBuilds.get());
             assertEquals(0, providerEffects.get());
             verifyNoInteractions(participants);
             verify(receiptService, never()).recordResult(any(), any(), any(), any());
@@ -327,6 +409,7 @@ class TaskCreateCommandCoordinatorTest {
                                 events.add("identity." + identityReads.incrementAndGet());
                                 return actualIdentity(request, context);
                             },
+                            () -> events.add("route.prepare"),
                             () -> {
                                 events.add("identity." + identityReads.incrementAndGet());
                                 TaskCreateCommandCoordinator.ProviderEffectIdentity identity =
@@ -366,9 +449,12 @@ class TaskCreateCommandCoordinatorTest {
                 "facade.create",
                 "identity.1",
                 "effect.begin",
-                "participant.prepare",
+                "route.prepare",
                 "plan.match.2",
                 "identity.2",
+                "participant.prepare",
+                "plan.match.3",
+                "identity.3",
                 "provider",
                 "participant.complete",
                 "receipt.record"), events);
@@ -555,6 +641,202 @@ class TaskCreateCommandCoordinatorTest {
         verifyNoInteractions(participants);
         verify(receiptService, never()).beginEffect(any(), any());
         verify(receiptService, never()).markAmbiguous(any(), any(), any());
+        verify(receiptService, never()).recordResult(any(), any(), any(), any());
+    }
+
+    @Test
+    void routePreparationFailureMarksAmbiguousBeforeParticipantAndProvider() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-route-preparation-failure-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicInteger routePreparations = new AtomicInteger();
+        AtomicInteger artifactBuilds = new AtomicInteger();
+        AtomicInteger providerEffects = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-route-preparation-failure-1"));
+        CommandOnceReceiptService.EffectPermit effectPermit = permitted(
+                "request-route-preparation-failure-1",
+                "attempt-route-preparation-failure-1");
+        when(receiptService.beginEffect(any(), any())).thenReturn(effectPermit);
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> actualIdentity(request, context),
+                            () -> {
+                                routePreparations.incrementAndGet();
+                                throw new IllegalStateException("route preparation unavailable");
+                            },
+                            () -> {
+                                artifactBuilds.incrementAndGet();
+                                return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        actualIdentity(request, context),
+                                        Boolean.TRUE,
+                                        ignored -> {
+                                            providerEffects.incrementAndGet();
+                                            return exactTask("must-not-run");
+                                        });
+                            });
+                });
+
+        assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
+
+        assertEquals(1, routePreparations.get());
+        assertEquals(0, artifactBuilds.get());
+        assertEquals(0, providerEffects.get());
+        verifyNoInteractions(participants);
+        verify(receiptService).markAmbiguous(
+                "request-route-preparation-failure-1",
+                "attempt-route-preparation-failure-1",
+                TaskCreateCommandCoordinator.TASK_CREATE_OUTCOME_UNKNOWN);
+        verify(receiptService, never()).recordResult(any(), any(), any(), any());
+    }
+
+    @Test
+    void postRoutePlanDriftMarksAmbiguousBeforeParticipantAndProvider() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-post-route-drift-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicInteger routePreparations = new AtomicInteger();
+        AtomicInteger artifactBuilds = new AtomicInteger();
+        AtomicInteger providerEffects = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-post-route-drift-1"));
+        CommandOnceReceiptService.EffectPermit effectPermit = permitted(
+                "request-post-route-drift-1", "attempt-post-route-drift-1");
+        when(receiptService.beginEffect(any(), any())).thenReturn(effectPermit);
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> actualIdentity(request, context),
+                            () -> {
+                                routePreparations.incrementAndGet();
+                                request.setWorkerId("worker-route-drift");
+                            },
+                            () -> {
+                                artifactBuilds.incrementAndGet();
+                                return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        actualIdentity(request, context),
+                                        Boolean.TRUE,
+                                        ignored -> {
+                                            providerEffects.incrementAndGet();
+                                            return exactTask("must-not-run");
+                                        });
+                            });
+                });
+
+        assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
+
+        assertEquals(1, routePreparations.get());
+        assertEquals(0, artifactBuilds.get());
+        assertEquals(0, providerEffects.get());
+        verifyNoInteractions(participants);
+        verify(receiptService).markAmbiguous(
+                "request-post-route-drift-1",
+                "attempt-post-route-drift-1",
+                TaskCreateCommandCoordinator.TASK_CREATE_OUTCOME_UNKNOWN);
+        verify(receiptService, never()).recordResult(any(), any(), any(), any());
+    }
+
+    @Test
+    void postRouteActualIdentityDriftMarksAmbiguousBeforeParticipantAndProvider() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-post-route-identity-drift-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicInteger routePreparations = new AtomicInteger();
+        AtomicInteger identityReads = new AtomicInteger();
+        AtomicInteger artifactBuilds = new AtomicInteger();
+        AtomicInteger providerEffects = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-post-route-identity-drift-1"));
+        CommandOnceReceiptService.EffectPermit effectPermit = permitted(
+                "request-post-route-identity-drift-1",
+                "attempt-post-route-identity-drift-1");
+        when(receiptService.beginEffect(any(), any())).thenReturn(effectPermit);
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> {
+                                if (identityReads.incrementAndGet() == 1) {
+                                    return actualIdentity(request, context);
+                                }
+                                return new TaskCreateCommandCoordinator.ProviderEffectIdentity(
+                                        TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                                        context.getTenantId(),
+                                        context.getUserId(),
+                                        null,
+                                        "codex-worker-drift",
+                                        request.getWorkerId(),
+                                        request.getModelConfigId(),
+                                        request.getModel(),
+                                        request.getSessionId(),
+                                        request.getDirectoryId());
+                            },
+                            routePreparations::incrementAndGet,
+                            () -> {
+                                artifactBuilds.incrementAndGet();
+                                return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        actualIdentity(request, context),
+                                        Boolean.TRUE,
+                                        ignored -> {
+                                            providerEffects.incrementAndGet();
+                                            return exactTask("must-not-run");
+                                        });
+                            });
+                });
+
+        assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
+
+        assertEquals(1, routePreparations.get());
+        assertEquals(2, identityReads.get());
+        assertEquals(0, artifactBuilds.get());
+        assertEquals(0, providerEffects.get());
+        verifyNoInteractions(participants);
+        verify(receiptService).markAmbiguous(
+                "request-post-route-identity-drift-1",
+                "attempt-post-route-identity-drift-1",
+                TaskCreateCommandCoordinator.TASK_CREATE_OUTCOME_UNKNOWN);
         verify(receiptService, never()).recordResult(any(), any(), any(), any());
     }
 
