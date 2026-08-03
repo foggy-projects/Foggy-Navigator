@@ -37,6 +37,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -318,6 +319,14 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         assertFalse(factory.supports(shared.submitRequest()));
         pipeline.submit(shared.submitRequest());
 
+        BoundRequest unscopedForward = bindJwt(
+                "jwt-forward", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        assertFalse(factory.supports(unscopedForward.submitRequest()));
+        pipeline.submit(unscopedForward.submitRequest());
+
         BoundRequest transitionalAsk = bindJwt(
                 "jwt-ask-ui", false, TrustedNavigatorTaskCreateCommandFactory.AGENT_ASK_ROUTE,
                 TrustedNavigatorTaskCreateCommandFactory.UI_SOURCE, USER_ID, TENANT_ID);
@@ -332,7 +341,7 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         assertFalse(factory.supports(mixedTransitionalAsk.submitRequest()));
         pipeline.submit(mixedTransitionalAsk.submitRequest());
 
-        assertEquals(4, terminalCalls.get());
+        assertEquals(5, terminalCalls.get());
         assertNull(transitionalAsk.submitRequest().getClientRequestId());
         assertNull(mixedTransitionalAsk.submitRequest().getClientRequestId());
         verifyNoInteractions(taskDispatchFacade, commandCoordinator);
@@ -471,6 +480,305 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
         }
 
         verifyNoInteractions(taskDispatchFacade, commandCoordinator, chain);
+    }
+
+    @Test
+    void forwardScopedJwtFreshBindsSemanticReceiptAndParticipantsExactlyOnce()
+            throws Exception {
+        String requestId = "550e8400-e29b-41d4-a716-446655440010";
+        String semanticFingerprint = "a".repeat(64);
+        BoundRequest bound = bindJwt(
+                "jwt-forward-fresh", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
+                factory.mintForwardScope(requestId, semanticFingerprint);
+        bound.submitRequest().setClientRequestId(scope.clientRequestId());
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-forward-fresh");
+        A2aTask a2aTask = A2aTask.builder().id("task-forward-fresh").build();
+        List<String> participantOrder = new ArrayList<>();
+        when(taskDispatchFacade.toTaskDispatchRequest(same(bound.submitRequest())))
+                .thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(
+                same(dispatchRequest), same(bound.submitRequest().getResolveContext())))
+                .thenReturn(plan);
+        when(commandCoordinator.execute(
+                same(dispatchRequest), same(bound.submitRequest().getResolveContext()),
+                same(plan), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                            invocation.getArgument(5);
+                    participants.prepareFreshTask();
+                    participants.completeFreshTask(task);
+                    return new TaskCreateCommandCoordinator.Executed(
+                            new TaskCreateCommandCoordinator.TaskReference(task.getTaskId()),
+                            task);
+                });
+        when(taskDispatchFacade.toA2aTask(same(task))).thenReturn(a2aTask);
+        DefaultAgentSubmitPipeline pipeline =
+                new DefaultAgentSubmitPipeline(List.of(factory));
+
+        AgentTaskSubmitResult result = factory.executeForwardScoped(
+                scope,
+                bound.submitRequest(),
+                new TrustedNavigatorTaskCreateCommandFactory.ForwardFreshParticipants() {
+                    @Override
+                    public void prepareFreshTask() {
+                        participantOrder.add("prepare");
+                    }
+
+                    @Override
+                    public void completeFreshTask(DispatchTaskDTO freshTask) {
+                        assertSame(task, freshTask);
+                        participantOrder.add("complete");
+                    }
+                },
+                () -> pipeline.submit(bound.submitRequest()));
+
+        assertSame(task, result.getDispatchTask());
+        assertSame(a2aTask, result.getTask());
+        assertEquals(List.of("prepare", "complete"), participantOrder);
+        assertEquals("ForwardCommandScope[content-free]", scope.toString());
+        ArgumentCaptor<CanonicalCommandEnvelope> envelope =
+                ArgumentCaptor.forClass(CanonicalCommandEnvelope.class);
+        verify(commandCoordinator).execute(
+                same(dispatchRequest), same(bound.submitRequest().getResolveContext()),
+                same(plan), envelope.capture(), any(), any());
+        CanonicalCommandEnvelope.CommandBinding binding = envelope.getValue().binding();
+        assertEquals(CanonicalCommandEnvelope.CommandIngress.DIRECT,
+                binding.ingress().ingress());
+        assertEquals(TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SURFACE,
+                binding.ingress().clientSurface());
+        assertEquals(TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                binding.ingress().routeId());
+        assertEquals(requestId, binding.request().clientRequestId());
+        assertEquals("UI_FORWARD_SHA256:" + semanticFingerprint,
+                binding.request().idempotencyKey());
+        assertEquals(requestId, binding.request().correlationId());
+        assertEquals(AuthorizationCredentialLane.NAVIGATOR_JWT,
+                binding.actor().lane());
+        verifyNoInteractions(chain);
+    }
+
+    @Test
+    void forwardScopedApiKeyReplayHydratesWithoutFreshParticipants() throws Exception {
+        String requestId = "550e8400-e29b-41d4-a716-446655440011";
+        BoundRequest bound = bindApiKey(
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
+                factory.mintForwardScope(requestId, "b".repeat(64));
+        bound.submitRequest().setClientRequestId(scope.clientRequestId());
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-forward-replay");
+        when(taskDispatchFacade.toTaskDispatchRequest(any())).thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(any(), any())).thenReturn(plan);
+        when(commandCoordinator.execute(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new TaskCreateCommandCoordinator.RecordedReplay(
+                        new TaskCreateCommandCoordinator.TaskReference(task.getTaskId())));
+        when(taskDispatchFacade.getTask(eq(task.getTaskId()), any()))
+                .thenReturn(Optional.of(task));
+        when(taskDispatchFacade.toA2aTask(same(task)))
+                .thenReturn(A2aTask.builder().id(task.getTaskId()).build());
+        AtomicInteger participantCalls = new AtomicInteger();
+        DefaultAgentSubmitPipeline pipeline =
+                new DefaultAgentSubmitPipeline(List.of(factory));
+
+        AgentTaskSubmitResult result = factory.executeForwardScoped(
+                scope,
+                bound.submitRequest(),
+                countingForwardParticipants(participantCalls),
+                () -> pipeline.submit(bound.submitRequest()));
+
+        assertSame(task, result.getDispatchTask());
+        assertEquals(0, participantCalls.get());
+        ArgumentCaptor<CanonicalCommandEnvelope> envelope =
+                ArgumentCaptor.forClass(CanonicalCommandEnvelope.class);
+        verify(commandCoordinator).execute(
+                same(dispatchRequest), same(bound.submitRequest().getResolveContext()),
+                same(plan), envelope.capture(), any(), any());
+        assertEquals(AuthorizationCredentialLane.NAVIGATOR_API_KEY,
+                envelope.getValue().binding().actor().lane());
+        verify(taskDispatchFacade).getTask(eq(task.getTaskId()),
+                same(bound.submitRequest().getResolveContext()));
+        verifyNoInteractions(chain);
+    }
+
+    @Test
+    void forwardSemanticFingerprintChangesBindingForSameClientRequest() throws Exception {
+        String requestId = "550e8400-e29b-41d4-a716-446655440012";
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-forward-binding");
+        when(taskDispatchFacade.toTaskDispatchRequest(any())).thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(any(), any())).thenReturn(plan);
+        when(commandCoordinator.execute(any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                            invocation.getArgument(5);
+                    participants.prepareFreshTask();
+                    participants.completeFreshTask(task);
+                    return new TaskCreateCommandCoordinator.Executed(
+                            new TaskCreateCommandCoordinator.TaskReference(task.getTaskId()),
+                            task);
+                });
+        when(taskDispatchFacade.toA2aTask(same(task)))
+                .thenReturn(A2aTask.builder().id(task.getTaskId()).build());
+
+        for (String fingerprint : List.of("c".repeat(64), "d".repeat(64))) {
+            BoundRequest bound = bindJwt(
+                    "jwt-forward-" + fingerprint.charAt(0), false,
+                    TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                    TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                    USER_ID, TENANT_ID);
+            TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope scope =
+                    factory.mintForwardScope(requestId, fingerprint);
+            bound.submitRequest().setClientRequestId(scope.clientRequestId());
+            DefaultAgentSubmitPipeline pipeline =
+                    new DefaultAgentSubmitPipeline(List.of(factory));
+            factory.executeForwardScoped(
+                    scope,
+                    bound.submitRequest(),
+                    countingForwardParticipants(new AtomicInteger()),
+                    () -> pipeline.submit(bound.submitRequest()));
+        }
+
+        ArgumentCaptor<CanonicalCommandEnvelope> envelopes =
+                ArgumentCaptor.forClass(CanonicalCommandEnvelope.class);
+        verify(commandCoordinator, times(2)).execute(
+                same(dispatchRequest), any(), same(plan), envelopes.capture(), any(), any());
+        CanonicalCommandEnvelope.CommandBinding first =
+                envelopes.getAllValues().get(0).binding();
+        CanonicalCommandEnvelope.CommandBinding second =
+                envelopes.getAllValues().get(1).binding();
+        assertEquals(first.request().clientRequestId(), second.request().clientRequestId());
+        assertEquals(requestId, first.request().clientRequestId());
+        assertEquals("UI_FORWARD_SHA256:" + "c".repeat(64),
+                first.request().idempotencyKey());
+        assertEquals("UI_FORWARD_SHA256:" + "d".repeat(64),
+                second.request().idempotencyKey());
+        assertNotEquals(first, second);
+    }
+
+    @Test
+    void forwardScopeRejectsInvalidDigestMissingStageNestedAndReuse() {
+        AgentTaskSubmitRequest request = AgentTaskSubmitRequest.builder()
+                .resolveContext(AgentResolveContext.builder()
+                        .requestSource(TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE)
+                        .build())
+                .build();
+        assertThrows(IllegalArgumentException.class,
+                () -> factory.mintForwardScope(null, "A".repeat(64)));
+        assertThrows(IllegalArgumentException.class,
+                () -> factory.mintForwardScope(null, "a".repeat(63)));
+
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope unused =
+                factory.mintForwardScope(null, "e".repeat(64));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        unused, request, noOpForwardParticipants(), () -> "stage-skipped"));
+        assertFalse(factory.supports(request));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        unused, request, noOpForwardParticipants(), () -> "reused"));
+
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope outer =
+                factory.mintForwardScope(null, "f".repeat(64));
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope inner =
+                factory.mintForwardScope(null, "1".repeat(64));
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        outer,
+                        request,
+                        noOpForwardParticipants(),
+                        () -> {
+                            assertThrows(IllegalStateException.class,
+                                    () -> factory.executeForwardScoped(
+                                            inner,
+                                            request,
+                                            noOpForwardParticipants(),
+                                            () -> "nested"));
+                            return "nested-caught";
+                        }));
+        assertFalse(factory.supports(request));
+        verifyNoInteractions(taskDispatchFacade, commandCoordinator, chain);
+    }
+
+    @Test
+    void forwardScopeTamperingAndIncompleteFreshCallbacksFailClosed() throws Exception {
+        DefaultAgentSubmitPipeline pipeline =
+                new DefaultAgentSubmitPipeline(List.of(factory));
+
+        BoundRequest routeDrift = bindJwt(
+                "jwt-forward-route", false,
+                TrustedNavigatorTaskCreateCommandFactory.TASK_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope routeScope =
+                factory.mintForwardScope(null, "2".repeat(64));
+        routeDrift.submitRequest().setClientRequestId(routeScope.clientRequestId());
+        assertThrows(SecurityException.class,
+                () -> factory.executeForwardScoped(
+                        routeScope,
+                        routeDrift.submitRequest(),
+                        noOpForwardParticipants(),
+                        () -> pipeline.submit(routeDrift.submitRequest())));
+        assertFalse(factory.supports(routeDrift.submitRequest()));
+
+        BoundRequest identity = bindJwt(
+                "jwt-forward-identity", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope identityScope =
+                factory.mintForwardScope(null, "3".repeat(64));
+        identity.submitRequest().setClientRequestId(identityScope.clientRequestId());
+        AgentTaskSubmitRequest replacement = AgentTaskSubmitRequest.builder()
+                .clientRequestId(identityScope.clientRequestId())
+                .resolveContext(identity.submitRequest().getResolveContext())
+                .build();
+        assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        identityScope,
+                        identity.submitRequest(),
+                        noOpForwardParticipants(),
+                        () -> pipeline.submit(replacement)));
+        assertFalse(factory.supports(identity.submitRequest()));
+
+        BoundRequest incomplete = bindJwt(
+                "jwt-forward-incomplete", false,
+                TrustedNavigatorTaskCreateCommandFactory.FORWARD_ROUTE,
+                TrustedNavigatorTaskCreateCommandFactory.UI_FORWARD_SOURCE,
+                USER_ID, TENANT_ID);
+        TrustedNavigatorTaskCreateCommandFactory.ForwardCommandScope incompleteScope =
+                factory.mintForwardScope(null, "4".repeat(64));
+        incomplete.submitRequest().setClientRequestId(incompleteScope.clientRequestId());
+        TaskDispatchRequest dispatchRequest = TaskDispatchRequest.builder().build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = plan(USER_ID, TENANT_ID);
+        DispatchTaskDTO task = exactTask("task-forward-incomplete");
+        when(taskDispatchFacade.toTaskDispatchRequest(same(incomplete.submitRequest())))
+                .thenReturn(dispatchRequest);
+        when(taskDispatchFacade.resolveCreateExecutionPlan(
+                same(dispatchRequest), same(incomplete.submitRequest().getResolveContext())))
+                .thenReturn(plan);
+        when(commandCoordinator.execute(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new TaskCreateCommandCoordinator.Executed(
+                        new TaskCreateCommandCoordinator.TaskReference(task.getTaskId()), task));
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> factory.executeForwardScoped(
+                        incompleteScope,
+                        incomplete.submitRequest(),
+                        noOpForwardParticipants(),
+                        () -> pipeline.submit(incomplete.submitRequest())));
+        assertEquals("FORWARD_TASK_CREATE_FRESH_PARTICIPANTS_INCOMPLETE",
+                failure.getMessage());
+        assertFalse(factory.supports(incomplete.submitRequest()));
+        verifyNoInteractions(chain);
     }
 
     @Test
@@ -719,6 +1027,26 @@ class TrustedNavigatorTaskCreateCommandFactoryTest {
                                 .build())
                         .build(),
                 request);
+    }
+
+    private TrustedNavigatorTaskCreateCommandFactory.ForwardFreshParticipants
+            noOpForwardParticipants() {
+        return countingForwardParticipants(new AtomicInteger());
+    }
+
+    private TrustedNavigatorTaskCreateCommandFactory.ForwardFreshParticipants
+            countingForwardParticipants(AtomicInteger calls) {
+        return new TrustedNavigatorTaskCreateCommandFactory.ForwardFreshParticipants() {
+            @Override
+            public void prepareFreshTask() {
+                calls.incrementAndGet();
+            }
+
+            @Override
+            public void completeFreshTask(DispatchTaskDTO freshTask) {
+                calls.incrementAndGet();
+            }
+        };
     }
 
     private AgentSubmitPipelineStage terminalStage(AtomicInteger calls) {

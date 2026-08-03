@@ -27,11 +27,12 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
  * Server-owned command factory and penultimate submit stage for trusted
- * Navigator MVC JWT task creation.
+ * Navigator MVC task creation.
  */
 @Service
 public final class TrustedNavigatorTaskCreateCommandFactory
@@ -39,10 +40,13 @@ public final class TrustedNavigatorTaskCreateCommandFactory
 
     static final String TASK_ROUTE = "/api/v1/tasks";
     static final String AGENT_ASK_ROUTE = "/api/v1/agents/{agentId}/ask";
+    static final String FORWARD_ROUTE = "/api/v1/session-relations/forward";
     static final String UI_SOURCE = "UI";
     static final String A2A_SOURCE = "A2A";
+    static final String UI_FORWARD_SOURCE = "UI_FORWARD";
     static final String UI_SURFACE = "NAVIGATOR_UI";
     static final String A2A_SURFACE = "NAVIGATOR_A2A";
+    static final String UI_FORWARD_SURFACE = "NAVIGATOR_UI_FORWARD";
 
     private static final String AUTHORIZATION = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
@@ -55,6 +59,9 @@ public final class TrustedNavigatorTaskCreateCommandFactory
     private static final Pattern STRICT_UUID = Pattern.compile(
             "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                     + "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+    private static final Pattern STRICT_SEMANTIC_FINGERPRINT =
+            Pattern.compile("[0-9a-f]{64}");
+    private static final String FORWARD_IDEMPOTENCY_PREFIX = "UI_FORWARD_SHA256:";
     private static final List<String> FOREIGN_CREDENTIAL_HEADERS = List.of(
             "X-Navigator-API-Key",
             "X-Sharing-Key",
@@ -89,6 +96,8 @@ public final class TrustedNavigatorTaskCreateCommandFactory
     private final TaskDispatchFacade taskDispatchFacade;
     private final TaskCreateCommandCoordinator commandCoordinator;
     private final VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority;
+    private final Object forwardScopeIssuer = new Object();
+    private final ThreadLocal<ActiveForwardScope> activeForwardScope = new ThreadLocal<>();
 
     public TrustedNavigatorTaskCreateCommandFactory(
             TaskDispatchFacade taskDispatchFacade,
@@ -112,8 +121,63 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         return Integer.MAX_VALUE - 1;
     }
 
+    ForwardCommandScope mintForwardScope(
+            @Nullable String suppliedClientRequestId,
+            String semanticFingerprint) {
+        return new ForwardCommandScope(
+                forwardScopeIssuer,
+                canonicalClientRequestId(suppliedClientRequestId),
+                semanticFingerprint);
+    }
+
+    <T> T executeForwardScoped(
+            ForwardCommandScope scope,
+            AgentTaskSubmitRequest expectedRequest,
+            ForwardFreshParticipants participants,
+            Supplier<T> submission) {
+        ActiveForwardScope existing = activeForwardScope.get();
+        if (existing != null) {
+            existing.poison();
+            throw conflict("FORWARD_TASK_CREATE_SCOPE_NESTED");
+        }
+        Objects.requireNonNull(scope, "forward command scope must not be null");
+        Objects.requireNonNull(expectedRequest, "expected submit request must not be null");
+        Objects.requireNonNull(participants, "forward fresh participants must not be null");
+        Objects.requireNonNull(submission, "forward scoped submission must not be null");
+        scope.requireIssuer(forwardScopeIssuer);
+        scope.claimExecution();
+        ActiveForwardScope active = new ActiveForwardScope(
+                forwardScopeIssuer, scope, expectedRequest, participants);
+        activeForwardScope.set(active);
+
+        Throwable primaryFailure = null;
+        try {
+            T result = submission.get();
+            active.requireSuccessfulExit();
+            return result;
+        } catch (RuntimeException | Error failure) {
+            primaryFailure = failure;
+            throw failure;
+        } finally {
+            RuntimeException cleanupFailure = null;
+            if (activeForwardScope.get() != active) {
+                cleanupFailure = conflict("FORWARD_TASK_CREATE_SCOPE_CLEANUP_CONFLICT");
+            }
+            activeForwardScope.remove();
+            if (cleanupFailure != null) {
+                if (primaryFailure == null) {
+                    throw cleanupFailure;
+                }
+                primaryFailure.addSuppressed(cleanupFailure);
+            }
+        }
+    }
+
     @Override
     public boolean supports(AgentTaskSubmitRequest request) {
+        if (activeForwardScope.get() != null) {
+            return true;
+        }
         AgentResolveContext context = request == null ? null : request.getResolveContext();
         String source = context == null ? null : context.getRequestSource();
         if (!UI_SOURCE.equals(source) && !A2A_SOURCE.equals(source)) {
@@ -136,71 +200,110 @@ public final class TrustedNavigatorTaskCreateCommandFactory
             AgentSubmitPipelineChain chain) {
         Objects.requireNonNull(request, "submit request must not be null");
         Objects.requireNonNull(chain, "pipeline chain must not be null");
-        TrustedIngress ingress = requireTrustedIngress(request);
-        if (ingress.deferredLegacy()) {
-            return chain.proceed(request);
-        }
+        ActiveForwardScope active = activeForwardScope.get();
+        try {
+            if (active != null) {
+                active.requireAdapter(forwardScopeIssuer);
+                active.claim(request);
+            }
+            TrustedIngress ingress = requireTrustedIngress(request, active);
+            if (ingress.deferredLegacy()) {
+                return chain.proceed(request);
+            }
 
-        String clientRequestId = canonicalClientRequestId(request.getClientRequestId());
-        request.setClientRequestId(clientRequestId);
-        AgentResolveContext context = Objects.requireNonNull(
-                request.getResolveContext(), "resolve context must not be null");
-        TaskDispatchRequest dispatchRequest =
-                taskDispatchFacade.toTaskDispatchRequest(request);
-        TaskCreateTargetResolver.CreateExecutionPlan plan =
-                taskDispatchFacade.resolveCreateExecutionPlan(dispatchRequest, context);
-        if (!ingress.ownerUserId().equals(plan.ownerUserId())
-                || !Objects.equals(ingress.tenantId(), plan.tenantId())) {
-            throw rejected("TRUSTED_NAVIGATOR_PLAN_OWNER_CONFLICT");
-        }
+            String clientRequestId;
+            String idempotencyKey;
+            if (active == null) {
+                clientRequestId = canonicalClientRequestId(request.getClientRequestId());
+                request.setClientRequestId(clientRequestId);
+                idempotencyKey = clientRequestId;
+            } else {
+                ForwardCommandScope scope = active.scope();
+                scope.requireClientRequest(request.getClientRequestId());
+                clientRequestId = scope.clientRequestId;
+                idempotencyKey = FORWARD_IDEMPOTENCY_PREFIX + scope.semanticFingerprint;
+            }
+            AgentResolveContext context = Objects.requireNonNull(
+                    request.getResolveContext(), "resolve context must not be null");
+            TaskDispatchRequest dispatchRequest =
+                    taskDispatchFacade.toTaskDispatchRequest(request);
+            TaskCreateTargetResolver.CreateExecutionPlan plan =
+                    taskDispatchFacade.resolveCreateExecutionPlan(dispatchRequest, context);
+            if (!ingress.ownerUserId().equals(plan.ownerUserId())
+                    || !Objects.equals(ingress.tenantId(), plan.tenantId())) {
+                throw rejected("TRUSTED_NAVIGATOR_PLAN_OWNER_CONFLICT");
+            }
 
-        TaskCreateCommandCoordinator.PlanBinding planBinding =
-                TaskCreateCommandCoordinator.PlanBinding.from(plan);
-        CanonicalCommandEnvelope.CommandBinding binding =
-                new CanonicalCommandEnvelope.CommandBinding(
-                        CanonicalCommandEnvelope.CommandKind.CREATE,
-                        new CanonicalCommandEnvelope.Ingress(
-                                ingress.commandIngress(),
-                                ingress.clientSurface(),
-                                ingress.routeId()),
-                        new CanonicalCommandEnvelope.Request(
-                                clientRequestId,
-                                clientRequestId,
-                                clientRequestId),
-                        new CanonicalCommandEnvelope.Actor(
-                                CanonicalCommandEnvelope.ActorKind.AUTHENTICATED_PRINCIPAL,
-                                AuthorizationPrincipalType.NAVIGATOR_USER,
-                                ingress.credentialSource().lane,
-                                principalFingerprint(
-                                        ingress.ownerUserId(),
-                                        ingress.credentialSource().fingerprintDomain),
-                                null),
-                        new CanonicalCommandEnvelope.Ownership(
-                                planBinding.tenantReference(),
-                                ingress.ownerUserId(),
-                                null,
-                                null),
-                        planBinding.target(),
-                        planBinding.effect());
-        VerifiedCommandAuthorizationDecision decision = serverAuthority.issue(binding);
-        CanonicalCommandEnvelope envelope = new CanonicalCommandEnvelope(
-                CanonicalCommandEnvelope.SCHEMA_VERSION,
-                binding,
-                decision.metadata());
+            TaskCreateCommandCoordinator.PlanBinding planBinding =
+                    TaskCreateCommandCoordinator.PlanBinding.from(plan);
+            CanonicalCommandEnvelope.CommandBinding binding =
+                    new CanonicalCommandEnvelope.CommandBinding(
+                            CanonicalCommandEnvelope.CommandKind.CREATE,
+                            new CanonicalCommandEnvelope.Ingress(
+                                    ingress.commandIngress(),
+                                    ingress.clientSurface(),
+                                    ingress.routeId()),
+                            new CanonicalCommandEnvelope.Request(
+                                    clientRequestId,
+                                    idempotencyKey,
+                                    clientRequestId),
+                            new CanonicalCommandEnvelope.Actor(
+                                    CanonicalCommandEnvelope.ActorKind.AUTHENTICATED_PRINCIPAL,
+                                    AuthorizationPrincipalType.NAVIGATOR_USER,
+                                    ingress.credentialSource().lane,
+                                    principalFingerprint(
+                                            ingress.ownerUserId(),
+                                            ingress.credentialSource().fingerprintDomain),
+                                    null),
+                            new CanonicalCommandEnvelope.Ownership(
+                                    planBinding.tenantReference(),
+                                    ingress.ownerUserId(),
+                                    null,
+                                    null),
+                            planBinding.target(),
+                            planBinding.effect());
+            VerifiedCommandAuthorizationDecision decision = serverAuthority.issue(binding);
+            CanonicalCommandEnvelope envelope = new CanonicalCommandEnvelope(
+                    CanonicalCommandEnvelope.SCHEMA_VERSION,
+                    binding,
+                    decision.metadata());
 
-        TaskCreateCommandCoordinator.TaskCreateCommandResult result =
-                commandCoordinator.execute(
-                        dispatchRequest, context, plan, envelope, decision);
-        DispatchTaskDTO dispatchTask;
-        if (result instanceof TaskCreateCommandCoordinator.Executed executed) {
-            dispatchTask = executed.freshTask();
-        } else if (result instanceof TaskCreateCommandCoordinator.RecordedReplay replay) {
-            dispatchTask = hydrateRecordedTask(replay.reference(), context, plan);
-        } else {
-            throw conflict("TASK_CREATE_COMMAND_RESULT_MISSING");
+            TaskCreateCommandCoordinator.TaskCreateCommandResult result = active == null
+                    ? commandCoordinator.execute(
+                            dispatchRequest, context, plan, envelope, decision)
+                    : commandCoordinator.execute(
+                            dispatchRequest,
+                            context,
+                            plan,
+                            envelope,
+                            decision,
+                            active.commandParticipants());
+            DispatchTaskDTO dispatchTask;
+            if (result instanceof TaskCreateCommandCoordinator.Executed executed) {
+                if (active != null) {
+                    active.requireFreshCompletion(executed.freshTask());
+                }
+                dispatchTask = executed.freshTask();
+            } else if (result instanceof TaskCreateCommandCoordinator.RecordedReplay replay) {
+                if (active != null) {
+                    active.requireReplayWithoutParticipants();
+                }
+                dispatchTask = hydrateRecordedTask(replay.reference(), context, plan);
+            } else {
+                throw conflict("TASK_CREATE_COMMAND_RESULT_MISSING");
+            }
+            AgentTaskSubmitResult submitResult = AgentTaskSubmitResult.of(
+                    taskDispatchFacade.toA2aTask(dispatchTask), dispatchTask);
+            if (active != null) {
+                active.markResultVerified();
+            }
+            return submitResult;
+        } catch (RuntimeException | Error failure) {
+            if (active != null) {
+                active.poison();
+            }
+            throw failure;
         }
-        return AgentTaskSubmitResult.of(
-                taskDispatchFacade.toA2aTask(dispatchTask), dispatchTask);
     }
 
     private DispatchTaskDTO hydrateRecordedTask(
@@ -238,7 +341,9 @@ public final class TrustedNavigatorTaskCreateCommandFactory
         }
     }
 
-    private TrustedIngress requireTrustedIngress(AgentTaskSubmitRequest request) {
+    private TrustedIngress requireTrustedIngress(
+            AgentTaskSubmitRequest request,
+            @Nullable ActiveForwardScope active) {
         HttpServletRequest servletRequest = Objects.requireNonNull(
                 currentServletRequest(), "trusted Navigator MVC request is unavailable");
         NavigatorCredentialSource credentialSource =
@@ -266,6 +371,19 @@ public final class TrustedNavigatorTaskCreateCommandFactory
                 HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         String route = routeAttribute == null ? null : routeAttribute.toString();
         String source = context.getRequestSource();
+        if (active != null) {
+            if (FORWARD_ROUTE.equals(route) && UI_FORWARD_SOURCE.equals(source)) {
+                return new TrustedIngress(
+                        CanonicalCommandEnvelope.CommandIngress.DIRECT,
+                        UI_FORWARD_SURFACE,
+                        FORWARD_ROUTE,
+                        currentUser.getUserId(),
+                        currentUser.getTenantId(),
+                        credentialSource,
+                        false);
+            }
+            throw rejected("TRUSTED_NAVIGATOR_FORWARD_ROUTE_SOURCE_CONFLICT");
+        }
         if (TASK_ROUTE.equals(route) && UI_SOURCE.equals(source)) {
             return new TrustedIngress(
                     CanonicalCommandEnvelope.CommandIngress.DIRECT,
@@ -425,6 +543,203 @@ public final class TrustedNavigatorTaskCreateCommandFactory
 
     private static IllegalStateException conflict(String safeCode) {
         return new IllegalStateException(safeCode);
+    }
+
+    interface ForwardFreshParticipants {
+        void prepareFreshTask();
+
+        void completeFreshTask(DispatchTaskDTO freshTask);
+    }
+
+    static final class ForwardCommandScope {
+        private final Object issuer;
+        private final String clientRequestId;
+        private final String semanticFingerprint;
+        private boolean executionClaimed;
+
+        private ForwardCommandScope(
+                Object issuer,
+                String clientRequestId,
+                String semanticFingerprint) {
+            this.issuer = Objects.requireNonNull(issuer, "scope issuer must not be null");
+            this.clientRequestId = Objects.requireNonNull(
+                    clientRequestId, "client request ID must not be null");
+            if (semanticFingerprint == null
+                    || !STRICT_SEMANTIC_FINGERPRINT.matcher(semanticFingerprint).matches()) {
+                throw new IllegalArgumentException(
+                        "semanticFingerprint must be 64 lowercase SHA-256 hex characters");
+            }
+            this.semanticFingerprint = semanticFingerprint;
+        }
+
+        String clientRequestId() {
+            return clientRequestId;
+        }
+
+        private void requireIssuer(Object expectedIssuer) {
+            if (issuer != expectedIssuer) {
+                throw conflict("FORWARD_TASK_CREATE_SCOPE_ISSUER_CONFLICT");
+            }
+        }
+
+        private synchronized void claimExecution() {
+            if (executionClaimed) {
+                throw conflict("FORWARD_TASK_CREATE_SCOPE_ALREADY_USED");
+            }
+            executionClaimed = true;
+        }
+
+        private void requireClientRequest(@Nullable String actualClientRequestId) {
+            if (!clientRequestId.equals(actualClientRequestId)) {
+                throw conflict("FORWARD_TASK_CREATE_SCOPE_REQUEST_ID_CONFLICT");
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "ForwardCommandScope[content-free]";
+        }
+    }
+
+    private static final class ActiveForwardScope {
+        private final Object factoryIssuer;
+        private final ForwardCommandScope scope;
+        private final AgentTaskSubmitRequest expectedRequest;
+        private final ForwardFreshParticipants participants;
+
+        private boolean claimed;
+        private boolean prepareInvoked;
+        private boolean prepareCompleted;
+        private boolean completionInvoked;
+        private boolean completionCompleted;
+        @Nullable
+        private DispatchTaskDTO completedTask;
+        private boolean resultVerified;
+        private boolean poisoned;
+
+        private ActiveForwardScope(
+                Object factoryIssuer,
+                ForwardCommandScope scope,
+                AgentTaskSubmitRequest expectedRequest,
+                ForwardFreshParticipants participants) {
+            this.factoryIssuer = factoryIssuer;
+            this.scope = scope;
+            this.expectedRequest = expectedRequest;
+            this.participants = participants;
+        }
+
+        private ForwardCommandScope scope() {
+            return scope;
+        }
+
+        private synchronized void requireAdapter(Object actualIssuer) {
+            if (poisoned || factoryIssuer != actualIssuer) {
+                poisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_ADAPTER_CONFLICT");
+            }
+        }
+
+        private synchronized void claim(AgentTaskSubmitRequest actualRequest) {
+            if (poisoned || claimed || actualRequest != expectedRequest) {
+                poisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_SCOPE_REQUEST_CONFLICT");
+            }
+            claimed = true;
+        }
+
+        private TaskCreateCommandCoordinator.TaskCreateParticipants commandParticipants() {
+            return new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                @Override
+                public void prepareFreshTask() {
+                    prepare();
+                }
+
+                @Override
+                public void completeFreshTask(DispatchTaskDTO freshTask) {
+                    complete(freshTask);
+                }
+            };
+        }
+
+        private void prepare() {
+            synchronized (this) {
+                if (poisoned || !claimed || prepareInvoked || completionInvoked) {
+                    poisoned = true;
+                    throw conflict("FORWARD_TASK_CREATE_PREPARATION_CONFLICT");
+                }
+                prepareInvoked = true;
+            }
+            try {
+                participants.prepareFreshTask();
+                synchronized (this) {
+                    prepareCompleted = true;
+                }
+            } catch (RuntimeException | Error failure) {
+                poison();
+                throw failure;
+            }
+        }
+
+        private void complete(DispatchTaskDTO freshTask) {
+            Objects.requireNonNull(freshTask, "fresh task must not be null");
+            synchronized (this) {
+                if (poisoned || !prepareCompleted || completionInvoked) {
+                    poisoned = true;
+                    throw conflict("FORWARD_TASK_CREATE_COMPLETION_CONFLICT");
+                }
+                completionInvoked = true;
+            }
+            try {
+                participants.completeFreshTask(freshTask);
+                synchronized (this) {
+                    completedTask = freshTask;
+                    completionCompleted = true;
+                }
+            } catch (RuntimeException | Error failure) {
+                poison();
+                throw failure;
+            }
+        }
+
+        private synchronized void requireFreshCompletion(DispatchTaskDTO freshTask) {
+            if (poisoned
+                    || !claimed
+                    || !prepareInvoked
+                    || !prepareCompleted
+                    || !completionInvoked
+                    || !completionCompleted
+                    || completedTask != freshTask) {
+                poisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_FRESH_PARTICIPANTS_INCOMPLETE");
+            }
+        }
+
+        private synchronized void requireReplayWithoutParticipants() {
+            if (poisoned || !claimed || prepareInvoked || completionInvoked) {
+                poisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_REPLAY_PARTICIPANT_CONFLICT");
+            }
+        }
+
+        private synchronized void markResultVerified() {
+            if (poisoned || resultVerified) {
+                poisoned = true;
+                throw conflict("FORWARD_TASK_CREATE_RESULT_CONFLICT");
+            }
+            resultVerified = true;
+        }
+
+        private synchronized void requireSuccessfulExit() {
+            if (poisoned || !claimed || !resultVerified) {
+                throw conflict(poisoned
+                        ? "FORWARD_TASK_CREATE_SCOPE_POISONED"
+                        : "FORWARD_TASK_CREATE_SCOPE_NOT_CONSUMED");
+            }
+        }
+
+        private synchronized void poison() {
+            poisoned = true;
+        }
     }
 
     private enum NavigatorCredentialSource {
