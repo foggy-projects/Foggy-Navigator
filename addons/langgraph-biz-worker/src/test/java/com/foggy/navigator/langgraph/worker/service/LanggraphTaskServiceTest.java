@@ -115,6 +115,7 @@ class LanggraphTaskServiceTest {
         assertFalse(service instanceof TaskListingProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
         assertTrue(service.supports(TaskQueryCapability.RESPOND_TO_TASK));
+        assertFalse(service.supports(TaskQueryCapability.CANCEL_TASK));
     }
 
     // -- createTask ----------------------------------------------------------
@@ -643,24 +644,85 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
-        void cancelTaskDirect_sets_aborted_for_active_task() {
-            service.cancelTaskDirect("lgt_existing", USER_ID);
+        void cancelTaskDirect_rejects_non_terminal_and_unknown_tasks_without_mutation() {
+            for (String rejectedStatus : new String[]{"PENDING", "RUNNING", "PAUSED", null}) {
+                existingTask.setStatus(rejectedStatus);
+                existingTask.setTaskSubStatus("WAITING");
+                existingTask.setInterruptionReason("prior_reason");
+                existingTask.setInterruptionMessage("prior message");
+                existingTask.setRecoverable(false);
+                existingTask.setErrorMessage("prior error");
 
-            assertEquals("ABORTED", existingTask.getStatus());
-            assertEquals("INTERRUPTED", existingTask.getTaskSubStatus());
-            assertEquals("user_cancelled", existingTask.getInterruptionReason());
-            assertEquals(true, existingTask.getRecoverable());
-            assertEquals("Cancelled by user", existingTask.getErrorMessage());
-            verify(taskRepository).save(existingTask);
+                UnsupportedOperationException error = assertThrows(
+                        UnsupportedOperationException.class,
+                        () -> {
+                            if ("RUNNING".equals(rejectedStatus)) {
+                                service.cancelTaskDirect("lgt_existing", USER_ID, true);
+                            } else {
+                                service.cancelTaskDirect("lgt_existing", USER_ID);
+                            }
+                        });
 
-            TaskStatusChangeEvent event = captureStatusChangeEvent();
-            assertEquals("PENDING", event.getPreviousStatus());
-            assertEquals("ABORTED", event.getStatus());
-            assertEquals(Boolean.TRUE, event.getRecoverable());
+                assertEquals("TERMINATION_REQUEST_NOT_SUPPORTED", error.getMessage());
+                assertEquals(rejectedStatus, existingTask.getStatus());
+                assertEquals("WAITING", existingTask.getTaskSubStatus());
+                assertEquals("prior_reason", existingTask.getInterruptionReason());
+                assertEquals("prior message", existingTask.getInterruptionMessage());
+                assertEquals(Boolean.FALSE, existingTask.getRecoverable());
+                assertEquals("prior error", existingTask.getErrorMessage());
+            }
+
+            verify(taskRepository, times(4))
+                    .findByTaskIdAndUserId("lgt_existing", USER_ID);
+            verify(taskRepository, never()).save(any());
+            verify(sessionTaskRepository, never()).save(any());
+            verify(sessionEntityRepository, never()).save(any());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(workerService, never()).getWorkerEntity(anyString());
+            verify(workerService, never()).createClient(any());
+            verifyNoInteractions(workerClient);
         }
 
         @Test
-        void cancelTaskDirect_records_recoverable_interruption_on_worker() {
+        void cancelTaskDirect_keeps_terminal_tasks_as_side_effect_free_noops() {
+            for (String terminalStatus : List.of("COMPLETED", "FAILED", "ABORTED")) {
+                existingTask.setStatus(terminalStatus);
+                assertDoesNotThrow(() ->
+                        service.cancelTaskDirect("lgt_existing", USER_ID, true));
+                assertEquals(terminalStatus, existingTask.getStatus());
+            }
+
+            verify(taskRepository, times(3))
+                    .findByTaskIdAndUserId("lgt_existing", USER_ID);
+            verify(taskRepository, never()).save(any());
+            verify(sessionTaskRepository, never()).save(any());
+            verify(sessionEntityRepository, never()).save(any());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(workerService, never()).getWorkerEntity(anyString());
+            verify(workerService, never()).createClient(any());
+            verifyNoInteractions(workerClient);
+        }
+
+        @Test
+        void cancelTaskDirect_checks_owner_before_observing_task_state() {
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.cancelTaskDirect("lgt_existing", "foreign-user", true));
+
+            assertEquals("Task not found: lgt_existing", error.getMessage());
+            assertEquals("PENDING", existingTask.getStatus());
+            verify(taskRepository).findByTaskIdAndUserId("lgt_existing", "foreign-user");
+            verify(taskRepository, never()).findByTaskId("lgt_existing");
+            verify(taskRepository, never()).save(any());
+            verify(sessionTaskRepository, never()).save(any());
+            verify(sessionEntityRepository, never()).save(any());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(workerService, never()).getWorkerEntity(anyString());
+            verify(workerService, never()).createClient(any());
+            verifyNoInteractions(workerClient);
+        }
+
+        @Test
+        void recordTaskInterruption_preserves_task_status_and_records_recoverable_worker_fact() {
             existingTask.setWorkerId(WORKER_ID);
             existingTask.setSessionId(SESSION_ID);
             existingTask.setContextId("ctx-1");
@@ -673,18 +735,26 @@ class LanggraphTaskServiceTest {
                     anyString(), anyString(), anyString(), anyString(), anyString(), anyMap()
             )).thenReturn(Mono.just(Map.of("status", "recorded")));
 
-            service.cancelTaskDirect("lgt_existing", USER_ID);
+            service.recordTaskInterruption("lgt_existing", "stream_error", "connection reset");
+
+            assertEquals("PENDING", existingTask.getStatus());
+            assertEquals("INTERRUPTED", existingTask.getTaskSubStatus());
+            assertEquals("stream_error", existingTask.getInterruptionReason());
+            assertEquals("connection reset", existingTask.getInterruptionMessage());
+            assertEquals(Boolean.TRUE, existingTask.getRecoverable());
+            verify(taskRepository).save(existingTask);
+            verify(eventPublisher, never()).publishEvent(any());
 
             verify(workerClient).recordInterruption(
                     eq("lgt_existing"),
                     eq(SESSION_ID),
                     eq("ctx-1"),
-                    eq("user_cancelled"),
-                    eq("Cancelled by user"),
+                    eq("stream_error"),
+                    eq("connection reset"),
                     argThat(context -> "ctx-1".equals(context.get("contextId"))
                             && SESSION_ID.equals(context.get("session_id"))
                             && AGENT_ID.equals(context.get("agentId"))
-                            && "ABORTED".equals(context.get("taskStatus")))
+                            && "PENDING".equals(context.get("taskStatus")))
             );
         }
 

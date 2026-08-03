@@ -76,7 +76,6 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESPOND_TO_TASK,
-            TaskQueryCapability.CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK);
 
     private final LanggraphTaskRepository taskRepository;
@@ -489,20 +488,18 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     public void cancelTaskDirect(String taskId, String userId) {
         LanggraphTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        if (!"RUNNING".equals(entity.getStatus()) && !"PENDING".equals(entity.getStatus())) {
+        if ("COMPLETED".equals(entity.getStatus())
+                || "FAILED".equals(entity.getStatus())
+                || "ABORTED".equals(entity.getStatus())) {
             return;
         }
-        String previousStatus = entity.getStatus();
-        entity.setStatus("ABORTED");
-        entity.setTaskSubStatus("INTERRUPTED");
-        entity.setInterruptionReason("user_cancelled");
-        entity.setInterruptionMessage("Cancelled by user");
-        entity.setRecoverable(true);
-        entity.setErrorMessage("Cancelled by user");
-        persistTask(entity);
-        publishStatusChange(entity, previousStatus);
-        recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
-        log.info("Task cancelled: taskId={}", taskId);
+        throw new UnsupportedOperationException("TERMINATION_REQUEST_NOT_SUPPORTED");
+    }
+
+    @Override
+    @Transactional
+    public void cancelTaskDirect(String taskId, String userId, boolean force) {
+        cancelTaskDirect(taskId, userId);
     }
 
     public void recordTaskInterruption(String taskId, String reason, String errorMessage) {
