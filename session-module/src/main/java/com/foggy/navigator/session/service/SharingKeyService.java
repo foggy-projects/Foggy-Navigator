@@ -37,6 +37,7 @@ public class SharingKeyService {
     private final UserRepository userRepository;
     private final String externalUrl;
     private final Object askAuthorityIssuer = new Object();
+    private final Object taskTerminationAuthorityIssuer = new Object();
 
     public SharingKeyService(SharingKeyRepository repository,
                              SharingKeyGenerator keyGenerator,
@@ -176,6 +177,43 @@ public class SharingKeyService {
     }
 
     /**
+     * Mints a process-local, raw-key-free authority for one Shared task cancellation.
+     * Cancellation never consumes the Shared ask quota.
+     */
+    @Transactional(readOnly = true)
+    SharedTaskTerminationAuthority mintTaskTerminationAuthority(
+            String plainSharingKey) {
+        SharingKeyEntity entity = validateBase(plainSharingKey);
+        checkOperation(entity, "task:cancel");
+        String tenantId = requireOwnerTenant(entity.getOwnerUserId());
+        return new SharedTaskTerminationAuthority(
+                taskTerminationAuthorityIssuer,
+                entity.getId(),
+                entity.getOwnerUserId(),
+                tenantId,
+                entity.getAgentId());
+    }
+
+    /**
+     * Revalidates the current Sharing Key row immediately before command receipt admission.
+     * This is deliberately read-only and does not retain a database lock across Provider I/O.
+     */
+    @Transactional(readOnly = true)
+    void requireCurrentTaskTerminationAuthority(
+            SharedTaskTerminationAuthority authority) {
+        requireIssuedTaskTerminationAuthority(authority);
+        SharingKeyEntity entity = repository.findById(authority.sharingKeyId)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid sharing key"));
+        requireExactTaskTerminationAuthorityIdentity(authority, entity);
+        validateUsable(entity);
+        checkOperation(entity, "task:cancel");
+        String currentTenantId = requireOwnerTenant(entity.getOwnerUserId());
+        if (!Objects.equals(authority.tenantId, currentTenantId)) {
+            throw inaccessibleSharedResource();
+        }
+    }
+
+    /**
      * Revalidates and consumes one Shared ask under a pessimistic row lock.
      * Only a server-minted authority is accepted; the raw Sharing Key is never reintroduced.
      */
@@ -300,6 +338,23 @@ public class SharingKeyService {
         }
     }
 
+    private void requireIssuedTaskTerminationAuthority(
+            SharedTaskTerminationAuthority authority) {
+        if (authority == null || authority.issuer != taskTerminationAuthorityIssuer) {
+            throw inaccessibleSharedResource();
+        }
+    }
+
+    private void requireExactTaskTerminationAuthorityIdentity(
+            SharedTaskTerminationAuthority authority,
+            SharingKeyEntity entity) {
+        if (!Objects.equals(authority.sharingKeyId, entity.getId())
+                || !Objects.equals(authority.ownerUserId, entity.getOwnerUserId())
+                || !Objects.equals(authority.agentId, entity.getAgentId())) {
+            throw inaccessibleSharedResource();
+        }
+    }
+
     private static SecurityException inaccessibleSharedResource() {
         return new SecurityException("shared resource is not accessible");
     }
@@ -382,6 +437,43 @@ public class SharingKeyService {
         @Override
         public String toString() {
             return "SharedAskAuthority[content-free]";
+        }
+    }
+
+    /** Immutable Shared task-cancel authority that never retains the raw Sharing Key. */
+    static final class SharedTaskTerminationAuthority {
+        private final Object issuer;
+        private final String sharingKeyId;
+        private final String ownerUserId;
+        private final String tenantId;
+        private final String agentId;
+
+        private SharedTaskTerminationAuthority(
+                Object issuer,
+                String sharingKeyId,
+                String ownerUserId,
+                String tenantId,
+                String agentId) {
+            this.issuer = Objects.requireNonNull(issuer, "authority issuer is required");
+            this.sharingKeyId = Objects.requireNonNull(
+                    sharingKeyId, "sharingKeyId is required");
+            this.ownerUserId = Objects.requireNonNull(
+                    ownerUserId, "ownerUserId is required");
+            this.tenantId = Objects.requireNonNull(tenantId, "tenantId is required");
+            this.agentId = Objects.requireNonNull(agentId, "agentId is required");
+        }
+
+        String sharingKeyId() { return sharingKeyId; }
+
+        String ownerUserId() { return ownerUserId; }
+
+        String tenantId() { return tenantId; }
+
+        String agentId() { return agentId; }
+
+        @Override
+        public String toString() {
+            return "SharedTaskTerminationAuthority[content-free]";
         }
     }
 

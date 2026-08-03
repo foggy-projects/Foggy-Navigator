@@ -2,6 +2,8 @@ package com.foggy.navigator.session.controller;
 
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
@@ -10,6 +12,7 @@ import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.entity.UserEntity;
 import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.service.ScopedSharedTaskTerminationCommandAdapter;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
@@ -28,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Shared API 下的任务/会话查询端点，统一使用 X-Sharing-Key 鉴权。
@@ -37,12 +41,16 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SharedTaskController {
 
+    private static final Pattern SAFE_TERMINATION_ERROR_CODE =
+            Pattern.compile("TERMINATION_[A-Z0-9_]{1,128}");
+
     private final SharingKeyService sharingKeyService;
     private final UnifiedAgentResolver agentResolver;
     private final TaskDispatchFacade taskDispatchFacade;
     private final SessionManager sessionManager;
     private final UserRepository userRepository;
     private final SessionTaskResourceAccessService resourceAccessService;
+    private final ScopedSharedTaskTerminationCommandAdapter taskTerminationCommandAdapter;
 
     @GetMapping("/tasks/{taskId}")
     public RX<A2aTask> getTask(
@@ -72,21 +80,39 @@ public class SharedTaskController {
     @PostMapping("/tasks/{taskId}/cancel")
     public RX<String> cancelTask(
             @RequestHeader("X-Sharing-Key") String sharingKey,
-            @PathVariable String taskId) {
+            @PathVariable String taskId,
+            @RequestHeader(value = "X-Navigator-Client-Request-Id", required = false)
+            String clientRequestId) {
+        CurrentUser ambientUser = UserContext.getCurrentUser();
+        UserContext.clear();
         try {
-            SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
-            sharingKeyService.checkOperation(keyEntity, "task:cancel");
-            Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
-            if (taskOpt.isEmpty()) {
-                return RX.failA("Task not found: " + taskId);
-            }
-
-            AgentResolveContext context = buildSharedContext(keyEntity);
-            taskDispatchFacade.cancelTask(taskId, taskOpt.get().getAgentId(), context);
+            taskTerminationCommandAdapter.terminateTask(
+                    sharingKey, taskId, clientRequestId);
             return RX.ok("Task cancelled");
-        } catch (IllegalArgumentException e) {
+        } catch (ScopedSharedTaskTerminationCommandAdapter
+                .SharedTerminationAdmissionRejectedException e) {
             return RX.failA(e.getMessage());
+        } catch (UnsupportedOperationException | IllegalArgumentException e) {
+            return RX.failA("TERMINATION_REQUEST_NOT_SUPPORTED");
+        } catch (IllegalStateException e) {
+            return RX.failB(safeTerminationErrorCode(e.getMessage()));
+        } catch (org.springframework.dao.PessimisticLockingFailureException e) {
+            return RX.failB(
+                    "Failed to cancel task due to concurrent update, please retry");
+        } finally {
+            if (ambientUser == null) {
+                UserContext.clear();
+            } else {
+                UserContext.setCurrentUser(ambientUser);
+            }
         }
+    }
+
+    private String safeTerminationErrorCode(String message) {
+        if (message != null && SAFE_TERMINATION_ERROR_CODE.matcher(message).matches()) {
+            return message;
+        }
+        return "TERMINATION_REQUEST_FAILED";
     }
 
     @GetMapping("/sessions/{sessionId}")
