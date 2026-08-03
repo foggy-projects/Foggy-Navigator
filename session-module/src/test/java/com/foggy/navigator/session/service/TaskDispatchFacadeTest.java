@@ -717,11 +717,16 @@ class TaskDispatchFacadeTest {
         LifecycleIngressGate.IngressPermit ingressPermit =
                 mock(LifecycleIngressGate.IngressPermit.class);
         ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(
+                facade, "agentConversationContextRepository", agentConversationContextRepository);
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .agentId("agent-direct-1")
                 .providerType("codex-worker")
                 .workerId("worker-1")
                 .sessionId("session-1")
+                .contextId("ctx-direct-1")
+                .model("model-direct-1")
                 .prompt("gated direct")
                 .initializeRuntimeAffinity(true)
                 .build();
@@ -743,37 +748,274 @@ class TaskDispatchFacadeTest {
                         .providerType("codex-worker")
                         .workerId("worker-1")
                         .sessionId("session-1")
+                        .contextId("ctx-direct-1")
                         .build());
+        SessionTaskEntity storedTask = new SessionTaskEntity();
+        storedTask.setTaskId("task-gated-direct-1");
+        storedTask.setProviderType("codex-worker");
+        when(sessionTaskRepository.findByTaskIdForUpdate("task-gated-direct-1"))
+                .thenReturn(Optional.of(storedTask));
         clearInvocations(taskQueryProvider);
 
         DispatchTaskDTO result = facade.createTask(
                 request, context, plan, effectGate);
 
         assertEquals("task-gated-direct-1", result.getTaskId());
-        InOrder ordered = inOrder(lifecycleGate, taskQueryProvider, effectGate);
-        ordered.verify(lifecycleGate).reserveBeforeEffect("session-1", "worker-1");
-        ordered.verify(taskQueryProvider, atLeastOnce()).getProviderType();
-        ordered.verify(effectGate).invoke(
+        assertFalse(InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                request.getMetadata()));
+        InOrder ordered = inOrder(
+                effectGate,
+                lifecycleGate,
+                taskQueryProvider,
+                sessionTaskRepository,
+                resourceAccessService,
+                agentContextStore);
+        ordered.verify(effectGate).invokePrepared(
                 eq(plan),
-                argThat(identity -> "agent-direct-1".equals(identity.logicalAgentId())),
+                any(),
+                any(),
                 any());
+        ordered.verify(lifecycleGate).reserveBeforeEffect("session-1", "worker-1");
         ordered.verify(taskQueryProvider).createTaskDirect(
                 argThat(InternalTaskDispatchMarkers::requestsRuntimeAffinityInitialization),
                 eq("user-1"), isNull());
+        ordered.verify(sessionTaskRepository).findByTaskIdForUpdate("task-gated-direct-1");
+        ordered.verify(sessionTaskRepository).save(storedTask);
+        ordered.verify(resourceAccessService).requireOwnedSession(
+                "session-1", "user-1", null);
+        ordered.verify(agentContextStore).saveSessionRefFull(
+                eq("ctx-direct-1"),
+                eq("codex-worker"),
+                isNull(),
+                eq("session-1"),
+                eq("user-1"),
+                eq("agent-direct-1"),
+                isNull());
         ordered.verify(lifecycleGate).confirm(ingressPermit, "task-gated-direct-1");
+        assertEquals("model-direct-1", storedTask.getModel());
+        verify(lifecycleGate, never()).releaseFailed(any());
+        verify(effectGate, never()).invoke(any(), any(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void guardedDirectCapturedParamsAndPersistenceIgnoreMutableDrift() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        Map<String, Object> nestedMetadata = new LinkedHashMap<>();
+        nestedMetadata.put("value", "metadata-before-participant");
+        Map<String, Object> nestedContext = new LinkedHashMap<>();
+        nestedContext.put("value", "context-before-participant");
+        Map<String, Object> attachment = new LinkedHashMap<>();
+        attachment.put("value", "attachment-before-participant");
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .model("model-before-participant")
+                .metadata(Map.of("nested", nestedMetadata))
+                .context(Map.of("nested", nestedContext))
+                .attachments(List.of(attachment))
+                .initializeRuntimeAffinity(true)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                null,
+                "codex-worker",
+                TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                null);
+        TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        doAnswer(invocation -> {
+            Supplier<TaskCreateCommandCoordinator.ProviderEffectIdentity> identitySupplier =
+                    invocation.getArgument(1);
+            Runnable routePreparation = invocation.getArgument(2);
+            Supplier<TaskCreateCommandCoordinator.PreparedProviderEffect<Object>>
+                    preparedEffectSupplier = invocation.getArgument(3);
+            identitySupplier.get();
+            routePreparation.run();
+            identitySupplier.get();
+
+            nestedMetadata.put("value", "metadata-from-participant");
+            nestedContext.put("value", "context-from-participant");
+            attachment.put("value", "attachment-from-participant");
+            request.setModel("model-from-participant");
+            TaskCreateCommandCoordinator.PreparedProviderEffect<Object> prepared =
+                    preparedEffectSupplier.get();
+
+            nestedMetadata.put("value", "metadata-after-capture");
+            nestedContext.put("value", "context-after-capture");
+            attachment.put("value", "attachment-after-capture");
+            request.setModel("model-after-capture");
+            return prepared.execute();
+        }).when(gate).invokePrepared(eq(plan), any(), any(), any());
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), isNull()))
+                .thenAnswer(invocation -> {
+                    Map<String, Object> params = invocation.getArgument(0);
+                    assertEquals("metadata-from-participant",
+                            assertInstanceOf(Map.class, params.get("nested")).get("value"));
+                    Map<String, Object> providerContext = assertInstanceOf(
+                            Map.class, params.get("context"));
+                    assertEquals("context-from-participant",
+                            assertInstanceOf(Map.class, providerContext.get("nested"))
+                                    .get("value"));
+                    List<Map<String, Object>> providerAttachments = assertInstanceOf(
+                            List.class, params.get("attachments"));
+                    assertEquals(
+                            "attachment-from-participant",
+                            providerAttachments.get(0).get("value"));
+                    assertEquals("model-from-participant", params.get("model"));
+                    assertTrue(InternalTaskDispatchMarkers
+                            .requestsRuntimeAffinityInitialization(params));
+
+                    ((Map<String, Object>) params.get("nested"))
+                            .put("value", "metadata-from-provider");
+                    ((Map<String, Object>) providerContext.get("nested"))
+                            .put("value", "context-from-provider");
+                    providerAttachments.get(0)
+                            .put("value", "attachment-from-provider");
+                    params.put("model", "model-from-provider");
+                    return DispatchTaskDTO.builder()
+                            .taskId("task-direct-snapshot-1")
+                            .providerType("codex-worker")
+                            .workerId("worker-1")
+                            .build();
+                });
+        SessionTaskEntity storedTask = new SessionTaskEntity();
+        storedTask.setTaskId("task-direct-snapshot-1");
+        storedTask.setProviderType("codex-worker");
+        when(sessionTaskRepository.findByTaskIdForUpdate("task-direct-snapshot-1"))
+                .thenReturn(Optional.of(storedTask));
+
+        DispatchTaskDTO result = facade.createTask(request, context, plan, gate);
+
+        assertEquals("task-direct-snapshot-1", result.getTaskId());
+        assertEquals("model-from-participant", storedTask.getModel());
+        assertEquals("model-after-capture", request.getModel());
+        assertEquals("metadata-after-capture", nestedMetadata.get("value"));
+        assertEquals("context-after-capture", nestedContext.get("value"));
+        assertEquals("attachment-after-capture", attachment.get("value"));
+        assertFalse(InternalTaskDispatchMarkers.requestsRuntimeAffinityInitialization(
+                request.getMetadata()));
+        verify(sessionTaskRepository).save(storedTask);
+    }
+
+    @Test
+    void guardedDirectRebuildsActualProviderIdentityAfterRoutePreparation() {
+        LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
+        LifecycleIngressGate.IngressPermit ingressPermit =
+                mock(LifecycleIngressGate.IngressPermit.class);
+        ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .sessionId("session-direct-provider-drift")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-direct-provider-drift")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                null,
+                "codex-worker",
+                TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                "session-direct-provider-drift");
+        AtomicReference<String> actualProviderType =
+                new AtomicReference<>("codex-worker");
+        when(taskQueryProvider.getProviderType())
+                .thenAnswer(ignored -> actualProviderType.get());
+        when(lifecycleGate.reserveBeforeEffect(
+                "session-direct-provider-drift", "worker-1"))
+                .thenReturn(ingressPermit);
+        TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
+        doAnswer(invocation -> {
+            Supplier<TaskCreateCommandCoordinator.ProviderEffectIdentity> identitySupplier =
+                    invocation.getArgument(1);
+            Runnable routePreparation = invocation.getArgument(2);
+            TaskCreateCommandCoordinator.ProviderEffectIdentity beforeRoute =
+                    identitySupplier.get();
+            routePreparation.run();
+            actualProviderType.set("codex-app-server-worker");
+            TaskCreateCommandCoordinator.ProviderEffectIdentity afterRoute =
+                    identitySupplier.get();
+            assertEquals("codex-worker", beforeRoute.providerType());
+            assertEquals("codex-app-server-worker", afterRoute.providerType());
+            throw new IllegalStateException("TASK_CREATE_EFFECT_IDENTITY_CONFLICT");
+        }).when(gate).invokePrepared(eq(plan), any(), any(), any());
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> facade.createTask(request, context, plan, gate));
+
+        assertEquals("TASK_CREATE_EFFECT_IDENTITY_CONFLICT", failure.getMessage());
+        verify(lifecycleGate).reserveBeforeEffect(
+                "session-direct-provider-drift", "worker-1");
+        verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
+        verify(lifecycleGate, never()).confirm(any(), any());
         verify(lifecycleGate, never()).releaseFailed(any());
     }
 
     @Test
-    void guardedGateDenialReleasesDirectReservationButSkipsA2aPreparation() {
+    void guardedDirectRechecksActualProviderIdentityAtCapturedEffect() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+        TaskCreateTargetResolver.CreateExecutionPlan plan = guardedPlan(
+                null,
+                "codex-worker",
+                TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                null);
+        AtomicReference<String> actualProviderType =
+                new AtomicReference<>("codex-worker");
+        when(taskQueryProvider.getProviderType())
+                .thenAnswer(ignored -> actualProviderType.get());
+        TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
+        doAnswer(invocation -> {
+            Supplier<TaskCreateCommandCoordinator.ProviderEffectIdentity> identitySupplier =
+                    invocation.getArgument(1);
+            Runnable routePreparation = invocation.getArgument(2);
+            Supplier<TaskCreateCommandCoordinator.PreparedProviderEffect<Object>>
+                    preparedEffectSupplier = invocation.getArgument(3);
+            identitySupplier.get();
+            routePreparation.run();
+            identitySupplier.get();
+            TaskCreateCommandCoordinator.PreparedProviderEffect<Object> prepared =
+                    preparedEffectSupplier.get();
+            actualProviderType.set("codex-app-server-worker");
+            return prepared.execute();
+        }).when(gate).invokePrepared(eq(plan), any(), any(), any());
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> facade.createTask(request, context, plan, gate));
+
+        assertEquals(
+                "TASK_CREATE_DIRECT_PROVIDER_IDENTITY_CHANGED",
+                failure.getMessage());
+        verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
+    }
+
+    @Test
+    void guardedGateDenialSkipsDirectAndA2aRoutePreparation() {
         LifecycleIngressGate lifecycleGate = mock(LifecycleIngressGate.class);
-        LifecycleIngressGate.IngressPermit directPermit =
-                mock(LifecycleIngressGate.IngressPermit.class);
         ReflectionTestUtils.setField(facade, "lifecycleIngressGate", lifecycleGate);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> directMetadata = mock(Map.class);
         TaskDispatchRequest directRequest = TaskDispatchRequest.builder()
                 .providerType("codex-worker")
                 .workerId("worker-1")
                 .sessionId("session-direct-denied")
+                .metadata(directMetadata)
                 .build();
         AgentResolveContext directContext = AgentResolveContext.builder()
                 .userId("user-1")
@@ -785,19 +1027,19 @@ class TaskDispatchFacadeTest {
                 "session-direct-denied");
         TaskCreateCommandCoordinator.ProviderEffectGate directGate =
                 mock(TaskCreateCommandCoordinator.ProviderEffectGate.class);
-        when(lifecycleGate.reserveBeforeEffect("session-direct-denied", "worker-1"))
-                .thenReturn(directPermit);
         when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
         doThrow(new IllegalStateException("TASK_CREATE_EFFECT_IDENTITY_CONFLICT"))
-                .when(directGate).invoke(eq(directPlan), any(), any());
-        when(directGate.providerEffectPermitted()).thenReturn(false);
+                .when(directGate).invokePrepared(
+                        eq(directPlan), any(), any(), any());
 
         assertThrows(IllegalStateException.class, () -> facade.createTask(
                 directRequest, directContext, directPlan, directGate));
 
         verify(taskQueryProvider, never()).createTaskDirect(any(), any(), any());
-        verify(lifecycleGate).releaseFailed(directPermit);
-        verify(lifecycleGate, never()).confirm(eq(directPermit), any());
+        verifyNoInteractions(lifecycleGate);
+        verifyNoInteractions(directMetadata);
+        verify(directGate).invokePrepared(eq(directPlan), any(), any(), any());
+        verify(directGate, never()).invoke(any(), any(), any());
 
         reset(lifecycleGate, agentResolver, agent);
         TaskDispatchRequest a2aRequest = TaskDispatchRequest.builder()

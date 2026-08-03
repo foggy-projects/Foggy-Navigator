@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -82,19 +83,6 @@ final class TaskOperationRouter {
     }
 
     DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
-        return createTaskDirect(providerType, request, context, null, null);
-    }
-
-    DispatchTaskDTO createTaskDirect(
-            String providerType,
-            TaskDispatchRequest request,
-            AgentResolveContext context,
-            TaskCreateTargetResolver.CreateExecutionPlan plan,
-            TaskCreateCommandCoordinator.ProviderEffectGate providerEffectGate) {
-        if ((plan == null) != (providerEffectGate == null)) {
-            throw new IllegalArgumentException(
-                    "create execution plan and provider effect gate must be supplied together");
-        }
         validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
         validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
@@ -104,27 +92,118 @@ final class TaskOperationRouter {
         if (request.isInitializeRuntimeAffinity()) {
             InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(params);
         }
-        DispatchTaskDTO dto;
-        if (providerEffectGate == null) {
-            dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
-        } else {
-            plan.requireMatches(request, context);
-            TaskCreateCommandCoordinator.ProviderEffectIdentity effectIdentity =
-                    TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
-                            TaskCreateTargetResolver.ExecutionRoute.DIRECT,
-                            request,
-                            context,
-                            request.getAgentId(),
-                            provider.getProviderType());
-            dto = providerEffectGate.invoke(
-                    plan,
-                    effectIdentity,
-                    () -> provider.createTaskDirect(
-                            params, context.getUserId(), context.getTenantId()));
-        }
+        DispatchTaskDTO dto = provider.createTaskDirect(
+                params, context.getUserId(), context.getTenantId());
         log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
                 providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());
         return dto;
+    }
+
+    /** Resolves the exact Direct Provider without constructing payload or invoking it. */
+    ResolvedDirectCreate resolveGuardedDirectCreate(
+            String providerType,
+            TaskDispatchRequest request) {
+        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
+        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
+        TaskCommandProvider provider = findTaskCommandProviderByType(providerType)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Provider not available: " + providerType));
+        return new ResolvedDirectCreate(providerType, provider);
+    }
+
+    /** Captures Provider-only parameters after the fresh-task participant has completed. */
+    CapturedDirectCreate captureGuardedDirectCreate(
+            ResolvedDirectCreate route,
+            TaskDispatchRequest providerRequest,
+            AgentResolveContext context) {
+        Objects.requireNonNull(route, "resolved Direct route is required");
+        Objects.requireNonNull(providerRequest, "captured Direct request is required");
+        Objects.requireNonNull(context, "captured Direct context is required");
+        String actualProviderType = route.requireExpectedActualProviderType();
+        Map<String, Object> params = TaskDispatchRequestParams.toCommonParams(providerRequest);
+        if (providerRequest.isInitializeRuntimeAffinity()) {
+            InternalTaskDispatchMarkers.markRuntimeAffinityInitialization(params);
+        }
+        return new CapturedDirectCreate(
+                route,
+                actualProviderType,
+                params,
+                context.getUserId(),
+                context.getTenantId());
+    }
+
+    /** The sole guarded Direct Provider call; all inputs were captured after permission. */
+    DispatchTaskDTO executeCapturedDirectCreate(CapturedDirectCreate captured) {
+        Objects.requireNonNull(captured, "captured Direct create is required");
+        captured.requireProviderIdentityUnchanged();
+        DispatchTaskDTO dto = captured.route.provider.createTaskDirect(
+                captured.params,
+                captured.ownerUserId,
+                captured.tenantId);
+        log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
+                captured.actualProviderType,
+                dto.getTaskId(),
+                captured.params.get("workerId"),
+                captured.params.get("directoryId"));
+        return dto;
+    }
+
+    static final class ResolvedDirectCreate {
+        private final String expectedProviderType;
+        private final TaskCommandProvider provider;
+
+        private ResolvedDirectCreate(
+                String expectedProviderType,
+                TaskCommandProvider provider) {
+            this.expectedProviderType = requireText(
+                    expectedProviderType, "resolved Direct Provider is required");
+            this.provider = Objects.requireNonNull(provider, "Direct Provider is required");
+        }
+
+        String actualProviderType() {
+            return requireText(
+                    provider.getProviderType(),
+                    "Direct Provider returned no identity");
+        }
+
+        private String requireExpectedActualProviderType() {
+            String actual = actualProviderType();
+            if (!expectedProviderType.equals(actual)) {
+                throw new IllegalStateException(
+                        "TASK_CREATE_DIRECT_PROVIDER_IDENTITY_CHANGED");
+            }
+            return actual;
+        }
+    }
+
+    static final class CapturedDirectCreate {
+        private final ResolvedDirectCreate route;
+        private final String actualProviderType;
+        private final Map<String, Object> params;
+        private final String ownerUserId;
+        @Nullable
+        private final String tenantId;
+
+        private CapturedDirectCreate(
+                ResolvedDirectCreate route,
+                String actualProviderType,
+                Map<String, Object> params,
+                String ownerUserId,
+                @Nullable String tenantId) {
+            this.route = Objects.requireNonNull(route, "resolved Direct route is required");
+            this.actualProviderType = requireText(
+                    actualProviderType, "captured Direct Provider is required");
+            this.params = Objects.requireNonNull(params, "captured Direct params are required");
+            this.ownerUserId = requireText(ownerUserId, "captured Direct owner is required");
+            this.tenantId = tenantId;
+        }
+
+        private void requireProviderIdentityUnchanged() {
+            if (!actualProviderType.equals(route.actualProviderType())) {
+                throw new IllegalStateException(
+                        "TASK_CREATE_DIRECT_PROVIDER_IDENTITY_CHANGED");
+            }
+        }
     }
 
     /**
@@ -421,5 +500,12 @@ final class TaskOperationRouter {
             }
         }
         return null;
+    }
+
+    private static String requireText(@Nullable String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(message);
+        }
+        return value;
     }
 }

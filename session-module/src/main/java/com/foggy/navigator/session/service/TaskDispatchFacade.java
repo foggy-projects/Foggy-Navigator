@@ -318,19 +318,42 @@ public class TaskDispatchFacade {
         if (plan.directProviderRoute()) {
             validateSessionProviderBeforeDispatch(plan.sessionId(), plan.providerType());
             rejectBusyContextContinuationIfNeeded(plan.providerType(), request, context);
-            LifecycleIngressGate.IngressPermit permit = reserveBeforeEffect(request);
-            try {
-                DispatchTaskDTO dto =
-                        createTaskDirect(
-                                plan.providerType(), request, context, plan, providerEffectGate);
-                confirmReservation(permit, dto);
-                return dto;
-            } catch (RuntimeException failure) {
-                if (!providerEffectGate.providerEffectPermitted()) {
-                    releaseFailedReservation(permit);
-                }
-                throw failure;
-            }
+            TaskOperationRouter operations = operationRouter();
+            TaskOperationRouter.ResolvedDirectCreate directRoute =
+                    operations.resolveGuardedDirectCreate(plan.providerType(), request);
+            GuardedDirectRoutePreparation routePreparation =
+                    new GuardedDirectRoutePreparation(plan);
+            return providerEffectGate.invokePrepared(
+                    plan,
+                    () -> directEffectIdentity(
+                            request, context, directRoute.actualProviderType()),
+                    routePreparation::prepare,
+                    () -> {
+                        LifecycleIngressGate.IngressPermit ingressPermit =
+                                routePreparation.requirePrepared();
+                        TaskDispatchRequest persistenceRequest =
+                                defensiveRequestSnapshot(request);
+                        TaskDispatchRequest providerRequest =
+                                defensiveRequestSnapshot(persistenceRequest);
+                        AgentResolveContext capturedContext = executionContext(plan, context);
+                        TaskOperationRouter.CapturedDirectCreate providerCreate =
+                                operations.captureGuardedDirectCreate(
+                                        directRoute, providerRequest, capturedContext);
+                        CapturedDirectCreate captured = new CapturedDirectCreate(
+                                operations,
+                                providerCreate,
+                                persistenceRequest,
+                                capturedContext,
+                                directRoute.actualProviderType(),
+                                ingressPermit);
+                        return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                directEffectIdentity(
+                                        persistenceRequest,
+                                        capturedContext,
+                                        captured.actualProviderType()),
+                                captured,
+                                this::executeCapturedDirectCreate);
+                    });
         }
 
         TaskCreateTargetResolver.AgentLookup lookup = plan.agentLookup();
@@ -814,6 +837,31 @@ public class TaskDispatchFacade {
                 plan.providerType());
     }
 
+    private TaskCreateCommandCoordinator.ProviderEffectIdentity directEffectIdentity(
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            String actualProviderType) {
+        return TaskCreateCommandCoordinator.ProviderEffectIdentity.atEffectPoint(
+                TaskCreateTargetResolver.ExecutionRoute.DIRECT,
+                request,
+                context,
+                request.getAgentId(),
+                actualProviderType);
+    }
+
+    private DispatchTaskDTO executeCapturedDirectCreate(CapturedDirectCreate captured) {
+        DispatchTaskDTO dto = captured.operations().executeCapturedDirectCreate(
+                captured.providerCreate());
+        persistTaskRequestFields(dto.getTaskId(), captured.persistenceRequest());
+        persistContextBinding(
+                dto,
+                captured.persistenceRequest(),
+                captured.resolveContext(),
+                captured.actualProviderType());
+        confirmReservation(captured.ingressPermit(), dto);
+        return dto;
+    }
+
     private DispatchTaskDTO executeCapturedA2aCreate(CapturedA2aCreate captured) {
         A2aTask providerTask = captured.agent().sendTask(captured.message());
         DispatchTaskDTO dto = toDispatchDTO(
@@ -965,6 +1013,54 @@ public class TaskDispatchFacade {
     private record GuardedA2aRouteState(
             @Nullable TaskCreateContextNormalizer.CanonicalContextProof contextProof,
             @Nullable LifecycleIngressGate.IngressPermit ingressPermit) {
+    }
+
+    private final class GuardedDirectRoutePreparation {
+        private final TaskCreateTargetResolver.CreateExecutionPlan plan;
+        private boolean invoked;
+        @Nullable
+        private LifecycleIngressGate.IngressPermit prepared;
+
+        private GuardedDirectRoutePreparation(
+                TaskCreateTargetResolver.CreateExecutionPlan plan) {
+            this.plan = plan;
+        }
+
+        private synchronized void prepare() {
+            if (invoked) {
+                throw new IllegalStateException(
+                        "TASK_CREATE_DIRECT_ROUTE_PREPARATION_ALREADY_USED");
+            }
+            invoked = true;
+            prepared = reserveBeforeEffect(
+                    plan.sessionId(), plan.physicalWorkerId());
+        }
+
+        @Nullable
+        private synchronized LifecycleIngressGate.IngressPermit requirePrepared() {
+            if (!invoked) {
+                throw new IllegalStateException(
+                        "TASK_CREATE_DIRECT_ROUTE_PREPARATION_MISSING");
+            }
+            return prepared;
+        }
+    }
+
+    private record CapturedDirectCreate(
+            TaskOperationRouter operations,
+            TaskOperationRouter.CapturedDirectCreate providerCreate,
+            TaskDispatchRequest persistenceRequest,
+            AgentResolveContext resolveContext,
+            String actualProviderType,
+            @Nullable LifecycleIngressGate.IngressPermit ingressPermit) {
+
+        private CapturedDirectCreate {
+            Objects.requireNonNull(operations, "TaskOperationRouter is required");
+            Objects.requireNonNull(providerCreate, "captured Direct Provider call is required");
+            Objects.requireNonNull(persistenceRequest, "persistence request is required");
+            Objects.requireNonNull(resolveContext, "resolve context is required");
+            Objects.requireNonNull(actualProviderType, "actual Direct Provider is required");
+        }
     }
 
     private record CapturedA2aCreate(
@@ -1427,19 +1523,6 @@ public class TaskDispatchFacade {
 
     private DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
         DispatchTaskDTO dto = operationRouter().createTaskDirect(providerType, request, context);
-        persistTaskRequestFields(dto.getTaskId(), request);
-        persistContextBinding(dto, request, context, providerType);
-        return dto;
-    }
-
-    private DispatchTaskDTO createTaskDirect(
-            String providerType,
-            TaskDispatchRequest request,
-            AgentResolveContext context,
-            TaskCreateTargetResolver.CreateExecutionPlan plan,
-            TaskCreateCommandCoordinator.ProviderEffectGate providerEffectGate) {
-        DispatchTaskDTO dto = operationRouter().createTaskDirect(
-                providerType, request, context, plan, providerEffectGate);
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
         return dto;
