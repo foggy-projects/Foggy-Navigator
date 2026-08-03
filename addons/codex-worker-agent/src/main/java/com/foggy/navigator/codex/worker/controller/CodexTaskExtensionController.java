@@ -2,10 +2,9 @@ package com.foggy.navigator.codex.worker.controller;
 
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
-import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.service.CodexAppServerRuntimeAffinityAdapter;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeUnavailableException;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
@@ -71,7 +70,7 @@ public class CodexTaskExtensionController {
     private final CodexTaskService taskService;
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
-    private final CodexRuntimeRegistryService runtimeRegistryService;
+    private final CodexAppServerRuntimeAffinityAdapter runtimeAffinityAdapter;
 
     /**
      * Operational page used by the app-server canary without reopening the legacy Codex task API.
@@ -159,12 +158,7 @@ public class CodexTaskExtensionController {
 
         workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
 
-        CodexRuntimeBinding runtime = runtimeRegistryService.resolveBoundRuntime(
-                task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
-                task.getRuntimeInstanceId());
-        CodexWorkerClient client = clientFactory.getOrCreate(
-                "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
-                runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
+        CodexWorkerClient client = pinnedAppServerClient(task);
         String remoteTaskId = hasText(task.getWorkerTaskId())
                 ? task.getWorkerTaskId()
                 : task.getTaskId();
@@ -515,10 +509,13 @@ public class CodexTaskExtensionController {
     }
 
     private void requirePinnedAppServerRuntime(CodexTaskEntity task) {
-        if (!hasText(task.getRuntimeId())
+        if (!hasText(task.getProviderType())
+                || !hasText(task.getRuntimeId())
                 || task.getRuntimeRevision() == null
+                || !hasText(task.getRuntimeType())
                 || !hasText(task.getRuntimeInstanceId())
-                || !hasText(task.getWorkerId())) {
+                || !hasText(task.getWorkerId())
+                || task.getRoutingEpoch() == null) {
             throw taskNotFound(task.getTaskId());
         }
     }
@@ -544,12 +541,16 @@ public class CodexTaskExtensionController {
     }
 
     private CodexWorkerClient pinnedAppServerClient(CodexTaskEntity task) {
-        CodexRuntimeBinding runtime = runtimeRegistryService.resolveBoundRuntime(
-                task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
-                task.getRuntimeInstanceId());
-        return clientFactory.getOrCreate(
-                "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
-                runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
+        CodexAppServerRuntimeAffinityAdapter.DurableAffinity affinity =
+                new CodexAppServerRuntimeAffinityAdapter.DurableAffinity(
+                        task.getProviderType(),
+                        task.getRuntimeId(),
+                        task.getRuntimeRevision(),
+                        task.getRuntimeType(),
+                        task.getWorkerId(),
+                        task.getRuntimeInstanceId(),
+                        task.getRoutingEpoch());
+        return runtimeAffinityAdapter.client(runtimeAffinityAdapter.resolveBound(affinity));
     }
 
     private String remoteTaskId(CodexTaskEntity task) {

@@ -2,10 +2,9 @@ package com.foggy.navigator.codex.worker.controller;
 
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
-import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.service.CodexAppServerRuntimeAffinityAdapter;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeUnavailableException;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
@@ -22,6 +21,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -69,7 +70,10 @@ class CodexTaskExtensionControllerTest {
     private CodexWorkerClientFactory clientFactory;
 
     @Mock
-    private CodexRuntimeRegistryService runtimeRegistryService;
+    private CodexAppServerRuntimeAffinityAdapter runtimeAffinityAdapter;
+
+    @Mock
+    private CodexAppServerRuntimeAffinityAdapter.BoundRuntime boundRuntime;
 
     @Mock
     private CodexWorkerClient client;
@@ -81,7 +85,7 @@ class CodexTaskExtensionControllerTest {
         setCurrentUser(USER_ID, TENANT_ID);
         controller = new CodexTaskExtensionController(
                 resourceAccessService, taskService, workerManagementFacade,
-                clientFactory, runtimeRegistryService);
+                clientFactory, runtimeAffinityAdapter);
     }
 
     @AfterEach
@@ -157,7 +161,7 @@ class CodexTaskExtensionControllerTest {
         assertEquals(3, response.getData().size());
         verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
         verify(taskService).getStaleTurnCleanupEligibility(TASK_ID, USER_ID, TENANT_ID);
-        verifyNoInteractions(workerManagementFacade, clientFactory, runtimeRegistryService, client);
+        verifyNoInteractions(workerManagementFacade, clientFactory, runtimeAffinityAdapter, client);
     }
 
     @Test
@@ -223,7 +227,7 @@ class CodexTaskExtensionControllerTest {
         verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, null);
         verify(workerManagementFacade).validateWorkerAccess(USER_ID, null, "worker-1");
         verify(taskService).cleanupStaleTurn(TASK_ID, USER_ID, null);
-        verifyNoInteractions(clientFactory, runtimeRegistryService, client);
+        verifyNoInteractions(clientFactory, runtimeAffinityAdapter, client);
     }
 
     @Test
@@ -234,7 +238,8 @@ class CodexTaskExtensionControllerTest {
 
         assertThrows(SecurityException.class, () -> controller.cleanupStaleTurn(TASK_ID));
 
-        verifyNoInteractions(taskService, workerManagementFacade, clientFactory, runtimeRegistryService, client);
+        verifyNoInteractions(taskService, workerManagementFacade, clientFactory,
+                runtimeAffinityAdapter, client);
     }
 
     @Test
@@ -304,6 +309,9 @@ class CodexTaskExtensionControllerTest {
         order.verify(taskService).getTaskEntity(TASK_ID);
         order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
         order.verify(client).getSessionFileHints("thread-1", 7, "2026-06-01", "2026-06-28");
+        verify(clientFactory).getOrCreate(
+                "worker-1:codex", "http://localhost:3051", "worker-secret");
+        verifyNoInteractions(runtimeAffinityAdapter);
     }
 
     @Test
@@ -316,7 +324,7 @@ class CodexTaskExtensionControllerTest {
                 () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
 
         verifyNoInteractions(taskService, workerManagementFacade, clientFactory, client,
-                runtimeRegistryService);
+                runtimeAffinityAdapter);
     }
 
     @Test
@@ -329,7 +337,7 @@ class CodexTaskExtensionControllerTest {
                 () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
 
         verifyNoInteractions(taskService, workerManagementFacade, clientFactory, client,
-                runtimeRegistryService);
+                runtimeAffinityAdapter);
     }
 
     @Test
@@ -341,7 +349,7 @@ class CodexTaskExtensionControllerTest {
 
         assertEquals("Task not found: " + TASK_ID, error.getMessage());
         verifyNoInteractions(taskService, workerManagementFacade, clientFactory, client,
-                runtimeRegistryService);
+                runtimeAffinityAdapter);
     }
 
     @Test
@@ -354,7 +362,7 @@ class CodexTaskExtensionControllerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
 
-        verifyNoInteractions(workerManagementFacade, clientFactory, client, runtimeRegistryService);
+        verifyNoInteractions(workerManagementFacade, clientFactory, client, runtimeAffinityAdapter);
     }
 
     @Test
@@ -372,7 +380,7 @@ class CodexTaskExtensionControllerTest {
         assertEquals(TASK_ID, response.getData().get("taskId"));
         verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
         verify(workerManagementFacade, never()).getCodexConfig("worker-1");
-        verifyNoInteractions(clientFactory, client, runtimeRegistryService);
+        verifyNoInteractions(clientFactory, client, runtimeAffinityAdapter);
     }
 
     @Test
@@ -381,12 +389,7 @@ class CodexTaskExtensionControllerTest {
         CodexTaskEntity task = appServerTask();
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        CodexRuntimeBinding binding = appServerBinding();
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getGeneratedImage("worker-task-1", ARTIFACT_ID)).thenReturn(Mono.just(
                 ResponseEntity.ok()
                         .contentType(MediaType.IMAGE_PNG)
@@ -408,15 +411,14 @@ class CodexTaskExtensionControllerTest {
         assertArrayEquals(image, response.getBody());
 
         InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade,
-                runtimeRegistryService, clientFactory, client);
+                runtimeAffinityAdapter, client);
         order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
         order.verify(taskService).getTaskEntity(TASK_ID);
         order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
-        order.verify(runtimeRegistryService).resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a");
-        order.verify(clientFactory).getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a");
+        order.verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        order.verify(runtimeAffinityAdapter).client(boundRuntime);
         order.verify(client).getGeneratedImage("worker-task-1", ARTIFACT_ID);
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -425,11 +427,7 @@ class CodexTaskExtensionControllerTest {
         task.setCodexThreadId("thread-1");
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getTaskContextUsage("worker-task-1")).thenReturn(Mono.just(new LinkedHashMap<>(Map.of(
                 "task_id", "attacker-task",
                 "thread_id", "attacker-thread",
@@ -446,8 +444,15 @@ class CodexTaskExtensionControllerTest {
         assertEquals("thread-1", response.getData().get("codexThreadId"));
         assertEquals(81234, response.getData().get("current_tokens"));
         assertFalse(response.getData().containsKey("auth_token"));
-        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
-        verify(client).getTaskContextUsage("worker-task-1");
+        InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade,
+                runtimeAffinityAdapter, client);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        order.verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        order.verify(runtimeAffinityAdapter).client(boundRuntime);
+        order.verify(client).getTaskContextUsage("worker-task-1");
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -456,11 +461,7 @@ class CodexTaskExtensionControllerTest {
         task.setStatus("CANCEL_REQUESTED");
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getTerminationInspection("worker-task-1"))
                 .thenReturn(Mono.just(new LinkedHashMap<>(Map.ofEntries(
                         Map.entry("task_id", "worker-task-1"),
@@ -486,7 +487,15 @@ class CodexTaskExtensionControllerTest {
         assertFalse(response.getData().containsKey("turn_id"));
         assertFalse(response.getData().containsKey("app_server_instance_id"));
         assertFalse(response.getData().containsKey("auth_token"));
-        verify(client).getTerminationInspection("worker-task-1");
+        InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade,
+                runtimeAffinityAdapter, client);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        order.verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        order.verify(runtimeAffinityAdapter).client(boundRuntime);
+        order.verify(client).getTerminationInspection("worker-task-1");
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -495,8 +504,7 @@ class CodexTaskExtensionControllerTest {
         task.setStatus("CANCEL_REQUESTED");
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a"))
+        when(runtimeAffinityAdapter.resolveBound(appServerAffinity()))
                 .thenThrow(new CodexRuntimeUnavailableException(
                         "CODEX_RUNTIME_INSTANCE_UNAVAILABLE", "private runtime details"));
 
@@ -504,6 +512,8 @@ class CodexTaskExtensionControllerTest {
 
         assertEquals("CODEX_RUNTIME_INSTANCE_UNAVAILABLE", response.getMsg());
         assertNull(response.getData());
+        verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        verify(runtimeAffinityAdapter, never()).client(boundRuntime);
         verifyNoInteractions(clientFactory, client);
     }
 
@@ -513,11 +523,7 @@ class CodexTaskExtensionControllerTest {
         task.setStatus("CANCEL_REQUESTED");
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getTerminationInspection("worker-task-1"))
                 .thenReturn(Mono.error(new IllegalStateException("private unexpected details")));
 
@@ -525,6 +531,7 @@ class CodexTaskExtensionControllerTest {
 
         assertEquals("CODEX_TERMINATION_INSPECTION_UNAVAILABLE", response.getMsg());
         assertNull(response.getData());
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -546,7 +553,7 @@ class CodexTaskExtensionControllerTest {
                 "status", "ABORTED"), response.getData());
         verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
         verify(taskService).retryAppServerAbort(TASK_ID, USER_ID, TENANT_ID);
-        verifyNoInteractions(clientFactory, runtimeRegistryService, client);
+        verifyNoInteractions(clientFactory, runtimeAffinityAdapter, client);
     }
 
     @Test
@@ -568,7 +575,7 @@ class CodexTaskExtensionControllerTest {
                 "status", "CANCEL_REQUESTED"), response.getData());
         verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
         verify(taskService).retrySdkAbort(TASK_ID, USER_ID, TENANT_ID);
-        verifyNoInteractions(clientFactory, runtimeRegistryService, client);
+        verifyNoInteractions(clientFactory, runtimeAffinityAdapter, client);
     }
 
     @Test
@@ -577,11 +584,7 @@ class CodexTaskExtensionControllerTest {
         task.setCodexThreadId("thread-1");
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.compactTaskContext("worker-task-1", "compact-20260717-1"))
                 .thenReturn(Mono.just(new LinkedHashMap<>(Map.of(
                         "task_id", "worker-task-1",
@@ -599,7 +602,15 @@ class CodexTaskExtensionControllerTest {
         assertEquals("compact-20260717-1", response.getData().get("operation_id"));
         assertEquals("compact-turn-1", response.getData().get("turn_id"));
         assertFalse(response.getData().containsKey("compact_turn_id"));
-        verify(client).compactTaskContext("worker-task-1", "compact-20260717-1");
+        InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade,
+                runtimeAffinityAdapter, client);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        order.verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        order.verify(runtimeAffinityAdapter).client(boundRuntime);
+        order.verify(client).compactTaskContext("worker-task-1", "compact-20260717-1");
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -608,11 +619,7 @@ class CodexTaskExtensionControllerTest {
         task.setCodexThreadId("thread-1");
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(appServerBinding());
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getTaskContextCompactOperation("worker-task-1", "compact-20260717-1"))
                 .thenReturn(Mono.just(new LinkedHashMap<>(Map.of(
                         "operation_id", "compact-20260717-1",
@@ -625,7 +632,16 @@ class CodexTaskExtensionControllerTest {
         assertEquals(TASK_ID, response.getData().get("taskId"));
         assertEquals("thread-1", response.getData().get("codexThreadId"));
         assertEquals("compact-turn-1", response.getData().get("turn_id"));
-        verify(client).getTaskContextCompactOperation("worker-task-1", "compact-20260717-1");
+        InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade,
+                runtimeAffinityAdapter, client);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        order.verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        order.verify(runtimeAffinityAdapter).client(boundRuntime);
+        order.verify(client).getTaskContextCompactOperation(
+                "worker-task-1", "compact-20260717-1");
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -641,7 +657,7 @@ class CodexTaskExtensionControllerTest {
                         new CodexTaskExtensionController.CompactContextRequest("compact-20260717-1")));
 
         assertEquals("TASK_NOT_TERMINAL", error.getMessage());
-        verifyNoInteractions(workerManagementFacade, runtimeRegistryService, clientFactory, client);
+        verifyNoInteractions(workerManagementFacade, runtimeAffinityAdapter, clientFactory, client);
     }
 
     @Test
@@ -656,7 +672,7 @@ class CodexTaskExtensionControllerTest {
         InOrder order = inOrder(resourceAccessService, taskService);
         order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
         order.verify(taskService).getTaskEntity(TASK_ID);
-        verifyNoInteractions(workerManagementFacade, runtimeRegistryService, clientFactory, client);
+        verifyNoInteractions(workerManagementFacade, runtimeAffinityAdapter, clientFactory, client);
     }
 
     @Test
@@ -666,21 +682,35 @@ class CodexTaskExtensionControllerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> controller.getGeneratedImage(TASK_ID, ARTIFACT_ID));
 
-        verifyNoInteractions(taskService, workerManagementFacade, runtimeRegistryService,
+        verifyNoInteractions(taskService, workerManagementFacade, runtimeAffinityAdapter,
                 clientFactory, client);
     }
 
-    @Test
-    void getGeneratedImage_missingPinnedInstanceDoesNotFallBackToAnotherRuntime() {
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "providerType", "runtimeId", "runtimeRevision", "runtimeType",
+            "workerId", "runtimeInstanceId", "routingEpoch"
+    })
+    void getGeneratedImage_missingPersistedAffinityFieldFailsWithoutProviderEffect(
+            String missingField) {
         CodexTaskEntity task = appServerTask();
-        task.setRuntimeInstanceId(null);
+        switch (missingField) {
+            case "providerType" -> task.setProviderType(null);
+            case "runtimeId" -> task.setRuntimeId(null);
+            case "runtimeRevision" -> task.setRuntimeRevision(null);
+            case "runtimeType" -> task.setRuntimeType(null);
+            case "workerId" -> task.setWorkerId(null);
+            case "runtimeInstanceId" -> task.setRuntimeInstanceId(null);
+            case "routingEpoch" -> task.setRoutingEpoch(null);
+            default -> throw new IllegalArgumentException(missingField);
+        }
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
 
         assertThrows(IllegalArgumentException.class,
                 () -> controller.getGeneratedImage(TASK_ID, ARTIFACT_ID));
 
-        verifyNoInteractions(workerManagementFacade, runtimeRegistryService, clientFactory, client);
+        verifyNoInteractions(workerManagementFacade, runtimeAffinityAdapter, clientFactory, client);
     }
 
     @Test
@@ -688,12 +718,7 @@ class CodexTaskExtensionControllerTest {
         CodexTaskEntity task = appServerTask();
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        CodexRuntimeBinding binding = appServerBinding();
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getGeneratedImage("worker-task-1", ARTIFACT_ID)).thenReturn(Mono.just(
                 ResponseEntity.ok()
                         .contentType(MediaType.IMAGE_PNG)
@@ -705,6 +730,9 @@ class CodexTaskExtensionControllerTest {
 
         assertEquals("inline", response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION));
         assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        verify(runtimeAffinityAdapter).client(boundRuntime);
+        verifyNoInteractions(clientFactory);
     }
 
     @Test
@@ -712,12 +740,7 @@ class CodexTaskExtensionControllerTest {
         CodexTaskEntity task = appServerTask();
         stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
-        CodexRuntimeBinding binding = appServerBinding();
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
-                .thenReturn(client);
+        stubAppServerAffinityClient();
         when(client.getGeneratedImage("worker-task-1", ARTIFACT_ID)).thenReturn(Mono.just(
                 ResponseEntity.ok()
                         .contentType(MediaType.TEXT_HTML)
@@ -730,6 +753,9 @@ class CodexTaskExtensionControllerTest {
         assertNull(response.getHeaders().getContentType());
         assertEquals("private, no-store", response.getHeaders().getCacheControl());
         assertEquals("nosniff", response.getHeaders().getFirst("X-Content-Type-Options"));
+        verify(runtimeAffinityAdapter).resolveBound(appServerAffinity());
+        verify(runtimeAffinityAdapter).client(boundRuntime);
+        verifyNoInteractions(clientFactory);
     }
 
     private void setCurrentUser(String userId, String tenantId) {
@@ -768,6 +794,7 @@ class CodexTaskExtensionControllerTest {
         task.setRuntimeRevision(3);
         task.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
         task.setRuntimeInstanceId("instance-a");
+        task.setRoutingEpoch(7L);
         task.setWorkerTaskId("worker-task-1");
         return task;
     }
@@ -785,16 +812,20 @@ class CodexTaskExtensionControllerTest {
         return task;
     }
 
-    private CodexRuntimeBinding appServerBinding() {
-        return CodexRuntimeBinding.builder()
-                .runtimeId("app-main")
-                .runtimeRevision(3)
-                .runtimeType(CodexRuntimeType.APP_SERVER)
-                .workerId("worker-1")
-                .endpointUrl("http://127.0.0.1:3062")
-                .authToken("runtime-secret")
-                .instanceId("instance-a")
-                .routingEpoch(7L)
-                .build();
+    private void stubAppServerAffinityClient() {
+        when(runtimeAffinityAdapter.resolveBound(appServerAffinity()))
+                .thenReturn(boundRuntime);
+        when(runtimeAffinityAdapter.client(boundRuntime)).thenReturn(client);
+    }
+
+    private CodexAppServerRuntimeAffinityAdapter.DurableAffinity appServerAffinity() {
+        return new CodexAppServerRuntimeAffinityAdapter.DurableAffinity(
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                "app-main",
+                3,
+                CodexRuntimeType.APP_SERVER.name(),
+                "worker-1",
+                "instance-a",
+                7L);
     }
 }
