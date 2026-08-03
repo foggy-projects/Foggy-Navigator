@@ -2,8 +2,6 @@ package com.foggy.navigator.session.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.foggy.navigator.agent.framework.session.Message;
-import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
@@ -70,9 +68,10 @@ public class SessionForwardService {
     ) {
         SessionEntity sourceSession = findOwnedSession(request.getSourceSessionId(), userId, tenantId,
                 "Source session not found: ");
-        SessionMessageEntity sourceMessage = resolveSourceMessage(request, sourceSession, userId, tenantId);
+        ForwardSourceProjection sourceMessage =
+                resolveSourceMessage(request, sourceSession, userId, tenantId);
 
-        if (!"ASSISTANT".equalsIgnoreCase(sourceMessage.getRole())) {
+        if (!"ASSISTANT".equalsIgnoreCase(sourceMessage.role())) {
             throw new IllegalArgumentException("Only assistant messages can be forwarded");
         }
 
@@ -85,7 +84,7 @@ public class SessionForwardService {
         };
     }
 
-    private SessionMessageEntity resolveSourceMessage(
+    private ForwardSourceProjection resolveSourceMessage(
             SessionForwardCreateRequest request,
             SessionEntity sourceSession,
             String userId,
@@ -99,7 +98,8 @@ public class SessionForwardService {
                 if (!sourceSession.getId().equals(message.getSessionId())) {
                     throw new IllegalArgumentException("Source message not found: " + sourceMessageId);
                 }
-                return message;
+                return new ForwardSourceProjection(
+                        message.getId(), message.getRole(), message.getContent(), message.getTaskId());
             }
         }
 
@@ -110,7 +110,7 @@ public class SessionForwardService {
         return resolveRecoveredTaskResult(sourceSession, sourceTaskId, userId, tenantId);
     }
 
-    private SessionMessageEntity resolveRecoveredTaskResult(
+    private ForwardSourceProjection resolveRecoveredTaskResult(
             SessionEntity sourceSession,
             String sourceTaskId,
             String userId,
@@ -129,39 +129,11 @@ public class SessionForwardService {
             throw new IllegalArgumentException("Source task result is empty");
         }
 
-        Optional<SessionMessageEntity> existingMessage = sessionMessageRepository
-                .findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
-                        sourceSession.getId(), sourceTaskId, "ASSISTANT")
-                .stream()
-                .filter(message -> resultText.equals(blankToNull(message.getContent())))
-                .findFirst();
-        if (existingMessage.isPresent()) {
-            return existingMessage.get();
-        }
-
-        String durableMessageId = recoveredTaskResultMessageId(sourceSession.getId(), sourceTaskId);
-        Message recoveredMessage = Message.builder()
-                .id(durableMessageId)
-                .sessionId(sourceSession.getId())
-                .taskId(sourceTaskId)
-                .role(MessageRole.ASSISTANT)
-                .content(resultText)
-                .metadata(Map.of(
-                        "type", "TEXT_COMPLETE",
-                        "taskId", sourceTaskId,
-                        "isResult", true,
-                        "recoveredFromTask", true,
-                        "durableRecovery", true
-                ))
-                .build();
-        String persistedMessageId = sessionManager.addMessage(sourceSession.getId(), recoveredMessage);
-        log.info("Materialized recovered task result for forwarding: sessionId={}, taskId={}, messageId={}",
-                sourceSession.getId(), sourceTaskId, persistedMessageId);
-
-        return sessionMessageRepository.findById(persistedMessageId)
-                .filter(message -> sourceSession.getId().equals(message.getSessionId()))
-                .orElseThrow(() -> new IllegalStateException(
-                        "Recovered source message persistence failed: " + persistedMessageId));
+        return new ForwardSourceProjection(
+                recoveredTaskResultMessageId(sourceSession.getId(), sourceTaskId),
+                "ASSISTANT",
+                resultText,
+                sourceTaskId);
     }
 
     private String recoveredTaskResultMessageId(String sessionId, String taskId) {
@@ -191,7 +163,7 @@ public class SessionForwardService {
             String userId,
             String tenantId,
             SessionEntity sourceSession,
-            SessionMessageEntity sourceMessage,
+            ForwardSourceProjection sourceMessage,
             String prompt
     ) {
         WorkingDirectoryEntity targetDirectory = resolveTargetDirectory(request, userId);
@@ -256,9 +228,9 @@ public class SessionForwardService {
         );
 
         log.info("Forwarded assistant message to new session: sourceSessionId={}, sourceMessageId={}, targetSessionId={}, taskId={}",
-                sourceSession.getId(), sourceMessage.getId(), targetSessionId, task.getTaskId());
+                sourceSession.getId(), sourceMessage.referenceId(), targetSessionId, task.getTaskId());
 
-        return buildResponse(relation.getId(), "NEW_SESSION", sourceSession.getId(), sourceMessage.getId(), targetSessionId, task);
+        return buildResponse(relation.getId(), "NEW_SESSION", sourceSession.getId(), sourceMessage.referenceId(), targetSessionId, task);
     }
 
     private SessionForwardCreateResponse forwardToExistingSession(
@@ -266,7 +238,7 @@ public class SessionForwardService {
             String userId,
             String tenantId,
             SessionEntity sourceSession,
-            SessionMessageEntity sourceMessage,
+            ForwardSourceProjection sourceMessage,
             String prompt
     ) {
         String targetSessionId = blankToNull(request.getTargetSessionId());
@@ -315,9 +287,9 @@ public class SessionForwardService {
         );
 
         log.info("Forwarded assistant message to existing session: sourceSessionId={}, sourceMessageId={}, targetSessionId={}, taskId={}",
-                sourceSession.getId(), sourceMessage.getId(), targetSession.getId(), task.getTaskId());
+                sourceSession.getId(), sourceMessage.referenceId(), targetSession.getId(), task.getTaskId());
 
-        return buildResponse(relation.getId(), "EXISTING_SESSION", sourceSession.getId(), sourceMessage.getId(), targetSession.getId(), task);
+        return buildResponse(relation.getId(), "EXISTING_SESSION", sourceSession.getId(), sourceMessage.referenceId(), targetSession.getId(), task);
     }
 
     private SessionEntity findOwnedSession(String sessionId, String userId, String tenantId, String messagePrefix) {
@@ -328,10 +300,12 @@ public class SessionForwardService {
         return session;
     }
 
-    private String resolvePrompt(SessionForwardCreateRequest request, SessionMessageEntity sourceMessage) {
+    private String resolvePrompt(
+            SessionForwardCreateRequest request,
+            ForwardSourceProjection sourceMessage) {
         String prompt = blankToNull(request.getPrompt());
         if (prompt == null) {
-            prompt = blankToNull(sourceMessage.getContent());
+            prompt = blankToNull(sourceMessage.content());
         }
         if (prompt == null) {
             throw new IllegalArgumentException("Forward prompt cannot be empty");
@@ -378,7 +352,7 @@ public class SessionForwardService {
     private SessionRelationEntity saveRelation(
             String targetMode,
             SessionEntity sourceSession,
-            SessionMessageEntity sourceMessage,
+            ForwardSourceProjection sourceMessage,
             String targetSessionId,
             String targetWorkerId,
             String targetDirectoryId,
@@ -395,7 +369,7 @@ public class SessionForwardService {
         relation.setRelationType("FORWARD");
         relation.setTargetMode(targetMode);
         relation.setSourceSessionId(sourceSession.getId());
-        relation.setSourceMessageId(sourceMessage.getId());
+        relation.setSourceMessageId(sourceMessage.referenceId());
         relation.setTargetSessionId(targetSessionId);
         relation.setSourceWorkerId(sourceSession.getCurrentWorkerId());
         relation.setSourceDirectoryId(sourceSession.getCurrentDirectoryId());
@@ -622,5 +596,12 @@ public class SessionForwardService {
             return null;
         }
         return List.of(normalized);
+    }
+
+    private record ForwardSourceProjection(
+            String referenceId,
+            String role,
+            String content,
+            String sourceTaskId) {
     }
 }

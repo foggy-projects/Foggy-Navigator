@@ -1,6 +1,5 @@
 package com.foggy.navigator.session.service;
 
-import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
@@ -27,9 +26,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -384,7 +385,7 @@ class SessionForwardServiceTest {
     }
 
     @Test
-    void forwardToNewSession_recoveredTaskResult_materializesDurableSourceMessage() {
+    void forwardToNewSession_recoveredTaskResultUsesReadOnlyCanonicalProjection() {
         SessionEntity sourceSession = new SessionEntity();
         sourceSession.setId("session-source");
         sourceSession.setUserId("user-1");
@@ -410,25 +411,8 @@ class SessionForwardServiceTest {
                 .thenReturn(sourceSession);
         when(resourceAccessService.requireOwnedTask("task-source", "user-1", "tenant-1"))
                 .thenReturn(sourceTask);
-        when(sessionMessageRepository.findById(any())).thenAnswer(invocation -> {
-            String messageId = invocation.getArgument(0);
-            if ("task-result-task-source".equals(messageId)) {
-                return Optional.empty();
-            }
-            SessionMessageEntity durableMessage = new SessionMessageEntity();
-            durableMessage.setId(messageId);
-            durableMessage.setSessionId("session-source");
-            durableMessage.setTaskId("task-source");
-            durableMessage.setRole("ASSISTANT");
-            durableMessage.setContent("任务最终结果");
-            return Optional.of(durableMessage);
-        });
-        when(sessionMessageRepository.findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
-                "session-source", "task-source", "ASSISTANT")).thenReturn(List.of());
-        when(sessionManager.addMessage(eq("session-source"), any())).thenAnswer(invocation -> {
-            Message message = invocation.getArgument(1);
-            return message.getId();
-        });
+        when(sessionMessageRepository.findById("task-result-task-source"))
+                .thenReturn(Optional.empty());
         when(sessionManager.createSession(any())).thenReturn("session-target");
         when(sessionRepository.findById("session-target")).thenReturn(Optional.of(createdSession));
         when(agentSubmitPipeline.submit(any())).thenReturn(AgentTaskSubmitResult.of(null, createdTask));
@@ -450,19 +434,14 @@ class SessionForwardServiceTest {
 
         assertEquals("NEW_SESSION", response.getTargetMode());
         assertEquals("session-target", response.getTargetSessionId());
-        assertTrue(response.getSourceMessageId().matches("[0-9a-f-]{36}"));
-        assertFalse(response.getSourceMessageId().startsWith("task-result-"));
-
-        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
-        verify(sessionManager).addMessage(eq("session-source"), messageCaptor.capture());
-        Message recoveredMessage = messageCaptor.getValue();
-        assertEquals(response.getSourceMessageId(), recoveredMessage.getId());
-        assertEquals("session-source", recoveredMessage.getSessionId());
-        assertEquals("task-source", recoveredMessage.getTaskId());
-        assertEquals("ASSISTANT", recoveredMessage.getRole().name());
-        assertEquals("任务最终结果", recoveredMessage.getContent());
-        assertEquals("TEXT_COMPLETE", recoveredMessage.getMetadata().get("type"));
-        assertEquals(true, recoveredMessage.getMetadata().get("recoveredFromTask"));
+        String expectedReference = UUID.nameUUIDFromBytes(
+                "forward-task-result:session-source:task-source"
+                        .getBytes(StandardCharsets.UTF_8)).toString();
+        assertEquals(expectedReference, response.getSourceMessageId());
+        verify(sessionManager, never()).addMessage(any(), any());
+        verify(sessionMessageRepository, never())
+                .findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
+                        any(), any(), any());
 
         ArgumentCaptor<SessionRelationEntity> relationCaptor = ArgumentCaptor.forClass(SessionRelationEntity.class);
         verify(sessionRelationRepository).save(relationCaptor.capture());
@@ -470,7 +449,7 @@ class SessionForwardServiceTest {
     }
 
     @Test
-    void forwardToNewSession_recoveredTaskResult_reusesExistingDurableMessage() {
+    void forwardToNewSession_recoveredTaskReferenceDoesNotDependOnExistingMessages() {
         SessionEntity sourceSession = new SessionEntity();
         sourceSession.setId("session-source");
         sourceSession.setUserId("user-1");
@@ -480,13 +459,6 @@ class SessionForwardServiceTest {
         sourceTask.setSessionId("session-source");
         sourceTask.setStatus("COMPLETED");
         sourceTask.setResultText("任务最终结果");
-
-        SessionMessageEntity existingMessage = new SessionMessageEntity();
-        existingMessage.setId("msg-durable");
-        existingMessage.setSessionId("session-source");
-        existingMessage.setTaskId("task-source");
-        existingMessage.setRole("ASSISTANT");
-        existingMessage.setContent("任务最终结果");
 
         SessionEntity createdSession = new SessionEntity();
         createdSession.setId("session-target");
@@ -504,8 +476,6 @@ class SessionForwardServiceTest {
         when(resourceAccessService.requireOwnedTask("task-source", "user-1", "tenant-1"))
                 .thenReturn(sourceTask);
         when(sessionMessageRepository.findById("task-result-task-source")).thenReturn(Optional.empty());
-        when(sessionMessageRepository.findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
-                "session-source", "task-source", "ASSISTANT")).thenReturn(List.of(existingMessage));
         when(sessionManager.createSession(any())).thenReturn("session-target");
         when(sessionRepository.findById("session-target")).thenReturn(Optional.of(createdSession));
         when(agentSubmitPipeline.submit(any())).thenReturn(AgentTaskSubmitResult.of(null, createdTask));
@@ -524,8 +494,14 @@ class SessionForwardServiceTest {
 
         SessionForwardCreateResponse response = service.forwardToNewSession(request, "user-1", "tenant-1");
 
-        assertEquals("msg-durable", response.getSourceMessageId());
+        String expectedReference = UUID.nameUUIDFromBytes(
+                "forward-task-result:session-source:task-source"
+                        .getBytes(StandardCharsets.UTF_8)).toString();
+        assertEquals(expectedReference, response.getSourceMessageId());
         verify(sessionManager, never()).addMessage(any(), any());
+        verify(sessionMessageRepository, never())
+                .findBySessionIdAndTaskIdAndRoleOrderByCreatedAtDescIdDesc(
+                        any(), any(), any());
     }
 
     @Test
