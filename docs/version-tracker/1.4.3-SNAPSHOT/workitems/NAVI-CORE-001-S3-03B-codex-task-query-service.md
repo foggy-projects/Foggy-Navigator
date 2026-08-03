@@ -93,5 +93,5 @@ search map or persisted-data contract changed. The SDK default remains conservat
 logical Agent/context values remain null. Existing or historical rows were read only: no repair,
 backfill, reconcile, normalization flush or synthetic fact was performed.
 
-This slice is implemented but not independently reviewed or committed. The unrelated untracked
-`BOOT-INF/` tree was not inspected or changed.
+This slice was independently reviewed, committed as `27a998d0`, and pushed before the recorded
+affected lane. The unrelated untracked `BOOT-INF/` tree was not inspected or changed.

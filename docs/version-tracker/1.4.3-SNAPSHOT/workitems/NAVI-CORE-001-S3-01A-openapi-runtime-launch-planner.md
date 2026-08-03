@@ -1,6 +1,6 @@
 ---
 workitem: NAVI-CORE-001-S3-01A
-status: IMPLEMENTED_PENDING_REVIEW
+status: IMPLEMENTED_REVIEWED
 date: 2026-08-03
 canonical_contract: /home/sa/ultra/sim-navi/docs/decisions/NAVI-CORE-001-core-runtime-scope-and-complexity-convergence-delivery-spec.md
 ---
@@ -40,6 +40,12 @@ function entries are retained for the existing token-policy validator, and dupli
   was consumed by this slice.
 
 ## Residual boundary
+
+Independent review initially found three compatibility risks in nullable list handling,
+`allowed_dirs` duplicate preservation and the one-shot ownership/context order. All three were
+closed within the same five-path slice, and the final read-only re-review returned `ACCEPT` before
+commit `df789df9` was pushed. The reviewer reused the final `14/14` focused evidence and did not
+run an affected or full lane.
 
 This slice does not yet extract task-token and submission orchestration from `askAgent`; that is the
 separate S3-01B work item. No public HTTP path, Form/DTO, RX/reason code, credential, ownership,
