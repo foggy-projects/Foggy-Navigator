@@ -62,6 +62,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doAnswer;
@@ -86,6 +87,7 @@ class CodexStreamRelayTest {
     private CodexTaskRepository taskRepository;
     private CodexWorkerClientFactory clientFactory;
     private WorkerManagementFacade workerManagementFacade;
+    private CodexSdkExecutionAdapter sdkExecutionAdapter;
     private CodexTaskService taskService;
     private CodexRuntimeRegistryService runtimeRegistryService;
     private CodexTaskRuntimeStateService taskRuntimeStateService;
@@ -103,6 +105,8 @@ class CodexStreamRelayTest {
         taskRepository = mock(CodexTaskRepository.class);
         clientFactory = mock(CodexWorkerClientFactory.class);
         workerManagementFacade = mock(WorkerManagementFacade.class);
+        sdkExecutionAdapter = new CodexSdkExecutionAdapter(
+                workerManagementFacade, clientFactory);
         taskService = mock(CodexTaskService.class);
         runtimeRegistryService = mock(CodexRuntimeRegistryService.class);
         taskRuntimeStateService = mock(CodexTaskRuntimeStateService.class);
@@ -119,8 +123,8 @@ class CodexStreamRelayTest {
                 recoveryPolicyResolver, Clock.fixed(NOW, ZoneOffset.UTC));
 
         relay = new CodexStreamRelay(
-                workerManagementFacade,
                 clientFactory,
+                sdkExecutionAdapter,
                 taskService,
                 runtimeRegistryService,
                 taskRuntimeStateService,
@@ -293,8 +297,8 @@ class CodexStreamRelayTest {
                         .build());
         when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
                 .thenReturn(client);
-        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        stubBuiltRequest(new LinkedHashMap<>(Map.of("prompt", "hello")));
+        when(client.streamQuery(any(Map.class)))
                 .thenReturn(Flux.error(new RuntimeException("401 Unauthorized")));
 
         relay.onTaskStart(WorkerTaskStartEvent.builder()
@@ -324,8 +328,8 @@ class CodexStreamRelayTest {
                         .build());
         when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
                 .thenReturn(client);
-        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        stubBuiltRequest(new LinkedHashMap<>(Map.of("prompt", "continue")));
+        when(client.streamQuery(any(Map.class)))
                 .thenReturn(Flux.error(new CodexWorkerClient.ThreadActiveException(
                         409, "CODEX_THREAD_ACTIVE", "thread-1",
                         "worker-task-old", 4321, "process_scan")));
@@ -358,9 +362,28 @@ class CodexStreamRelayTest {
                         .build());
         when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
                 .thenReturn(client);
-        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(Flux.never());
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("prompt", "hello");
+        stubBuiltRequest(requestBody);
+        when(client.streamQuery(same(requestBody))).thenReturn(Flux.never());
+        Map<String, Object> businessRuntimeContext = new LinkedHashMap<>();
+        businessRuntimeContext.put("task_scoped_token", "token-1");
+        Map<String, Object> outputSchema = new LinkedHashMap<>();
+        outputSchema.put("type", "object");
+        Map<String, Object> codexConfig = new LinkedHashMap<>();
+        codexConfig.put("model_reasoning_effort", "high");
+        List<String> additionalDirectories = List.of("/home/sa/workspace/shared");
+        Map<String, Object> providerConfig = new LinkedHashMap<>();
+        providerConfig.put("codexHomeKey", "tenant/world-sim/scenario-1/actor-1");
+        providerConfig.put("developerInstructions", "Return ActorDecisionResult JSON.");
+        providerConfig.put("outputSchema", outputSchema);
+        providerConfig.put("codexConfig", codexConfig);
+        providerConfig.put("sandboxMode", "workspace-write");
+        providerConfig.put("approvalPolicy", "never");
+        providerConfig.put("networkAccessEnabled", false);
+        providerConfig.put("webSearchMode", "disabled");
+        providerConfig.put("businessRuntimeContext", businessRuntimeContext);
+        providerConfig.put("additionalDirectories", additionalDirectories);
 
         relay.onTaskStart(WorkerTaskStartEvent.builder()
                 .taskId("local-task-1")
@@ -371,19 +394,10 @@ class CodexStreamRelayTest {
                 .model("gpt-5.5")
                 .apiKey("sk-test")
                 .providerType("codex-biz-worker")
-                .providerConfig(Map.of(
-                        "codexHomeKey", "tenant/world-sim/scenario-1/actor-1",
-                        "developerInstructions", "Return ActorDecisionResult JSON.",
-                        "sandboxMode", "workspace-write",
-                        "approvalPolicy", "never",
-                        "networkAccessEnabled", false,
-                        "webSearchMode", "disabled",
-                        "businessRuntimeContext", Map.of("task_scoped_token", "token-1"),
-                        "additionalDirectories", List.of("/home/sa/workspace/shared")
-                ))
+                .providerConfig(providerConfig)
                 .build());
 
-        verify(client).streamQuery(
+        verify(client).buildTaskRequest(
                 eq("hello"),
                 eq("D:/repo"),
                 isNull(),
@@ -396,14 +410,15 @@ class CodexStreamRelayTest {
                 isNull(),
                 eq("tenant/world-sim/scenario-1/actor-1"),
                 eq("Return ActorDecisionResult JSON."),
-                isNull(),
-                isNull(),
+                same(outputSchema),
+                same(codexConfig),
                 eq("workspace-write"),
                 eq("never"),
                 eq(false),
                 eq("disabled"),
-                eq(Map.of("task_scoped_token", "token-1")),
-                eq(List.of("/home/sa/workspace/shared")));
+                same(businessRuntimeContext),
+                same(additionalDirectories));
+        verify(client).streamQuery(same(requestBody));
     }
 
     @Test

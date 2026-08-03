@@ -21,10 +21,8 @@ import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.common.dto.NativeSubtaskSnapshotDTO;
 import com.foggy.navigator.common.dto.NativeSubtaskUpdatePayload;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
-import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.session.event.SessionEventListener;
 import com.foggy.navigator.session.lifecycle.LifecycleActivationDeniedException;
-import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -100,8 +98,8 @@ public class CodexStreamRelay {
      */
     static final int MAX_DURABLE_TOOL_RESULT_METADATA_BYTES = 48 * 1024;
 
-    private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
+    private final CodexSdkExecutionAdapter sdkExecutionAdapter;
     private final CodexTaskService taskService;
     private final CodexRuntimeRegistryService runtimeRegistryService;
     private final CodexTaskRuntimeStateService taskRuntimeStateService;
@@ -208,7 +206,15 @@ public class CodexStreamRelay {
             publishMessage(sessionId, providerType, MessageType.SESSION_START, sessionStartPayload);
 
             CodexRuntimeBinding runtime = resolveRuntimeBinding(task);
-            CodexWorkerClient client = getCodexClient(task, runtime);
+            CodexSdkExecutionAdapter.SdkExecution sdkExecution = null;
+            CodexWorkerClient client;
+            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
+                client = getAppServerClient(task, runtime);
+            } else {
+                sdkExecution = sdkExecutionAdapter.bind(
+                        providerType, task.getWorkerId(), runtime);
+                client = sdkExecutionAdapter.client(sdkExecution);
+            }
 
             String codexThreadId = event.getProviderConfigString("codexThreadId");
             String images = blankToNull(event.getProviderConfigString("images"));
@@ -232,7 +238,7 @@ public class CodexStreamRelay {
             @SuppressWarnings("unchecked")
             List<String> additionalDirectories = event.getProviderConfigValue("additionalDirectories");
             log.info(
-                    "Dispatching Codex worker query: taskId={}, workerId={}, model={}, hasApiKey={}, hasBaseUrl={}, envVarKeys={}, hasImages={}, resumeThread={}, hasCodexHomeKey={}, sandboxMode={}, approvalPolicy={}",
+                    "Dispatching Codex worker query: taskId={}, workerId={}, model={}, hasApiKey={}, hasBaseUrl={}, envVarKeys={}, hasImages={}, resumeThread={}",
                     taskId,
                     workerId,
                     event.getModel(),
@@ -240,10 +246,7 @@ public class CodexStreamRelay {
                     baseUrl != null && !baseUrl.isBlank(),
                     extraEnvVars != null ? extraEnvVars.keySet() : List.of(),
                     images != null && !images.isBlank(),
-                    codexThreadId != null && !codexThreadId.isBlank(),
-                    codexHomeKey != null,
-                    sandboxMode,
-                    approvalPolicy
+                    codexThreadId != null && !codexThreadId.isBlank()
             );
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(codexThreadId);
@@ -341,19 +344,8 @@ public class CodexStreamRelay {
                         }
                     }
                     requestBody.put("lifecycle_context", lifecycleContext);
-                    sseFlux = client.streamQuery(requestBody);
-                } else {
-                    sseFlux = client.streamQuery(
-                            event.getPrompt(), event.getCwd(),
-                            codexThreadId, event.getModel(),
-                            event.getMaxTurns(), images, attachments,
-                            event.getApiKey(), baseUrl, extraEnvVars,
-                            codexHomeKey, developerInstructions,
-                            outputSchema, codexConfig,
-                            sandboxMode, approvalPolicy,
-                            networkAccessEnabled, webSearchMode,
-                            businessRuntimeContext, additionalDirectories);
                 }
+                sseFlux = sdkExecutionAdapter.streamQuery(sdkExecution, requestBody);
             }
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
@@ -489,7 +481,16 @@ public class CodexStreamRelay {
             log.info("Reconnecting Codex stream: taskId={}, sessionId={}, workerId={}, automatic={}, attempt={}",
                     taskId, sessionId, workerId, automatic, reconnectAttempt);
             CodexRuntimeBinding runtime = resolveRuntimeBinding(entity);
-            CodexWorkerClient client = getCodexClient(entity, runtime);
+            String persistedProviderType = providerType(entity.getProviderType());
+            CodexSdkExecutionAdapter.SdkExecution sdkExecution = null;
+            CodexWorkerClient client;
+            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
+                client = getAppServerClient(entity, runtime);
+            } else {
+                sdkExecution = sdkExecutionAdapter.bind(
+                        persistedProviderType, entity.getWorkerId(), runtime);
+                client = sdkExecutionAdapter.client(sdkExecution);
+            }
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(entity.getCodexThreadId());
             if (entity.getWorkerTaskId() == null || entity.getWorkerTaskId().isBlank()) {
@@ -557,10 +558,21 @@ public class CodexStreamRelay {
             Flux<ServerSentEvent<String>> sseFlux;
             if (automatic) {
                 CodexBackgroundRecoveryPolicy.AttemptLease connectionLease = recoveryLease;
-                sseFlux = client.subscribeToTask(
-                        entity.getWorkerTaskId(), ackSeq, connectionLease::close);
+                if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
+                    sseFlux = client.subscribeToTask(
+                            entity.getWorkerTaskId(), ackSeq, connectionLease::close);
+                } else {
+                    sseFlux = sdkExecutionAdapter.subscribe(
+                            sdkExecution, entity.getWorkerTaskId(), ackSeq,
+                            connectionLease::close);
+                }
             } else {
-                sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
+                if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
+                    sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
+                } else {
+                    sseFlux = sdkExecutionAdapter.subscribe(
+                            sdkExecution, entity.getWorkerTaskId(), ackSeq);
+                }
             }
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
@@ -866,7 +878,7 @@ public class CodexStreamRelay {
 
         try {
             CodexRuntimeBinding runtime = resolveRuntimeBinding(task);
-            CodexWorkerClient client = getCodexClient(task, runtime);
+            CodexWorkerClient client = getAppServerClient(task, runtime);
             RemoteTaskStatus status = fetchAppServerTaskStatus(task, client, workerTaskId);
             if (status == null) return false;
 
@@ -2013,28 +2025,26 @@ public class CodexStreamRelay {
             throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH: provider "
                     + providerType + " requires SDK_EXEC affinity");
         }
-        return CodexRuntimeBinding.legacySdk(task.getWorkerId());
+        return CodexRuntimeBinding.builder()
+                .runtimeId(task.getRuntimeId())
+                .runtimeRevision(task.getRuntimeRevision())
+                .runtimeType(CodexRuntimeType.SDK_EXEC)
+                .workerId(task.getWorkerId())
+                .instanceId(task.getRuntimeInstanceId())
+                .routingEpoch(task.getRoutingEpoch())
+                .build();
     }
 
-    private CodexWorkerClient getCodexClient(CodexTaskEntity task, CodexRuntimeBinding runtime) {
+    private CodexWorkerClient getAppServerClient(
+            CodexTaskEntity task, CodexRuntimeBinding runtime) {
         String providerType = providerType(task.getProviderType());
-        if (CODEX_APP_SERVER_AGENT_ID.equals(providerType)) {
-            if (runtime.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
-                throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH");
-            }
-            return clientFactory.getOrCreate(
-                    "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
-                    runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
-        }
-        if (runtime.getRuntimeType() != CodexRuntimeType.SDK_EXEC) {
+        if (!CODEX_APP_SERVER_AGENT_ID.equals(providerType)
+                || runtime.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
             throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH");
         }
-        CodexConfig config = workerManagementFacade.getCodexConfig(task.getWorkerId());
-        if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {
-            throw new IllegalStateException("Codex not configured for worker: " + task.getWorkerId());
-        }
-        return clientFactory.getOrCreate(task.getWorkerId() + ":codex",
-                config.getBaseUrl(), config.getAuthToken());
+        return clientFactory.getOrCreate(
+                "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
+                runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
     }
 
 }
