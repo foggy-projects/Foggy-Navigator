@@ -139,6 +139,15 @@ final class TrustedNavigatorCommandIngressAuthority {
 
     /** CREATE-compatible identity policy: both absent and blank values mint a fresh UUID. */
     String canonicalCreateClientRequestId(@Nullable String supplied) {
+        return canonicalClientRequestId(supplied);
+    }
+
+    /** TERMINATE-compatible identity policy: both absent and blank values mint a fresh UUID. */
+    String canonicalTerminationClientRequestId(@Nullable String supplied) {
+        return canonicalClientRequestId(supplied);
+    }
+
+    private static String canonicalClientRequestId(@Nullable String supplied) {
         if (supplied == null || supplied.isBlank()) {
             return UUID.randomUUID().toString();
         }
@@ -268,6 +277,11 @@ final class TrustedNavigatorCommandIngressAuthority {
                 "NAVIGATOR_UI",
                 "/api/v1/tasks",
                 "UI"),
+        TASK_TERMINATE_DIRECT(
+                CanonicalCommandEnvelope.CommandIngress.DIRECT,
+                "NAVIGATOR_UI",
+                "/api/v1/tasks/{taskId}/cancel",
+                "UI"),
         TRANSITIONAL_AGENT_ASK(
                 CanonicalCommandEnvelope.CommandIngress.A2A,
                 "NAVIGATOR_A2A",
@@ -277,6 +291,11 @@ final class TrustedNavigatorCommandIngressAuthority {
                 CanonicalCommandEnvelope.CommandIngress.A2A,
                 "NAVIGATOR_A2A",
                 "/api/v1/agents/{agentId}/ask",
+                "A2A"),
+        A2A_TASK_TERMINATE(
+                CanonicalCommandEnvelope.CommandIngress.A2A,
+                "NAVIGATOR_A2A",
+                "/api/v1/agents/{agentId}/tasks/{taskId}/cancel",
                 "A2A"),
         SESSION_FORWARD_CREATE(
                 CanonicalCommandEnvelope.CommandIngress.DIRECT,
