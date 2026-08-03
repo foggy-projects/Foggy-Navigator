@@ -889,6 +889,72 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
+    void resolveOpenApiTaskWorkerPreflight_selectsExactWorkerWithoutMutation() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+        ClientAppEntity activeClientApp = new ClientAppEntity();
+        activeClientApp.setUpstreamSystemId("  trusted-upstream  ");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(activeClientApp);
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01");
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerPoolId("pool_01")
+                        .workerPoolOwnerType(ResourceOwnerType.PLATFORM)
+                        .workerPoolOwnerId("tenant_01")
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .upstreamSystemId("caller-controlled-upstream")
+                        .build();
+
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight =
+                serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
+
+        assertNotNull(preflight);
+        assertEquals("worker_01", preflight.workerId());
+        assertEquals("model_01", preflight.modelConfigId());
+        assertEquals("pool_01", preflight.workerPoolId());
+        assertEquals("LANGGRAPH_BIZ", preflight.workerBackend());
+        assertEquals("trusted-upstream", preflight.upstreamSystemId());
+        assertEquals("worker_01", selectionRequest.getSelectedWorkerId());
+        assertNull(selectionRequest.getWorkerLeaseId());
+        assertEquals("trusted-upstream", selectionRequest.getUpstreamSystemId());
+        verify(workerTaskLauncher).resolveWorkerId(selectionRequest);
+        verify(workerTaskLauncher, never()).launch(any());
+        verifyNoInteractions(
+                taskRepository,
+                tokenRepository,
+                bizWorkerPoolService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService);
+    }
+
+    @Test
     void prepareOpenApiTaskScopedToken_resolvesAndPersistsExactWorkerBeforeDispatch() {
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
                 taskRepository,
@@ -924,8 +990,8 @@ class BusinessAgentTaskServiceTest {
                         .callerAccessTokenId("access-token-01")
                         .build();
 
-        BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
-                serviceWithLauncher.prepareOpenApiTaskScopedToken(
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight =
+                serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
                         "tenant_01",
                         "actor_01",
                         "app_01",
@@ -935,6 +1001,20 @@ class BusinessAgentTaskServiceTest {
                         "model_01",
                         selectionRequest);
 
+        BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
+                serviceWithLauncher.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest,
+                        preflight);
+
+        assertNotNull(preflight);
+        assertEquals("worker_01", preflight.workerId());
         assertTrue(prepared.plainToken().matches("btt_[A-Za-z0-9_-]{43}"));
         assertTrue(prepared.tokenId().matches("tst_[a-f0-9]{32}"));
         assertEquals("worker_01", prepared.workerId());
@@ -949,7 +1029,7 @@ class BusinessAgentTaskServiceTest {
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
                 ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
         InOrder preparationOrder = inOrder(workerTaskLauncher, tokenLifecycleService);
-        preparationOrder.verify(workerTaskLauncher).resolveWorkerId(requestCaptor.capture());
+        preparationOrder.verify(workerTaskLauncher, times(2)).resolveWorkerId(requestCaptor.capture());
         preparationOrder.verify(tokenLifecycleService).issuePreboundToken(
                 tokenCaptor.capture(),
                 eq(prepared.plainToken()),
@@ -964,6 +1044,228 @@ class BusinessAgentTaskServiceTest {
         verify(callerAuthorityService).bindRuntimeAuthority(
                 persisted, "credential-01", "access-token-01");
         verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedToken_rejectsPreflightWorkerDriftBeforeIssuance() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(new ClientAppEntity());
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01", "worker_02");
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerPoolId("pool_01")
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .build();
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight =
+                serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
+        assertEquals("worker_01", preflight.workerId());
+
+        SecurityException error = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest,
+                        preflight));
+
+        assertEquals("OpenAPI Worker binding changed after preflight", error.getMessage());
+        assertEquals("worker_01", selectionRequest.getSelectedWorkerId());
+        assertNull(selectionRequest.getWorkerLeaseId());
+        verify(workerTaskLauncher, times(2)).resolveWorkerId(selectionRequest);
+        verify(workerTaskLauncher, never()).launch(any());
+        verifyNoInteractions(tokenRepository, tokenLifecycleService, callerAuthorityService);
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedTokenAfterPreflight_rejectsMutableWorkerBindingTampering() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(new ClientAppEntity());
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01");
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerPoolId("pool_01")
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .build();
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight =
+                serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
+
+        selectionRequest.setSelectedWorkerId(null);
+        SecurityException cleared = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        "tenant_01", "actor_01", "app_01", "user_01", "skill_01",
+                        "session_01", "model_01", selectionRequest, preflight));
+        selectionRequest.setSelectedWorkerId("worker_02");
+        SecurityException replaced = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        "tenant_01", "actor_01", "app_01", "user_01", "skill_01",
+                        "session_01", "model_01", selectionRequest, preflight));
+
+        assertEquals("preflight-selected Worker binding changed before token issuance",
+                cleared.getMessage());
+        assertEquals(cleared.getMessage(), replaced.getMessage());
+        assertNull(selectionRequest.getWorkerLeaseId());
+        verify(workerTaskLauncher).resolveWorkerId(selectionRequest);
+        verify(workerTaskLauncher, never()).launch(any());
+        verifyNoInteractions(tokenRepository, tokenLifecycleService, callerAuthorityService);
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedTokenAfterPreflight_rejectsSafeBindingDriftBeforeIssuance() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+        ClientAppEntity firstClientApp = new ClientAppEntity();
+        firstClientApp.setUpstreamSystemId("upstream_01");
+        ClientAppEntity changedClientApp = new ClientAppEntity();
+        changedClientApp.setUpstreamSystemId("upstream_02");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01"))
+                .thenReturn(firstClientApp, changedClientApp);
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01", "model_02");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01");
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerPoolId("pool_01")
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .build();
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight =
+                serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
+                        "tenant_01", "actor_01", "app_01", "user_01", "skill_01",
+                        "session_01", "model_01", selectionRequest);
+
+        SecurityException error = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        "tenant_01", "actor_01", "app_01", "user_01", "skill_01",
+                        "session_01", "model_01", selectionRequest, preflight));
+
+        assertEquals("OpenAPI Worker binding changed after preflight", error.getMessage());
+        assertNull(selectionRequest.getWorkerLeaseId());
+        verify(workerTaskLauncher, times(2)).resolveWorkerId(selectionRequest);
+        verify(workerTaskLauncher, never()).launch(any());
+        verifyNoInteractions(tokenRepository, tokenLifecycleService, callerAuthorityService);
+    }
+
+    @Test
+    void canonicalOpenApiPreparation_requiresServiceMintedPristinePreflight() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                List.of(workerTaskLauncher));
+        BusinessAgentWorkerTaskLaunchRequest reservedRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .workerPoolId("pool_01")
+                        .selectedWorkerId("caller-worker")
+                        .workerLeaseId("caller-lease")
+                        .taskScopedToken("caller-token")
+                        .build();
+
+        SecurityException reserved = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
+                        "tenant_01", "actor_01", "app_01", "user_01", "skill_01",
+                        "session_01", "model_01", reservedRequest));
+        IllegalArgumentException missing = assertThrows(
+                IllegalArgumentException.class,
+                () -> serviceWithLauncher.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        "tenant_01", "actor_01", "app_01", "user_01", "skill_01",
+                        "session_01", "model_01",
+                        BusinessAgentWorkerTaskLaunchRequest.builder().build(), null));
+
+        assertEquals("OpenAPI Worker preflight request contains reserved capability fields",
+                reserved.getMessage());
+        assertEquals("OpenAPI Worker preflight is required", missing.getMessage());
+        verifyNoInteractions(
+                clientAppService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                workerTaskLauncher,
+                tokenRepository,
+                tokenLifecycleService,
+                callerAuthorityService);
     }
 
     @Test
@@ -1113,6 +1415,16 @@ class BusinessAgentTaskServiceTest {
                         .workerBackend("CLAUDE_CODE")
                         .build();
 
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight =
+                serviceWithLauncher.resolveOpenApiTaskWorkerPreflight(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
         BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
                 serviceWithLauncher.prepareOpenApiTaskScopedToken(
                         "tenant_01",
@@ -1124,6 +1436,7 @@ class BusinessAgentTaskServiceTest {
                         "model_01",
                         selectionRequest);
 
+        assertNull(preflight);
         assertNull(prepared);
         verify(clientAppService, never()).requireActiveClientApp(anyString(), anyString());
         verify(tokenLifecycleService, never()).issuePreboundToken(any(), anyString(), anyString(), anyString());

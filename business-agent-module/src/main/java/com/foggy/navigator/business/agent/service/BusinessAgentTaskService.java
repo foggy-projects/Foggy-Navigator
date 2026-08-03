@@ -428,6 +428,39 @@ public class BusinessAgentTaskService {
     }
 
     /**
+     * Resolves the exact OpenAPI Worker without issuing a token, creating a lease,
+     * launching a Worker task or performing any other mutation.
+     *
+     * <p>The selected Worker is copied only to the caller-owned in-memory request so
+     * the canonical command plan can bind it before a once-effect receipt is prepared.</p>
+     */
+    @Transactional(readOnly = true)
+    public OpenApiTaskWorkerPreflight resolveOpenApiTaskWorkerPreflight(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId,
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest) {
+        requirePristineOpenApiWorkerPreflightRequest(selectionRequest);
+        OpenApiTaskWorkerPreflight preflight = resolveOpenApiTaskWorker(
+                tenantId,
+                actorUserId,
+                clientAppId,
+                upstreamUserId,
+                skillId,
+                sessionId,
+                requestedModelConfigId,
+                selectionRequest);
+        if (preflight != null) {
+            selectionRequest.setSelectedWorkerId(preflight.workerId());
+        }
+        return preflight;
+    }
+
+    /**
      * Resolves and persists an exact Worker binding before an OpenAPI task can
      * reach any provider network boundary. Providers without a Biz Worker
      * launcher do not use Worker Gateway capabilities and therefore return no
@@ -443,50 +476,84 @@ public class BusinessAgentTaskService {
             String sessionId,
             String requestedModelConfigId,
             BusinessAgentWorkerTaskLaunchRequest selectionRequest) {
-        requireText(tenantId, "tenantId is required");
-        requireText(actorUserId, "actorUserId is required");
-        requireText(clientAppId, "clientAppId is required");
-        requireText(upstreamUserId, "upstreamUserId is required");
-        requireText(skillId, "skillId is required");
-        requireText(sessionId, "sessionId is required");
-        if (selectionRequest == null) {
-            throw new IllegalArgumentException("worker selection request is required");
+        return prepareOpenApiTaskScopedToken(
+                tenantId,
+                actorUserId,
+                clientAppId,
+                upstreamUserId,
+                skillId,
+                sessionId,
+                requestedModelConfigId,
+                selectionRequest,
+                null);
+    }
+
+    /**
+     * Required-preflight token preparation used by the canonical OpenAPI command lane.
+     * The immutable preflight is service-minted and cannot be reconstructed by an addon.
+     */
+    @Transactional
+    public PreparedOpenApiTaskScopedToken prepareOpenApiTaskScopedTokenAfterPreflight(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId,
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest,
+            OpenApiTaskWorkerPreflight expectedPreflight) {
+        if (expectedPreflight == null) {
+            throw new IllegalArgumentException("OpenAPI Worker preflight is required");
         }
-        requireText(selectionRequest.getWorkerBackend(), "workerBackend is required");
-        BusinessAgentWorkerTaskLauncher launcher = findWorkerTaskLauncher(
-                selectionRequest.getWorkerBackend());
-        if (launcher == null) {
+        requirePreparedOpenApiWorkerRequest(selectionRequest, expectedPreflight);
+        return prepareOpenApiTaskScopedToken(
+                tenantId,
+                actorUserId,
+                clientAppId,
+                upstreamUserId,
+                skillId,
+                sessionId,
+                requestedModelConfigId,
+                selectionRequest,
+                expectedPreflight);
+    }
+
+    private PreparedOpenApiTaskScopedToken prepareOpenApiTaskScopedToken(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId,
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest,
+            OpenApiTaskWorkerPreflight expectedPreflight) {
+        OpenApiTaskWorkerPreflight preflight = resolveOpenApiTaskWorker(
+                tenantId,
+                actorUserId,
+                clientAppId,
+                upstreamUserId,
+                skillId,
+                sessionId,
+                requestedModelConfigId,
+                selectionRequest);
+        if (preflight == null) {
+            if (expectedPreflight != null) {
+                throw new SecurityException(
+                        "OpenAPI Worker capability changed after preflight");
+            }
             return null;
         }
-
-        ClientAppEntity activeClientApp = clientAppService.requireActiveClientApp(tenantId, clientAppId);
-        if (activeClientApp == null) {
-            throw new IllegalStateException("active client app lookup returned no client app");
+        String selectedWorkerId = preflight.workerId();
+        if (expectedPreflight != null) {
+            expectedPreflight.requireExactMatch(preflight);
         }
-        userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
-        skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
-
-        String finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
-                tenantId,
-                clientAppId,
-                requestedModelConfigId,
-                LlmModelCategory.GENERAL);
-
-        selectionRequest.setTenantId(tenantId);
-        selectionRequest.setActorUserId(actorUserId);
-        selectionRequest.setClientAppId(clientAppId);
-        // This is a server-resolved dispatch context, never a caller-selected scope.
-        selectionRequest.setUpstreamSystemId(trimToNull(activeClientApp.getUpstreamSystemId()));
-        selectionRequest.setUpstreamUserId(upstreamUserId);
-        selectionRequest.setSkillId(skillId);
-        selectionRequest.setSessionId(sessionId);
-        selectionRequest.setModelConfigId(finalModelConfigId);
-        requireText(selectionRequest.getWorkerPoolId(), "workerPoolId is required");
-        String selectedWorkerId = requireResolvedWorkerId(launcher.resolveWorkerId(selectionRequest));
-        String workerLeaseId = newWorkerLeaseId();
         selectionRequest.setSelectedWorkerId(selectedWorkerId);
+        String workerLeaseId = newWorkerLeaseId();
         selectionRequest.setWorkerLeaseId(workerLeaseId);
 
+        String finalModelConfigId = preflight.modelConfigId();
         String taskId = "obt_" + UUID.randomUUID().toString().replace("-", "");
         String plainToken = SecretTokenSupport.randomToken("btt_");
         BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
@@ -546,6 +613,94 @@ public class BusinessAgentTaskService {
                 functionScopeSummary.effectiveFunctionCount(),
                 functionScopeSummary.source(),
                 functionScopeSummary.empty());
+    }
+
+    private void requirePristineOpenApiWorkerPreflightRequest(
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest) {
+        if (selectionRequest == null) {
+            throw new IllegalArgumentException("worker selection request is required");
+        }
+        if (StringUtils.hasText(selectionRequest.getSelectedWorkerId())
+                || StringUtils.hasText(selectionRequest.getWorkerLeaseId())
+                || StringUtils.hasText(selectionRequest.getTaskScopedToken())) {
+            throw new SecurityException(
+                    "OpenAPI Worker preflight request contains reserved capability fields");
+        }
+    }
+
+    private void requirePreparedOpenApiWorkerRequest(
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest,
+            OpenApiTaskWorkerPreflight expectedPreflight) {
+        if (selectionRequest == null) {
+            throw new IllegalArgumentException("worker selection request is required");
+        }
+        if (!expectedPreflight.workerId().equals(
+                trimToNull(selectionRequest.getSelectedWorkerId()))) {
+            throw new SecurityException(
+                    "preflight-selected Worker binding changed before token issuance");
+        }
+        if (StringUtils.hasText(selectionRequest.getWorkerLeaseId())
+                || StringUtils.hasText(selectionRequest.getTaskScopedToken())) {
+            throw new SecurityException(
+                    "OpenAPI Worker capability was supplied before token issuance");
+        }
+    }
+
+    private OpenApiTaskWorkerPreflight resolveOpenApiTaskWorker(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId,
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest) {
+        requireText(tenantId, "tenantId is required");
+        requireText(actorUserId, "actorUserId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(skillId, "skillId is required");
+        requireText(sessionId, "sessionId is required");
+        if (selectionRequest == null) {
+            throw new IllegalArgumentException("worker selection request is required");
+        }
+        requireText(selectionRequest.getWorkerBackend(), "workerBackend is required");
+        BusinessAgentWorkerTaskLauncher launcher = findWorkerTaskLauncher(
+                selectionRequest.getWorkerBackend());
+        if (launcher == null) {
+            return null;
+        }
+
+        ClientAppEntity activeClientApp = clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        if (activeClientApp == null) {
+            throw new IllegalStateException("active client app lookup returned no client app");
+        }
+        userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
+        skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
+
+        String finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+                tenantId,
+                clientAppId,
+                requestedModelConfigId,
+                LlmModelCategory.GENERAL);
+
+        selectionRequest.setTenantId(tenantId);
+        selectionRequest.setActorUserId(actorUserId);
+        selectionRequest.setClientAppId(clientAppId);
+        // This is a server-resolved dispatch context, never a caller-selected scope.
+        selectionRequest.setUpstreamSystemId(trimToNull(activeClientApp.getUpstreamSystemId()));
+        selectionRequest.setUpstreamUserId(upstreamUserId);
+        selectionRequest.setSkillId(skillId);
+        selectionRequest.setSessionId(sessionId);
+        selectionRequest.setModelConfigId(finalModelConfigId);
+        requireText(selectionRequest.getWorkerPoolId(), "workerPoolId is required");
+        String selectedWorkerId = requireResolvedWorkerId(launcher.resolveWorkerId(selectionRequest));
+        return new OpenApiTaskWorkerPreflight(
+                selectedWorkerId,
+                finalModelConfigId,
+                selectionRequest.getWorkerPoolId().trim(),
+                selectionRequest.getWorkerBackend().trim(),
+                trimToNull(activeClientApp.getUpstreamSystemId()));
     }
 
     @Transactional(readOnly = true)
@@ -816,6 +971,66 @@ public class BusinessAgentTaskService {
                     0,
                     BusinessTaskScopedTokenPolicyService.FUNCTION_SCOPE_SOURCE_CLIENT_APP_GRANTS,
                     true);
+        }
+    }
+
+    public static final class OpenApiTaskWorkerPreflight {
+        private final String workerId;
+        private final String modelConfigId;
+        private final String workerPoolId;
+        private final String workerBackend;
+        private final String upstreamSystemId;
+
+        private OpenApiTaskWorkerPreflight(
+                String workerId,
+                String modelConfigId,
+                String workerPoolId,
+                String workerBackend,
+                String upstreamSystemId) {
+            this.workerId = requirePreflightText(workerId, "workerId");
+            this.modelConfigId = requirePreflightText(modelConfigId, "modelConfigId");
+            this.workerPoolId = requirePreflightText(workerPoolId, "workerPoolId");
+            this.workerBackend = requirePreflightText(workerBackend, "workerBackend");
+            this.upstreamSystemId = upstreamSystemId;
+        }
+
+        public String workerId() {
+            return workerId;
+        }
+
+        public String modelConfigId() {
+            return modelConfigId;
+        }
+
+        public String workerPoolId() {
+            return workerPoolId;
+        }
+
+        public String workerBackend() {
+            return workerBackend;
+        }
+
+        public String upstreamSystemId() {
+            return upstreamSystemId;
+        }
+
+        private void requireExactMatch(OpenApiTaskWorkerPreflight actual) {
+            if (actual == null
+                    || !workerId.equals(actual.workerId)
+                    || !modelConfigId.equals(actual.modelConfigId)
+                    || !workerPoolId.equals(actual.workerPoolId)
+                    || !workerBackend.equals(actual.workerBackend)
+                    || !Objects.equals(upstreamSystemId, actual.upstreamSystemId)) {
+                throw new SecurityException(
+                        "OpenAPI Worker binding changed after preflight");
+            }
+        }
+
+        private static String requirePreflightText(String value, String field) {
+            if (!StringUtils.hasText(value)) {
+                throw new IllegalArgumentException(field + " is required");
+            }
+            return value;
         }
     }
 
