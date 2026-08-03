@@ -20,6 +20,7 @@ import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -63,6 +64,11 @@ public class BusinessAgentTaskService {
     public CreatedBusinessAgentTaskDTO createTask(String tenantId, String actorUserId, CreateBusinessAgentTaskForm form) {
         ResolvedTaskPreparation preparation = resolveTaskPreparation(
                 tenantId, actorUserId, form, true);
+        return executeResolvedPreparation(preparation);
+    }
+
+    private CreatedBusinessAgentTaskDTO executeResolvedPreparation(
+            ResolvedTaskPreparation preparation) {
         BusinessAgentTaskEntity task = preparation.task();
         task.setTaskId("bt_" + UUID.randomUUID().toString().replace("-", ""));
         task = taskRepository.save(task);
@@ -131,7 +137,7 @@ public class BusinessAgentTaskService {
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
             task = taskRepository.save(task);
             tokenLifecycleService.bindIssuedTokenToWorkerTask(
-                    tenantId,
+                    task.getTenantId(),
                     token.getTokenId(),
                     plainToken,
                     task.getWorkerTaskId(),
@@ -174,10 +180,33 @@ public class BusinessAgentTaskService {
             String tenantId,
             String actorUserId,
             CreateBusinessAgentTaskForm form) {
-        if (form != null && form.getResumeFromTaskId() != null) {
-            throw new IllegalArgumentException(CREATE_RESUME_NOT_SUPPORTED);
-        }
-        return resolveTaskPreparation(tenantId, actorUserId, form, false).plan();
+        return prepareFreshCreate(tenantId, actorUserId, form).plan();
+    }
+
+    @Transactional(readOnly = true)
+    BusinessAgentTaskPreparedFreshCreate prepareFreshCreate(
+            String tenantId,
+            String actorUserId,
+            CreateBusinessAgentTaskForm form) {
+        BusinessAgentTaskCreateInput input = BusinessAgentTaskCreateInput.snapshot(form);
+        ResolvedTaskPreparation preparation = resolveTaskPreparation(
+                tenantId, actorUserId, input.toForm(), false);
+        return new BusinessAgentTaskPreparedFreshCreate(preparation.plan(), input);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CreatedBusinessAgentTaskDTO executeFreshCreatePlan(
+            BusinessAgentTaskPreparedFreshCreate prepared) {
+        Objects.requireNonNull(prepared, "prepared must not be null");
+        BusinessAgentTaskCreatePlan expectedPlan = prepared.plan();
+        BusinessAgentTaskCreatePlan.Identity identity = expectedPlan.identity();
+        ResolvedTaskPreparation current = resolveTaskPreparation(
+                identity.tenantId(),
+                identity.actorUserId(),
+                prepared.input().toForm(),
+                false);
+        expectedPlan.requireExactRevalidation(current.plan());
+        return executeResolvedPreparation(current);
     }
 
     private ResolvedTaskPreparation resolveTaskPreparation(
