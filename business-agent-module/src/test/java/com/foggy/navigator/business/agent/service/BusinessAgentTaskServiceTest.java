@@ -1975,42 +1975,27 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
-    void createTask_resumeFromTaskId_success() {
-        form.setResumeFromTaskId("bt_old123");
-        form.setRequestedModelConfigId("model_01");
-
-        BusinessAgentTaskEntity existingTask = new BusinessAgentTaskEntity();
-        existingTask.setTaskId("bt_old123");
-        existingTask.setTenantId("tenant_01");
-        existingTask.setClientAppId("app_01");
-        existingTask.setSessionId("session_01");
-        existingTask.setAgentId("agent_01");
-        existingTask.setModelConfigId("model_01");
-
-        when(taskRepository.findByTaskId("bt_old123")).thenReturn(Optional.of(existingTask));
-        when(resourceResolver.resolveRequiredModelForAgent(
-                eq("tenant_01"), eq("app_01"), any(), eq("model_01"), nullable(String.class), eq(LlmModelCategory.GENERAL)))
-                .thenReturn(modelResource("model_01", null));
-        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
-        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
-        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        CreatedBusinessAgentTaskDTO result = taskService.createTask("tenant_01", "actor_01", form);
-
-        assertNotNull(result);
-        assertEquals("model_01", result.getModelConfigId());
-        assertNotEquals("bt_old123", result.getTaskId());
-        assertNotNull(result.getTaskScopedToken());
-        verify(userGrantService)
-                .checkUpstreamUserAccess("tenant_01", "app_01", "user_01");
-        verify(skillRegistryService)
-                .checkClientAppSkillAccess("tenant_01", "app_01", "skill_01");
-        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
-                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(callerAuthorityService).bindInternalAuthority(tokenCaptor.capture());
-        assertEquals(result.getTaskId(), tokenCaptor.getValue().getTaskId());
-        verify(resourceResolver).resolveRequiredModelForAgent(
-                eq("tenant_01"), eq("app_01"), any(), eq("model_01"), nullable(String.class), eq(LlmModelCategory.GENERAL));
+    void createTask_rejectsEveryPresentResumeBeforeAnyResolutionOrMutation() {
+        for (String suppliedResume : List.of("bt_old123", "", "  \t")) {
+            form.setResumeFromTaskId(suppliedResume);
+            IllegalArgumentException error = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> taskService.createTask("tenant_01", "actor_01", form));
+            assertEquals(BusinessAgentTaskService.CREATE_RESUME_NOT_SUPPORTED, error.getMessage());
+        }
+        verifyNoInteractions(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                callerAuthorityService,
+                workerTaskLauncher);
     }
 
     private A2AgentResourceResolver.ResolvedModelResource modelResource(
@@ -2025,26 +2010,6 @@ class BusinessAgentTaskServiceTest {
                 requestedModelVariant != null ? "REQUESTED_MODEL_VARIANT" : "MODEL_CONFIG_DEFAULT",
                 "LANGGRAPH_BIZ",
                 "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT");
-    }
-
-    @Test
-    void createTask_resumeFromTaskId_modelDrift_rejected() {
-        form.setResumeFromTaskId("bt_old123");
-        form.setRequestedModelConfigId("model_02");
-
-        BusinessAgentTaskEntity existingTask = new BusinessAgentTaskEntity();
-        existingTask.setTaskId("bt_old123");
-        existingTask.setTenantId("tenant_01");
-        existingTask.setClientAppId("app_01");
-        existingTask.setSessionId("session_01");
-        existingTask.setAgentId("agent_01");
-        existingTask.setModelConfigId("model_01"); // different model
-
-        when(taskRepository.findByTaskId("bt_old123")).thenReturn(Optional.of(existingTask));
-
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
-                taskService.createTask("tenant_01", "actor_01", form));
-        assertTrue(ex.getMessage().contains("cannot change modelConfigId"));
     }
 
     @Test

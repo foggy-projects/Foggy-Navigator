@@ -60,10 +60,15 @@ public class BusinessAgentTaskService {
     private final BusinessTaskScopedCallerAuthorityService callerAuthorityService;
     private final List<BusinessAgentWorkerTaskLauncher> workerTaskLaunchers;
 
+    /**
+     * Legacy fresh-create seam retained temporarily for internal source compatibility.
+     * Production HTTP creation uses {@link BusinessAgentTaskCreateCommandFacade}.
+     */
+    @Deprecated
     @Transactional
     public CreatedBusinessAgentTaskDTO createTask(String tenantId, String actorUserId, CreateBusinessAgentTaskForm form) {
         ResolvedTaskPreparation preparation = resolveTaskPreparation(
-                tenantId, actorUserId, form, true);
+                tenantId, actorUserId, form);
         return executeResolvedPreparation(preparation);
     }
 
@@ -190,7 +195,7 @@ public class BusinessAgentTaskService {
             CreateBusinessAgentTaskForm form) {
         BusinessAgentTaskCreateInput input = BusinessAgentTaskCreateInput.snapshot(form);
         ResolvedTaskPreparation preparation = resolveTaskPreparation(
-                tenantId, actorUserId, input.toForm(), false);
+                tenantId, actorUserId, input.toForm());
         return new BusinessAgentTaskPreparedFreshCreate(preparation.plan(), input);
     }
 
@@ -203,8 +208,7 @@ public class BusinessAgentTaskService {
         ResolvedTaskPreparation current = resolveTaskPreparation(
                 identity.tenantId(),
                 identity.actorUserId(),
-                prepared.input().toForm(),
-                false);
+                prepared.input().toForm());
         expectedPlan.requireExactRevalidation(current.plan());
         return executeResolvedPreparation(current);
     }
@@ -212,12 +216,11 @@ public class BusinessAgentTaskService {
     private ResolvedTaskPreparation resolveTaskPreparation(
             String tenantId,
             String actorUserId,
-            CreateBusinessAgentTaskForm form,
-            boolean allowLegacyResume) {
+            CreateBusinessAgentTaskForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
-        if (!allowLegacyResume && form.getResumeFromTaskId() != null) {
+        if (form.getResumeFromTaskId() != null) {
             throw new IllegalArgumentException(CREATE_RESUME_NOT_SUPPORTED);
         }
         requireText(tenantId, "tenantId is required");
@@ -260,61 +263,26 @@ public class BusinessAgentTaskService {
         String finalModelName;
         String finalVisionModelConfigId;
         A2AgentResourceResolver.ResolvedModelResource finalModelResource;
-        BusinessAgentTaskEntity existingResumeTask = null;
         String explicitRequestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
         String explicitRequestedModelVariant = trimToNull(form.getModelVariant());
         String requestedModelConfigId = resolveRequestedModelConfigId(form, agentResource);
 
-        if (StringUtils.hasText(form.getResumeFromTaskId())) {
-            existingResumeTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
-                    .orElseThrow(() -> new IllegalArgumentException("resume task not found: " + form.getResumeFromTaskId()));
-
-            if (!tenantId.equals(existingResumeTask.getTenantId()) ||
-                !form.getClientAppId().equals(existingResumeTask.getClientAppId()) ||
-                !form.getSessionId().equals(existingResumeTask.getSessionId())) {
-                throw new IllegalArgumentException("resume task context mismatch");
-            }
-            if (!agentResource.agentId().equals(existingResumeTask.getAgentId())) {
-                throw new IllegalArgumentException("cannot change agentId when resuming task");
-            }
-            if (StringUtils.hasText(explicitRequestedModelConfigId) &&
-                !explicitRequestedModelConfigId.equals(existingResumeTask.getModelConfigId())) {
-                throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
-            }
-            if (StringUtils.hasText(explicitRequestedModelVariant) &&
-                StringUtils.hasText(existingResumeTask.getModel()) &&
-                !explicitRequestedModelVariant.equals(existingResumeTask.getModel())) {
-                throw new IllegalArgumentException("cannot change modelVariant when resuming task");
-            }
-            finalModelResource = resourceResolver.resolveRequiredModelForAgent(
-                    tenantId,
-                    form.getClientAppId(),
-                    agentResource,
-                    existingResumeTask.getModelConfigId(),
-                    null,
-                    LlmModelCategory.GENERAL);
-            validateAgentBackendCompatibility(agentResource, finalModelResource);
-            finalModelConfigId = existingResumeTask.getModelConfigId();
-            finalModelName = existingResumeTask.getModel();
-            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
-        } else {
-            // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
-            finalModelResource = resourceResolver.resolveRequiredModelForAgent(
-                    tenantId,
-                    form.getClientAppId(),
-                    agentResource,
-                    requestedModelConfigId,
-                    explicitRequestedModelVariant,
-                    LlmModelCategory.GENERAL);
-            validateAgentBackendCompatibility(agentResource, finalModelResource);
-            finalModelConfigId = finalModelResource.modelConfigId();
-            finalModelName = finalModelResource.modelName();
-            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
-        }
+        // 4, 5, 6. Fresh create always resolves the current effective model.
+        finalModelResource = resourceResolver.resolveRequiredModelForAgent(
+                tenantId,
+                form.getClientAppId(),
+                agentResource,
+                requestedModelConfigId,
+                explicitRequestedModelVariant,
+                LlmModelCategory.GENERAL);
+        validateAgentBackendCompatibility(agentResource, finalModelResource);
+        finalModelConfigId = finalModelResource.modelConfigId();
+        finalModelName = finalModelResource.modelName();
+        finalVisionModelConfigId = resolveOptionalVisionModelConfigId(
+                tenantId, form.getClientAppId(), agentResource);
         A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResource(
                 tenantId,
                 form,
-                existingResumeTask,
                 agentResource);
         String workerBackend = firstNonBlank(
                 agentResource.workerBackend(),
@@ -1305,16 +1273,11 @@ public class BusinessAgentTaskService {
     private A2AgentResourceResolver.ResolvedWorkspaceResource resolveWorkspaceResource(
             String tenantId,
             CreateBusinessAgentTaskForm form,
-            BusinessAgentTaskEntity existingResumeTask,
             A2AgentResourceResolver.ResolvedAgentResource agentResource) {
         String requestedDirectoryId = trimToNull(form.getDirectoryId());
-        String resumeDirectoryId = existingResumeTask != null ? trimToNull(existingResumeTask.getDirectoryId()) : null;
-        if (requestedDirectoryId != null && resumeDirectoryId != null && !requestedDirectoryId.equals(resumeDirectoryId)) {
-            throw new IllegalArgumentException("cannot change directoryId when resuming task");
-        }
         String directoryId = requestedDirectoryId != null
                 ? requestedDirectoryId
-                : (resumeDirectoryId != null ? resumeDirectoryId : agentResource.defaultDirectoryId());
+                : agentResource.defaultDirectoryId();
         return resourceResolver.resolveOptionalWorkspaceForAgent(
                         tenantId,
                         form.getClientAppId(),
