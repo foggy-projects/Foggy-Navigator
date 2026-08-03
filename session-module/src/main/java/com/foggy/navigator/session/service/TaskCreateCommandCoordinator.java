@@ -17,6 +17,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -51,11 +52,28 @@ public final class TaskCreateCommandCoordinator {
             TaskCreateTargetResolver.CreateExecutionPlan plan,
             CanonicalCommandEnvelope envelope,
             VerifiedCommandAuthorizationDecision decision) {
+        return execute(
+                request,
+                context,
+                plan,
+                envelope,
+                decision,
+                TaskCreateParticipants.NO_OP);
+    }
+
+    TaskCreateCommandResult execute(
+            TaskDispatchRequest request,
+            AgentResolveContext context,
+            TaskCreateTargetResolver.CreateExecutionPlan plan,
+            CanonicalCommandEnvelope envelope,
+            VerifiedCommandAuthorizationDecision decision,
+            TaskCreateParticipants participants) {
         Objects.requireNonNull(request, "request must not be null");
         Objects.requireNonNull(context, "context must not be null");
         Objects.requireNonNull(plan, "create execution plan must not be null");
         Objects.requireNonNull(envelope, "command envelope must not be null");
         Objects.requireNonNull(decision, "authorization decision must not be null");
+        Objects.requireNonNull(participants, "task create participants must not be null");
 
         plan.requireMatches(request, context);
         PlanBinding binding = PlanBinding.from(plan);
@@ -79,17 +97,32 @@ public final class TaskCreateCommandCoordinator {
         }
 
         ProviderEffectGate effectGate = new ProviderEffectGate(
-                plan, binding, envelope, decision, receiptService);
+                request,
+                context,
+                plan,
+                binding,
+                envelope,
+                decision,
+                participants,
+                receiptService);
         try {
             DispatchTaskDTO dispatchedTask = taskDispatchFacade.createTask(
                     request, context, plan, effectGate);
             TaskReference reference = requireExactResult(dispatchedTask, plan);
+            ResultIdentitySnapshot resultSnapshot =
+                    ResultIdentitySnapshot.from(dispatchedTask);
+            effectGate.completeFreshTask(dispatchedTask);
+            TaskReference completedReference = requireExactResult(dispatchedTask, plan);
+            resultSnapshot.requireUnchanged(dispatchedTask);
+            if (!reference.equals(completedReference)) {
+                throw conflict("TASK_CREATE_COMPLETION_RESULT_CONFLICT");
+            }
             receiptService.recordResult(
                     envelope.binding().request().clientRequestId(),
                     effectGate.requireEffectAttemptId(),
-                    reference.opaqueValue(),
+                    completedReference.opaqueValue(),
                     TASK_CREATED);
-            return new Executed(reference, dispatchedTask);
+            return new Executed(completedReference, dispatchedTask);
         } catch (RecordedResultReplay replay) {
             return new RecordedReplay(replay.reference());
         } catch (RuntimeException failure) {
@@ -190,29 +223,121 @@ public final class TaskCreateCommandCoordinator {
         }
     }
 
+    record ResultIdentitySnapshot(
+            String taskId,
+            @Nullable String providerType,
+            @Nullable String agentId,
+            @Nullable String workerId,
+            @Nullable String modelConfigId,
+            @Nullable String model,
+            @Nullable String sessionId,
+            @Nullable String directoryId) {
+
+        static ResultIdentitySnapshot from(DispatchTaskDTO result) {
+            Objects.requireNonNull(result, "task result must not be null");
+            return new ResultIdentitySnapshot(
+                    result.getTaskId(),
+                    result.getProviderType(),
+                    result.getAgentId(),
+                    result.getWorkerId(),
+                    result.getModelConfigId(),
+                    result.getModel(),
+                    result.getSessionId(),
+                    result.getDirectoryId());
+        }
+
+        void requireUnchanged(DispatchTaskDTO result) {
+            if (!equals(from(result))) {
+                throw conflict("TASK_CREATE_COMPLETION_RESULT_CONFLICT");
+            }
+        }
+    }
+
+    interface TaskCreateParticipants {
+        TaskCreateParticipants NO_OP = new TaskCreateParticipants() {
+            @Override
+            public void prepareFreshTask() {
+                // Compatibility lane: no participant work.
+            }
+
+            @Override
+            public void completeFreshTask(DispatchTaskDTO freshTask) {
+                // Compatibility lane: no participant work.
+            }
+        };
+
+        void prepareFreshTask();
+
+        void completeFreshTask(DispatchTaskDTO freshTask);
+    }
+
+    static final class PreparedProviderEffect<T> {
+        private final ProviderEffectIdentity identity;
+        private final Supplier<T> capturedEffect;
+
+        private PreparedProviderEffect(
+                ProviderEffectIdentity identity,
+                Supplier<T> capturedEffect) {
+            this.identity = Objects.requireNonNull(
+                    identity, "provider effect identity must not be null");
+            this.capturedEffect = Objects.requireNonNull(
+                    capturedEffect, "captured provider effect must not be null");
+        }
+
+        static <I, T> PreparedProviderEffect<T> capture(
+                ProviderEffectIdentity identity,
+                I capturedInput,
+                Function<I, T> providerEffect) {
+            Objects.requireNonNull(capturedInput, "captured provider input must not be null");
+            Objects.requireNonNull(providerEffect, "providerEffect must not be null");
+            return new PreparedProviderEffect<>(
+                    identity,
+                    () -> providerEffect.apply(capturedInput));
+        }
+
+        ProviderEffectIdentity identity() {
+            return identity;
+        }
+
+        T execute() {
+            return capturedEffect.get();
+        }
+    }
+
     /** Single-use, coordinator-minted gate that structurally wraps the Provider callback. */
     static final class ProviderEffectGate {
+        private final TaskDispatchRequest request;
+        private final AgentResolveContext context;
         private final TaskCreateTargetResolver.CreateExecutionPlan expectedPlan;
         private final PlanBinding expectedBinding;
         private final CanonicalCommandEnvelope envelope;
         private final VerifiedCommandAuthorizationDecision decision;
+        private final TaskCreateParticipants participants;
         private final CommandOnceReceiptService receiptService;
 
         private boolean invoked;
         private boolean providerEffectPermitted;
+        private boolean providerEffectReturned;
+        private boolean completionInvoked;
         @Nullable
         private String effectAttemptId;
 
         private ProviderEffectGate(
+                TaskDispatchRequest request,
+                AgentResolveContext context,
                 TaskCreateTargetResolver.CreateExecutionPlan expectedPlan,
                 PlanBinding expectedBinding,
                 CanonicalCommandEnvelope envelope,
                 VerifiedCommandAuthorizationDecision decision,
+                TaskCreateParticipants participants,
                 CommandOnceReceiptService receiptService) {
+            this.request = request;
+            this.context = context;
             this.expectedPlan = expectedPlan;
             this.expectedBinding = expectedBinding;
             this.envelope = envelope;
             this.decision = decision;
+            this.participants = participants;
             this.receiptService = receiptService;
         }
 
@@ -220,7 +345,28 @@ public final class TaskCreateCommandCoordinator {
                 TaskCreateTargetResolver.CreateExecutionPlan actualPlan,
                 ProviderEffectIdentity actualIdentity,
                 Supplier<T> providerEffect) {
+            Objects.requireNonNull(actualIdentity, "provider effect identity must not be null");
             Objects.requireNonNull(providerEffect, "providerEffect must not be null");
+            if (participants != TaskCreateParticipants.NO_OP) {
+                throw conflict("TASK_CREATE_FRESH_EFFECT_INPUT_REQUIRED");
+            }
+            return invokePrepared(
+                    actualPlan,
+                    () -> actualIdentity,
+                    () -> PreparedProviderEffect.capture(
+                            actualIdentity,
+                            providerEffect,
+                            Supplier::get));
+        }
+
+        <T> T invokePrepared(
+                TaskCreateTargetResolver.CreateExecutionPlan actualPlan,
+                Supplier<ProviderEffectIdentity> actualIdentitySupplier,
+                Supplier<PreparedProviderEffect<T>> preparedProviderEffectSupplier) {
+            Objects.requireNonNull(actualIdentitySupplier,
+                    "provider effect identity supplier must not be null");
+            Objects.requireNonNull(preparedProviderEffectSupplier,
+                    "prepared provider effect supplier must not be null");
             synchronized (this) {
                 if (invoked) {
                     throw conflict("TASK_CREATE_EFFECT_GATE_ALREADY_USED");
@@ -229,7 +375,7 @@ public final class TaskCreateCommandCoordinator {
                 if (actualPlan != expectedPlan) {
                     throw conflict("TASK_CREATE_EFFECT_PLAN_CONFLICT");
                 }
-                expectedBinding.requireActual(actualIdentity);
+                expectedBinding.requireActual(requireActualIdentity(actualIdentitySupplier));
                 CommandOnceReceiptService.EffectPermit permit =
                         receiptService.beginEffect(envelope, decision);
                 if (permit.disposition() == BeginEffectDisposition.RESULT_RECORDED) {
@@ -252,7 +398,38 @@ public final class TaskCreateCommandCoordinator {
                 }
                 providerEffectPermitted = true;
             }
-            return providerEffect.get();
+            participants.prepareFreshTask();
+            expectedPlan.requireMatches(request, context);
+            PreparedProviderEffect<T> preparedProviderEffect = Objects.requireNonNull(
+                    preparedProviderEffectSupplier.get(),
+                    "prepared provider effect must not be null");
+            expectedBinding.requireActual(preparedProviderEffect.identity());
+            T result = preparedProviderEffect.execute();
+            synchronized (this) {
+                providerEffectReturned = true;
+            }
+            return result;
+        }
+
+        private ProviderEffectIdentity requireActualIdentity(
+                Supplier<ProviderEffectIdentity> actualIdentitySupplier) {
+            return Objects.requireNonNull(
+                    actualIdentitySupplier.get(),
+                    "provider effect identity must not be null");
+        }
+
+        private void completeFreshTask(DispatchTaskDTO freshTask) {
+            Objects.requireNonNull(freshTask, "fresh task must not be null");
+            synchronized (this) {
+                if (!providerEffectReturned) {
+                    throw conflict("TASK_CREATE_EFFECT_RESULT_MISSING");
+                }
+                if (completionInvoked) {
+                    throw conflict("TASK_CREATE_COMPLETION_ALREADY_USED");
+                }
+                completionInvoked = true;
+            }
+            participants.completeFreshTask(freshTask);
         }
 
         synchronized boolean providerEffectPermitted() {

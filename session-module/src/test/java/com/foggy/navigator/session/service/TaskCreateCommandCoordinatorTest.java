@@ -17,7 +17,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -105,6 +108,8 @@ class TaskCreateCommandCoordinatorTest {
         TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
         TaskDispatchRequest request = directRequest();
         AgentResolveContext context = directContext();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
         Issued issued = issue(plan, "request-replay-1",
                 CanonicalCommandEnvelope.CommandIngress.DIRECT);
 
@@ -114,7 +119,12 @@ class TaskCreateCommandCoordinatorTest {
                         "attempt-recorded", "TASK:task-recorded"));
 
         TaskCreateCommandCoordinator.TaskCreateCommandResult result = coordinator.execute(
-                request, context, plan, issued.envelope(), issued.decision());
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants);
 
         TaskCreateCommandCoordinator.RecordedReplay replay = assertInstanceOf(
                 TaskCreateCommandCoordinator.RecordedReplay.class, result);
@@ -127,7 +137,12 @@ class TaskCreateCommandCoordinatorTest {
                         CommandOnceReceiptService.ReceiptState.EFFECT_STARTED,
                         "attempt-started", null));
         assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                request, context, plan, issued.envelope(), issued.decision()));
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
         verifyNoInteractions(taskDispatchFacade);
 
         reset(receiptService, taskDispatchFacade);
@@ -136,8 +151,14 @@ class TaskCreateCommandCoordinatorTest {
                         CommandOnceReceiptService.ReceiptState.AMBIGUOUS,
                         "attempt-ambiguous", null));
         assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                request, context, plan, issued.envelope(), issued.decision()));
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
         verifyNoInteractions(taskDispatchFacade);
+        verifyNoInteractions(participants);
     }
 
     @Test
@@ -154,6 +175,8 @@ class TaskCreateCommandCoordinatorTest {
                 CommandOnceReceiptService.BeginEffectDisposition.AMBIGUOUS}) {
             reset(receiptService, taskDispatchFacade);
             String requestId = "request-begin-race-" + disposition.name().toLowerCase();
+            TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                    mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
             Issued issued = issue(plan, requestId,
                     CanonicalCommandEnvelope.CommandIngress.DIRECT);
             CommandOnceReceiptService.ReceiptState state = switch (disposition) {
@@ -174,23 +197,40 @@ class TaskCreateCommandCoordinatorTest {
                     .thenAnswer(invocation -> {
                         TaskCreateCommandCoordinator.ProviderEffectGate gate =
                                 invocation.getArgument(3);
-                        return gate.invoke(plan, actualIdentity(request, context), () -> {
-                            providerEffects.incrementAndGet();
-                            return exactTask("must-not-run");
-                        });
+                        return gate.invokePrepared(
+                                plan,
+                                () -> actualIdentity(request, context),
+                                () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        actualIdentity(request, context),
+                                        Boolean.TRUE,
+                                        ignored -> {
+                                            providerEffects.incrementAndGet();
+                                            return exactTask("must-not-run");
+                                        }));
                     });
 
             if (disposition == CommandOnceReceiptService.BeginEffectDisposition.RESULT_RECORDED) {
                 TaskCreateCommandCoordinator.RecordedReplay replay = assertInstanceOf(
                         TaskCreateCommandCoordinator.RecordedReplay.class,
                         coordinator.execute(
-                                request, context, plan, issued.envelope(), issued.decision()));
+                                request,
+                                context,
+                                plan,
+                                issued.envelope(),
+                                issued.decision(),
+                                participants));
                 assertEquals("task-race-recorded", replay.reference().taskId());
             } else {
                 assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                        request, context, plan, issued.envelope(), issued.decision()));
+                        request,
+                        context,
+                        plan,
+                        issued.envelope(),
+                        issued.decision(),
+                        participants));
             }
             assertEquals(0, providerEffects.get());
+            verifyNoInteractions(participants);
             verify(receiptService, never()).recordResult(any(), any(), any(), any());
             verify(receiptService, never()).markAmbiguous(any(), any(), any());
         }
@@ -235,6 +275,172 @@ class TaskCreateCommandCoordinatorTest {
                 "request-success-1", "attempt-success-1",
                 "TASK:task-success-1", TaskCreateCommandCoordinator.TASK_CREATED);
         verify(receiptService, never()).markAmbiguous(any(), any(), any());
+    }
+
+    @Test
+    void preparedCreateRunsHooksOnceInsidePermitAndBeforeReceiptRecord() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-hook-order-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        DispatchTaskDTO task = exactTask("task-hook-order-1");
+        List<String> events = new ArrayList<>();
+        AtomicInteger planChecks = new AtomicInteger();
+        AtomicInteger identityReads = new AtomicInteger();
+
+        doAnswer(invocation -> {
+            events.add("plan.match." + planChecks.incrementAndGet());
+            return null;
+        }).when(plan).requireMatches(request, context);
+        when(receiptService.prepare(issued.envelope(), issued.decision()))
+                .thenAnswer(invocation -> {
+                    events.add("receipt.prepare");
+                    return prepared("request-hook-order-1");
+                });
+        when(receiptService.beginEffect(issued.envelope(), issued.decision()))
+                .thenAnswer(invocation -> {
+                    events.add("effect.begin");
+                    return permitted("request-hook-order-1", "attempt-hook-order-1");
+                });
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                    @Override
+                    public void prepareFreshTask() {
+                        events.add("participant.prepare");
+                    }
+
+                    @Override
+                    public void completeFreshTask(DispatchTaskDTO freshTask) {
+                        assertSame(task, freshTask);
+                        events.add("participant.complete");
+                    }
+                };
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    events.add("facade.create");
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> {
+                                events.add("identity." + identityReads.incrementAndGet());
+                                return actualIdentity(request, context);
+                            },
+                            () -> {
+                                events.add("identity." + identityReads.incrementAndGet());
+                                TaskCreateCommandCoordinator.ProviderEffectIdentity identity =
+                                        actualIdentity(request, context);
+                                return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        identity,
+                                        task,
+                                        capturedTask -> {
+                                            events.add("provider");
+                                            return capturedTask;
+                                        });
+                            });
+                });
+        doAnswer(invocation -> {
+            events.add("receipt.record");
+            return null;
+        }).when(receiptService).recordResult(
+                "request-hook-order-1",
+                "attempt-hook-order-1",
+                "TASK:task-hook-order-1",
+                TaskCreateCommandCoordinator.TASK_CREATED);
+
+        TaskCreateCommandCoordinator.Executed executed = assertInstanceOf(
+                TaskCreateCommandCoordinator.Executed.class,
+                coordinator.execute(
+                        request,
+                        context,
+                        plan,
+                        issued.envelope(),
+                        issued.decision(),
+                        participants));
+
+        assertSame(task, executed.freshTask());
+        assertEquals(List.of(
+                "plan.match.1",
+                "receipt.prepare",
+                "facade.create",
+                "identity.1",
+                "effect.begin",
+                "participant.prepare",
+                "plan.match.2",
+                "identity.2",
+                "provider",
+                "participant.complete",
+                "receipt.record"), events);
+        verify(receiptService, never()).markAmbiguous(any(), any(), any());
+    }
+
+    @Test
+    void preparedEffectUsesCapturedInputWhenMutableRequestDriftsAtProviderBoundary() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-captured-effect-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicReference<String> providerObservedWorker = new AtomicReference<>();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                    @Override
+                    public void prepareFreshTask() {
+                        // The later OpenAPI lane prepares its token and lease here.
+                    }
+
+                    @Override
+                    public void completeFreshTask(DispatchTaskDTO freshTask) {
+                        // The later OpenAPI lane completes its durable participants here.
+                    }
+                };
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-captured-effect-1"));
+        CommandOnceReceiptService.EffectPermit effectPermit = permitted(
+                "request-captured-effect-1", "attempt-captured-effect-1");
+        when(receiptService.beginEffect(any(), any())).thenReturn(effectPermit);
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> actualIdentity(request, context),
+                            () -> {
+                                String capturedWorkerId = request.getWorkerId();
+                                TaskCreateCommandCoordinator.ProviderEffectIdentity identity =
+                                        actualIdentity(request, context);
+                                return TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        identity,
+                                        capturedWorkerId,
+                                        providerWorkerId -> {
+                                            request.setWorkerId("worker-concurrent-drift");
+                                            providerObservedWorker.set(providerWorkerId);
+                                            return exactTask("task-captured-effect-1");
+                                        });
+                            });
+                });
+
+        TaskCreateCommandCoordinator.Executed executed = assertInstanceOf(
+                TaskCreateCommandCoordinator.Executed.class,
+                coordinator.execute(
+                        request,
+                        context,
+                        plan,
+                        issued.envelope(),
+                        issued.decision(),
+                        participants));
+
+        assertEquals("task-captured-effect-1", executed.reference().taskId());
+        assertEquals("worker-1", providerObservedWorker.get());
+        assertEquals("worker-concurrent-drift", request.getWorkerId());
+        verify(receiptService).recordResult(
+                "request-captured-effect-1",
+                "attempt-captured-effect-1",
+                "TASK:task-captured-effect-1",
+                TaskCreateCommandCoordinator.TASK_CREATED);
     }
 
     @Test
@@ -312,6 +518,171 @@ class TaskCreateCommandCoordinatorTest {
     }
 
     @Test
+    void legacyValueIdentityGateRejectsRealParticipantsBeforePermit() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-legacy-value-participant-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicInteger providerEffects = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-legacy-value-participant-1"));
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invoke(
+                            plan,
+                            actualIdentity(request, context),
+                            () -> {
+                                providerEffects.incrementAndGet();
+                                return exactTask("must-not-run");
+                            });
+                });
+
+        assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
+
+        assertEquals(0, providerEffects.get());
+        verifyNoInteractions(participants);
+        verify(receiptService, never()).beginEffect(any(), any());
+        verify(receiptService, never()).markAmbiguous(any(), any(), any());
+        verify(receiptService, never()).recordResult(any(), any(), any(), any());
+    }
+
+    @Test
+    void freshPreparationFailureMarksAmbiguousBeforeProviderAndCompletion() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-preparation-failure-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicInteger providerEffects = new AtomicInteger();
+        AtomicInteger completions = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                    @Override
+                    public void prepareFreshTask() {
+                        throw new IllegalStateException("task participant unavailable");
+                    }
+
+                    @Override
+                    public void completeFreshTask(DispatchTaskDTO freshTask) {
+                        completions.incrementAndGet();
+                    }
+                };
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-preparation-failure-1"));
+        CommandOnceReceiptService.EffectPermit effectPermit = permitted(
+                "request-preparation-failure-1",
+                "attempt-preparation-failure-1");
+        when(receiptService.beginEffect(any(), any()))
+                .thenReturn(effectPermit);
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> actualIdentity(request, context),
+                            () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                    actualIdentity(request, context),
+                                    Boolean.TRUE,
+                                    ignored -> {
+                                        providerEffects.incrementAndGet();
+                                        return exactTask("must-not-run");
+                                    }));
+                });
+
+        assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
+
+        assertEquals(0, providerEffects.get());
+        assertEquals(0, completions.get());
+        verify(receiptService).markAmbiguous(
+                "request-preparation-failure-1",
+                "attempt-preparation-failure-1",
+                TaskCreateCommandCoordinator.TASK_CREATE_OUTCOME_UNKNOWN);
+        verify(receiptService, never()).recordResult(any(), any(), any(), any());
+    }
+
+    @Test
+    void postPreparationIdentityDriftMarksAmbiguousBeforeProviderAndCompletion() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+        Issued issued = issue(plan, "request-post-preparation-drift-1",
+                CanonicalCommandEnvelope.CommandIngress.DIRECT);
+        AtomicInteger providerEffects = new AtomicInteger();
+        AtomicInteger completions = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                    @Override
+                    public void prepareFreshTask() {
+                        request.setWorkerId("worker-drift");
+                    }
+
+                    @Override
+                    public void completeFreshTask(DispatchTaskDTO freshTask) {
+                        completions.incrementAndGet();
+                    }
+                };
+
+        when(receiptService.prepare(any(), any()))
+                .thenReturn(prepared("request-post-preparation-drift-1"));
+        CommandOnceReceiptService.EffectPermit effectPermit = permitted(
+                "request-post-preparation-drift-1",
+                "attempt-post-preparation-drift-1");
+        when(receiptService.beginEffect(any(), any()))
+                .thenReturn(effectPermit);
+        when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                .thenAnswer(invocation -> {
+                    TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                            invocation.getArgument(3);
+                    return gate.invokePrepared(
+                            plan,
+                            () -> actualIdentity(request, context),
+                            () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                    actualIdentity(request, context),
+                                    Boolean.TRUE,
+                                    ignored -> {
+                                        providerEffects.incrementAndGet();
+                                        return exactTask("must-not-run");
+                                    }));
+                });
+
+        assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
+
+        assertEquals(0, providerEffects.get());
+        assertEquals(0, completions.get());
+        verify(receiptService).markAmbiguous(
+                "request-post-preparation-drift-1",
+                "attempt-post-preparation-drift-1",
+                TaskCreateCommandCoordinator.TASK_CREATE_OUTCOME_UNKNOWN);
+        verify(receiptService, never()).recordResult(any(), any(), any(), any());
+    }
+
+    @Test
     void failureAfterPermitMarksAmbiguousAndNeverRedispatches() {
         TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
         TaskDispatchRequest request = directRequest();
@@ -319,6 +690,20 @@ class TaskCreateCommandCoordinatorTest {
         Issued issued = issue(plan, "request-provider-failure-1",
                 CanonicalCommandEnvelope.CommandIngress.DIRECT);
         AtomicInteger providerEffects = new AtomicInteger();
+        AtomicInteger preparations = new AtomicInteger();
+        AtomicInteger completions = new AtomicInteger();
+        TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                    @Override
+                    public void prepareFreshTask() {
+                        preparations.incrementAndGet();
+                    }
+
+                    @Override
+                    public void completeFreshTask(DispatchTaskDTO freshTask) {
+                        completions.incrementAndGet();
+                    }
+                };
         CommandOnceReceiptService.EffectPermit effectPermit = permitted(
                 "request-provider-failure-1", "attempt-provider-failure-1");
 
@@ -333,18 +718,36 @@ class TaskCreateCommandCoordinatorTest {
                 .thenAnswer(invocation -> {
                     TaskCreateCommandCoordinator.ProviderEffectGate gate =
                             invocation.getArgument(3);
-                    return gate.invoke(plan, actualIdentity(request, context), () -> {
-                        providerEffects.incrementAndGet();
-                        throw new IllegalStateException("provider unavailable");
-                    });
+                    return gate.invokePrepared(
+                            plan,
+                            () -> actualIdentity(request, context),
+                            () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                    actualIdentity(request, context),
+                                    Boolean.TRUE,
+                                    ignored -> {
+                                        providerEffects.incrementAndGet();
+                                        throw new IllegalStateException("provider unavailable");
+                                    }));
                 });
 
         assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                request, context, plan, issued.envelope(), issued.decision()));
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
         assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                request, context, plan, issued.envelope(), issued.decision()));
+                request,
+                context,
+                plan,
+                issued.envelope(),
+                issued.decision(),
+                participants));
 
+        assertEquals(1, preparations.get());
         assertEquals(1, providerEffects.get());
+        assertEquals(0, completions.get());
         verify(taskDispatchFacade, times(1)).createTask(eq(request), eq(context), eq(plan), any());
         verify(receiptService).markAmbiguous(
                 "request-provider-failure-1", "attempt-provider-failure-1",
@@ -401,6 +804,7 @@ class TaskCreateCommandCoordinatorTest {
         TaskDispatchRequest request = directRequest();
         AgentResolveContext context = directContext();
         DispatchTaskDTO[] invalidResults = new DispatchTaskDTO[]{
+                null,
                 DispatchTaskDTO.builder()
                         .taskId(" ")
                         .providerType("codex-worker")
@@ -420,6 +824,8 @@ class TaskCreateCommandCoordinatorTest {
             String requestId = "request-invalid-result-" + index;
             String attemptId = "attempt-invalid-result-" + index;
             DispatchTaskDTO invalidResult = invalidResults[index];
+            TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                    mock(TaskCreateCommandCoordinator.TaskCreateParticipants.class);
             Issued issued = issue(plan, requestId,
                     CanonicalCommandEnvelope.CommandIngress.DIRECT);
             CommandOnceReceiptService.EffectPermit effectPermit =
@@ -430,15 +836,110 @@ class TaskCreateCommandCoordinatorTest {
                     .thenAnswer(invocation -> {
                         TaskCreateCommandCoordinator.ProviderEffectGate gate =
                                 invocation.getArgument(3);
-                        return gate.invoke(
+                        return gate.invokePrepared(
                                 plan,
-                                actualIdentity(request, context),
-                                () -> invalidResult);
+                                () -> actualIdentity(request, context),
+                                () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        actualIdentity(request, context),
+                                        Boolean.TRUE,
+                                        ignored -> invalidResult));
                     });
 
             assertThrows(IllegalStateException.class, () -> coordinator.execute(
-                    request, context, plan, issued.envelope(), issued.decision()));
+                    request,
+                    context,
+                    plan,
+                    issued.envelope(),
+                    issued.decision(),
+                    participants));
 
+            verify(participants).prepareFreshTask();
+            verify(participants, never()).completeFreshTask(any());
+            verify(receiptService).markAmbiguous(
+                    requestId,
+                    attemptId,
+                    TaskCreateCommandCoordinator.TASK_CREATE_OUTCOME_UNKNOWN);
+            verify(receiptService, never()).recordResult(any(), any(), any(), any());
+        }
+    }
+
+    @Test
+    void completionFailureOrResultMutationMarksAmbiguousBeforeReceiptRecord() {
+        TaskCreateTargetResolver.CreateExecutionPlan plan = directPlan();
+        TaskDispatchRequest request = directRequest();
+        AgentResolveContext context = directContext();
+
+        for (int mutation : new int[]{-1, 0, 1, 2, 3, 4, 5, 6, 7}) {
+            reset(receiptService, taskDispatchFacade);
+            String suffix = mutation < 0 ? "failure" : "mutation-" + mutation;
+            String requestId = "request-completion-" + suffix;
+            String attemptId = "attempt-completion-" + suffix;
+            DispatchTaskDTO task = exactTask("task-completion-" + suffix);
+            AtomicInteger preparations = new AtomicInteger();
+            AtomicInteger providerEffects = new AtomicInteger();
+            AtomicInteger completions = new AtomicInteger();
+            TaskCreateCommandCoordinator.TaskCreateParticipants participants =
+                    new TaskCreateCommandCoordinator.TaskCreateParticipants() {
+                        @Override
+                        public void prepareFreshTask() {
+                            preparations.incrementAndGet();
+                        }
+
+                        @Override
+                        public void completeFreshTask(DispatchTaskDTO freshTask) {
+                            completions.incrementAndGet();
+                            if (mutation < 0) {
+                                throw new IllegalStateException("completion unavailable");
+                            }
+                            switch (mutation) {
+                                case 0 -> freshTask.setTaskId("task-completion-drift");
+                                case 1 -> freshTask.setProviderType(null);
+                                case 2 -> freshTask.setAgentId("agent-added-by-completion");
+                                case 3 -> freshTask.setWorkerId(" ");
+                                case 4 -> freshTask.setModelConfigId(null);
+                                case 5 -> freshTask.setModel(" ");
+                                case 6 -> freshTask.setSessionId(null);
+                                case 7 -> freshTask.setDirectoryId(" ");
+                                default -> throw new IllegalStateException(
+                                        "unexpected mutation case");
+                            }
+                        }
+                    };
+            Issued issued = issue(plan, requestId,
+                    CanonicalCommandEnvelope.CommandIngress.DIRECT);
+
+            when(receiptService.prepare(any(), any())).thenReturn(prepared(requestId));
+            CommandOnceReceiptService.EffectPermit effectPermit =
+                    permitted(requestId, attemptId);
+            when(receiptService.beginEffect(any(), any()))
+                    .thenReturn(effectPermit);
+            when(taskDispatchFacade.createTask(eq(request), eq(context), eq(plan), any()))
+                    .thenAnswer(invocation -> {
+                        TaskCreateCommandCoordinator.ProviderEffectGate gate =
+                                invocation.getArgument(3);
+                        return gate.invokePrepared(
+                                plan,
+                                () -> actualIdentity(request, context),
+                                () -> TaskCreateCommandCoordinator.PreparedProviderEffect.capture(
+                                        actualIdentity(request, context),
+                                        task,
+                                        capturedTask -> {
+                                            providerEffects.incrementAndGet();
+                                            return capturedTask;
+                                        }));
+                    });
+
+            assertThrows(IllegalStateException.class, () -> coordinator.execute(
+                    request,
+                    context,
+                    plan,
+                    issued.envelope(),
+                    issued.decision(),
+                    participants));
+
+            assertEquals(1, preparations.get());
+            assertEquals(1, providerEffects.get());
+            assertEquals(1, completions.get());
             verify(receiptService).markAmbiguous(
                     requestId,
                     attemptId,
