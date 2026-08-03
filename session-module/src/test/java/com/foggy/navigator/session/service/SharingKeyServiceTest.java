@@ -2,12 +2,18 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.dto.SharingKeyDTO;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
+import com.foggy.navigator.common.entity.UserEntity;
 import com.foggy.navigator.common.form.SharingKeyCreateForm;
 import com.foggy.navigator.common.form.SharingKeyUpdateForm;
+import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -15,6 +21,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -34,6 +44,7 @@ class SharingKeyServiceTest {
     @Mock private SharingKeyRepository repository;
     @Mock private SharingKeyGenerator keyGenerator;
     @Mock private UnifiedAgentResolver agentResolver;
+    @Mock private UserRepository userRepository;
 
     @InjectMocks private SharingKeyService service;
 
@@ -365,6 +376,277 @@ class SharingKeyServiceTest {
         verify(repository, never()).save(any());
     }
 
+    @Test
+    void findByIdForUpdateDeclaresExactPessimisticPrimaryKeyLock() throws Exception {
+        Method method = SharingKeyRepository.class.getMethod(
+                "findByIdForUpdate", String.class);
+
+        Lock lock = method.getAnnotation(Lock.class);
+        Query query = method.getAnnotation(Query.class);
+
+        assertNotNull(lock);
+        assertEquals(LockModeType.PESSIMISTIC_WRITE, lock.value());
+        assertNotNull(query);
+        String normalized = query.value().replaceAll("\\s+", " ").trim();
+        assertEquals(
+                "select sharingKey from SharingKeyEntity sharingKey where sharingKey.id = :id",
+                normalized);
+        Param parameter = method.getParameters()[0].getAnnotation(Param.class);
+        assertNotNull(parameter);
+        assertEquals("id", parameter.value());
+    }
+
+    @Test
+    void mintAskAuthorityIsReadOnlyRawKeyFreeAndHasRedactedRepresentation() {
+        SharingKeyEntity entity = buildEntity("sk-1", "agent-1", "u1");
+        entity.setAllowedOperations(" ");
+        entity.setMaxTurns(3);
+        entity.setSystemPrompt("private default prompt");
+        entity.setMaxDailyCalls(50);
+        entity.setTodayCalls(50);
+        entity.setCallDate(LocalDate.now());
+        when(repository.findBySharingKey("shk-full-key")).thenReturn(Optional.of(entity));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-1")));
+
+        SharingKeyService.SharedAskAuthority authority =
+                service.mintAskAuthority("shk-full-key");
+
+        assertEquals("sk-1", authority.sharingKeyId());
+        assertEquals("u1", authority.ownerUserId());
+        assertEquals("tenant-1", authority.tenantId());
+        assertEquals("agent-1", authority.agentId());
+        assertEquals(3, authority.preflightPolicy().maxTurns());
+        assertEquals("private default prompt",
+                authority.preflightPolicy().systemPrompt());
+        assertEquals("SharedAskAuthority[content-free]", authority.toString());
+        assertEquals("SharedAskPolicySnapshot[content-redacted]",
+                authority.preflightPolicy().toString());
+        assertFalse(authority.toString().contains("shk-full-key"));
+        assertFalse(authority.preflightPolicy().toString()
+                .contains("private default prompt"));
+        for (Constructor<?> constructor
+                : SharingKeyService.SharedAskAuthority.class.getDeclaredConstructors()) {
+            assertTrue(Modifier.isPrivate(constructor.getModifiers()));
+        }
+        for (Field field : SharingKeyService.SharedAskAuthority.class.getDeclaredFields()) {
+            assertTrue(Modifier.isPrivate(field.getModifiers()));
+            assertTrue(Modifier.isFinal(field.getModifiers()));
+        }
+        verify(repository, never()).findByIdForUpdate(anyString());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void mintAskAuthorityRejectsOperationOrOwnerTenantWithoutMutation() {
+        SharingKeyEntity entity = buildEntity("sk-1", "agent-1", "u1");
+        entity.setAllowedOperations("task:get");
+        when(repository.findBySharingKey("shk-full-key")).thenReturn(Optional.of(entity));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.mintAskAuthority("shk-full-key"));
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        entity.setAllowedOperations("ask");
+        when(repository.findBySharingKey("shk-full-key")).thenReturn(Optional.of(entity));
+        when(userRepository.findById("u1")).thenReturn(Optional.empty());
+        SecurityException missingOwner = assertThrows(SecurityException.class,
+                () -> service.mintAskAuthority("shk-full-key"));
+        assertEquals("shared resource is not accessible", missingOwner.getMessage());
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        when(repository.findBySharingKey("shk-full-key")).thenReturn(Optional.of(entity));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", " ")));
+        SecurityException blankTenant = assertThrows(SecurityException.class,
+                () -> service.mintAskAuthority("shk-full-key"));
+        assertEquals("shared resource is not accessible", blankTenant.getMessage());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void consumeAuthorizedAskLocksOnceUsesLatestPolicyAndRejectsSerializedSecondSlot() {
+        SharingKeyEntity preflight = buildEntity("sk-1", "agent-1", "u1");
+        preflight.setMaxTurns(1);
+        preflight.setSystemPrompt("old prompt");
+        when(repository.findBySharingKey("shk-full-key"))
+                .thenReturn(Optional.of(preflight));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-1")));
+        SharingKeyService.SharedAskAuthority authority =
+                service.mintAskAuthority("shk-full-key");
+
+        clearInvocations(repository, userRepository);
+        SharingKeyEntity locked = buildEntity("sk-1", "agent-1", "u1");
+        locked.setAllowedOperations("ask,task:get");
+        locked.setMaxTurns(5);
+        locked.setSystemPrompt("latest prompt");
+        locked.setMaxDailyCalls(2);
+        locked.setTodayCalls(1);
+        locked.setCallDate(LocalDate.now());
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(locked));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-1")));
+
+        SharingKeyService.SharedAskPolicySnapshot policy =
+                service.consumeAuthorizedAsk(authority);
+        LocalDateTime firstLastUsedAt = locked.getLastUsedAt();
+
+        assertEquals(2, locked.getTodayCalls());
+        assertNotNull(firstLastUsedAt);
+        assertEquals(5, policy.maxTurns());
+        assertEquals("latest prompt", policy.systemPrompt());
+        IllegalArgumentException exhausted = assertThrows(IllegalArgumentException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        assertTrue(exhausted.getMessage().contains("Daily call limit exceeded"));
+        assertEquals(2, locked.getTodayCalls());
+        assertSame(firstLastUsedAt, locked.getLastUsedAt());
+        verify(repository, times(2)).findByIdForUpdate("sk-1");
+        verify(repository, times(1)).save(locked);
+        verify(repository, never()).findBySharingKey(anyString());
+    }
+
+    @Test
+    void consumeAuthorizedAskRejectsIdentityTenantAndCurrentAuthorityDriftWithoutSave() {
+        SharingKeyEntity preflight = buildEntity("sk-1", "agent-1", "u1");
+        preflight.setAllowedOperations("ask");
+        when(repository.findBySharingKey("shk-full-key"))
+                .thenReturn(Optional.of(preflight));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-1")));
+        SharingKeyService.SharedAskAuthority authority =
+                service.mintAskAuthority("shk-full-key");
+
+        SharingKeyRepository foreignRepository = mock(SharingKeyRepository.class);
+        UserRepository foreignUserRepository = mock(UserRepository.class);
+        SharingKeyService foreignService = new SharingKeyService(
+                foreignRepository,
+                mock(SharingKeyGenerator.class),
+                mock(UnifiedAgentResolver.class),
+                foreignUserRepository,
+                "http://localhost:8112");
+        SecurityException foreignIssuer = assertThrows(SecurityException.class,
+                () -> foreignService.consumeAuthorizedAsk(authority));
+        assertEquals("shared resource is not accessible", foreignIssuer.getMessage());
+        assertThrows(SecurityException.class,
+                () -> service.consumeAuthorizedAsk(null));
+        verifyNoInteractions(foreignRepository, foreignUserRepository);
+
+        reset(repository, userRepository);
+        when(repository.findByIdForUpdate("sk-1")).thenReturn(Optional.empty());
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        assertEquals("Invalid sharing key", missing.getMessage());
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity rowIdDrift = buildEntity("sk-2", "agent-1", "u1");
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(rowIdDrift));
+        assertThrows(SecurityException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity agentDrift = buildEntity("sk-1", "agent-2", "u1");
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(agentDrift));
+        assertThrows(SecurityException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity ownerDrift = buildEntity("sk-1", "agent-1", "u2");
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(ownerDrift));
+        assertThrows(SecurityException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity tenantDrift = buildEntity("sk-1", "agent-1", "u1");
+        tenantDrift.setAllowedOperations("ask");
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(tenantDrift));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-2")));
+        assertThrows(SecurityException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity operationDrift = buildEntity("sk-1", "agent-1", "u1");
+        operationDrift.setAllowedOperations("task:get");
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(operationDrift));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+        verify(repository, never()).findBySharingKey(anyString());
+    }
+
+    @Test
+    void consumeAuthorizedAskRechecksLockedUsabilityAndPreservesDayRollover() {
+        SharingKeyEntity preflight = buildEntity("sk-1", "agent-1", "u1");
+        preflight.setAllowedOperations("ask");
+        when(repository.findBySharingKey("shk-full-key"))
+                .thenReturn(Optional.of(preflight));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-1")));
+        SharingKeyService.SharedAskAuthority authority =
+                service.mintAskAuthority("shk-full-key");
+
+        reset(repository, userRepository);
+        SharingKeyEntity disabled = buildEntity("sk-1", "agent-1", "u1");
+        disabled.setEnabled(false);
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(disabled));
+        IllegalArgumentException disabledFailure = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        assertTrue(disabledFailure.getMessage().contains("disabled"));
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity expired = buildEntity("sk-1", "agent-1", "u1");
+        expired.setExpiresAt(LocalDateTime.now().minusDays(1));
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(expired));
+        IllegalArgumentException expiredFailure = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.consumeAuthorizedAsk(authority));
+        assertTrue(expiredFailure.getMessage().contains("expired"));
+        verifyNoInteractions(userRepository);
+        verify(repository, never()).save(any());
+
+        reset(repository, userRepository);
+        SharingKeyEntity newDay = buildEntity("sk-1", "agent-1", "u1");
+        newDay.setAllowedOperations("ask");
+        newDay.setMaxDailyCalls(50);
+        newDay.setTodayCalls(50);
+        newDay.setCallDate(LocalDate.now().minusDays(1));
+        when(repository.findByIdForUpdate("sk-1"))
+                .thenReturn(Optional.of(newDay));
+        when(userRepository.findById("u1"))
+                .thenReturn(Optional.of(owner("u1", "tenant-1")));
+
+        service.consumeAuthorizedAsk(authority);
+
+        assertEquals(1, newDay.getTodayCalls());
+        assertEquals(LocalDate.now(), newDay.getCallDate());
+        verify(repository).save(newDay);
+        verify(repository, never()).findBySharingKey(anyString());
+    }
+
     // ---- helper ----
 
     private SharingKeyEntity buildEntity(String id, String agentId, String ownerUserId) {
@@ -379,5 +661,12 @@ class SharingKeyServiceTest {
         entity.setTodayCalls(0);
         entity.setEnabled(true);
         return entity;
+    }
+
+    private UserEntity owner(String userId, String tenantId) {
+        UserEntity owner = new UserEntity();
+        owner.setId(userId);
+        owner.setTenantId(tenantId);
+        return owner;
     }
 }

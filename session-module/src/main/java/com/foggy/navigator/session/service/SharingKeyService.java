@@ -2,8 +2,10 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.dto.SharingKeyDTO;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
+import com.foggy.navigator.common.entity.UserEntity;
 import com.foggy.navigator.common.form.SharingKeyCreateForm;
 import com.foggy.navigator.common.form.SharingKeyUpdateForm;
+import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
@@ -17,6 +19,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -31,15 +34,19 @@ public class SharingKeyService {
     private final SharingKeyRepository repository;
     private final SharingKeyGenerator keyGenerator;
     private final UnifiedAgentResolver agentResolver;
+    private final UserRepository userRepository;
     private final String externalUrl;
+    private final Object askAuthorityIssuer = new Object();
 
     public SharingKeyService(SharingKeyRepository repository,
                              SharingKeyGenerator keyGenerator,
                              UnifiedAgentResolver agentResolver,
+                             UserRepository userRepository,
                              @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}") String externalUrl) {
         this.repository = repository;
         this.keyGenerator = keyGenerator;
         this.agentResolver = agentResolver;
+        this.userRepository = userRepository;
         this.externalUrl = normalizeUrl(externalUrl);
     }
 
@@ -149,6 +156,48 @@ public class SharingKeyService {
     // ==================== 外部调用验证 ====================
 
     /**
+     * Mints an immutable, process-local authority for one Shared ask without consuming quota.
+     * The plain Sharing Key is validated here and deliberately discarded.
+     */
+    @Transactional(readOnly = true)
+    SharedAskAuthority mintAskAuthority(String plainSharingKey) {
+        SharingKeyEntity entity = validateBase(plainSharingKey);
+        checkOperation(entity, "ask");
+        String tenantId = requireOwnerTenant(entity.getOwnerUserId());
+        return new SharedAskAuthority(
+                askAuthorityIssuer,
+                entity.getId(),
+                entity.getOwnerUserId(),
+                tenantId,
+                entity.getAgentId(),
+                new SharedAskPolicySnapshot(
+                        entity.getMaxTurns(),
+                        entity.getSystemPrompt()));
+    }
+
+    /**
+     * Revalidates and consumes one Shared ask under a pessimistic row lock.
+     * Only a server-minted authority is accepted; the raw Sharing Key is never reintroduced.
+     */
+    @Transactional
+    SharedAskPolicySnapshot consumeAuthorizedAsk(SharedAskAuthority authority) {
+        requireIssuedAuthority(authority);
+        SharingKeyEntity entity = repository.findByIdForUpdate(authority.sharingKeyId)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid sharing key"));
+        requireExactAuthorityIdentity(authority, entity);
+        validateUsable(entity);
+        checkOperation(entity, "ask");
+        String currentTenantId = requireOwnerTenant(entity.getOwnerUserId());
+        if (!Objects.equals(authority.tenantId, currentTenantId)) {
+            throw inaccessibleSharedResource();
+        }
+        consumeQuota(entity);
+        return new SharedAskPolicySnapshot(
+                entity.getMaxTurns(),
+                entity.getSystemPrompt());
+    }
+
+    /**
      * 验证共享密钥并消费一次调用额度
      *
      * @param sharingKey 外部用户传入的密钥
@@ -210,6 +259,11 @@ public class SharingKeyService {
         SharingKeyEntity entity = repository.findBySharingKey(sharingKey)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid sharing key"));
 
+        validateUsable(entity);
+        return entity;
+    }
+
+    private void validateUsable(SharingKeyEntity entity) {
         if (!entity.getEnabled()) {
             throw new IllegalArgumentException("Sharing key is disabled");
         }
@@ -217,7 +271,37 @@ public class SharingKeyService {
         if (entity.getExpiresAt() != null && entity.getExpiresAt().isBefore(LocalDateTime.now())) {
             throw new IllegalArgumentException("Sharing key has expired");
         }
-        return entity;
+    }
+
+    private String requireOwnerTenant(String ownerUserId) {
+        UserEntity owner = userRepository.findById(ownerUserId)
+                .orElseThrow(SharingKeyService::inaccessibleSharedResource);
+        if (!Objects.equals(ownerUserId, owner.getId())
+                || owner.getTenantId() == null
+                || owner.getTenantId().isBlank()) {
+            throw inaccessibleSharedResource();
+        }
+        return owner.getTenantId();
+    }
+
+    private void requireIssuedAuthority(SharedAskAuthority authority) {
+        if (authority == null || authority.issuer != askAuthorityIssuer) {
+            throw inaccessibleSharedResource();
+        }
+    }
+
+    private void requireExactAuthorityIdentity(
+            SharedAskAuthority authority,
+            SharingKeyEntity entity) {
+        if (!Objects.equals(authority.sharingKeyId, entity.getId())
+                || !Objects.equals(authority.ownerUserId, entity.getOwnerUserId())
+                || !Objects.equals(authority.agentId, entity.getAgentId())) {
+            throw inaccessibleSharedResource();
+        }
+    }
+
+    private static SecurityException inaccessibleSharedResource() {
+        return new SecurityException("shared resource is not accessible");
     }
 
     /** 所有有效的操作标识 */
@@ -256,6 +340,69 @@ public class SharingKeyService {
     private static List<String> splitOperations(String ops) {
         if (ops == null || ops.isBlank()) return null;
         return Arrays.asList(ops.split(","));
+    }
+
+    /** Server-minted safe references plus a provisional, immutable execution policy. */
+    static final class SharedAskAuthority {
+        private final Object issuer;
+        private final String sharingKeyId;
+        private final String ownerUserId;
+        private final String tenantId;
+        private final String agentId;
+        private final SharedAskPolicySnapshot preflightPolicy;
+
+        private SharedAskAuthority(
+                Object issuer,
+                String sharingKeyId,
+                String ownerUserId,
+                String tenantId,
+                String agentId,
+                SharedAskPolicySnapshot preflightPolicy) {
+            this.issuer = Objects.requireNonNull(issuer, "authority issuer is required");
+            this.sharingKeyId = Objects.requireNonNull(
+                    sharingKeyId, "sharingKeyId is required");
+            this.ownerUserId = Objects.requireNonNull(
+                    ownerUserId, "ownerUserId is required");
+            this.tenantId = Objects.requireNonNull(tenantId, "tenantId is required");
+            this.agentId = Objects.requireNonNull(agentId, "agentId is required");
+            this.preflightPolicy = Objects.requireNonNull(
+                    preflightPolicy, "preflightPolicy is required");
+        }
+
+        String sharingKeyId() { return sharingKeyId; }
+
+        String ownerUserId() { return ownerUserId; }
+
+        String tenantId() { return tenantId; }
+
+        String agentId() { return agentId; }
+
+        SharedAskPolicySnapshot preflightPolicy() { return preflightPolicy; }
+
+        @Override
+        public String toString() {
+            return "SharedAskAuthority[content-free]";
+        }
+    }
+
+    /** Immutable execution policy re-read from the locked SharingKey row. */
+    static final class SharedAskPolicySnapshot {
+        private final Integer maxTurns;
+        private final String systemPrompt;
+
+        private SharedAskPolicySnapshot(Integer maxTurns, String systemPrompt) {
+            this.maxTurns = maxTurns;
+            this.systemPrompt = systemPrompt;
+        }
+
+        Integer maxTurns() { return maxTurns; }
+
+        String systemPrompt() { return systemPrompt; }
+
+        @Override
+        public String toString() {
+            return "SharedAskPolicySnapshot[content-redacted]";
+        }
     }
 
     private SharingKeyDTO toDTO(SharingKeyEntity entity) {
