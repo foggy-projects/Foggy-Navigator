@@ -864,19 +864,6 @@ public class OpenApiController {
         String clientContextJson = serializeClientContext(form.getClientContext());
         OpenApiRuntimeTaskLaunchPlanner.LaunchPlan launchPlan =
                 runtimeTaskLaunchPlanner.plan(resourceResolver, launchResources, form);
-        Map<String, Object> metadata = launchPlan.mutableMetadata();
-        if (askRequestAudit != null) {
-            try {
-                requestAuditService.taskAdmissionRecorded(
-                        askRequestAudit,
-                        requestAuditEvidence(
-                                null, "ADMITTED", false, null, route.agentId(), upstreamUserId,
-                                stringValue(metadata.get("workerId")), modelConfigId, modelResource.modelName(),
-                                metadata, "STANDARD_SCOPE_ADMITTED", false));
-            } catch (RuntimeException e) {
-                return RX.failB("RUNTIME_AUDIT_RECORDING_FAILED");
-            }
-        }
         OpenApiRuntimeTaskCreateFacade.CreateOutcome createOutcome = runtimeTaskCreateFacade.create(
                 new OpenApiRuntimeTaskCreateFacade.VerifiedCreateCommand(
                         prepareOutcome.preparedContext(),
@@ -891,11 +878,11 @@ public class OpenApiController {
                     "open api request rejected"));
         }
         A2aTask task = createOutcome.task();
-        metadata = createOutcome.metadata();
+        Map<String, Object> metadata = createOutcome.metadata();
 
         SessionTaskEntity taskEntity = sessionQueryService.findTask(task.getId()).orElse(null);
         OpenApiTaskDTO response = toOpenApiTaskDTO(task, route.agentId(), taskEntity);
-        response.setClientRequestId(clientRequestId);
+        response.setClientRequestId(askRequestAudit.clientRequestId());
         applyScopeDiagnostics(response, metadata);
         return RX.ok(response);
     }
@@ -1089,56 +1076,38 @@ public class OpenApiController {
         if (target == null || metadata == null) {
             return;
         }
-        target.setEffectiveToolCount(integerValue(metadata.get("effectiveToolCount")));
-        target.setEffectiveFunctionCount(integerValue(metadata.get("effectiveFunctionCount")));
-        target.setToolScopeSource(stringValue(metadata.get("toolScopeSource")));
-        target.setToolScopeKind(stringValue(metadata.get("toolScopeKind")));
-        target.setFunctionScopeSource(stringValue(metadata.get("functionScopeSource")));
-        target.setTaskTokenFunctionScopeEmpty(booleanValue(metadata.get("taskTokenFunctionScopeEmpty")));
-        target.setRuntimeDispatched(booleanValue(metadata.get("runtimeDispatched")));
-        target.setTaskTokenStatus(stringValue(metadata.get("taskTokenStatus")));
-    }
-
-    private RuntimeRequestAuditService.TaskEvidence requestAuditEvidence(
-            String taskId,
-            String status,
-            boolean terminal,
-            String sanitizedErrorCode,
-            String agentCode,
-            String upstreamUserId,
-            String physicalWorkerId,
-            String modelConfigId,
-            String modelVariant,
-            Map<String, Object> metadata,
-            String result,
-            boolean dispatched) {
-        boolean taskCreated = StringUtils.hasText(taskId);
-        return new RuntimeRequestAuditService.TaskEvidence(
-                taskId,
-                status,
-                terminal,
-                sanitizedErrorCode,
-                agentCode,
-                upstreamUserId,
-                physicalWorkerId,
-                modelConfigId,
-                modelVariant,
-                integerValue(metadata.get("requestedToolCount")),
-                integerValue(metadata.get("effectiveToolCount")),
-                stringValue(metadata.get("toolScopeKind")),
-                stringValue(metadata.get("toolScopeSource")),
-                integerValue(metadata.get("requestedFunctionCount")),
-                integerValue(metadata.get("effectiveFunctionCount")),
-                stringValue(metadata.get("functionScopeSource")),
-                booleanValue(metadata.get("taskTokenFunctionScopeEmpty")),
-                taskCreated ? "ACTIVE" : "NOT_ISSUED",
-                dispatched,
-                dispatched,
-                false,
-                dispatched ? 1 : 0,
-                0,
-                0,
-                result);
+        Integer effectiveToolCount = integerValue(metadata.get("effectiveToolCount"));
+        if (effectiveToolCount != null) {
+            target.setEffectiveToolCount(effectiveToolCount);
+        }
+        Integer effectiveFunctionCount = integerValue(metadata.get("effectiveFunctionCount"));
+        if (effectiveFunctionCount != null) {
+            target.setEffectiveFunctionCount(effectiveFunctionCount);
+        }
+        String toolScopeSource = stringValue(metadata.get("toolScopeSource"));
+        if (toolScopeSource != null) {
+            target.setToolScopeSource(toolScopeSource);
+        }
+        String toolScopeKind = stringValue(metadata.get("toolScopeKind"));
+        if (toolScopeKind != null) {
+            target.setToolScopeKind(toolScopeKind);
+        }
+        String functionScopeSource = stringValue(metadata.get("functionScopeSource"));
+        if (functionScopeSource != null) {
+            target.setFunctionScopeSource(functionScopeSource);
+        }
+        Boolean functionScopeEmpty = booleanValue(metadata.get("taskTokenFunctionScopeEmpty"));
+        if (functionScopeEmpty != null) {
+            target.setTaskTokenFunctionScopeEmpty(functionScopeEmpty);
+        }
+        Boolean runtimeDispatched = booleanValue(metadata.get("runtimeDispatched"));
+        if (runtimeDispatched != null) {
+            target.setRuntimeDispatched(runtimeDispatched);
+        }
+        String taskTokenStatus = stringValue(metadata.get("taskTokenStatus"));
+        if (taskTokenStatus != null) {
+            target.setTaskTokenStatus(taskTokenStatus);
+        }
     }
 
     private String extractRequestedModelConfigId(OpenApiQueryForm form) {

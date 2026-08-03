@@ -6,15 +6,17 @@ import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.business.agent.service.TerminalTaskBindingException;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
-import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
+import com.foggy.navigator.session.service.ScopedOpenApiTaskCreateCommandAdapter;
+import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
@@ -46,18 +48,13 @@ import java.util.Optional;
 public final class OpenApiRuntimeTaskCreateFacade {
 
     private static final String BUSINESS_RUNTIME_TOKEN_REVOKED_BY = "system";
-    private static final String BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON =
-            "open api task submission failed";
-    private static final String BUSINESS_RUNTIME_MISSING_TASK_REASON =
-            "open api task submission returned no task id";
-    private static final String BUSINESS_RUNTIME_BIND_FAILURE_REASON =
-            "open api task token binding failed";
     private static final String BUSINESS_RUNTIME_IMMEDIATE_TERMINAL_REASON =
             "open api task returned terminal after submission";
 
     private final CodingAgentRepository codingAgentRepository;
     private final UnifiedAgentResolver agentResolver;
     private final AgentSubmitPipeline agentSubmitPipeline;
+    private final ScopedOpenApiTaskCreateCommandAdapter scopedTaskCreateCommandAdapter;
     private final OpenApiSessionQueryService sessionQueryService;
     private final ObjectProvider<RuntimeRequestAuditService> runtimeRequestAuditService;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
@@ -129,19 +126,30 @@ public final class OpenApiRuntimeTaskCreateFacade {
         Map<String, Object> metadata = launchPlan.mutableMetadata();
         BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest =
                 launchPlan.workerSelectionRequest(agentOwnerUserId);
-        String businessRuntimeToken;
+        workerSelectionRequest.setCallerCredentialId(credential.credentialId());
+        workerSelectionRequest.setCallerAccessTokenId(credential.runtimeAccessTokenId());
+        BusinessAgentTaskService taskService = businessAgentTaskService.getIfAvailable();
+        BusinessAgentTaskService.OpenApiTaskWorkerPreflight workerPreflight = null;
         try {
-            businessRuntimeToken = enrichBusinessRuntimeContext(
+            if (taskService != null && StringUtils.hasText(command.upstreamUserId())) {
+                workerPreflight = taskService.resolveOpenApiTaskWorkerPreflight(
+                        credential.tenantId(),
+                        agentOwnerUserId,
+                        credential.clientAppId(),
+                        command.upstreamUserId(),
+                        command.skillId(),
+                        command.contextId(),
+                        modelConfigId,
+                        workerSelectionRequest);
+            }
+            requireExactWorkerPreflight(workerPreflight, workerSelectionRequest, metadata, modelConfigId);
+            enrichBusinessRuntimeContext(
                     credential,
                     metadata,
                     command.agentId(),
-                    command.skillId(),
-                    agentOwnerUserId,
-                    command.upstreamUserId(),
-                    command.contextId(),
-                    workerSelectionRequest);
+                    command.upstreamUserId());
         } catch (RuntimeException e) {
-            auditService.askFailed(command.auditHandle(), "TASK_TOKEN_ISSUANCE_FAILED");
+            auditService.askFailed(command.auditHandle(), "TASK_WORKER_PREFLIGHT_FAILED");
             throw e;
         }
 
@@ -152,107 +160,68 @@ public final class OpenApiRuntimeTaskCreateFacade {
         }
         TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
                 agent, agentSubmitPipeline, command.agentId(), resolveContext);
+        AgentTaskSubmitRequest submitRequest = AgentTaskSubmitRequest.builder()
+                .agentId(command.agentId())
+                .providerType(stringValue(metadata.get("providerType")))
+                .resolveContext(resolveContext)
+                .message(message)
+                .prompt(command.messageContent())
+                .contextId(command.contextId())
+                .metadata(metadata)
+                .modelConfigId(modelConfigId)
+                .model(launchPlan.modelResource().modelName())
+                .workerId(stringValue(metadata.get("workerId")))
+                .directoryId(stringValue(metadata.get("directoryId")))
+                .cwd(stringValue(metadata.get("cwd")))
+                .maxTurns(command.maxTurns())
+                .attachments(launchPlan.normalizedAttachments().isEmpty()
+                        ? null
+                        : launchPlan.mutableNormalizedAttachments())
+                .clientRequestId(command.auditHandle().clientRequestId())
+                .build();
+        ScopedCreateParticipants participants = new ScopedCreateParticipants(
+                command,
+                workerSelectionRequest,
+                workerPreflight,
+                taskService);
+        ScopedOpenApiTaskCreateCommandAdapter.OpenApiCommandScope scope =
+                ScopedOpenApiTaskCreateCommandAdapter.OpenApiCommandScope.authenticated(
+                        command.auditHandle().clientRequestId(),
+                        credential.tenantId(),
+                        agentOwnerUserId,
+                        credential.clientAppId(),
+                        workerPreflight != null ? workerPreflight.upstreamSystemId() : null,
+                        command.upstreamUserId(),
+                        credential.credentialId(),
+                        credential.runtimeAccessTokenId(),
+                        new ScopedOpenApiTaskCreateCommandAdapter.TargetExpectation(
+                                command.agentId(),
+                                command.contextId(),
+                                submitRequest.getProviderType(),
+                                submitRequest.getWorkerId(),
+                                modelConfigId,
+                                submitRequest.getModel(),
+                                submitRequest.getDirectoryId()));
         A2aTask task;
         try {
-            task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
-                    .agentId(command.agentId())
-                    .providerType(stringValue(metadata.get("providerType")))
-                    .resolveContext(resolveContext)
-                    .message(message)
-                    .prompt(command.messageContent())
-                    .contextId(command.contextId())
-                    .metadata(metadata)
-                    .modelConfigId(modelConfigId)
-                    .model(launchPlan.modelResource().modelName())
-                    .workerId(stringValue(metadata.get("workerId")))
-                    .directoryId(stringValue(metadata.get("directoryId")))
-                    .cwd(stringValue(metadata.get("cwd")))
-                    .maxTurns(command.maxTurns())
-                    .attachments(launchPlan.normalizedAttachments().isEmpty()
-                            ? null
-                            : launchPlan.mutableNormalizedAttachments())
-                    .build());
+            task = scopedTaskCreateCommandAdapter.executeScoped(
+                    scope,
+                    submitRequest,
+                    participants,
+                    () -> submittingAgent.submitTask(submitRequest));
         } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
-            revokeBusinessRuntimeTokenAfterFailure(
-                    credential.tenantId(),
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON);
-            auditService.askFailed(command.auditHandle(), "STANDARD_ASK_SUBMIT_REJECTED");
             return CreateOutcome.rejected(e.getMessage(), "open api request rejected");
-        } catch (RuntimeException e) {
-            revokeBusinessRuntimeTokenAfterFailure(
-                    credential.tenantId(),
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON);
-            auditService.askFailed(command.auditHandle(), "STANDARD_ASK_SUBMIT_FAILED");
-            throw e;
         }
         if (task == null || !StringUtils.hasText(task.getId())) {
-            revokeBusinessRuntimeTokenAfterFailure(
-                    credential.tenantId(),
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_MISSING_TASK_REASON);
-            auditService.askFailed(command.auditHandle(), "TASK_NOT_CREATED");
-            return CreateOutcome.rejected(BUSINESS_RUNTIME_MISSING_TASK_REASON);
+            return CreateOutcome.rejected("open api task submission returned no task id");
         }
         if (!StringUtils.hasText(task.getContextId())) {
             task.setContextId(command.contextId());
         }
 
-        boolean terminalTaskObservedDuringBind = false;
-        try {
-            bindBusinessRuntimeTokenToWorkerTask(
-                    credential.tenantId(), businessRuntimeToken, task, metadata);
-        } catch (TerminalTaskBindingException e) {
-            terminalTaskObservedDuringBind = true;
-        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
-            revokeBusinessRuntimeTokenAfterFailure(
-                    credential.tenantId(),
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_BIND_FAILURE_REASON);
-            auditService.askFailed(command.auditHandle(), "TASK_TOKEN_BIND_REJECTED");
-            return CreateOutcome.rejected(e.getMessage(), "open api request rejected");
-        } catch (RuntimeException e) {
-            revokeBusinessRuntimeTokenAfterFailure(
-                    credential.tenantId(),
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_BIND_FAILURE_REASON);
-            auditService.askFailed(command.auditHandle(), "TASK_TOKEN_BIND_FAILED");
-            throw e;
-        }
-        if (terminalTaskObservedDuringBind || isTerminalTask(task)) {
-            revokeBusinessRuntimeTokenAfterFailure(
-                    credential.tenantId(),
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_IMMEDIATE_TERMINAL_REASON);
-        }
-
-        try {
-            auditService.taskDispatchRecorded(
-                    command.auditHandle(),
-                    dispatchEvidence(command, task, metadata));
-        } catch (RuntimeException e) {
-            return CreateOutcome.rejected("RUNTIME_AUDIT_RECORDING_FAILED");
-        }
-        if (command.clientContextJson() != null) {
-            sessionQueryService.updateClientContextJson(
-                    command.contextId(),
-                    agentOwnerUserId,
-                    command.agentId(),
-                    command.clientContextJson());
-        }
-        bindBusinessAgentSession(
-                credential,
-                command.upstreamUserId(),
-                command.agentId(),
-                command.contextId(),
-                task,
-                command.clientContextJson(),
-                agentOwnerUserId);
-
         log.info("Open API runtime task created: agentId={}, skillId={}, taskId={}, tenantId={}",
                 command.agentId(), command.skillId(), task.getId(), credential.tenantId());
-        return CreateOutcome.created(task, metadata);
+        return CreateOutcome.created(task, participants.safeResponseMetadata());
     }
 
     private void validateBusinessAgentContextOwnership(
@@ -334,15 +303,27 @@ public final class OpenApiRuntimeTaskCreateFacade {
                 .filter(StringUtils::hasText);
     }
 
-    private String enrichBusinessRuntimeContext(
+    private void requireExactWorkerPreflight(
+            BusinessAgentTaskService.OpenApiTaskWorkerPreflight preflight,
+            BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest,
+            Map<String, Object> metadata,
+            String modelConfigId) {
+        if (preflight == null) {
+            return;
+        }
+        if (!modelConfigId.equals(preflight.modelConfigId())
+                || !preflight.workerId().equals(workerSelectionRequest.getSelectedWorkerId())) {
+            throw new SecurityException("OpenAPI Worker preflight does not match the launch plan");
+        }
+        metadata.put("workerId", preflight.workerId());
+        metadata.put("workerBackend", preflight.workerBackend());
+    }
+
+    private void enrichBusinessRuntimeContext(
             RuntimeCredentialReference credential,
             Map<String, Object> metadata,
             String rootAgentId,
-            String skillId,
-            String actorUserId,
-            String upstreamUserId,
-            String contextId,
-            BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest) {
+            String upstreamUserId) {
         Map<String, Object> context = new LinkedHashMap<>();
         Object rawContext = metadata.get("context");
         if (rawContext instanceof Map<?, ?> existingContext) {
@@ -362,20 +343,8 @@ public final class OpenApiRuntimeTaskCreateFacade {
             context.put("upstreamUserId", upstreamUserId);
             context.put("accountId", upstreamUserId);
             context.put("account_id", upstreamUserId);
-            String token = issueBusinessRuntimeToken(
-                    credential,
-                    actorUserId,
-                    metadata,
-                    upstreamUserId,
-                    skillId,
-                    contextId,
-                    metadata.get("modelConfigId"),
-                    workerSelectionRequest);
-            metadata.put("context", context);
-            return token;
         }
         metadata.put("context", context);
-        return null;
     }
 
     private boolean isReservedBusinessRuntimeContextKey(String key) {
@@ -406,81 +375,24 @@ public final class OpenApiRuntimeTaskCreateFacade {
                 || "runtime_context".equals(key);
     }
 
-    private String issueBusinessRuntimeToken(
-            RuntimeCredentialReference credential,
-            String actorUserId,
-            Map<String, Object> metadata,
-            String upstreamUserId,
-            String skillId,
-            String sessionId,
-            Object requestedModelConfigId,
-            BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest) {
-        BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
-        if (service == null) {
-            return null;
-        }
-        workerSelectionRequest.setCallerCredentialId(credential.credentialId());
-        workerSelectionRequest.setCallerAccessTokenId(credential.runtimeAccessTokenId());
-        BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared;
-        try {
-            prepared = service.prepareOpenApiTaskScopedToken(
-                    credential.tenantId(),
-                    actorUserId,
-                    credential.clientAppId(),
-                    upstreamUserId,
-                    skillId,
-                    sessionId,
-                    requestedModelConfigId instanceof String value ? value : null,
-                    workerSelectionRequest);
-        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
-            throw openApiRequestRejected(e);
-        }
-        if (prepared == null) {
-            return null;
-        }
-
-        Map<String, Object> runtimeContext = new LinkedHashMap<>();
-        Object existingRuntimeContext = metadata.get("runtimeContext");
-        if (existingRuntimeContext instanceof Map<?, ?> existingMap) {
-            existingMap.forEach((key, value) -> {
-                if (key instanceof String stringKey) {
-                    runtimeContext.put(stringKey, value);
-                }
-            });
-        }
-        runtimeContext.put("task_scoped_token", prepared.plainToken());
-        runtimeContext.put("worker_id", prepared.workerId());
-        runtimeContext.put("worker_lease_id", prepared.workerLeaseId());
-        if (workerSelectionRequest.getAllowedTools() != null) {
-            runtimeContext.put("allowed_tools", workerSelectionRequest.getAllowedTools());
-        }
-        metadata.put("runtimeContext", runtimeContext);
-        metadata.put("workerId", prepared.workerId());
-        metadata.put("workerLeaseId", prepared.workerLeaseId());
-        metadata.put("effectiveFunctionCount", prepared.effectiveFunctionCount());
-        metadata.put("functionScopeSource", prepared.functionScopeSource());
-        metadata.put("taskTokenFunctionScopeEmpty", prepared.functionScopeEmpty());
-        return prepared.plainToken();
-    }
-
     private RuntimeException openApiRequestRejected(Exception e) {
         String message = sanitizeDiagnosticText(e != null ? e.getMessage() : null);
         return RX.throwB(StringUtils.hasText(message) ? message : "open api request rejected");
     }
 
     private void bindBusinessRuntimeTokenToWorkerTask(
+            BusinessAgentTaskService service,
             String tenantId,
             String businessRuntimeToken,
-            A2aTask task,
+            DispatchTaskDTO task,
             Map<String, Object> launchMetadata) {
         if (!StringUtils.hasText(businessRuntimeToken)
                 || task == null
-                || !StringUtils.hasText(task.getId())) {
+                || !StringUtils.hasText(task.getTaskId())) {
             return;
         }
-        BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
         if (service == null) {
-            return;
+            throw new IllegalStateException("business agent task service is not available");
         }
         String expectedWorkerId = launchMetadata != null
                 ? stringValue(launchMetadata.get("workerId"))
@@ -488,9 +400,7 @@ public final class OpenApiRuntimeTaskCreateFacade {
         String workerLeaseId = launchMetadata != null
                 ? stringValue(launchMetadata.get("workerLeaseId"))
                 : null;
-        String actualWorkerId = task.getMetadata() != null
-                ? stringValue(task.getMetadata().get("workerId"))
-                : null;
+        String actualWorkerId = task.getWorkerId();
         if (!StringUtils.hasText(expectedWorkerId)
                 || !StringUtils.hasText(actualWorkerId)
                 || !expectedWorkerId.equals(actualWorkerId)) {
@@ -500,57 +410,40 @@ public final class OpenApiRuntimeTaskCreateFacade {
         service.bindOpenApiTaskScopedTokenToWorkerTask(
                 tenantId,
                 businessRuntimeToken,
-                task.getId(),
-                resolveTaskSessionId(task),
+                task.getTaskId(),
+                task.getSessionId(),
                 actualWorkerId,
                 workerLeaseId);
     }
 
-    private void revokeBusinessRuntimeTokenAfterFailure(
+    private void revokeBusinessRuntimeTokenForTerminal(
+            BusinessAgentTaskService service,
             String tenantId,
             String businessRuntimeToken,
             String reason) {
         if (!StringUtils.hasText(businessRuntimeToken)) {
             return;
         }
-        BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
         if (service == null) {
-            log.warn("Unable to compensate Open API business runtime token: tenantId={}, reason={}, "
-                            + "businessAgentTaskService=unavailable",
-                    tenantId, reason);
-            return;
+            throw new IllegalStateException("business agent task service is not available");
         }
-        try {
-            service.revokeOpenApiTaskScopedToken(
-                    tenantId,
-                    businessRuntimeToken,
-                    BUSINESS_RUNTIME_TOKEN_REVOKED_BY,
-                    reason);
-        } catch (RuntimeException revocationFailure) {
-            log.warn("Failed to compensate Open API business runtime token: "
-                            + "tenantId={}, reason={}, errorType={}",
-                    tenantId, reason, revocationFailure.getClass().getSimpleName());
-        }
+        service.revokeOpenApiTaskScopedToken(
+                tenantId,
+                businessRuntimeToken,
+                BUSINESS_RUNTIME_TOKEN_REVOKED_BY,
+                reason);
     }
 
-    private boolean isTerminalTask(A2aTask task) {
-        if (task == null || task.getStatus() == null || task.getStatus().getState() == null) {
+    private boolean isTerminalTask(DispatchTaskDTO task) {
+        if (task == null || !StringUtils.hasText(task.getStatus())) {
             return false;
         }
-        return switch (task.getStatus().getState()) {
-            case COMPLETED, FAILED, CANCELED -> true;
-            default -> false;
-        };
-    }
-
-    private String resolveTaskSessionId(A2aTask task) {
-        if (task != null && task.getMetadata() != null) {
-            Object sessionId = task.getMetadata().get("sessionId");
-            if (sessionId instanceof String value && StringUtils.hasText(value)) {
-                return value;
-            }
-        }
-        return task != null ? task.getContextId() : null;
+        String status = task.getStatus().trim().toUpperCase(java.util.Locale.ROOT);
+        return "COMPLETED".equals(status)
+                || "FAILED".equals(status)
+                || "CANCELLED".equals(status)
+                || "CANCELED".equals(status)
+                || "ABORTED".equals(status);
     }
 
     private void bindBusinessAgentSession(
@@ -558,7 +451,7 @@ public final class OpenApiRuntimeTaskCreateFacade {
             String upstreamUserId,
             String agentId,
             String contextId,
-            A2aTask task,
+            DispatchTaskDTO task,
             String clientContextJson,
             String agentOwnerUserId) {
         if (!StringUtils.hasText(upstreamUserId)) {
@@ -568,13 +461,14 @@ public final class OpenApiRuntimeTaskCreateFacade {
         if (service == null) {
             return;
         }
-        String sessionId = resolveTaskNavigatorSessionId(task);
+        String sessionId = task != null ? task.getSessionId() : null;
         if (!StringUtils.hasText(sessionId)) {
             sessionId = resolveNavigatorSessionId(contextId, agentOwnerUserId, agentId).orElse(null);
         }
         if (!StringUtils.hasText(sessionId)) {
             log.warn("Skip binding business agent session because no Navigator sessionId is available: "
-                    + "contextId={}, taskId={}", contextId, task != null ? task.getId() : null);
+                    + "contextId={}, taskId={}", contextId,
+                    task != null ? task.getTaskId() : null);
             return;
         }
         service.bindOpenApiSession(
@@ -584,37 +478,26 @@ public final class OpenApiRuntimeTaskCreateFacade {
                 contextId,
                 sessionId,
                 agentId,
-                task != null ? task.getId() : null,
+                task != null ? task.getTaskId() : null,
                 clientContextJson);
-    }
-
-    private String resolveTaskNavigatorSessionId(A2aTask task) {
-        if (task != null && task.getMetadata() != null) {
-            Object sessionId = task.getMetadata().get("sessionId");
-            if (sessionId instanceof String value && StringUtils.hasText(value)) {
-                return value;
-            }
-        }
-        return null;
     }
 
     private RuntimeRequestAuditService.TaskEvidence dispatchEvidence(
             VerifiedCreateCommand command,
-            A2aTask task,
-            Map<String, Object> metadata) {
-        String status = task.getStatus() != null
-                ? mapA2aState(task.getStatus().getState())
-                : "SUBMITTED";
+            DispatchTaskDTO task,
+            Map<String, Object> metadata,
+            String taskTokenStatus) {
+        String status = StringUtils.hasText(task.getStatus()) ? task.getStatus() : "SUBMITTED";
         return new RuntimeRequestAuditService.TaskEvidence(
-                task.getId(),
+                task.getTaskId(),
                 status,
-                false,
+                isTerminalTask(task),
                 null,
                 command.agentId(),
                 command.upstreamUserId(),
-                stringValue(metadata.get("workerId")),
-                command.launchPlan().modelResource().modelConfigId(),
-                command.launchPlan().modelResource().modelName(),
+                task.getWorkerId(),
+                task.getModelConfigId(),
+                task.getModel(),
                 integerValue(metadata.get("requestedToolCount")),
                 integerValue(metadata.get("effectiveToolCount")),
                 stringValue(metadata.get("toolScopeKind")),
@@ -623,7 +506,7 @@ public final class OpenApiRuntimeTaskCreateFacade {
                 integerValue(metadata.get("effectiveFunctionCount")),
                 stringValue(metadata.get("functionScopeSource")),
                 booleanValue(metadata.get("taskTokenFunctionScopeEmpty")),
-                "ACTIVE",
+                taskTokenStatus,
                 true,
                 true,
                 false,
@@ -633,24 +516,245 @@ public final class OpenApiRuntimeTaskCreateFacade {
                 "STANDARD_ASK_DISPATCHED");
     }
 
+    private RuntimeRequestAuditService.TaskEvidence admissionEvidence(
+            VerifiedCreateCommand command,
+            TaskDispatchRequest request) {
+        Map<String, Object> metadata = request.getMetadata() != null
+                ? request.getMetadata()
+                : Map.of();
+        return new RuntimeRequestAuditService.TaskEvidence(
+                null,
+                "ADMITTED",
+                false,
+                null,
+                command.agentId(),
+                command.upstreamUserId(),
+                request.getWorkerId(),
+                request.getModelConfigId(),
+                request.getModel(),
+                integerValue(metadata.get("requestedToolCount")),
+                integerValue(metadata.get("effectiveToolCount")),
+                stringValue(metadata.get("toolScopeKind")),
+                stringValue(metadata.get("toolScopeSource")),
+                integerValue(metadata.get("requestedFunctionCount")),
+                integerValue(metadata.get("effectiveFunctionCount")),
+                stringValue(metadata.get("functionScopeSource")),
+                booleanValue(metadata.get("taskTokenFunctionScopeEmpty")),
+                "NOT_ISSUED",
+                false,
+                false,
+                false,
+                0,
+                0,
+                0,
+                "STANDARD_SCOPE_ADMITTED");
+    }
+
+    private Map<String, Object> mutableCanonicalMetadata(TaskDispatchRequest request) {
+        Map<String, Object> copy = request.getMetadata() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(request.getMetadata());
+        Object rawRuntimeContext = copy.get("runtimeContext");
+        if (rawRuntimeContext instanceof Map<?, ?> runtimeContext) {
+            Map<String, Object> nestedCopy = new LinkedHashMap<>();
+            runtimeContext.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    nestedCopy.put(stringKey, value);
+                }
+            });
+            copy.put("runtimeContext", nestedCopy);
+        }
+        return copy;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> canonicalRuntimeContext(Map<String, Object> metadata) {
+        Object rawRuntimeContext = metadata.get("runtimeContext");
+        if (rawRuntimeContext instanceof Map<?, ?>) {
+            return (Map<String, Object>) rawRuntimeContext;
+        }
+        Map<String, Object> runtimeContext = new LinkedHashMap<>();
+        metadata.put("runtimeContext", runtimeContext);
+        return runtimeContext;
+    }
+
+    private Map<String, Object> safeResponseMetadata(
+            TaskDispatchRequest request,
+            String taskTokenStatus) {
+        Map<String, Object> source = request.getMetadata() != null
+                ? request.getMetadata()
+                : Map.of();
+        Map<String, Object> safe = new LinkedHashMap<>();
+        putSafeValue(safe, "workerId", request.getWorkerId());
+        for (String key : List.of(
+                "modelConfigId",
+                "modelConfigSource",
+                "workerBackend",
+                "workerSource",
+                "backendSource",
+                "requestedToolCount",
+                "effectiveToolCount",
+                "toolScopeKind",
+                "toolScopeSource",
+                "requestedFunctionCount",
+                "effectiveFunctionCount",
+                "functionScopeSource",
+                "taskTokenFunctionScopeEmpty",
+                "runtimeDispatched",
+                "modelDispatched",
+                "businessFunctionDispatched")) {
+            putSafeValue(safe, key, source.get(key));
+        }
+        putSafeValue(safe, "taskTokenStatus", taskTokenStatus);
+        return safe;
+    }
+
+    private void putSafeValue(Map<String, Object> target, String key, Object value) {
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            target.put(key, text);
+        } else if (value instanceof Number || value instanceof Boolean) {
+            target.put(key, value);
+        }
+    }
+
+    private final class ScopedCreateParticipants
+            implements ScopedOpenApiTaskCreateCommandAdapter.FreshParticipants {
+
+        private final VerifiedCreateCommand command;
+        private final BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest;
+        private final BusinessAgentTaskService.OpenApiTaskWorkerPreflight workerPreflight;
+        private final BusinessAgentTaskService taskService;
+
+        private BusinessAgentTaskService.PreparedOpenApiTaskScopedToken preparedToken;
+        private Map<String, Object> responseMetadata = Map.of();
+        private boolean completionSucceeded;
+
+        private ScopedCreateParticipants(
+                VerifiedCreateCommand command,
+                BusinessAgentWorkerTaskLaunchRequest workerSelectionRequest,
+                BusinessAgentTaskService.OpenApiTaskWorkerPreflight workerPreflight,
+                BusinessAgentTaskService taskService) {
+            this.command = command;
+            this.workerSelectionRequest = workerSelectionRequest;
+            this.workerPreflight = workerPreflight;
+            this.taskService = taskService;
+        }
+
+        @Override
+        public void prepare(TaskDispatchRequest canonicalRequest) {
+            command.preparedContext().auditService().taskAdmissionRecorded(
+                    command.auditHandle(),
+                    admissionEvidence(command, canonicalRequest));
+            if (workerPreflight == null) {
+                return;
+            }
+            if (taskService == null) {
+                throw new IllegalStateException("business agent task service is not available");
+            }
+            BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared;
+            try {
+                prepared = taskService.prepareOpenApiTaskScopedTokenAfterPreflight(
+                        command.credential().tenantId(),
+                        command.preparedContext().agentOwnerUserId(),
+                        command.credential().clientAppId(),
+                        command.upstreamUserId(),
+                        command.skillId(),
+                        command.contextId(),
+                        command.preparedContext().context().modelConfigId(),
+                        workerSelectionRequest,
+                        workerPreflight);
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                throw openApiRequestRejected(e);
+            }
+            if (prepared == null
+                    || !workerPreflight.workerId().equals(prepared.workerId())
+                    || !prepared.workerId().equals(canonicalRequest.getWorkerId())) {
+                throw new SecurityException(
+                        "OpenAPI task token Worker does not match the canonical request");
+            }
+
+            Map<String, Object> canonicalMetadata = mutableCanonicalMetadata(canonicalRequest);
+            Map<String, Object> runtimeContext = canonicalRuntimeContext(canonicalMetadata);
+            runtimeContext.put("task_scoped_token", prepared.plainToken());
+            runtimeContext.put("worker_id", prepared.workerId());
+            runtimeContext.put("worker_lease_id", prepared.workerLeaseId());
+            if (workerSelectionRequest.getAllowedTools() != null) {
+                runtimeContext.put("allowed_tools", List.copyOf(workerSelectionRequest.getAllowedTools()));
+            }
+            canonicalMetadata.put("workerId", prepared.workerId());
+            canonicalMetadata.put("workerLeaseId", prepared.workerLeaseId());
+            canonicalMetadata.put("effectiveFunctionCount", prepared.effectiveFunctionCount());
+            canonicalMetadata.put("functionScopeSource", prepared.functionScopeSource());
+            canonicalMetadata.put("taskTokenFunctionScopeEmpty", prepared.functionScopeEmpty());
+            canonicalRequest.setMetadata(canonicalMetadata);
+            preparedToken = prepared;
+        }
+
+        @Override
+        public void complete(TaskDispatchRequest canonicalRequest, DispatchTaskDTO freshTask) {
+            boolean terminalTaskObservedDuringBind = false;
+            if (preparedToken != null) {
+                try {
+                    bindBusinessRuntimeTokenToWorkerTask(
+                            taskService,
+                            command.credential().tenantId(),
+                            preparedToken.plainToken(),
+                            freshTask,
+                            canonicalRequest.getMetadata());
+                } catch (TerminalTaskBindingException terminal) {
+                    terminalTaskObservedDuringBind = true;
+                }
+            }
+            boolean immediateTerminal = isTerminalTask(freshTask);
+            if (!terminalTaskObservedDuringBind && immediateTerminal && preparedToken != null) {
+                revokeBusinessRuntimeTokenForTerminal(
+                        taskService,
+                        command.credential().tenantId(),
+                        preparedToken.plainToken(),
+                        BUSINESS_RUNTIME_IMMEDIATE_TERMINAL_REASON);
+            }
+            boolean terminal = terminalTaskObservedDuringBind || immediateTerminal;
+            String taskTokenStatus = preparedToken == null
+                    ? "NOT_ISSUED"
+                    : terminal ? "REVOKED" : "ACTIVE";
+            command.preparedContext().auditService().taskDispatchRecorded(
+                    command.auditHandle(),
+                    dispatchEvidence(
+                            command,
+                            freshTask,
+                            canonicalRequest.getMetadata() != null
+                                    ? canonicalRequest.getMetadata()
+                                    : Map.of(),
+                            taskTokenStatus));
+            if (command.clientContextJson() != null) {
+                sessionQueryService.updateClientContextJson(
+                        command.contextId(),
+                        command.preparedContext().agentOwnerUserId(),
+                        command.agentId(),
+                        command.clientContextJson());
+            }
+            bindBusinessAgentSession(
+                    command.credential(),
+                    command.upstreamUserId(),
+                    command.agentId(),
+                    command.contextId(),
+                    freshTask,
+                    command.clientContextJson(),
+                    command.preparedContext().agentOwnerUserId());
+            responseMetadata = OpenApiRuntimeTaskCreateFacade.this.safeResponseMetadata(
+                    canonicalRequest, taskTokenStatus);
+            completionSucceeded = true;
+        }
+
+        private Map<String, Object> safeResponseMetadata() {
+            return completionSucceeded ? responseMetadata : Map.of();
+        }
+    }
+
     private String resolveAgentOwnerUserId(String agentId, String tenantId) {
         return codingAgentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .map(entity -> entity.getUserId())
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
-    }
-
-    private String mapA2aState(A2aTaskState state) {
-        if (state == null) {
-            return "UNKNOWN";
-        }
-        return switch (state) {
-            case SUBMITTED -> "SUBMITTED";
-            case WORKING -> "RUNNING";
-            case INPUT_REQUIRED -> "AWAITING_INPUT";
-            case COMPLETED -> "COMPLETED";
-            case FAILED -> "FAILED";
-            case CANCELED -> "CANCELLED";
-        };
     }
 
     private String sanitizeDiagnosticText(String text) {
