@@ -24,11 +24,6 @@ const routes = [
         component: () => import('@/views/ClaudeWorkerView.vue'),
       },
       {
-        path: 'workers/fap',
-        name: 'FapWorkers',
-        component: () => import('@/views/FapWorkerView.vue'),
-      },
-      {
         path: 'chat',
         redirect: '/',
       },

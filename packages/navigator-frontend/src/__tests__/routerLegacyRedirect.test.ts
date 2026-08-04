@@ -19,10 +19,4 @@ describe('legacy workspace routes', () => {
     expect(router.getRoutes().find((route) => route.name === 'Workers')?.path).toBe('/')
     expect(router.getRoutes().find((route) => route.name === 'Chat')?.path).toBe('/c/:id')
   })
-
-  it('registers FAP as a separate route without replacing canonical Workers', () => {
-    expect(router.getRoutes().find((route) => route.name === 'FapWorkers')?.path)
-      .toBe('/workers/fap')
-    expect(router.getRoutes().find((route) => route.name === 'Workers')?.path).toBe('/')
-  })
 })

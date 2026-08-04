@@ -15,12 +15,6 @@
     <name>Application Launcher</name>
     <description>应用启动器 - 负责打包和启动所有模块</description>
 
-    <properties>
-        <!-- The default/company artifact keeps H2 test-only. The isolated FAP
-             canary profile promotes it to runtime without changing stable packaging. -->
-        <launcher.h2.scope>test</launcher.h2.scope>
-    </properties>
-
     <dependencies>
         <!-- Shared deployment identity and authorization foundation contracts. -->
         <dependency>
@@ -105,7 +99,7 @@
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>${launcher.h2.scope}</scope>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -229,21 +223,4 @@
             </plugin>
         </plugins>
     </build>
-
-    <profiles>
-        <!-- Packaged only for the owner's isolated FAP Workbench canary. -->
-        <profile>
-            <id>fap-workbench-canary</id>
-            <properties>
-                <launcher.h2.scope>runtime</launcher.h2.scope>
-            </properties>
-            <dependencies>
-                <dependency>
-                    <groupId>com.foggy.navigator</groupId>
-                    <artifactId>workbench-fap-adapter</artifactId>
-                    <version>${project.version}</version>
-                </dependency>
-            </dependencies>
-        </profile>
-    </profiles>
 </project>

@@ -47,14 +47,4 @@
         <!-- 启动器模块（最后编译，依赖其他所有模块） -->
         <module>launcher</module>
     </modules>
-
-    <profiles>
-        <!-- Personal-only new-platform canary. Default/company legacy builds do not resolve or package it. -->
-        <profile>
-            <id>fap-workbench-canary</id>
-            <modules>
-                <module>workbench-fap-adapter</module>
-            </modules>
-        </profile>
-    </profiles>
 </project>

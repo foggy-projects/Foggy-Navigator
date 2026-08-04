@@ -10,7 +10,6 @@
         router
       >
         <el-menu-item index="/">Workers</el-menu-item>
-        <el-menu-item v-if="fapAvailable" index="/workers/fap">Workers · FAP</el-menu-item>
         <el-menu-item index="/users">用户</el-menu-item>
         <el-menu-item index="/settings">设置</el-menu-item>
       </el-menu>
@@ -44,20 +43,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Bell, ArrowDown } from '@element-plus/icons-vue'
 import { getUserInfo, clearAuth } from '@/utils/auth'
 import { useNotifications } from '@/composables/useNotifications'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
-import { getFapAvailability } from '@/api/workbenchFap'
 
 const route = useRoute()
 const router = useRouter()
 const userInfo = getUserInfo()
 const { unreadCount, connect: connectNotifications, markAllRead, requestPermission } = useNotifications()
 const { isSessionFullscreen } = useSessionFullscreen()
-const fapAvailable = ref(false)
 
 const activeMenu = computed(() => {
   const path = route.path
@@ -74,18 +71,7 @@ const routeCacheKey = computed(() => {
 onMounted(() => {
   connectNotifications()
   requestPermission()
-  void discoverFapCanary()
 })
-
-async function discoverFapCanary() {
-  try {
-    const availability = await getFapAvailability({ suppressErrorMessage: true })
-    fapAvailable.value = availability.packaged && availability.enabled && availability.eligible
-  } catch {
-    // Stable/company builds do not package the canary module and intentionally return 404.
-    fapAvailable.value = false
-  }
-}
 
 function handleNotificationClick() {
   markAllRead()
