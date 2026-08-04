@@ -5,6 +5,7 @@ import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskClosureDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskFactsDTO;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskTerminationOutcome;
+import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
 import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,10 +14,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -41,23 +45,25 @@ class RuntimeTerminationDeliveryRecoveryTest {
     void setUp() {
         service = new RuntimeTaskClosureService(
                 stateAudit, List.of(provider), audits, coordinator);
-        when(audits.terminationRequestReceiptEnabled()).thenReturn(true);
+        lenient().when(audits.terminationRequestReceiptEnabled()).thenReturn(true);
         lenient().when(audits.beginTaskOperationIdempotent(
                 eq(REQUEST), eq(RuntimeRequestAuditService.OPERATION_TASK_TERMINATE),
                 eq("key"), eq("secret"), eq(null), eq("user"),
                 eq("task-delivery"))).thenReturn(registration(false));
-        when(stateAudit.requireOwnedTask(
+        lenient().when(stateAudit.requireOwnedTask(
                 "key", "secret", "user", "task-delivery"))
                 .thenReturn(new RuntimeStateAuditService.OwnedRuntimeTask(
                         "task-delivery", "session-delivery",
                         "provider-task-delivery", "owner", "tenant",
                         "codex-biz-worker", "worker-delivery",
-                        "RUNNING", false, 1));
-        when(provider.supports("codex-biz-worker")).thenReturn(true);
-        when(provider.inspect("task-delivery", "worker-delivery")).thenReturn(
+                        "RUNNING", false, 1,
+                        "agent-delivery", "model-delivery",
+                        "app-delivery", "credential-delivery", "user"));
+        lenient().when(provider.supports("codex-biz-worker")).thenReturn(true);
+        lenient().when(provider.inspect("task-delivery", "worker-delivery")).thenReturn(
                 new RuntimeTaskClosureProvider.TerminationReadiness(
                         true, true, true, true, true, true, null));
-        when(stateAudit.auditTask(
+        lenient().when(stateAudit.auditTask(
                 "key", "secret", "user", "task-delivery"))
                 .thenReturn(audit("RUNNING"), audit("CANCEL_REQUESTED"));
     }
@@ -66,10 +72,9 @@ class RuntimeTerminationDeliveryRecoveryTest {
     void sameRequestRecoversCommittedPreparedDeliveryAfterCrashBeforeDispatch() {
         when(coordinator.accept(
                 eq(REQUEST), eq("key"), eq("secret"), eq("user"),
-                eq("task-delivery"), eq("session-delivery"),
-                eq("codex-biz-worker"), eq("worker-delivery"),
-                eq("provider-task-delivery"), eq("owner"), eq("tenant"),
-                eq("operator-request"), eq(provider)))
+                eq("operator-request"), eq(provider),
+                any(RuntimeStateAuditService.OwnedRuntimeTask.class),
+                any(RuntimeTerminationCommandAuthorization.class)))
                 .thenReturn(registration(true));
         when(coordinator.authorize(REQUEST)).thenReturn(authorization(true, false));
         when(provider.terminate(
@@ -94,8 +99,9 @@ class RuntimeTerminationDeliveryRecoveryTest {
     void responseLossRedeliveryNeverStartsSecondProviderTermination() {
         when(coordinator.accept(
                 eq(REQUEST), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), eq(provider)))
+                anyString(), eq(provider),
+                any(RuntimeStateAuditService.OwnedRuntimeTask.class),
+                any(RuntimeTerminationCommandAuthorization.class)))
                 .thenReturn(registration(true));
         when(coordinator.authorize(REQUEST)).thenReturn(authorization(true, false));
         when(audits.beginTaskOperationIdempotent(
@@ -127,8 +133,9 @@ class RuntimeTerminationDeliveryRecoveryTest {
     void acceptancePersistenceFailureFailsClosedBeforeProviderEffect() {
         when(coordinator.accept(
                 eq(REQUEST), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), eq(provider)))
+                anyString(), eq(provider),
+                any(RuntimeStateAuditService.OwnedRuntimeTask.class),
+                any(RuntimeTerminationCommandAuthorization.class)))
                 .thenThrow(new IllegalStateException("FIXTURE_COMMIT_FAILED"));
 
         RuntimeTaskClosureDTO result = terminate();
@@ -145,6 +152,76 @@ class RuntimeTerminationDeliveryRecoveryTest {
         verify(provider, never()).terminate(
                 eq("task-delivery"), eq("owner"), eq("tenant"),
                 eq("worker-delivery"), anyString(), eq(REQUEST), eq(false));
+    }
+
+    @Test
+    void recoveryCapableFastPathRejectsFreshPrincipalDriftBeforeEffect() {
+        RuntimeStateAuditService.OwnedRuntimeTask admitted =
+                new RuntimeStateAuditService.OwnedRuntimeTask(
+                        "task-delivery", "session-delivery",
+                        "provider-task-delivery", "owner", "tenant",
+                        "codex-biz-worker", "worker-delivery",
+                        "RUNNING", false, 1,
+                        "agent-delivery", "model-delivery",
+                        "app-delivery", "credential-delivery", "user");
+        RuntimeStateAuditService.OwnedRuntimeTask drifted =
+                new RuntimeStateAuditService.OwnedRuntimeTask(
+                        "task-delivery", "session-delivery",
+                        "provider-task-delivery", "owner-other", "tenant",
+                        "codex-biz-worker", "worker-delivery",
+                        "RUNNING", false, 1,
+                        "agent-delivery", "model-delivery",
+                        "app-delivery", "credential-delivery", "user");
+        when(stateAudit.requireOwnedTask(
+                "key", "secret", "user", "task-delivery"))
+                .thenReturn(admitted, drifted);
+        when(stateAudit.auditTask(
+                "key", "secret", "user", "task-delivery"))
+                .thenReturn(audit("RUNNING"), audit("RUNNING"));
+        var authority = new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                "runtime-termination-test-v1",
+                Clock.systemUTC(), Duration.ofMinutes(5));
+        service = new RuntimeTaskClosureService(
+                stateAudit, List.of(provider), audits, coordinator,
+                new RuntimeTerminationOutboxDispatcher(
+                        coordinator, List.of(provider)),
+                authority);
+
+        RuntimeTaskClosureDTO result = terminate();
+
+        assertThat(result.getOutcome())
+                .isEqualTo(RuntimeTaskTerminationOutcome.PROCESSING);
+        assertThat(result.getReasonCode())
+                .isEqualTo("TERMINATION_AUTHORIZATION_BINDING_CONFLICT");
+        assertThat(result.getReconcileRequired()).isTrue();
+        verify(audits, never()).taskOperationFailed(
+                any(RuntimeRequestAuditService.AuditHandle.class), anyString());
+        verify(coordinator, never()).authorize(REQUEST);
+        verify(provider, never()).terminate(
+                eq("task-delivery"), anyString(), anyString(),
+                eq("worker-delivery"), anyString(), eq(REQUEST), eq(false));
+    }
+
+    @Test
+    void dispatcherUsesFrozenDeliveryPrincipalWithoutMutableTaskLookup() {
+        RuntimeTerminationOutboxDispatcher dispatcher =
+                new RuntimeTerminationOutboxDispatcher(
+                        coordinator, List.of(provider));
+        when(coordinator.authorize(REQUEST)).thenReturn(authorization(true, false));
+        when(provider.terminate(
+                "task-delivery", "owner", "tenant", "worker-delivery",
+                "lifecycle-owner-recovery", REQUEST, false))
+                .thenReturn(new RuntimeTaskClosureProvider.TerminationResult(
+                        false, true, false, true,
+                        "CANCEL_REQUESTED", "receipt", null));
+
+        dispatcher.dispatch(REQUEST, "lifecycle-owner-recovery");
+
+        verify(provider).terminate(
+                "task-delivery", "owner", "tenant", "worker-delivery",
+                "lifecycle-owner-recovery", REQUEST, false);
+        verify(coordinator).resultObserved(
+                REQUEST, "TERMINATION_DISPATCHED");
     }
 
     private RuntimeTaskClosureDTO terminate() {
@@ -168,7 +245,8 @@ class RuntimeTerminationDeliveryRecoveryTest {
                 "provider-task-delivery", "operation-delivery",
                 "ENFORCED", "generation-delivery", "epoch-delivery",
                 "JCS_SHA256_V1", "binding-delivery",
-                alreadyStarted ? "EFFECT_STARTED" : "PREPARED");
+                alreadyStarted ? "EFFECT_STARTED" : "PREPARED",
+                "owner", "tenant");
         return new RuntimeTerminationIntentPort.RuntimeTerminationAuthorization(
                 delivery, authorized, alreadyStarted, false,
                 authorized ? "EFFECT_AUTHORIZED" : "EFFECT_ALREADY_STARTED");

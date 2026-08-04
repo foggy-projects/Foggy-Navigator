@@ -79,6 +79,8 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         entity.setProviderType(intent.providerType());
         entity.setPhysicalWorkerId(intent.physicalWorkerId());
         entity.setProviderTaskId(intent.providerTaskId());
+        entity.setOwnerUserId(intent.ownerUserId());
+        entity.setTenantId(intent.tenantId());
         entity.setDispatchId(intent.dispatchId());
         entity.setOperationId(intent.operationId());
         entity.setOwnershipMode(intent.ownershipMode());
@@ -135,10 +137,11 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 entity.getEffectState())) {
             throw new IllegalStateException("TERMINATION_DELIVERY_STATE_INVALID");
         }
-        var snapshot = snapshots.findById(entity.getAggregateId())
+        var snapshot = snapshots.findForUpdate(entity.getAggregateId())
                 .orElseThrow(() -> new IllegalStateException(
                         "LIFECYCLE_TASK_NOT_ENROLLED"));
-        var proof = proofs.findById(entity.getProofId())
+        requireExactEffectBinding(entity, snapshot);
+        var proof = proofs.findForUpdate(entity.getProofId())
                 .orElseThrow(() -> new IllegalStateException(
                         "LIFECYCLE_PROOF_NOT_FOUND"));
         String workerReference = referenceId(
@@ -366,7 +369,42 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 entity.getInstanceEpoch(),
                 entity.getBindingDigestVersion(),
                 entity.getBindingDigest(),
-                entity.getEffectState());
+                entity.getEffectState(),
+                entity.getOwnerUserId(),
+                entity.getTenantId());
+    }
+
+    private void requireExactEffectBinding(
+            LifecycleEffectOutboxEntity entity,
+            com.foggy.navigator.session.lifecycle.persistence
+                    .TaskLifecycleSnapshotEntity snapshot) {
+        var canonical = canonicalTasks.findByTaskIdForUpdate(
+                        entity.getAggregateId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "TERMINATION_EFFECT_TASK_NOT_FOUND"));
+        if (entity.getOwnerUserId() == null
+                || entity.getOwnerUserId().isBlank()
+                || entity.getTenantId() == null
+                || entity.getTenantId().isBlank()
+                || !Objects.equals(entity.getAggregateId(), canonical.getTaskId())
+                || !Objects.equals(entity.getOwnerUserId(), canonical.getUserId())
+                || !Objects.equals(entity.getTenantId(), canonical.getTenantId())
+                || !Objects.equals(entity.getProviderType(), canonical.getProviderType())
+                || !Objects.equals(entity.getPhysicalWorkerId(), canonical.getWorkerId())
+                || !Objects.equals(entity.getProviderTaskId(),
+                canonical.getProviderTaskId())
+                || !Objects.equals(snapshot.getSessionId(), canonical.getSessionId())
+                || !Objects.equals(snapshot.getPhysicalWorkerId(),
+                entity.getPhysicalWorkerId())
+                || !Objects.equals(snapshot.getProviderTaskId(),
+                entity.getProviderTaskId())
+                || !Objects.equals(snapshot.getStateGeneration(),
+                entity.getStateGeneration())
+                || !Objects.equals(snapshot.getInstanceEpoch(),
+                entity.getInstanceEpoch())) {
+            throw new IllegalStateException(
+                    "TERMINATION_EFFECT_BINDING_MISMATCH");
+        }
     }
 
     private String safe(String value) {
@@ -390,6 +428,8 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         required(intent.instanceEpoch(), "INSTANCE_EPOCH");
         required(intent.bindingDigestVersion(), "BINDING_DIGEST_VERSION");
         required(intent.bindingDigest(), "BINDING_DIGEST");
+        required(intent.ownerUserId(), "OWNER_USER_ID");
+        required(intent.tenantId(), "TENANT_ID");
         if (!"ENFORCED".equals(intent.ownershipMode())) {
             throw new IllegalArgumentException(
                     "TERMINATION_OWNERSHIP_MODE_NOT_ENFORCED");
@@ -414,7 +454,9 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 || !intent.instanceEpoch().equals(existing.getInstanceEpoch())
                 || !intent.bindingDigestVersion().equals(
                 existing.getBindingDigestVersion())
-                || !intent.bindingDigest().equals(existing.getBindingDigest())) {
+                || !intent.bindingDigest().equals(existing.getBindingDigest())
+                || !intent.ownerUserId().equals(existing.getOwnerUserId())
+                || !intent.tenantId().equals(existing.getTenantId())) {
             throw new IllegalStateException(
                     "TERMINATION_DELIVERY_BINDING_MISMATCH");
         }
@@ -449,6 +491,10 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 || !intent.providerTaskId().equals(
                 canonical.getProviderTaskId())
                 || !intent.physicalWorkerId().equals(canonical.getWorkerId())
+                || (intent.ownerUserId() != null
+                && !intent.ownerUserId().equals(canonical.getUserId()))
+                || (intent.tenantId() != null
+                && !intent.tenantId().equals(canonical.getTenantId()))
                 || !intent.stateGeneration().equals(
                 snapshot.getStateGeneration())
                 || !intent.stateGeneration().equals(

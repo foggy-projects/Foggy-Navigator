@@ -36,6 +36,12 @@ public class LifecycleEffectOutboxEntity {
     @Column(length = 128)
     private String providerTaskId;
 
+    @Column(length = 64)
+    private String ownerUserId;
+
+    @Column(length = 64)
+    private String tenantId;
+
     @Column(length = 96)
     private String dispatchId;
 
@@ -118,6 +124,8 @@ public class LifecycleEffectOutboxEntity {
     public void setPhysicalWorkerId(String value) { physicalWorkerId = value; }
     public void setProviderType(String value) { providerType = value; }
     public void setProviderTaskId(String value) { providerTaskId = value; }
+    public void setOwnerUserId(String value) { ownerUserId = value; }
+    public void setTenantId(String value) { tenantId = value; }
     public void setDispatchId(String value) { dispatchId = value; }
     public void setOperationId(String value) { operationId = value; }
     public void setBindingDigest(String value) { bindingDigest = value; }
@@ -160,6 +168,8 @@ public class LifecycleEffectOutboxEntity {
     public String getPhysicalWorkerId() { return physicalWorkerId; }
     public String getProviderType() { return providerType; }
     public String getProviderTaskId() { return providerTaskId; }
+    public String getOwnerUserId() { return ownerUserId; }
+    public String getTenantId() { return tenantId; }
     public String getDispatchId() { return dispatchId; }
     public String getOperationId() { return operationId; }
     public String getBindingDigest() { return bindingDigest; }

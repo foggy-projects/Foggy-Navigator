@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskAuditDTO;
 import com.foggy.navigator.claude.worker.model.dto.RuntimeTaskClosureDTO;
@@ -9,6 +10,10 @@ import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskReconciliationSt
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskTerminationOutcome;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapability;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
+import com.foggy.navigator.common.authorization.AuthorizationCredentialLane;
+import com.foggy.navigator.common.authorization.AuthorizationPrincipalType;
+import com.foggy.navigator.spi.command.CanonicalCommandEnvelope;
+import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
 import com.foggy.navigator.spi.lifecycle.TaskLifecycleProjectionPort;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,12 +23,15 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -91,6 +99,84 @@ class RuntimeTaskTypedContractServiceTest {
         assertFalse(result.getCanonicalTerminal());
         assertEquals("TERMINATION_READY", result.getReasonCode());
         assertTrue(result.getTerminationRequestReceiptEnabled());
+    }
+
+    @Test
+    void runtimeTerminationAuthorizationIsContentFreeAndExact() throws Exception {
+        var authority = new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                "runtime-termination-test-v1",
+                Clock.systemUTC(),
+                Duration.ofMinutes(5));
+        RuntimeStateAuditService.OwnedRuntimeTask owned = ownedTask("RUNNING", false);
+
+        RuntimeTerminationCommandAuthorization authorization =
+                RuntimeTerminationCommandAuthorization.issue(
+                        authority, owned, "user-a", REQUEST_ID);
+        CanonicalCommandEnvelope envelope = authorization.safeEnvelope();
+        CanonicalCommandEnvelope.CommandBinding binding = envelope.binding();
+
+        assertEquals(CanonicalCommandEnvelope.CommandKind.TERMINATE,
+                binding.commandKind());
+        assertEquals(CanonicalCommandEnvelope.CommandIngress.OPENAPI,
+                binding.ingress().ingress());
+        assertEquals("NAVIGATOR_RUNTIME_API", binding.ingress().clientSurface());
+        assertEquals(AuthorizationPrincipalType.CLIENT_APP,
+                binding.actor().principalType());
+        assertEquals(AuthorizationCredentialLane.CLIENT_APP_RUNTIME_CREDENTIAL,
+                binding.actor().lane());
+        assertEquals("app-a", binding.ownership().clientAppReference());
+        assertEquals("owner-a", binding.ownership().ownerReference());
+        assertEquals("task-a", binding.target().taskId());
+        assertEquals("session-a", binding.target().sessionId());
+        assertEquals("agent-a", binding.target().logicalAgentId());
+        assertEquals("OPENAI_CODEX", binding.target().providerType());
+        assertEquals("worker-a", binding.target().physicalWorkerId());
+        assertEquals("model-a", binding.target().modelConfigId());
+
+        String serialized = new ObjectMapper()
+                .findAndRegisterModules()
+                .writeValueAsString(envelope);
+        assertFalse(serialized.contains("runtime-key"));
+        assertFalse(serialized.contains("runtime-secret"));
+        assertFalse(serialized.contains("operator-request"));
+        assertFalse(serialized.contains("credential-a"));
+        assertFalse(serialized.contains("user-a"));
+        assertEquals("RuntimeTerminationCommandAuthorization[content-free]",
+                authorization.toString());
+
+        authorization.require(
+                authority, owned, "user-a", REQUEST_ID);
+        RuntimeStateAuditService.OwnedRuntimeTask drifted =
+                new RuntimeStateAuditService.OwnedRuntimeTask(
+                        "task-a", "session-a", "provider-task-a",
+                        "owner-a", "tenant-a", "OPENAI_CODEX", "worker-other",
+                        "RUNNING", false, 1,
+                        "agent-a", "model-a", "app-a", "credential-a", "user-a");
+        SecurityException drift = assertThrows(SecurityException.class, () ->
+                authorization.require(
+                        authority, drifted, "user-a", REQUEST_ID));
+        assertEquals("TERMINATION_AUTHORIZATION_BINDING_CONFLICT",
+                drift.getMessage());
+    }
+
+    @Test
+    void compatibilityOwnedTaskCannotIssueMutationAuthorization() {
+        var authority = new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                "runtime-termination-test-v1",
+                Clock.systemUTC(), Duration.ofMinutes(5));
+        var compatibilityOwned =
+                new RuntimeStateAuditService.OwnedRuntimeTask(
+                        "task-a", "session-a", "provider-task-a",
+                        "owner-a", "tenant-a", "OPENAI_CODEX", "worker-a",
+                        "RUNNING", false, 1);
+
+        SecurityException rejection = assertThrows(
+                SecurityException.class,
+                () -> RuntimeTerminationCommandAuthorization.issue(
+                        authority, compatibilityOwned, "user-a", REQUEST_ID));
+
+        assertEquals("TERMINATION_AUTHORIZATION_IDENTITY_INCOMPLETE",
+                rejection.getMessage());
     }
 
     @Test
@@ -788,9 +874,17 @@ class RuntimeTaskTypedContractServiceTest {
 
     private void owned(String status, boolean terminal) {
         when(stateAuditService.requireOwnedTask("key", "secret", "user-a", "task-a"))
-                .thenReturn(new RuntimeStateAuditService.OwnedRuntimeTask(
-                        "task-a", "owner-a", "tenant-a", "OPENAI_CODEX", "worker-a",
-                        status, terminal, 1));
+                .thenReturn(ownedTask(status, terminal));
+    }
+
+    private RuntimeStateAuditService.OwnedRuntimeTask ownedTask(
+            String status,
+            boolean terminal) {
+        return new RuntimeStateAuditService.OwnedRuntimeTask(
+                "task-a", "session-a", "provider-task-a",
+                "owner-a", "tenant-a", "OPENAI_CODEX", "worker-a",
+                status, terminal, 1,
+                "agent-a", "model-a", "app-a", "credential-a", "user-a");
     }
 
     private RuntimeTaskAuditDTO audit(String status, boolean terminal) {

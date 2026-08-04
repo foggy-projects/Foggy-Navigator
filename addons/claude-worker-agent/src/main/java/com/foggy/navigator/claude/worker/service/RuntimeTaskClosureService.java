@@ -10,6 +10,10 @@ import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskReconciliationSt
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTaskTerminationOutcome;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeTerminationCapability;
 import com.foggy.navigator.claude.worker.model.enums.RuntimeWorkerIdentityMatch;
+import com.foggy.navigator.common.authorization.AuthorizationCredentialLane;
+import com.foggy.navigator.common.authorization.AuthorizationPrincipalType;
+import com.foggy.navigator.spi.command.CanonicalCommandEnvelope;
+import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import com.foggy.navigator.spi.lifecycle.TaskLifecycleProjectionPort;
 import org.springframework.lang.Nullable;
@@ -18,6 +22,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -44,6 +54,7 @@ public class RuntimeTaskClosureService {
     private final RuntimeRequestAuditService requestAuditService;
     private final RuntimeTerminationAcceptanceCoordinator acceptanceCoordinator;
     private final RuntimeTerminationOutboxDispatcher outboxDispatcher;
+    private final VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority;
 
     @Autowired(required = false)
     @Nullable
@@ -55,12 +66,15 @@ public class RuntimeTaskClosureService {
             List<RuntimeTaskClosureProvider> providers,
             RuntimeRequestAuditService requestAuditService,
             RuntimeTerminationAcceptanceCoordinator acceptanceCoordinator,
-            RuntimeTerminationOutboxDispatcher outboxDispatcher) {
+            RuntimeTerminationOutboxDispatcher outboxDispatcher,
+            VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority) {
         this.stateAuditService = stateAuditService;
         this.providers = providers;
         this.requestAuditService = requestAuditService;
         this.acceptanceCoordinator = acceptanceCoordinator;
         this.outboxDispatcher = outboxDispatcher;
+        this.serverAuthority = Objects.requireNonNull(
+                serverAuthority, "serverAuthority must not be null");
     }
 
     RuntimeTaskClosureService(
@@ -72,7 +86,8 @@ public class RuntimeTaskClosureService {
                 acceptanceCoordinator,
                 acceptanceCoordinator == null ? null
                         : new RuntimeTerminationOutboxDispatcher(
-                                acceptanceCoordinator));
+                                acceptanceCoordinator),
+                testServerAuthority());
     }
 
     RuntimeTaskClosureService(
@@ -80,6 +95,11 @@ public class RuntimeTaskClosureService {
             List<RuntimeTaskClosureProvider> providers,
             RuntimeRequestAuditService requestAuditService) {
         this(stateAuditService, providers, requestAuditService, null);
+    }
+
+    private static VerifiedCommandAuthorizationDecision.ServerAuthority testServerAuthority() {
+        return new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                "runtime-termination-test-v1", Clock.systemUTC(), Duration.ofMinutes(5));
     }
 
     public RuntimeTerminationReadinessDTO readiness(
@@ -200,6 +220,21 @@ public class RuntimeTaskClosureService {
                     code, false, false, false, false, code, false);
         }
 
+        RuntimeTerminationCommandAuthorization commandAuthorization;
+        try {
+            commandAuthorization = RuntimeTerminationCommandAuthorization.issue(
+                    serverAuthority, owned, upstreamUserId, clientRequestId);
+        } catch (RuntimeException authorizationFailure) {
+            audit = safeAudit(appKey, appSecret, upstreamUserId, taskId);
+            String code = sanitizedCode(
+                    authorizationFailure, "TERMINATION_AUTHORIZATION_REJECTED");
+            return terminationResponse(
+                    clientRequestId, taskId, false, audit,
+                    owned.physicalWorkerId(),
+                    RuntimeTaskTerminationOutcome.REJECTED,
+                    code, false, false, false, false, code, false);
+        }
+
         RuntimeRequestAuditService.TaskOperationRegistration registration = null;
         if (requestAuditService.terminationRequestReceiptEnabled()) {
             try {
@@ -234,6 +269,7 @@ public class RuntimeTaskClosureService {
         RuntimeRequestAuditService.AuditHandle requestAudit =
                 registration != null ? registration.handle() : null;
         boolean receiptPersisted = requestAudit != null;
+        boolean durableTerminationAccepted = false;
         RuntimeTaskClosureProvider selectedProvider;
         try {
             audit = stateAuditService.auditTask(
@@ -278,20 +314,9 @@ public class RuntimeTaskClosureService {
                     && requestAuditService.terminationRequestReceiptEnabled()) {
                 acceptanceCoordinator.accept(
                         clientRequestId, appKey, appSecret,
-                        upstreamUserId, taskId,
-                        owned.sessionId(), owned.providerType(),
-                        owned.physicalWorkerId(), owned.providerTaskId(),
-                        owned.ownerUserId(), owned.tenantId(), reason,
-                        selectedProvider);
-                if (!outboxDispatcher.recoveryCapable()) {
-                    var authorization = outboxDispatcher.authorize(clientRequestId);
-                    if (!authorization.providerCallAuthorized()) {
-                        return replayTermination(
-                                appKey, appSecret, upstreamUserId,
-                                clientRequestId, taskId,
-                                expectedPhysicalWorkerId);
-                    }
-                }
+                        upstreamUserId, reason, selectedProvider,
+                        owned, commandAuthorization);
+                durableTerminationAccepted = true;
             }
         } catch (RuntimeException admissionFailure) {
             String code = sanitizedCode(
@@ -320,10 +345,26 @@ public class RuntimeTaskClosureService {
 
         RuntimeTaskClosureProvider.TerminationResult providerResult = null;
         try {
-            if (acceptanceCoordinator != null
-                    && requestAuditService
-                    .terminationRequestReceiptEnabled()
-                    && outboxDispatcher.recoveryCapable()) {
+            RuntimeStateAuditService.OwnedRuntimeTask effectOwned =
+                    stateAuditService.requireOwnedTask(
+                            appKey, appSecret, upstreamUserId, taskId);
+            commandAuthorization.require(
+                    serverAuthority, effectOwned,
+                    upstreamUserId, clientRequestId);
+            boolean receiptBacked = acceptanceCoordinator != null
+                    && requestAuditService.terminationRequestReceiptEnabled();
+            boolean recoveryCapable = receiptBacked
+                    && outboxDispatcher.recoveryCapable();
+            if (receiptBacked && !recoveryCapable) {
+                var authorization = outboxDispatcher.authorize(clientRequestId);
+                if (!authorization.providerCallAuthorized()) {
+                    return replayTermination(
+                            appKey, appSecret, upstreamUserId,
+                            clientRequestId, taskId,
+                            expectedPhysicalWorkerId);
+                }
+            }
+            if (recoveryCapable) {
                 providerResult = outboxDispatcher.dispatch(
                         clientRequestId, reason.trim());
                 if (providerResult == null) {
@@ -337,12 +378,10 @@ public class RuntimeTaskClosureService {
                 // owner dedupe and each HTTP request remains one provider
                 // attempt even when the client request id is repeated.
                 providerResult = selectedProvider.terminate(
-                        taskId, owned.ownerUserId(), owned.tenantId(),
-                        owned.physicalWorkerId(), reason.trim(),
+                        taskId, effectOwned.ownerUserId(), effectOwned.tenantId(),
+                        effectOwned.physicalWorkerId(), reason.trim(),
                         clientRequestId, false);
-                if (acceptanceCoordinator != null
-                        && requestAuditService
-                        .terminationRequestReceiptEnabled()) {
+                if (receiptBacked) {
                     outboxDispatcher.resultObserved(
                             clientRequestId,
                             providerResult.terminationDispatched()
@@ -394,7 +433,8 @@ public class RuntimeTaskClosureService {
                         reasonCode,
                         receiptPersisted);
             }
-            if (terminationMayBeInFlight(audit, reasonCode)) {
+            if (durableTerminationAccepted
+                    || terminationMayBeInFlight(audit, reasonCode)) {
                 return terminationResponse(
                         clientRequestId, taskId, false, audit,
                         owned != null ? owned.physicalWorkerId() : null,
@@ -1201,5 +1241,251 @@ public class RuntimeTaskClosureService {
                 .reconciliationTriggered(false)
                 .provisioningResourceChanged(false)
                 .build();
+    }
+}
+
+/**
+ * Process-local, content-free authorization for one exact typed runtime termination command.
+ *
+ * <p>This capability is deliberately not a receipt or an effect gate. It binds the existing
+ * runtime receipt/intent/outbox admission to server-resolved identity without persisting command
+ * metadata or changing replay ownership.</p>
+ */
+final class RuntimeTerminationCommandAuthorization {
+
+    private static final String CLIENT_SURFACE = "NAVIGATOR_RUNTIME_API";
+    private static final String ROUTE_ID = "/api/v1/open/runtime/task-terminate";
+    private static final String ACTION_ID = "task.terminate";
+    private static final String TENANT_PREFIX = "navi.tenant.present.v1:";
+    private static final String ACTOR_DOMAIN =
+            "navi.runtime-termination-client-app-principal.v1";
+    private static final String UPSTREAM_DOMAIN =
+            "navi.runtime-termination-upstream-reference.v1";
+    private static final String EFFECT_DOMAIN =
+            "navi.runtime-termination-effect-scope.v1";
+    private static final String EFFECT_PREFIX = "RUNTIME_TASK_TERMINATE_SCOPE_SHA256_V1:";
+
+    private final CanonicalCommandEnvelope envelope;
+    private final VerifiedCommandAuthorizationDecision decision;
+    private final Identity identity;
+
+    private RuntimeTerminationCommandAuthorization(
+            CanonicalCommandEnvelope envelope,
+            VerifiedCommandAuthorizationDecision decision,
+            Identity identity) {
+        this.envelope = envelope;
+        this.decision = decision;
+        this.identity = identity;
+    }
+
+    static RuntimeTerminationCommandAuthorization issue(
+            VerifiedCommandAuthorizationDecision.ServerAuthority authority,
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            String suppliedUpstreamUserId,
+            String clientRequestId) {
+        Objects.requireNonNull(authority, "server authority must not be null");
+        Objects.requireNonNull(owned, "owned runtime task must not be null");
+        Identity identity = identity(
+                owned, suppliedUpstreamUserId, clientRequestId);
+        CanonicalCommandEnvelope.CommandBinding binding = binding(identity);
+        VerifiedCommandAuthorizationDecision decision = authority.issue(binding);
+        CanonicalCommandEnvelope envelope = new CanonicalCommandEnvelope(
+                CanonicalCommandEnvelope.SCHEMA_VERSION,
+                binding,
+                decision.metadata());
+        RuntimeTerminationCommandAuthorization authorization =
+                new RuntimeTerminationCommandAuthorization(
+                        envelope, decision, identity);
+        authorization.require(
+                authority, owned, suppliedUpstreamUserId, clientRequestId);
+        return authorization;
+    }
+
+    void require(
+            VerifiedCommandAuthorizationDecision.ServerAuthority verifier,
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            String suppliedUpstreamUserId,
+            String clientRequestId) {
+        Objects.requireNonNull(verifier, "server authority must not be null");
+        CanonicalCommandEnvelope.CommandBinding verified =
+                verifier.requireVerified(envelope, decision);
+        Identity current = identity(
+                owned, suppliedUpstreamUserId, clientRequestId);
+        if (!verified.equals(binding(identity))
+                || !identity.equals(current)) {
+            throw rejected("TERMINATION_AUTHORIZATION_BINDING_CONFLICT");
+        }
+    }
+
+    CanonicalCommandEnvelope safeEnvelope() {
+        return envelope;
+    }
+
+    private static Identity identity(
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            String suppliedUpstreamUserId,
+            String clientRequestId) {
+        Objects.requireNonNull(owned, "owned runtime task must not be null");
+        String upstreamUserId = requireText(
+                suppliedUpstreamUserId, "upstream user ID").trim();
+        String resolvedUpstreamUserId = requireText(
+                owned.upstreamUserId(), "resolved upstream user ID").trim();
+        if (!upstreamUserId.equals(resolvedUpstreamUserId)) {
+            throw rejected("TERMINATION_AUTHORIZATION_UPSTREAM_CONFLICT");
+        }
+        return new Identity(
+                requireExactReference(clientRequestId, "client request ID"),
+                requireText(owned.taskId(), "task ID"),
+                optionalText(owned.sessionId()),
+                optionalText(owned.providerTaskId()),
+                optionalText(owned.logicalAgentId()),
+                requireText(owned.ownerUserId(), "owner user ID"),
+                requireText(owned.tenantId(), "tenant ID"),
+                requireText(owned.clientAppId(), "ClientApp ID"),
+                requireText(owned.credentialId(), "credential ID"),
+                resolvedUpstreamUserId,
+                optionalText(owned.providerType()),
+                optionalText(owned.physicalWorkerId()),
+                optionalText(owned.modelConfigId()));
+    }
+
+    private static CanonicalCommandEnvelope.CommandBinding binding(Identity identity) {
+        String tenantReference = TENANT_PREFIX + identity.tenantId();
+        requireReferenceLength(tenantReference, "tenant reference");
+        String upstreamReference = digest(
+                UPSTREAM_DOMAIN,
+                identity.tenantId(),
+                identity.clientAppId(),
+                identity.upstreamUserId());
+        CanonicalCommandEnvelope.Target target = new CanonicalCommandEnvelope.Target(
+                CanonicalCommandEnvelope.TargetKind.TASK,
+                identity.taskId(),
+                identity.logicalAgentId(),
+                identity.providerType(),
+                identity.physicalWorkerId(),
+                identity.modelConfigId(),
+                identity.taskId(),
+                identity.sessionId());
+        CanonicalCommandEnvelope.Effect effect = new CanonicalCommandEnvelope.Effect(
+                ACTION_ID,
+                EFFECT_PREFIX + digest(
+                        EFFECT_DOMAIN,
+                        identity.tenantId(), identity.ownerUserId(),
+                        identity.clientAppId(), upstreamReference,
+                        identity.taskId(), identity.sessionId(),
+                        identity.providerTaskId(), identity.logicalAgentId(),
+                        identity.providerType(), identity.physicalWorkerId(),
+                        identity.modelConfigId()));
+        return new CanonicalCommandEnvelope.CommandBinding(
+                CanonicalCommandEnvelope.CommandKind.TERMINATE,
+                new CanonicalCommandEnvelope.Ingress(
+                        CanonicalCommandEnvelope.CommandIngress.OPENAPI,
+                        CLIENT_SURFACE,
+                        ROUTE_ID),
+                new CanonicalCommandEnvelope.Request(
+                        identity.clientRequestId(),
+                        identity.clientRequestId(),
+                        identity.clientRequestId()),
+                new CanonicalCommandEnvelope.Actor(
+                        CanonicalCommandEnvelope.ActorKind.AUTHENTICATED_PRINCIPAL,
+                        AuthorizationPrincipalType.CLIENT_APP,
+                        AuthorizationCredentialLane.CLIENT_APP_RUNTIME_CREDENTIAL,
+                        digest(
+                                ACTOR_DOMAIN,
+                                identity.tenantId(),
+                                identity.clientAppId(),
+                                identity.credentialId()),
+                        null),
+                new CanonicalCommandEnvelope.Ownership(
+                        tenantReference,
+                        identity.ownerUserId(),
+                        identity.clientAppId(),
+                        upstreamReference),
+                target,
+                effect);
+    }
+
+    private static String digest(String domain, @Nullable String... fields) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            updateDigestField(digest, domain);
+            for (String field : fields) {
+                digest.update(field == null ? (byte) 0 : (byte) 1);
+                if (field != null) {
+                    updateDigestField(digest, field);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 is unavailable", unavailable);
+        }
+    }
+
+    private static void updateDigestField(MessageDigest digest, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        digest.update((byte) (bytes.length >>> 24));
+        digest.update((byte) (bytes.length >>> 16));
+        digest.update((byte) (bytes.length >>> 8));
+        digest.update((byte) bytes.length);
+        digest.update(bytes);
+    }
+
+    private static String requireExactReference(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw rejected("TERMINATION_AUTHORIZATION_IDENTITY_INCOMPLETE");
+        }
+        requireReferenceLength(value, field);
+        if (value.chars().anyMatch(Character::isISOControl)) {
+            throw rejected("TERMINATION_AUTHORIZATION_IDENTITY_INVALID");
+        }
+        return value;
+    }
+
+    private static String requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw rejected("TERMINATION_AUTHORIZATION_IDENTITY_INCOMPLETE");
+        }
+        String clean = value.trim();
+        requireReferenceLength(clean, field);
+        if (clean.chars().anyMatch(Character::isISOControl)) {
+            throw rejected("TERMINATION_AUTHORIZATION_IDENTITY_INVALID");
+        }
+        return clean;
+    }
+
+    @Nullable
+    private static String optionalText(@Nullable String value) {
+        return StringUtils.hasText(value) ? requireText(value, "optional reference") : null;
+    }
+
+    private static void requireReferenceLength(String value, String field) {
+        if (value.length() > CanonicalCommandEnvelope.MAX_REFERENCE_LENGTH) {
+            throw new IllegalArgumentException(field + " exceeds maximum length");
+        }
+    }
+
+    private static SecurityException rejected(String safeCode) {
+        return new SecurityException(safeCode);
+    }
+
+    @Override
+    public String toString() {
+        return "RuntimeTerminationCommandAuthorization[content-free]";
+    }
+
+    private record Identity(
+            String clientRequestId,
+            String taskId,
+            @Nullable String sessionId,
+            @Nullable String providerTaskId,
+            @Nullable String logicalAgentId,
+            String ownerUserId,
+            String tenantId,
+            String clientAppId,
+            String credentialId,
+            String upstreamUserId,
+            @Nullable String providerType,
+            @Nullable String physicalWorkerId,
+            @Nullable String modelConfigId) {
     }
 }

@@ -96,6 +96,8 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 new TransactionTemplate(transactionManager).execute(status ->
                         recorder.recordIntent(intent("request-recovery")));
         assertThat(prepared.effectState()).isEqualTo("PREPARED");
+        assertThat(prepared.ownerUserId()).isEqualTo("owner-delivery");
+        assertThat(prepared.tenantId()).isEqualTo("tenant-delivery");
 
         var first = transaction(() ->
                 recorder.authorizeEffect("request-recovery"));
@@ -114,6 +116,23 @@ class TaskTerminationIntentRecorderIntegrationTest {
         assertThat(responseLossRedelivery.resultObserved()).isTrue();
         assertThat(outbox.findById(first.delivery().effectId()).orElseThrow()
                 .getEffectState()).isEqualTo("RESULT_OBSERVED");
+    }
+
+    @Test
+    void principalDriftRejectsBeforeEffectAuthorizationStateChange() {
+        transaction(() -> recorder.recordIntent(intent("request-principal-drift")));
+        var canonical = canonicalTasks.findByTaskId("task-delivery")
+                .orElseThrow();
+        canonical.setUserId("owner-other");
+        canonicalTasks.saveAndFlush(canonical);
+
+        assertThatThrownBy(() -> transaction(() ->
+                recorder.authorizeEffect("request-principal-drift")))
+                .hasMessage("TERMINATION_EFFECT_BINDING_MISMATCH");
+
+        assertThat(outbox.findByIdempotencyKey(
+                "termination-intent:request-principal-drift").orElseThrow()
+                .getEffectState()).isEqualTo("PREPARED");
     }
 
     @Test
@@ -451,7 +470,9 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 "generation-delivery",
                 "epoch-delivery",
                 "JCS_SHA256_V1",
-                "binding-delivery");
+                "binding-delivery",
+                "owner-delivery",
+                "tenant-delivery");
     }
 
     private <T> T transaction(Supplier<T> work) {

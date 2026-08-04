@@ -2,7 +2,6 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
-import com.foggy.navigator.common.repository.SessionTaskRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -21,23 +20,19 @@ import java.util.List;
 public class RuntimeTerminationOutboxDispatcher {
     private final RuntimeTerminationAcceptanceCoordinator coordinator;
     private final List<RuntimeTaskClosureProvider> providers;
-    private final SessionTaskRepository tasks;
 
     @org.springframework.beans.factory.annotation.Autowired
     public RuntimeTerminationOutboxDispatcher(
             RuntimeTerminationAcceptanceCoordinator coordinator,
-            List<RuntimeTaskClosureProvider> providers,
-            SessionTaskRepository tasks) {
+            List<RuntimeTaskClosureProvider> providers) {
         this.coordinator = coordinator;
         this.providers = List.copyOf(providers);
-        this.tasks = tasks;
     }
 
     RuntimeTerminationOutboxDispatcher(
             RuntimeTerminationAcceptanceCoordinator coordinator) {
         this.coordinator = coordinator;
         this.providers = List.of();
-        this.tasks = null;
     }
 
     public RuntimeTerminationIntentPort.RuntimeTerminationAuthorization authorize(
@@ -51,23 +46,24 @@ public class RuntimeTerminationOutboxDispatcher {
     }
 
     boolean recoveryCapable() {
-        return tasks != null;
+        return !providers.isEmpty();
     }
 
     /**
-     * Repository-backed dispatcher used both by the HTTP fast path and by the
-     * restart recovery poller.  Authorization is committed before this method
-     * invokes the provider; redelivery at EFFECT_STARTED returns without a
-     * second effect.
+     * Durable-outbox dispatcher used both by the HTTP fast path and by the
+     * restart recovery poller. Authorization returns the frozen effect
+     * principal before this method invokes the provider; redelivery at
+     * EFFECT_STARTED returns without a second effect.
      */
     public RuntimeTaskClosureProvider.TerminationResult dispatch(
             String clientRequestId, String safeReason) {
         var authorization = coordinator.authorize(clientRequestId);
         if (!authorization.providerCallAuthorized()) return null;
         var delivery = authorization.delivery();
-        var task = tasks.findByTaskId(delivery.taskId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "TERMINATION_DELIVERY_TASK_NOT_FOUND"));
+        String ownerUserId = requiredPrincipal(
+                delivery.ownerUserId(), "OWNER_USER_ID");
+        String tenantId = requiredPrincipal(
+                delivery.tenantId(), "TENANT_ID");
         RuntimeTaskClosureProvider provider = providers.stream()
                 .filter(candidate -> candidate.supports(
                         delivery.providerType()))
@@ -81,8 +77,8 @@ public class RuntimeTerminationOutboxDispatcher {
         }
         RuntimeTaskClosureProvider.TerminationResult result =
                 provider.terminate(
-                        delivery.taskId(), task.getUserId(),
-                        task.getTenantId(), delivery.physicalWorkerId(),
+                        delivery.taskId(), ownerUserId,
+                        tenantId, delivery.physicalWorkerId(),
                         safeReason, delivery.clientRequestId(), false);
         coordinator.resultObserved(
                 clientRequestId,
@@ -100,7 +96,7 @@ public class RuntimeTerminationOutboxDispatcher {
             initialDelayString =
                     "${navigator.lifecycle.termination-outbox-initial-delay-ms:5000}")
     public void recoverPrepared() {
-        if (tasks == null) return;
+        if (providers.isEmpty()) return;
         for (var delivery : coordinator.prepared(25)) {
             try {
                 dispatch(delivery.clientRequestId(),
@@ -110,5 +106,13 @@ public class RuntimeTerminationOutboxDispatcher {
                 // never re-invoked when a provider response was lost.
             }
         }
+    }
+
+    private String requiredPrincipal(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(
+                    "TERMINATION_DELIVERY_" + field + "_REQUIRED");
+        }
+        return value;
     }
 }

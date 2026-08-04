@@ -33,7 +33,30 @@ public interface RuntimeTerminationIntentPort {
             String stateGeneration,
             String instanceEpoch,
             String bindingDigestVersion,
-            String bindingDigest) {
+            String bindingDigest,
+            String ownerUserId,
+            String tenantId) {
+        public RuntimeTerminationIntent(
+                String clientRequestId,
+                String taskId,
+                String sessionId,
+                String providerType,
+                String physicalWorkerId,
+                String providerTaskId,
+                String dispatchId,
+                String operationId,
+                String ownershipMode,
+                String stateGeneration,
+                String instanceEpoch,
+                String bindingDigestVersion,
+                String bindingDigest) {
+            this(clientRequestId, taskId, sessionId, providerType,
+                    physicalWorkerId, providerTaskId, dispatchId,
+                    operationId, ownershipMode, stateGeneration,
+                    instanceEpoch, bindingDigestVersion, bindingDigest,
+                    null, null);
+        }
+
         public RuntimeTerminationIntent(
                 String clientRequestId,
                 String taskId,
@@ -46,7 +69,7 @@ public interface RuntimeTerminationIntentPort {
             this(clientRequestId, taskId, sessionId, providerType,
                     physicalWorkerId, providerTaskId, operationId,
                     operationId, "ENFORCED", null, null,
-                    "JCS_SHA256_V1", bindingDigest);
+                    "JCS_SHA256_V1", bindingDigest, null, null);
         }
     }
 
@@ -63,7 +86,29 @@ public interface RuntimeTerminationIntentPort {
             String instanceEpoch,
             String bindingDigestVersion,
             String bindingDigest,
-            String effectState) {
+            String effectState,
+            String ownerUserId,
+            String tenantId) {
+        public RuntimeTerminationDelivery(
+                String effectId,
+                String clientRequestId,
+                String taskId,
+                String providerType,
+                String physicalWorkerId,
+                String providerTaskId,
+                String operationId,
+                String ownershipMode,
+                String stateGeneration,
+                String instanceEpoch,
+                String bindingDigestVersion,
+                String bindingDigest,
+                String effectState) {
+            this(effectId, clientRequestId, taskId, providerType,
+                    physicalWorkerId, providerTaskId, operationId,
+                    ownershipMode, stateGeneration, instanceEpoch,
+                    bindingDigestVersion, bindingDigest, effectState,
+                    null, null);
+        }
     }
 
     record RuntimeTerminationAuthorization(

@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.business.agent.service.RuntimeRequestAuditService;
+import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
 import com.foggy.navigator.spi.lifecycle.RuntimeTerminationIntentPort;
 import com.foggy.navigator.spi.task.RuntimeTaskClosureProvider;
 import org.springframework.stereotype.Service;
@@ -14,14 +15,18 @@ public class RuntimeTerminationAcceptanceCoordinator {
     private final RuntimeRequestAuditService audits;
     private final List<RuntimeTerminationIntentPort> intentPorts;
     private final TransactionTemplate transactions;
+    private final VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority;
 
     public RuntimeTerminationAcceptanceCoordinator(
             RuntimeRequestAuditService audits,
             List<RuntimeTerminationIntentPort> intentPorts,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority) {
         this.audits = audits;
         this.intentPorts = List.copyOf(intentPorts);
         this.transactions = new TransactionTemplate(transactionManager);
+        this.serverAuthority = java.util.Objects.requireNonNull(
+                serverAuthority, "serverAuthority must not be null");
     }
 
     public RuntimeRequestAuditService.TaskOperationRegistration accept(
@@ -29,16 +34,13 @@ public class RuntimeTerminationAcceptanceCoordinator {
             String appKey,
             String appSecret,
             String upstreamUserId,
-            String taskId,
-            String sessionId,
-            String providerType,
-            String physicalWorkerId,
-            String providerTaskId,
-            String ownerUserId,
-            String tenantId,
             String reason,
-            RuntimeTaskClosureProvider provider) {
+            RuntimeTaskClosureProvider provider,
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            RuntimeTerminationCommandAuthorization commandAuthorization) {
         return transactions.execute(status -> {
+            commandAuthorization.require(
+                    serverAuthority, owned, upstreamUserId, clientRequestId);
             RuntimeRequestAuditService.TaskOperationRegistration registration =
                     audits.beginTaskOperationIdempotentAtomic(
                             clientRequestId,
@@ -47,15 +49,15 @@ public class RuntimeTerminationAcceptanceCoordinator {
                             appSecret,
                             null,
                             upstreamUserId,
-                            taskId);
+                            owned.taskId());
             if (!registration.existing()) {
                 throw new IllegalStateException(
                         "TERMINATION_REQUEST_RECEIPT_REQUIRED");
             }
             RuntimeTaskClosureProvider.TerminationAdmission admission =
                     provider.prepareTerminationAdmission(
-                            taskId, ownerUserId, tenantId,
-                            physicalWorkerId, reason, clientRequestId);
+                            owned.taskId(), owned.ownerUserId(), owned.tenantId(),
+                            owned.physicalWorkerId(), reason, clientRequestId);
             if (admission == null) {
                 throw new IllegalStateException(
                         "TERMINATION_EXACT_ADMISSION_UNAVAILABLE");
@@ -63,18 +65,20 @@ public class RuntimeTerminationAcceptanceCoordinator {
             for (RuntimeTerminationIntentPort port : intentPorts) {
                 port.recordIntent(new RuntimeTerminationIntentPort.RuntimeTerminationIntent(
                         clientRequestId,
-                        taskId,
-                        sessionId,
-                        providerType,
-                        physicalWorkerId,
-                        providerTaskId,
+                        owned.taskId(),
+                        owned.sessionId(),
+                        owned.providerType(),
+                        owned.physicalWorkerId(),
+                        owned.providerTaskId(),
                         admission.dispatchId(),
                         admission.operationId(),
                         admission.ownershipMode(),
                         admission.stateGeneration(),
                         admission.instanceEpoch(),
                         admission.bindingDigestVersion(),
-                        admission.bindingDigest()));
+                        admission.bindingDigest(),
+                        owned.ownerUserId(),
+                        owned.tenantId()));
             }
             return registration;
         });

@@ -484,6 +484,44 @@ class RuntimeStateAuditServiceTest {
     }
 
     @Test
+    void ownedRuntimeTaskCarriesOnlyServerResolvedCommandIdentity() {
+        SessionTaskEntity task = task(
+                LocalDateTime.of(2026, 8, 4, 9, 0),
+                LocalDateTime.of(2026, 8, 4, 9, 1));
+        task.setStatus("RUNNING");
+        task.setProviderTaskId("provider-task-a");
+        task.setUserId("owner-a");
+        task.setAgentId("agent-a");
+        task.setProviderType("OPENAI_CODEX");
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing")).thenReturn(Optional.empty());
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token("ACTIVE", task.getCreatedAt(), null)));
+
+        RuntimeStateAuditService.OwnedRuntimeTask owned = service.requireOwnedTask(
+                "runtime-key", "runtime-secret", "user-a", "task-existing");
+
+        assertEquals("task-existing", owned.taskId());
+        assertEquals("session-a", owned.sessionId());
+        assertEquals("provider-task-a", owned.providerTaskId());
+        assertEquals("owner-a", owned.ownerUserId());
+        assertEquals("tenant-a", owned.tenantId());
+        assertEquals("app-a", owned.clientAppId());
+        assertEquals("credential-a", owned.credentialId());
+        assertEquals("user-a", owned.upstreamUserId());
+        assertEquals("agent-a", owned.logicalAgentId());
+        assertEquals("OPENAI_CODEX", owned.providerType());
+        assertEquals("worker-observed", owned.physicalWorkerId());
+        assertEquals("model-observed", owned.modelConfigId());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(taskTokenRepository, never()).save(any());
+    }
+
+    @Test
     void auditMethodsAreReadOnlyTransactions() throws Exception {
         Method binding = RuntimeStateAuditService.class.getMethod(
                 "auditBinding",

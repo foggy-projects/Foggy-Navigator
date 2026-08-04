@@ -461,7 +461,8 @@ public class RuntimeStateAuditService {
                 task.getUserId(), task.getTenantId(), task.getProviderType(),
                 task.getWorkerId(), normalizedStatus(task.getStatus()),
                 TERMINAL_STATUSES.contains(normalizedStatus(task.getStatus())) || terminal.isPresent(),
-                counts.dispatchCount());
+                counts.dispatchCount(), task.getAgentId(), task.getModelConfigId(),
+                owner.getClientAppId(), owner.getCredentialId(), upstreamUserId.trim());
     }
 
     public record OwnedRuntimeTask(
@@ -474,7 +475,28 @@ public class RuntimeStateAuditService {
             String physicalWorkerId,
             String status,
             boolean terminal,
-            int dispatchCount) {
+            int dispatchCount,
+            String logicalAgentId,
+            String modelConfigId,
+            String clientAppId,
+            String credentialId,
+            String upstreamUserId) {
+        public OwnedRuntimeTask(
+                String taskId,
+                String sessionId,
+                String providerTaskId,
+                String ownerUserId,
+                String tenantId,
+                String providerType,
+                String physicalWorkerId,
+                String status,
+                boolean terminal,
+                int dispatchCount) {
+            this(taskId, sessionId, providerTaskId, ownerUserId, tenantId,
+                    providerType, physicalWorkerId, status, terminal, dispatchCount,
+                    null, null, null, null, null);
+        }
+
         public OwnedRuntimeTask(
                 String taskId,
                 String ownerUserId,
@@ -485,7 +507,8 @@ public class RuntimeStateAuditService {
                 boolean terminal,
                 int dispatchCount) {
             this(taskId, null, null, ownerUserId, tenantId, providerType,
-                    physicalWorkerId, status, terminal, dispatchCount);
+                    physicalWorkerId, status, terminal, dispatchCount,
+                    null, null, null, null, null);
         }
     }
 
