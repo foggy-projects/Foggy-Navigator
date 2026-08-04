@@ -99,6 +99,21 @@ class A2AgentResourceResolverTest {
     }
 
     @Test
+    void resolveRequiredVisibleAgentDoesNotMarkCallerTransactionRollbackOnlyForReadinessExceptions() throws Exception {
+        Method method = A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredVisibleAgent",
+                String.class,
+                String.class,
+                String.class,
+                String.class);
+        ReadinessTransactional transactional = method.getAnnotation(ReadinessTransactional.class);
+
+        assertNotNull(transactional);
+        assertTrue(transactional.readOnly());
+        assertReadinessNoRollbackFor(method);
+    }
+
+    @Test
     void workspaceResolversDoNotMarkCallerTransactionRollbackOnlyForReadinessExceptions() throws Exception {
         assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
                 "resolveOptionalWorkspace",
@@ -357,6 +372,29 @@ class A2AgentResourceResolverTest {
         assertEquals("model-1", result.defaultModelConfigId());
         assertEquals("dir-1", result.defaultDirectoryId());
         assertEquals("AGENT:CLIENT_APP", result.source());
+    }
+
+    @Test
+    void resolveRequiredVisibleAgent_allows_removed_current_route_without_resolving_worker_authority() {
+        ClientAppEntity clientApp = clientApp("tenant-1", "capp-1", "system-1");
+        CodingAgentEntity agent = agent("agent-1", ResourceOwnerType.CLIENT_APP, "capp-1");
+        agent.setClientAppId("capp-1");
+        agent.setWorkerId(null);
+        when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+
+        A2AgentResourceResolver.ResolvedVisibleAgent result =
+                resolver.resolveRequiredVisibleAgent(
+                        "tenant-1", "capp-1", "user-1", "agent-1");
+
+        assertEquals("agent-1", result.agentId());
+        assertEquals(ResourceOwnerType.CLIENT_APP, result.ownerType());
+        assertEquals("capp-1", result.ownerId());
+        assertEquals("capp-1", result.clientAppId());
+        assertEquals("AGENT:CLIENT_APP", result.source());
+        org.mockito.Mockito.verifyNoInteractions(
+                workerPoolRepository, physicalWorkerRuntimeRegistry);
     }
 
     @Test

@@ -33,6 +33,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Runtime-lane task termination and reconciliation.
@@ -452,6 +453,137 @@ public class RuntimeTaskClosureService {
                     false, false, false, false, reasonCode,
                     receiptPersisted);
         }
+    }
+
+    /**
+     * Access-token compatibility entry for the OpenAPI Agent cancel route.
+     * This method has no Controller caller until S4-03B2A3. It accepts only
+     * Tasks that the existing provider admission proves are ENFORCED and
+     * dispatches exclusively through the lifecycle termination outbox.
+     */
+    public AgentTerminationResult terminateAgentTaskWithRuntimeAccess(
+            String appKey,
+            String accessToken,
+            String upstreamUserId,
+            @Nullable String suppliedClientRequestId,
+            String pathAgentId,
+            String taskId) {
+        String clientRequestId = canonicalAgentTerminationClientRequestId(
+                suppliedClientRequestId);
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                stateAuditService.requireOwnedAgentTaskByAccessToken(
+                        appKey, accessToken, upstreamUserId,
+                        pathAgentId, taskId);
+        RuntimeTerminationCommandAuthorization authorization =
+                RuntimeTerminationCommandAuthorization.issueRuntimeAccessAgent(
+                        serverAuthority, owned, upstreamUserId,
+                        pathAgentId, clientRequestId);
+        String terminalStatus = canonicalAgentTerminalStatus(owned);
+        if (terminalStatus != null) {
+            return AgentTerminationResult.alreadyTerminal(
+                    clientRequestId, owned.taskId(),
+                    owned.logicalAgentId(), terminalStatus);
+        }
+        RuntimeTaskClosureProvider selectedProvider = provider(owned);
+        RuntimeTaskClosureProvider.TerminationReadiness readiness;
+        try {
+            readiness = selectedProvider.inspect(
+                    owned.taskId(), owned.physicalWorkerId());
+        } catch (RuntimeException unavailable) {
+            throw new IllegalStateException(
+                    "RUNTIME_AGENT_TERMINATION_OBSERVATION_UNAVAILABLE");
+        }
+        if (readiness == null || !readiness.terminateAllowed()) {
+            throw new IllegalStateException(stableCode(
+                    readiness != null ? readiness.blockedReason() : null,
+                    "RUNTIME_AGENT_TERMINATION_NOT_READY"));
+        }
+        if (acceptanceCoordinator == null
+                || outboxDispatcher == null
+                || !outboxDispatcher.recoveryCapable()) {
+            throw new IllegalStateException(
+                    "RUNTIME_AGENT_TERMINATION_AUTHORITY_UNAVAILABLE");
+        }
+
+        boolean durableAccepted = false;
+        try {
+            acceptanceCoordinator.acceptAgent(
+                    clientRequestId, appKey, accessToken,
+                    upstreamUserId, pathAgentId,
+                    "openapi-agent-cancel", selectedProvider,
+                    owned, authorization);
+            durableAccepted = true;
+
+            RuntimeStateAuditService.OwnedRuntimeTask effectOwned =
+                    stateAuditService.requireOwnedAgentTaskByAccessToken(
+                            appKey, accessToken, upstreamUserId,
+                            pathAgentId, taskId);
+            authorization.requireRuntimeAccessAgent(
+                    serverAuthority, effectOwned, upstreamUserId,
+                    pathAgentId, clientRequestId);
+            RuntimeTaskClosureProvider.TerminationResult providerResult =
+                    outboxDispatcher.dispatch(
+                            clientRequestId, "openapi-agent-cancel");
+            RuntimeStateAuditService.OwnedRuntimeTask current =
+                    stateAuditService.requireOwnedAgentTaskByAccessToken(
+                            appKey, accessToken, upstreamUserId,
+                            pathAgentId, taskId);
+            terminalStatus = canonicalAgentTerminalStatus(current);
+            if (terminalStatus != null) {
+                return AgentTerminationResult.alreadyTerminal(
+                        clientRequestId, current.taskId(),
+                        current.logicalAgentId(), terminalStatus);
+            }
+            return AgentTerminationResult.accepted(
+                    clientRequestId, current.taskId(),
+                    current.logicalAgentId(),
+                    providerResult != null
+                            && providerResult.idempotentReplay(),
+                    providerResult == null
+                            || providerResult.reconcileRequired());
+        } catch (RuntimeException failure) {
+            if (durableAccepted) {
+                return AgentTerminationResult.accepted(
+                        clientRequestId, owned.taskId(),
+                        owned.logicalAgentId(), false, true);
+            }
+            throw failure;
+        }
+    }
+
+    static String canonicalAgentTerminationClientRequestId(
+            @Nullable String suppliedClientRequestId) {
+        if (!StringUtils.hasText(suppliedClientRequestId)) {
+            return UUID.randomUUID().toString();
+        }
+        String supplied = suppliedClientRequestId;
+        try {
+            if (supplied.length() != 36) {
+                throw new IllegalArgumentException();
+            }
+            String canonical = UUID.fromString(supplied).toString();
+            if (!canonical.equals(supplied)) {
+                throw new IllegalArgumentException();
+            }
+            return canonical;
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException(
+                    "AGENT_CANCEL_CLIENT_REQUEST_ID_INVALID", invalid);
+        }
+    }
+
+    @Nullable
+    private String canonicalAgentTerminalStatus(
+            RuntimeStateAuditService.OwnedRuntimeTask owned) {
+        if (owned == null || !owned.terminal()) return null;
+        String status = stableText(owned.status()).toUpperCase(Locale.ROOT);
+        return switch (status) {
+            case "COMPLETED" -> "COMPLETED";
+            case "ABORTED", "CANCELLED", "CANCELED" -> "ABORTED";
+            case "FAILED", "REJECTED", "TIMED_OUT", "TIMEOUT" -> "FAILED";
+            default -> throw new IllegalStateException(
+                    "RUNTIME_AGENT_TERMINAL_STATUS_UNSUPPORTED");
+        };
     }
 
     private RuntimeTaskClosureDTO receiptPersistenceFailure(
@@ -1242,6 +1374,84 @@ public class RuntimeTaskClosureService {
                 .provisioningResourceChanged(false)
                 .build();
     }
+
+    public record AgentTerminationResult(
+            String clientRequestId,
+            String taskId,
+            String agentId,
+            boolean idempotentReplay,
+            boolean reconcileRequired,
+            @Nullable String terminalStatus) {
+        private static final Set<String> TERMINAL_STATUSES =
+                Set.of("COMPLETED", "FAILED", "ABORTED");
+
+        public AgentTerminationResult {
+            String canonicalRequestId = null;
+            if (StringUtils.hasText(clientRequestId)) {
+                try {
+                    canonicalRequestId = UUID.fromString(
+                            clientRequestId).toString();
+                } catch (IllegalArgumentException ignored) {
+                    // Stable validation below deliberately hides parser details.
+                }
+            }
+            if (!clientRequestIdEquals(
+                    clientRequestId, canonicalRequestId)) {
+                throw new IllegalArgumentException(
+                        "AGENT_CANCEL_CLIENT_REQUEST_ID_INVALID");
+            }
+            if (!StringUtils.hasText(taskId)
+                    || !StringUtils.hasText(agentId)) {
+                throw new IllegalArgumentException(
+                        "agent termination identity is required");
+            }
+            if (terminalStatus != null
+                    && !TERMINAL_STATUSES.contains(terminalStatus)) {
+                throw new IllegalArgumentException(
+                        "agent termination terminal status is invalid");
+            }
+        }
+
+        static AgentTerminationResult accepted(
+                String clientRequestId,
+                String taskId,
+                String agentId,
+                boolean idempotentReplay,
+                boolean reconcileRequired) {
+            return new AgentTerminationResult(
+                    clientRequestId, taskId, agentId,
+                    idempotentReplay, reconcileRequired, null);
+        }
+
+        static AgentTerminationResult alreadyTerminal(
+                String clientRequestId,
+                String taskId,
+                String agentId,
+                String terminalStatus) {
+            return new AgentTerminationResult(
+                    clientRequestId, taskId, agentId,
+                    false, false, terminalStatus);
+        }
+
+        public boolean canonicalTerminal() {
+            return terminalStatus != null;
+        }
+
+        public String taskStatus() {
+            return terminalStatus == null
+                    ? "CANCEL_REQUESTED" : terminalStatus;
+        }
+
+        @Override
+        public String toString() {
+            return "AgentTerminationResult[safe]";
+        }
+
+        private static boolean clientRequestIdEquals(
+                String supplied, String canonical) {
+            return supplied != null && supplied.equals(canonical);
+        }
+    }
 }
 
 /**
@@ -1255,6 +1465,9 @@ final class RuntimeTerminationCommandAuthorization {
 
     private static final String CLIENT_SURFACE = "NAVIGATOR_RUNTIME_API";
     private static final String ROUTE_ID = "/api/v1/open/runtime/task-terminate";
+    private static final String AGENT_CLIENT_SURFACE = "NAVIGATOR_OPEN_API";
+    private static final String AGENT_ROUTE_ID =
+            "/api/v1/open/agents/{agentId}/tasks/{taskId}/cancel";
     private static final String ACTION_ID = "task.terminate";
     private static final String TENANT_PREFIX = "navi.tenant.present.v1:";
     private static final String ACTOR_DOMAIN =
@@ -1264,10 +1477,23 @@ final class RuntimeTerminationCommandAuthorization {
     private static final String EFFECT_DOMAIN =
             "navi.runtime-termination-effect-scope.v1";
     private static final String EFFECT_PREFIX = "RUNTIME_TASK_TERMINATE_SCOPE_SHA256_V1:";
+    private static final String AGENT_ACTOR_DOMAIN =
+            "navi.runtime-access-agent-termination-principal.v1";
+    private static final String AGENT_UPSTREAM_DOMAIN =
+            "navi.runtime-access-agent-termination-upstream.v1";
+    private static final String AGENT_EFFECT_DOMAIN =
+            "navi.runtime-access-agent-termination-effect.v1";
+    private static final String AGENT_EFFECT_PREFIX =
+            "RUNTIME_ACCESS_AGENT_TERMINATE_SCOPE_SHA256_V1:";
+    private static final String AUTHORIZATION_BINDING_CLAIM_DOMAIN =
+            "navi.termination-authorization-binding-claim.v1";
 
     private final CanonicalCommandEnvelope envelope;
     private final VerifiedCommandAuthorizationDecision decision;
+    @Nullable
     private final Identity identity;
+    @Nullable
+    private final RuntimeAccessAgentIdentity runtimeAccessAgentIdentity;
 
     private RuntimeTerminationCommandAuthorization(
             CanonicalCommandEnvelope envelope,
@@ -1276,6 +1502,17 @@ final class RuntimeTerminationCommandAuthorization {
         this.envelope = envelope;
         this.decision = decision;
         this.identity = identity;
+        this.runtimeAccessAgentIdentity = null;
+    }
+
+    private RuntimeTerminationCommandAuthorization(
+            CanonicalCommandEnvelope envelope,
+            VerifiedCommandAuthorizationDecision decision,
+            RuntimeAccessAgentIdentity identity) {
+        this.envelope = envelope;
+        this.decision = decision;
+        this.identity = null;
+        this.runtimeAccessAgentIdentity = identity;
     }
 
     static RuntimeTerminationCommandAuthorization issue(
@@ -1301,6 +1538,34 @@ final class RuntimeTerminationCommandAuthorization {
         return authorization;
     }
 
+    static RuntimeTerminationCommandAuthorization issueRuntimeAccessAgent(
+            VerifiedCommandAuthorizationDecision.ServerAuthority authority,
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            String suppliedUpstreamUserId,
+            String pathAgentId,
+            String clientRequestId) {
+        Objects.requireNonNull(authority, "server authority must not be null");
+        Objects.requireNonNull(owned, "owned runtime task must not be null");
+        RuntimeAccessAgentIdentity identity = runtimeAccessAgentIdentity(
+                owned, suppliedUpstreamUserId, pathAgentId,
+                clientRequestId);
+        CanonicalCommandEnvelope.CommandBinding binding =
+                runtimeAccessAgentBinding(identity);
+        VerifiedCommandAuthorizationDecision decision =
+                authority.issue(binding);
+        CanonicalCommandEnvelope envelope = new CanonicalCommandEnvelope(
+                CanonicalCommandEnvelope.SCHEMA_VERSION,
+                binding,
+                decision.metadata());
+        RuntimeTerminationCommandAuthorization authorization =
+                new RuntimeTerminationCommandAuthorization(
+                        envelope, decision, identity);
+        authorization.requireRuntimeAccessAgent(
+                authority, owned, suppliedUpstreamUserId,
+                pathAgentId, clientRequestId);
+        return authorization;
+    }
+
     void require(
             VerifiedCommandAuthorizationDecision.ServerAuthority verifier,
             RuntimeStateAuditService.OwnedRuntimeTask owned,
@@ -1309,12 +1574,41 @@ final class RuntimeTerminationCommandAuthorization {
         Objects.requireNonNull(verifier, "server authority must not be null");
         CanonicalCommandEnvelope.CommandBinding verified =
                 verifier.requireVerified(envelope, decision);
+        if (identity == null) {
+            throw rejected("TERMINATION_AUTHORIZATION_BINDING_CONFLICT");
+        }
         Identity current = identity(
                 owned, suppliedUpstreamUserId, clientRequestId);
         if (!verified.equals(binding(identity))
                 || !identity.equals(current)) {
             throw rejected("TERMINATION_AUTHORIZATION_BINDING_CONFLICT");
         }
+    }
+
+    void requireRuntimeAccessAgent(
+            VerifiedCommandAuthorizationDecision.ServerAuthority verifier,
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            String suppliedUpstreamUserId,
+            String pathAgentId,
+            String clientRequestId) {
+        Objects.requireNonNull(verifier, "server authority must not be null");
+        CanonicalCommandEnvelope.CommandBinding verified =
+                verifier.requireVerified(envelope, decision);
+        if (runtimeAccessAgentIdentity == null) {
+            throw rejected("TERMINATION_AUTHORIZATION_BINDING_CONFLICT");
+        }
+        RuntimeAccessAgentIdentity current = runtimeAccessAgentIdentity(
+                owned, suppliedUpstreamUserId, pathAgentId,
+                clientRequestId);
+        if (!verified.equals(runtimeAccessAgentBinding(
+                runtimeAccessAgentIdentity))
+                || !runtimeAccessAgentIdentity.equals(current)) {
+            throw rejected("TERMINATION_AUTHORIZATION_BINDING_CONFLICT");
+        }
+    }
+
+    String authorizationBindingClaim() {
+        return authorizationBindingClaim(envelope.binding());
     }
 
     CanonicalCommandEnvelope safeEnvelope() {
@@ -1405,6 +1699,145 @@ final class RuntimeTerminationCommandAuthorization {
                 effect);
     }
 
+    private static RuntimeAccessAgentIdentity runtimeAccessAgentIdentity(
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            String suppliedUpstreamUserId,
+            String pathAgentId,
+            String clientRequestId) {
+        Objects.requireNonNull(owned, "owned runtime task must not be null");
+        String suppliedUpstream = requireText(
+                suppliedUpstreamUserId, "upstream user ID").trim();
+        String resolvedUpstream = requireText(
+                owned.upstreamUserId(), "resolved upstream user ID").trim();
+        if (!suppliedUpstream.equals(resolvedUpstream)) {
+            throw rejected("TERMINATION_AUTHORIZATION_UPSTREAM_CONFLICT");
+        }
+        String requestedAgentId = requireText(
+                pathAgentId, "path Agent ID").trim();
+        String logicalAgentId = requireText(
+                owned.logicalAgentId(), "logical Agent ID").trim();
+        if (!requestedAgentId.equals(logicalAgentId)) {
+            throw rejected("TERMINATION_AUTHORIZATION_AGENT_CONFLICT");
+        }
+        return new RuntimeAccessAgentIdentity(
+                requireExactReference(clientRequestId, "client request ID"),
+                requireText(owned.taskId(), "task ID"),
+                optionalText(owned.sessionId()),
+                optionalText(owned.providerTaskId()),
+                logicalAgentId,
+                requireText(owned.ownerUserId(), "owner user ID"),
+                requireText(owned.tenantId(), "tenant ID"),
+                requireText(owned.clientAppId(), "ClientApp ID"),
+                requireText(owned.credentialId(), "credential ID"),
+                resolvedUpstream,
+                optionalText(owned.providerType()),
+                optionalText(owned.physicalWorkerId()),
+                optionalText(owned.modelConfigId()));
+    }
+
+    private static CanonicalCommandEnvelope.CommandBinding
+    runtimeAccessAgentBinding(RuntimeAccessAgentIdentity identity) {
+        String tenantReference = TENANT_PREFIX + identity.tenantId();
+        requireReferenceLength(tenantReference, "tenant reference");
+        String upstreamReference = digest(
+                AGENT_UPSTREAM_DOMAIN,
+                identity.tenantId(),
+                identity.clientAppId(),
+                identity.upstreamUserId());
+        CanonicalCommandEnvelope.Target target =
+                new CanonicalCommandEnvelope.Target(
+                        CanonicalCommandEnvelope.TargetKind.TASK,
+                        identity.taskId(),
+                        identity.logicalAgentId(),
+                        identity.providerType(),
+                        identity.physicalWorkerId(),
+                        identity.modelConfigId(),
+                        identity.taskId(),
+                        identity.sessionId());
+        CanonicalCommandEnvelope.Effect effect =
+                new CanonicalCommandEnvelope.Effect(
+                        ACTION_ID,
+                        AGENT_EFFECT_PREFIX + digest(
+                                AGENT_EFFECT_DOMAIN,
+                                identity.tenantId(),
+                                identity.ownerUserId(),
+                                identity.clientAppId(),
+                                upstreamReference,
+                                identity.taskId(),
+                                identity.sessionId(),
+                                identity.providerTaskId(),
+                                identity.logicalAgentId(),
+                                identity.providerType(),
+                                identity.physicalWorkerId(),
+                                identity.modelConfigId()));
+        return new CanonicalCommandEnvelope.CommandBinding(
+                CanonicalCommandEnvelope.CommandKind.TERMINATE,
+                new CanonicalCommandEnvelope.Ingress(
+                        CanonicalCommandEnvelope.CommandIngress.OPENAPI,
+                        AGENT_CLIENT_SURFACE,
+                        AGENT_ROUTE_ID),
+                new CanonicalCommandEnvelope.Request(
+                        identity.clientRequestId(),
+                        identity.clientRequestId(),
+                        identity.clientRequestId()),
+                new CanonicalCommandEnvelope.Actor(
+                        CanonicalCommandEnvelope.ActorKind.AUTHENTICATED_PRINCIPAL,
+                        AuthorizationPrincipalType.CLIENT_APP,
+                        AuthorizationCredentialLane.CLIENT_APP_RUNTIME_ACCESS,
+                        digest(
+                                AGENT_ACTOR_DOMAIN,
+                                identity.tenantId(),
+                                identity.clientAppId(),
+                                identity.credentialId()),
+                        null),
+                new CanonicalCommandEnvelope.Ownership(
+                        tenantReference,
+                        identity.ownerUserId(),
+                        identity.clientAppId(),
+                        upstreamReference),
+                target,
+                effect);
+    }
+
+    private static String authorizationBindingClaim(
+            CanonicalCommandEnvelope.CommandBinding binding) {
+        CanonicalCommandEnvelope.Ingress ingress = binding.ingress();
+        CanonicalCommandEnvelope.Request request = binding.request();
+        CanonicalCommandEnvelope.Actor actor = binding.actor();
+        CanonicalCommandEnvelope.Ownership ownership = binding.ownership();
+        CanonicalCommandEnvelope.Target target = binding.target();
+        CanonicalCommandEnvelope.Effect effect = binding.effect();
+        return digest(
+                AUTHORIZATION_BINDING_CLAIM_DOMAIN,
+                binding.commandKind().name(),
+                ingress.ingress().name(),
+                ingress.clientSurface(),
+                ingress.routeId(),
+                request.clientRequestId(),
+                request.idempotencyKey(),
+                request.correlationId(),
+                actor.kind().name(),
+                actor.principalType() != null
+                        ? actor.principalType().name() : null,
+                actor.lane() != null ? actor.lane().name() : null,
+                actor.fingerprint(),
+                actor.serverProcessAuthorityReference(),
+                ownership.tenantReference(),
+                ownership.ownerReference(),
+                ownership.clientAppReference(),
+                ownership.upstreamReference(),
+                target.kind().name(),
+                target.targetId(),
+                target.logicalAgentId(),
+                target.providerType(),
+                target.physicalWorkerId(),
+                target.modelConfigId(),
+                target.taskId(),
+                target.sessionId(),
+                effect.actionId(),
+                effect.effectScopeReference());
+    }
+
     private static String digest(String domain, @Nullable String... fields) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -1479,6 +1912,22 @@ final class RuntimeTerminationCommandAuthorization {
             @Nullable String sessionId,
             @Nullable String providerTaskId,
             @Nullable String logicalAgentId,
+            String ownerUserId,
+            String tenantId,
+            String clientAppId,
+            String credentialId,
+            String upstreamUserId,
+            @Nullable String providerType,
+            @Nullable String physicalWorkerId,
+            @Nullable String modelConfigId) {
+    }
+
+    private record RuntimeAccessAgentIdentity(
+            String clientRequestId,
+            String taskId,
+            @Nullable String sessionId,
+            @Nullable String providerTaskId,
+            String logicalAgentId,
             String ownerUserId,
             String tenantId,
             String clientAppId,

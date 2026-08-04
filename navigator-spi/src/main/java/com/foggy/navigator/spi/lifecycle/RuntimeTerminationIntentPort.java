@@ -35,7 +35,35 @@ public interface RuntimeTerminationIntentPort {
             String bindingDigestVersion,
             String bindingDigest,
             String ownerUserId,
-            String tenantId) {
+            String tenantId,
+            String authorizationBindingClaim) {
+        public static final String LEGACY_AUTHORIZATION_BINDING_CLAIM =
+                "TERMINATION_PROVIDER_CALL";
+
+        public RuntimeTerminationIntent(
+                String clientRequestId,
+                String taskId,
+                String sessionId,
+                String providerType,
+                String physicalWorkerId,
+                String providerTaskId,
+                String dispatchId,
+                String operationId,
+                String ownershipMode,
+                String stateGeneration,
+                String instanceEpoch,
+                String bindingDigestVersion,
+                String bindingDigest,
+                String ownerUserId,
+                String tenantId) {
+            this(clientRequestId, taskId, sessionId, providerType,
+                    physicalWorkerId, providerTaskId, dispatchId,
+                    operationId, ownershipMode, stateGeneration,
+                    instanceEpoch, bindingDigestVersion, bindingDigest,
+                    ownerUserId, tenantId,
+                    LEGACY_AUTHORIZATION_BINDING_CLAIM);
+        }
+
         public RuntimeTerminationIntent(
                 String clientRequestId,
                 String taskId,
@@ -54,7 +82,7 @@ public interface RuntimeTerminationIntentPort {
                     physicalWorkerId, providerTaskId, dispatchId,
                     operationId, ownershipMode, stateGeneration,
                     instanceEpoch, bindingDigestVersion, bindingDigest,
-                    null, null);
+                    null, null, LEGACY_AUTHORIZATION_BINDING_CLAIM);
         }
 
         public RuntimeTerminationIntent(
@@ -69,7 +97,8 @@ public interface RuntimeTerminationIntentPort {
             this(clientRequestId, taskId, sessionId, providerType,
                     physicalWorkerId, providerTaskId, operationId,
                     operationId, "ENFORCED", null, null,
-                    "JCS_SHA256_V1", bindingDigest, null, null);
+                    "JCS_SHA256_V1", bindingDigest, null, null,
+                    LEGACY_AUTHORIZATION_BINDING_CLAIM);
         }
     }
 
@@ -88,7 +117,32 @@ public interface RuntimeTerminationIntentPort {
             String bindingDigest,
             String effectState,
             String ownerUserId,
-            String tenantId) {
+            String tenantId,
+            String authorizationBindingClaim) {
+        public RuntimeTerminationDelivery(
+                String effectId,
+                String clientRequestId,
+                String taskId,
+                String providerType,
+                String physicalWorkerId,
+                String providerTaskId,
+                String operationId,
+                String ownershipMode,
+                String stateGeneration,
+                String instanceEpoch,
+                String bindingDigestVersion,
+                String bindingDigest,
+                String effectState,
+                String ownerUserId,
+                String tenantId) {
+            this(effectId, clientRequestId, taskId, providerType,
+                    physicalWorkerId, providerTaskId, operationId,
+                    ownershipMode, stateGeneration, instanceEpoch,
+                    bindingDigestVersion, bindingDigest, effectState,
+                    ownerUserId, tenantId,
+                    RuntimeTerminationIntent.LEGACY_AUTHORIZATION_BINDING_CLAIM);
+        }
+
         public RuntimeTerminationDelivery(
                 String effectId,
                 String clientRequestId,
@@ -107,7 +161,8 @@ public interface RuntimeTerminationIntentPort {
                     physicalWorkerId, providerTaskId, operationId,
                     ownershipMode, stateGeneration, instanceEpoch,
                     bindingDigestVersion, bindingDigest, effectState,
-                    null, null);
+                    null, null,
+                    RuntimeTerminationIntent.LEGACY_AUTHORIZATION_BINDING_CLAIM);
         }
     }
 

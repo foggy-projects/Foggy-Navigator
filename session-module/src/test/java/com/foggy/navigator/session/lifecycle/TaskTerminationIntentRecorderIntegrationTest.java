@@ -29,6 +29,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TaskTerminationIntentRecorderIntegrationTest {
     private static final LocalDateTime AUTHORITY_NOW =
             LocalDateTime.of(2000, 1, 1, 0, 0);
+    private static final String AUTHORIZATION_CLAIM_A = "a".repeat(64);
+    private static final String AUTHORIZATION_CLAIM_B = "b".repeat(64);
 
     static class AuthorityClockConfig {
         @Bean
@@ -98,6 +100,9 @@ class TaskTerminationIntentRecorderIntegrationTest {
         assertThat(prepared.effectState()).isEqualTo("PREPARED");
         assertThat(prepared.ownerUserId()).isEqualTo("owner-delivery");
         assertThat(prepared.tenantId()).isEqualTo("tenant-delivery");
+        assertThat(prepared.authorizationBindingClaim()).isEqualTo(
+                RuntimeTerminationIntentPort.RuntimeTerminationIntent
+                        .LEGACY_AUTHORIZATION_BINDING_CLAIM);
 
         var first = transaction(() ->
                 recorder.authorizeEffect("request-recovery"));
@@ -116,6 +121,40 @@ class TaskTerminationIntentRecorderIntegrationTest {
         assertThat(responseLossRedelivery.resultObserved()).isTrue();
         assertThat(outbox.findById(first.delivery().effectId()).orElseThrow()
                 .getEffectState()).isEqualTo("RESULT_OBSERVED");
+    }
+
+    @Test
+    void authorizationBindingClaimPersistsAndRejectsSameRequestDrift() {
+        RuntimeTerminationIntentPort.RuntimeTerminationDelivery prepared =
+                transaction(() -> recorder.recordIntent(
+                        intent("request-claim", AUTHORIZATION_CLAIM_A)));
+        RuntimeTerminationIntentPort.RuntimeTerminationDelivery replay =
+                transaction(() -> recorder.recordIntent(
+                        intent("request-claim", AUTHORIZATION_CLAIM_A)));
+
+        assertThat(prepared.authorizationBindingClaim())
+                .isEqualTo(AUTHORIZATION_CLAIM_A);
+        assertThat(replay.effectId()).isEqualTo(prepared.effectId());
+        assertThat(outbox.findById(prepared.effectId()).orElseThrow()
+                .getEffectClaim()).isEqualTo(AUTHORIZATION_CLAIM_A);
+
+        assertThatThrownBy(() -> transaction(() -> recorder.recordIntent(
+                intent("request-claim", AUTHORIZATION_CLAIM_B))))
+                .hasMessage("TERMINATION_DELIVERY_BINDING_MISMATCH");
+        var unchanged = outbox.findById(prepared.effectId()).orElseThrow();
+        assertThat(unchanged.getEffectState()).isEqualTo("PREPARED");
+        assertThat(unchanged.getEffectClaim())
+                .isEqualTo(AUTHORIZATION_CLAIM_A);
+    }
+
+    @Test
+    void invalidAuthorizationBindingClaimRollsBackWithoutOutbox() {
+        assertThatThrownBy(() -> transaction(() -> recorder.recordIntent(
+                intent("request-invalid-claim", "NOT_A_CLAIM"))))
+                .hasMessage(
+                        "TERMINATION_AUTHORIZATION_BINDING_CLAIM_INVALID");
+
+        assertThat(outbox.findAll()).isEmpty();
     }
 
     @Test
@@ -199,6 +238,11 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 .isEqualTo("exact-node-binding");
         assertThat(command.getDispatchId())
                 .isEqualTo("termination-dispatch");
+        assertThat(parent.getEffectClaim()).isEqualTo(
+                RuntimeTerminationIntentPort.RuntimeTerminationIntent
+                        .LEGACY_AUTHORIZATION_BINDING_CLAIM);
+        assertThat(command.getEffectClaim())
+                .isEqualTo("CODEX_WORKER_TERMINATION_CALL");
     }
 
     @Test
@@ -473,6 +517,28 @@ class TaskTerminationIntentRecorderIntegrationTest {
                 "binding-delivery",
                 "owner-delivery",
                 "tenant-delivery");
+    }
+
+    private RuntimeTerminationIntentPort.RuntimeTerminationIntent intent(
+            String requestId,
+            String authorizationBindingClaim) {
+        return new RuntimeTerminationIntentPort.RuntimeTerminationIntent(
+                requestId,
+                "task-delivery",
+                "session-delivery",
+                "codex-biz-worker",
+                "worker-delivery",
+                "provider-task-delivery",
+                "operation-delivery",
+                "operation-delivery",
+                "ENFORCED",
+                "generation-delivery",
+                "epoch-delivery",
+                "JCS_SHA256_V1",
+                "binding-delivery",
+                "owner-delivery",
+                "tenant-delivery",
+                authorizationBindingClaim);
     }
 
     private <T> T transaction(Supplier<T> work) {

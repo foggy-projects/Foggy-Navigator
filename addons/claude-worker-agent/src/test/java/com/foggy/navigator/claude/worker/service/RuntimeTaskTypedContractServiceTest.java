@@ -34,9 +34,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -157,6 +159,256 @@ class RuntimeTaskTypedContractServiceTest {
                         authority, drifted, "user-a", REQUEST_ID));
         assertEquals("TERMINATION_AUTHORIZATION_BINDING_CONFLICT",
                 drift.getMessage());
+    }
+
+    @Test
+    void runtimeAccessAgentAuthorizationIsDistinctStableAndExact()
+            throws Exception {
+        var authority = new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                "runtime-termination-test-v1",
+                Clock.systemUTC(), Duration.ofMinutes(5));
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                ownedTask("RUNNING", false);
+        RuntimeTerminationCommandAuthorization typed =
+                RuntimeTerminationCommandAuthorization.issue(
+                        authority, owned, "user-a", REQUEST_ID);
+        RuntimeTerminationCommandAuthorization agent =
+                RuntimeTerminationCommandAuthorization.issueRuntimeAccessAgent(
+                        authority, owned, "user-a", "agent-a", REQUEST_ID);
+        RuntimeTerminationCommandAuthorization reissued =
+                RuntimeTerminationCommandAuthorization.issueRuntimeAccessAgent(
+                        authority, owned, "user-a", "agent-a", REQUEST_ID);
+
+        CanonicalCommandEnvelope.CommandBinding binding =
+                agent.safeEnvelope().binding();
+        assertEquals(CanonicalCommandEnvelope.CommandIngress.OPENAPI,
+                binding.ingress().ingress());
+        assertEquals("NAVIGATOR_OPEN_API",
+                binding.ingress().clientSurface());
+        assertEquals(
+                "/api/v1/open/agents/{agentId}/tasks/{taskId}/cancel",
+                binding.ingress().routeId());
+        assertEquals(AuthorizationCredentialLane.CLIENT_APP_RUNTIME_ACCESS,
+                binding.actor().lane());
+        assertEquals("agent-a", binding.target().logicalAgentId());
+        assertTrue(agent.authorizationBindingClaim().matches("[0-9a-f]{64}"));
+        assertEquals(agent.authorizationBindingClaim(),
+                reissued.authorizationBindingClaim());
+        assertFalse(agent.authorizationBindingClaim().equals(
+                typed.authorizationBindingClaim()));
+
+        String serialized = new ObjectMapper()
+                .findAndRegisterModules()
+                .writeValueAsString(agent.safeEnvelope());
+        assertFalse(serialized.contains("credential-a"));
+        assertFalse(serialized.contains("user-a"));
+        assertEquals("RuntimeTerminationCommandAuthorization[content-free]",
+                agent.toString());
+        agent.requireRuntimeAccessAgent(
+                authority, owned, "user-a", "agent-a", REQUEST_ID);
+
+        SecurityException drift = assertThrows(SecurityException.class,
+                () -> agent.requireRuntimeAccessAgent(
+                        authority, owned, "user-a", "agent-other",
+                        REQUEST_ID));
+        assertEquals("TERMINATION_AUTHORIZATION_AGENT_CONFLICT",
+                drift.getMessage());
+    }
+
+    @Test
+    void runtimeAccessAgentCancellationPersistsBeforeDispatchAndRevalidates() {
+        RuntimeTerminationAcceptanceCoordinator coordinator =
+                mock(RuntimeTerminationAcceptanceCoordinator.class);
+        RuntimeTerminationOutboxDispatcher dispatcher =
+                mock(RuntimeTerminationOutboxDispatcher.class);
+        var authority = new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                "runtime-termination-test-v1",
+                Clock.systemUTC(), Duration.ofMinutes(5));
+        RuntimeTaskClosureService agentService = new RuntimeTaskClosureService(
+                stateAuditService, List.of(provider), requestAuditService,
+                coordinator, dispatcher, authority);
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                ownedTask("RUNNING", false);
+        when(stateAuditService.requireOwnedAgentTaskByAccessToken(
+                "key", "access", "user-a", "agent-a", "task-a"))
+                .thenReturn(owned);
+        when(dispatcher.recoveryCapable()).thenReturn(true);
+        when(dispatcher.dispatch(
+                REQUEST_ID, "openapi-agent-cancel"))
+                .thenReturn(new RuntimeTaskClosureProvider.TerminationResult(
+                        false, true, false, false,
+                        "CANCEL_REQUESTED", "operation", null));
+
+        RuntimeTaskClosureService.AgentTerminationResult result =
+                agentService.terminateAgentTaskWithRuntimeAccess(
+                        "key", "access", "user-a", REQUEST_ID,
+                        "agent-a", "task-a");
+
+        assertEquals("CANCEL_REQUESTED", result.taskStatus());
+        assertFalse(result.canonicalTerminal());
+        assertFalse(result.idempotentReplay());
+        assertFalse(result.reconcileRequired());
+        var order = inOrder(
+                stateAuditService, provider, coordinator, dispatcher);
+        order.verify(stateAuditService)
+                .requireOwnedAgentTaskByAccessToken(
+                        "key", "access", "user-a", "agent-a", "task-a");
+        order.verify(provider).inspect("task-a", "worker-a");
+        order.verify(coordinator).acceptAgent(
+                eq(REQUEST_ID), eq("key"), eq("access"), eq("user-a"),
+                eq("agent-a"), eq("openapi-agent-cancel"), eq(provider),
+                eq(owned), any(RuntimeTerminationCommandAuthorization.class));
+        order.verify(stateAuditService)
+                .requireOwnedAgentTaskByAccessToken(
+                        "key", "access", "user-a", "agent-a", "task-a");
+        order.verify(dispatcher).dispatch(
+                REQUEST_ID, "openapi-agent-cancel");
+        order.verify(stateAuditService)
+                .requireOwnedAgentTaskByAccessToken(
+                        "key", "access", "user-a", "agent-a", "task-a");
+    }
+
+    @Test
+    void runtimeAccessAgentCancellationUsesOnlyCanonicalTerminalTruth() {
+        RuntimeTerminationAcceptanceCoordinator coordinator =
+                mock(RuntimeTerminationAcceptanceCoordinator.class);
+        RuntimeTerminationOutboxDispatcher dispatcher =
+                mock(RuntimeTerminationOutboxDispatcher.class);
+        RuntimeTaskClosureService agentService = new RuntimeTaskClosureService(
+                stateAuditService, List.of(provider), requestAuditService,
+                coordinator, dispatcher,
+                new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                        "runtime-termination-test-v1",
+                        Clock.systemUTC(), Duration.ofMinutes(5)));
+        when(stateAuditService.requireOwnedAgentTaskByAccessToken(
+                "key", "access", "user-a", "agent-a", "task-a"))
+                .thenReturn(ownedTask("ABORTED", true));
+
+        RuntimeTaskClosureService.AgentTerminationResult terminal =
+                agentService.terminateAgentTaskWithRuntimeAccess(
+                        "key", "access", "user-a", REQUEST_ID,
+                        "agent-a", "task-a");
+
+        assertEquals("ABORTED", terminal.taskStatus());
+        assertTrue(terminal.canonicalTerminal());
+        assertFalse(terminal.idempotentReplay());
+        verifyNoInteractions(coordinator, dispatcher);
+        verify(provider, never()).inspect(any(), any());
+
+        when(stateAuditService.requireOwnedAgentTaskByAccessToken(
+                "key", "access", "user-a", "agent-a", "task-unknown"))
+                .thenReturn(new RuntimeStateAuditService.OwnedRuntimeTask(
+                        "task-unknown", "session-a", "provider-task-a",
+                        "owner-a", "tenant-a", "OPENAI_CODEX", "worker-a",
+                        "MYSTERY", true, 1,
+                        "agent-a", "model-a", "app-a", "credential-a", "user-a"));
+        IllegalStateException unknown = assertThrows(
+                IllegalStateException.class,
+                () -> agentService.terminateAgentTaskWithRuntimeAccess(
+                        "key", "access", "user-a", REQUEST_ID,
+                        "agent-a", "task-unknown"));
+        assertEquals("RUNTIME_AGENT_TERMINAL_STATUS_UNSUPPORTED",
+                unknown.getMessage());
+    }
+
+    @Test
+    void runtimeAccessAgentCancellationSanitizesObservationFailure() {
+        RuntimeTerminationAcceptanceCoordinator coordinator =
+                mock(RuntimeTerminationAcceptanceCoordinator.class);
+        RuntimeTerminationOutboxDispatcher dispatcher =
+                mock(RuntimeTerminationOutboxDispatcher.class);
+        RuntimeTaskClosureService agentService = new RuntimeTaskClosureService(
+                stateAuditService, List.of(provider), requestAuditService,
+                coordinator, dispatcher,
+                new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                        "runtime-termination-test-v1",
+                        Clock.systemUTC(), Duration.ofMinutes(5)));
+        when(stateAuditService.requireOwnedAgentTaskByAccessToken(
+                "key", "access", "user-a", "agent-a", "task-a"))
+                .thenReturn(ownedTask("RUNNING", false));
+        when(provider.inspect("task-a", "worker-a"))
+                .thenThrow(new IllegalStateException("secret-provider-detail"));
+
+        IllegalStateException rejected = assertThrows(
+                IllegalStateException.class,
+                () -> agentService.terminateAgentTaskWithRuntimeAccess(
+                        "key", "access", "user-a", REQUEST_ID,
+                        "agent-a", "task-a"));
+
+        assertEquals("RUNTIME_AGENT_TERMINATION_OBSERVATION_UNAVAILABLE",
+                rejected.getMessage());
+        verifyNoInteractions(coordinator, dispatcher);
+    }
+
+    @Test
+    void runtimeAccessRevocationAfterDurableAcceptanceReturnsReconcileWithoutEffect() {
+        RuntimeTerminationAcceptanceCoordinator coordinator =
+                mock(RuntimeTerminationAcceptanceCoordinator.class);
+        RuntimeTerminationOutboxDispatcher dispatcher =
+                mock(RuntimeTerminationOutboxDispatcher.class);
+        RuntimeTaskClosureService agentService = new RuntimeTaskClosureService(
+                stateAuditService, List.of(provider), requestAuditService,
+                coordinator, dispatcher,
+                new VerifiedCommandAuthorizationDecision.ServerAuthority(
+                        "runtime-termination-test-v1",
+                        Clock.systemUTC(), Duration.ofMinutes(5)));
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                ownedTask("RUNNING", false);
+        when(stateAuditService.requireOwnedAgentTaskByAccessToken(
+                "key", "access", "user-a", "agent-a", "task-a"))
+                .thenReturn(owned)
+                .thenThrow(new SecurityException(
+                        "RUNTIME_ACCESS_TOKEN_INVALID"));
+        when(dispatcher.recoveryCapable()).thenReturn(true);
+
+        RuntimeTaskClosureService.AgentTerminationResult result =
+                agentService.terminateAgentTaskWithRuntimeAccess(
+                        "key", "access", "user-a", REQUEST_ID,
+                        "agent-a", "task-a");
+
+        assertEquals("CANCEL_REQUESTED", result.taskStatus());
+        assertFalse(result.canonicalTerminal());
+        assertFalse(result.idempotentReplay());
+        assertTrue(result.reconcileRequired());
+        verify(coordinator).acceptAgent(
+                eq(REQUEST_ID), eq("key"), eq("access"), eq("user-a"),
+                eq("agent-a"), eq("openapi-agent-cancel"), eq(provider),
+                eq(owned), any(RuntimeTerminationCommandAuthorization.class));
+        verify(dispatcher, never()).dispatch(any(), any());
+    }
+
+    @Test
+    void agentTerminationRequestIdAndResultValidationAreConservative() {
+        String minted = RuntimeTaskClosureService
+                .canonicalAgentTerminationClientRequestId("  ");
+        assertEquals(minted, java.util.UUID.fromString(minted).toString());
+        IllegalArgumentException nonCanonical = assertThrows(
+                IllegalArgumentException.class,
+                () -> RuntimeTaskClosureService
+                        .canonicalAgentTerminationClientRequestId(
+                                REQUEST_ID.toUpperCase()));
+        assertEquals("AGENT_CANCEL_CLIENT_REQUEST_ID_INVALID",
+                nonCanonical.getMessage());
+        IllegalArgumentException invalid = assertThrows(
+                IllegalArgumentException.class,
+                () -> RuntimeTaskClosureService
+                        .canonicalAgentTerminationClientRequestId("not-a-uuid"));
+        assertEquals("AGENT_CANCEL_CLIENT_REQUEST_ID_INVALID",
+                invalid.getMessage());
+
+        IllegalArgumentException resultInvalid = assertThrows(
+                IllegalArgumentException.class,
+                () -> new RuntimeTaskClosureService.AgentTerminationResult(
+                        "bad", "task-a", "agent-a", false, true, null));
+        assertEquals("AGENT_CANCEL_CLIENT_REQUEST_ID_INVALID",
+                resultInvalid.getMessage());
+        RuntimeTaskClosureService.AgentTerminationResult accepted =
+                RuntimeTaskClosureService.AgentTerminationResult.accepted(
+                        REQUEST_ID, "task-a", "agent-a", false, true);
+        assertEquals("CANCEL_REQUESTED", accepted.taskStatus());
+        assertFalse(accepted.canonicalTerminal());
+        assertFalse(accepted.idempotentReplay());
+        assertTrue(accepted.reconcileRequired());
     }
 
     @Test

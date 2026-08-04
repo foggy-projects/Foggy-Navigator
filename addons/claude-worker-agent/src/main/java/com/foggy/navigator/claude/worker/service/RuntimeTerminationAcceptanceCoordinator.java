@@ -16,6 +16,23 @@ public class RuntimeTerminationAcceptanceCoordinator {
     private final List<RuntimeTerminationIntentPort> intentPorts;
     private final TransactionTemplate transactions;
     private final VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority;
+    private final RuntimeStateAuditService stateAuditService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RuntimeTerminationAcceptanceCoordinator(
+            RuntimeRequestAuditService audits,
+            List<RuntimeTerminationIntentPort> intentPorts,
+            PlatformTransactionManager transactionManager,
+            VerifiedCommandAuthorizationDecision.ServerAuthority serverAuthority,
+            RuntimeStateAuditService stateAuditService) {
+        this.audits = audits;
+        this.intentPorts = List.copyOf(intentPorts);
+        this.transactions = new TransactionTemplate(transactionManager);
+        this.serverAuthority = java.util.Objects.requireNonNull(
+                serverAuthority, "serverAuthority must not be null");
+        this.stateAuditService = java.util.Objects.requireNonNull(
+                stateAuditService, "stateAuditService must not be null");
+    }
 
     public RuntimeTerminationAcceptanceCoordinator(
             RuntimeRequestAuditService audits,
@@ -27,6 +44,7 @@ public class RuntimeTerminationAcceptanceCoordinator {
         this.transactions = new TransactionTemplate(transactionManager);
         this.serverAuthority = java.util.Objects.requireNonNull(
                 serverAuthority, "serverAuthority must not be null");
+        this.stateAuditService = null;
     }
 
     public RuntimeRequestAuditService.TaskOperationRegistration accept(
@@ -78,9 +96,65 @@ public class RuntimeTerminationAcceptanceCoordinator {
                         admission.bindingDigestVersion(),
                         admission.bindingDigest(),
                         owned.ownerUserId(),
-                        owned.tenantId()));
+                        owned.tenantId(),
+                        RuntimeTerminationIntentPort.RuntimeTerminationIntent
+                                .LEGACY_AUTHORIZATION_BINDING_CLAIM));
             }
             return registration;
+        });
+    }
+
+    /**
+     * Accepts the access-token Agent compatibility ingress into the existing
+     * lifecycle termination outbox. The outbox is the durable idempotency and
+     * effect authority for this ingress; no synthetic ClientApp secret audit
+     * receipt is created.
+     */
+    public RuntimeTerminationIntentPort.RuntimeTerminationDelivery acceptAgent(
+            String clientRequestId,
+            String appKey,
+            String accessToken,
+            String upstreamUserId,
+            String pathAgentId,
+            String reason,
+            RuntimeTaskClosureProvider provider,
+            RuntimeStateAuditService.OwnedRuntimeTask owned,
+            RuntimeTerminationCommandAuthorization commandAuthorization) {
+        return transactions.execute(status -> {
+            RuntimeStateAuditService.OwnedRuntimeTask current =
+                    requiredStateAuditService()
+                            .requireOwnedAgentTaskByAccessToken(
+                                    appKey, accessToken, upstreamUserId,
+                                    pathAgentId, owned.taskId());
+            commandAuthorization.requireRuntimeAccessAgent(
+                    serverAuthority, current, upstreamUserId,
+                    pathAgentId, clientRequestId);
+            RuntimeTaskClosureProvider.TerminationAdmission admission =
+                    provider.prepareTerminationAdmission(
+                            current.taskId(), current.ownerUserId(), current.tenantId(),
+                            current.physicalWorkerId(), reason, clientRequestId);
+            if (admission == null) {
+                throw new IllegalStateException(
+                        "TERMINATION_EXACT_ADMISSION_UNAVAILABLE");
+            }
+            return requiredPort().recordIntent(
+                    new RuntimeTerminationIntentPort.RuntimeTerminationIntent(
+                            clientRequestId,
+                            current.taskId(),
+                            current.sessionId(),
+                            current.providerType(),
+                            current.physicalWorkerId(),
+                            current.providerTaskId(),
+                            admission.dispatchId(),
+                            admission.operationId(),
+                            admission.ownershipMode(),
+                            admission.stateGeneration(),
+                            admission.instanceEpoch(),
+                            admission.bindingDigestVersion(),
+                            admission.bindingDigest(),
+                            current.ownerUserId(),
+                            current.tenantId(),
+                            commandAuthorization.authorizationBindingClaim()));
         });
     }
 
@@ -109,6 +183,14 @@ public class RuntimeTerminationAcceptanceCoordinator {
                     "TERMINATION_DELIVERY_PORT_CARDINALITY_INVALID");
         }
         return intentPorts.get(0);
+    }
+
+    private RuntimeStateAuditService requiredStateAuditService() {
+        if (stateAuditService == null) {
+            throw new IllegalStateException(
+                    "RUNTIME_AGENT_TERMINATION_AUTHORITY_UNAVAILABLE");
+        }
+        return stateAuditService;
     }
 
 }

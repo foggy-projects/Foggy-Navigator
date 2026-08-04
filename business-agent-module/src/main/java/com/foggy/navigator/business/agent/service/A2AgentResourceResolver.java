@@ -98,20 +98,45 @@ public class A2AgentResourceResolver {
             String source) {
     }
 
+    /**
+     * Canonical Agent identity after tenant, ClientApp, owner and enabled-state
+     * visibility checks. This projection deliberately contains no current
+     * Worker or pool route and is suitable for authorizing operations against
+     * an already-created Task whose route is a durable Task fact.
+     */
+    public record ResolvedVisibleAgent(
+            String agentId,
+            ResourceOwnerType ownerType,
+            String ownerId,
+            String clientAppId,
+            String source) {
+    }
+
+    @ReadinessTransactional(readOnly = true)
+    public ResolvedVisibleAgent resolveRequiredVisibleAgent(String tenantId,
+                                                            String clientAppId,
+                                                            String upstreamUserId,
+                                                            String agentId) {
+        VisibleAgentContext visible = requireVisibleAgent(
+                tenantId, clientAppId, upstreamUserId, agentId);
+        CodingAgentEntity agent = visible.agent();
+        return new ResolvedVisibleAgent(
+                agent.getAgentId(),
+                agent.getOwnerType(),
+                agent.getOwnerId(),
+                agent.getClientAppId(),
+                "AGENT:" + agent.getOwnerType());
+    }
+
     @ReadinessTransactional(readOnly = true)
     public ResolvedAgentResource resolveRequiredAgent(String tenantId,
                                                      String clientAppId,
                                                      String upstreamUserId,
                                                      String agentId) {
-        requireText(tenantId, "tenantId is required");
-        requireText(clientAppId, "clientAppId is required");
-        requireText(upstreamUserId, "upstreamUserId is required");
-        requireText(agentId, "agentId is required");
-
-        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
-        CodingAgentEntity agent = agentRepository.findByAgentIdAndTenantId(agentId.trim(), tenantId)
-                .orElseThrow(() -> new IllegalArgumentException("agent not found: " + agentId));
-        validateAgentVisibility(tenantId, clientApp, agent);
+        VisibleAgentContext visible = requireVisibleAgent(
+                tenantId, clientAppId, upstreamUserId, agentId);
+        ClientAppEntity clientApp = visible.clientApp();
+        CodingAgentEntity agent = visible.agent();
 
         String skillId = resolveAgentSkillId(agent);
         String workerRef = trimToNull(agent.getWorkerId());
@@ -159,6 +184,25 @@ public class A2AgentResourceResolver {
                 resolved.defaultModelName(),
                 resolved.defaultDirectoryId());
         return resolved;
+    }
+
+    private VisibleAgentContext requireVisibleAgent(String tenantId,
+                                                     String clientAppId,
+                                                     String upstreamUserId,
+                                                     String agentId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(agentId, "agentId is required");
+
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
+        CodingAgentEntity agent = agentRepository.findByAgentIdAndTenantId(agentId.trim(), tenantId)
+                .orElseThrow(() -> new IllegalArgumentException("agent not found: " + agentId));
+        validateAgentVisibility(tenantId, clientApp, agent);
+        return new VisibleAgentContext(clientApp, agent);
+    }
+
+    private record VisibleAgentContext(ClientAppEntity clientApp, CodingAgentEntity agent) {
     }
 
     @ReadinessTransactional(readOnly = true)

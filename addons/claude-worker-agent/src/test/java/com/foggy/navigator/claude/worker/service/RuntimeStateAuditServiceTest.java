@@ -522,6 +522,265 @@ class RuntimeStateAuditServiceTest {
     }
 
     @Test
+    void accessTokenAgentOwnershipUsesFreshAuthorityAndDurableTaskIdentity() {
+        SessionTaskEntity task = task(
+                LocalDateTime.of(2026, 8, 4, 9, 0),
+                LocalDateTime.of(2026, 8, 4, 9, 1));
+        task.setStatus("RUNNING");
+        task.setProviderTaskId("provider-task-a");
+        task.setUserId("owner-a");
+        task.setAgentId("agent-a");
+        task.setProviderType("OPENAI_CODEX");
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenReturn(Optional.of(accessOwner()));
+        when(resourceResolver.resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a"))
+                .thenReturn(visibleAgent("agent-a"));
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing")).thenReturn(Optional.empty());
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token(
+                        "REVOKED", task.getCreatedAt(), task.getUpdatedAt())));
+
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "access-token", "user-a",
+                        "agent-a", "task-existing");
+
+        assertEquals("task-existing", owned.taskId());
+        assertEquals("agent-a", owned.logicalAgentId());
+        assertEquals("owner-a", owned.ownerUserId());
+        assertEquals("tenant-a", owned.tenantId());
+        assertEquals("app-a", owned.clientAppId());
+        assertEquals("credential-a", owned.credentialId());
+        assertEquals("user-a", owned.upstreamUserId());
+        assertEquals("OPENAI_CODEX", owned.providerType());
+        assertEquals("worker-observed", owned.physicalWorkerId());
+        verify(credentialResolver).resolveAccessToken(
+                "runtime-key", "access-token");
+        verify(resourceResolver).resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a");
+        verify(sessionTaskRepository, never()).save(any());
+        verify(taskTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void accessTokenAgentOwnershipUsesCanonicalTombstoneStatus() {
+        SessionTaskEntity task = task(LocalDateTime.now(), LocalDateTime.now());
+        task.setStatus("RUNNING");
+        task.setUserId("owner-a");
+        task.setAgentId("agent-a");
+        task.setProviderType("OPENAI_CODEX");
+        BusinessTaskTerminalStateEntity terminal =
+                new BusinessTaskTerminalStateEntity();
+        terminal.setTerminalStatus("ABORTED");
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenReturn(Optional.of(accessOwner()));
+        when(resourceResolver.resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a"))
+                .thenReturn(visibleAgent("agent-a"));
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing"))
+                .thenReturn(Optional.of(terminal));
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token(
+                        "REVOKED", task.getCreatedAt(), task.getUpdatedAt())));
+
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "access-token", "user-a",
+                        "agent-a", "task-existing");
+
+        assertEquals("ABORTED", owned.status());
+        assertTrue(owned.terminal());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(terminalStateRepository, never()).save(any());
+    }
+
+    @Test
+    void accessTokenAgentOwnershipAcceptsPoolRouteFromDurableTaskToken() {
+        SessionTaskEntity task = task(LocalDateTime.now(), LocalDateTime.now());
+        task.setStatus("RUNNING");
+        task.setUserId("owner-a");
+        task.setAgentId("agent-a");
+        task.setProviderType("OPENAI_CODEX");
+        BusinessTaskScopedTokenEntity token = token(
+                "ACTIVE", task.getCreatedAt(), null);
+        token.setWorkerPoolId("pool-a");
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenReturn(Optional.of(accessOwner()));
+        when(resourceResolver.resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a"))
+                .thenReturn(visibleAgent("agent-a"));
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing")).thenReturn(Optional.empty());
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token));
+
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "access-token", "user-a",
+                        "agent-a", "task-existing");
+
+        assertEquals("worker-observed", owned.physicalWorkerId());
+        assertEquals("agent-a", owned.logicalAgentId());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(taskTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void accessTokenAgentOwnershipUsesDurableRouteWithoutCurrentAgentRouteProjection() {
+        SessionTaskEntity task = task(LocalDateTime.now(), LocalDateTime.now());
+        task.setStatus("RUNNING");
+        task.setUserId("owner-a");
+        task.setAgentId("agent-a");
+        task.setProviderType("OPENAI_CODEX");
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenReturn(Optional.of(accessOwner()));
+        when(resourceResolver.resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a"))
+                .thenReturn(visibleAgent("agent-a"));
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing")).thenReturn(Optional.empty());
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token(
+                        "ACTIVE", task.getCreatedAt(), null)));
+
+        RuntimeStateAuditService.OwnedRuntimeTask owned =
+                service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "access-token", "user-a",
+                        "agent-a", "task-existing");
+
+        assertEquals("OPENAI_CODEX", owned.providerType());
+        assertEquals("worker-observed", owned.physicalWorkerId());
+    }
+
+    @Test
+    void accessTokenAgentOwnershipRejectsInvalidAuthorityAndAgentDrift() {
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "invalid-token"))
+                .thenReturn(Optional.empty());
+        SecurityException invalid = assertThrows(SecurityException.class,
+                () -> service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "invalid-token", "user-a",
+                        "agent-a", "task-existing"));
+        assertEquals("RUNTIME_ACCESS_TOKEN_INVALID", invalid.getMessage());
+
+        SessionTaskEntity task = task(LocalDateTime.now(), LocalDateTime.now());
+        task.setStatus("RUNNING");
+        task.setUserId("owner-a");
+        task.setAgentId("agent-other");
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenReturn(Optional.of(accessOwner()));
+        when(resourceResolver.resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a"))
+                .thenReturn(visibleAgent("agent-a"));
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(Optional.of(task));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing")).thenReturn(Optional.empty());
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token(
+                        "ACTIVE", task.getCreatedAt(), null)));
+
+        SecurityException drift = assertThrows(SecurityException.class,
+                () -> service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "access-token", "user-a",
+                        "agent-a", "task-existing"));
+        assertEquals("RUNTIME_AGENT_TASK_FORBIDDEN", drift.getMessage());
+        verify(sessionTaskRepository, never()).save(any());
+        verify(taskTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void accessTokenAgentOwnershipRejectsTaskProviderAndWorkerDrift() {
+        SessionTaskEntity repositoryDrift =
+                task(LocalDateTime.now(), LocalDateTime.now());
+        repositoryDrift.setTaskId("task-other");
+        SessionTaskEntity missingWorker =
+                task(LocalDateTime.now(), LocalDateTime.now());
+        missingWorker.setStatus("RUNNING");
+        missingWorker.setUserId("owner-a");
+        missingWorker.setAgentId("agent-a");
+        missingWorker.setProviderType("OPENAI_CODEX");
+        missingWorker.setWorkerId(null);
+        SessionTaskEntity unknownProvider =
+                task(LocalDateTime.now(), LocalDateTime.now());
+        unknownProvider.setStatus("RUNNING");
+        unknownProvider.setUserId("owner-a");
+        unknownProvider.setAgentId("agent-a");
+        unknownProvider.setProviderType("UNKNOWN_PROVIDER");
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenReturn(Optional.of(accessOwner()));
+        when(resourceResolver.resolveRequiredVisibleAgent(
+                "tenant-a", "app-a", "user-a", "agent-a"))
+                .thenReturn(visibleAgent("agent-a"));
+        when(sessionTaskRepository.findByTaskId("task-existing"))
+                .thenReturn(
+                        Optional.of(repositoryDrift),
+                        Optional.of(missingWorker),
+                        Optional.of(unknownProvider));
+        when(terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                "tenant-a", "task-existing")).thenReturn(Optional.empty());
+        when(taskTokenRepository
+                .findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+                        "task-existing", "tenant-a", "app-a"))
+                .thenReturn(Optional.of(token(
+                        "ACTIVE", missingWorker.getCreatedAt(), null)));
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            SecurityException rejected = assertThrows(SecurityException.class,
+                    () -> service.requireOwnedAgentTaskByAccessToken(
+                            "runtime-key", "access-token", "user-a",
+                            "agent-a", "task-existing"));
+            assertEquals("RUNTIME_AGENT_TASK_FORBIDDEN",
+                    rejected.getMessage());
+        }
+        verify(sessionTaskRepository, never()).save(any());
+        verify(taskTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void accessTokenAgentOwnershipDoesNotMisreportAuthorityFailure() {
+        when(credentialResolver.resolveAccessToken(
+                "runtime-key", "access-token"))
+                .thenThrow(new RuntimeException("fixture-store-offline"));
+
+        SecurityException unavailable = assertThrows(SecurityException.class,
+                () -> service.requireOwnedAgentTaskByAccessToken(
+                        "runtime-key", "access-token", "user-a",
+                        "agent-a", "task-existing"));
+
+        assertEquals("RUNTIME_ACCESS_AUTHORITY_UNAVAILABLE",
+                unavailable.getMessage());
+        verify(sessionTaskRepository, never()).findByTaskId(any());
+    }
+
+    @Test
     void auditMethodsAreReadOnlyTransactions() throws Exception {
         Method binding = RuntimeStateAuditService.class.getMethod(
                 "auditBinding",
@@ -529,9 +788,14 @@ class RuntimeStateAuditServiceTest {
         Method task = RuntimeStateAuditService.class.getMethod(
                 "auditTask",
                 String.class, String.class, String.class, String.class);
+        Method accessTokenAgent = RuntimeStateAuditService.class.getMethod(
+                "requireOwnedAgentTaskByAccessToken",
+                String.class, String.class, String.class,
+                String.class, String.class);
 
         assertTrue(binding.getAnnotation(Transactional.class).readOnly());
         assertTrue(task.getAnnotation(Transactional.class).readOnly());
+        assertTrue(accessTokenAgent.getAnnotation(Transactional.class).readOnly());
     }
 
     private ResolvedClientAppCredentialDTO owner() {
@@ -540,6 +804,25 @@ class RuntimeStateAuditServiceTest {
                 .clientAppId("app-a")
                 .credentialId("credential-a")
                 .build();
+    }
+
+    private ResolvedClientAppCredentialDTO accessOwner() {
+        return ResolvedClientAppCredentialDTO.builder()
+                .tenantId("tenant-a")
+                .clientAppId("app-a")
+                .credentialId("credential-a")
+                .runtimeAccessTokenId("access-token-id-a")
+                .build();
+    }
+
+    private A2AgentResourceResolver.ResolvedVisibleAgent visibleAgent(
+            String agentId) {
+        return new A2AgentResourceResolver.ResolvedVisibleAgent(
+                agentId,
+                ResourceOwnerType.CLIENT_APP,
+                "app-a",
+                "app-a",
+                "AGENT:CLIENT_APP");
     }
 
     private SessionTaskEntity task(LocalDateTime created, LocalDateTime updated) {

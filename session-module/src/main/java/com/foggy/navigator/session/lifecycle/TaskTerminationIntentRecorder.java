@@ -88,7 +88,7 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         entity.setInstanceEpoch(intent.instanceEpoch());
         entity.setBindingDigestVersion(intent.bindingDigestVersion());
         entity.setBindingDigest(intent.bindingDigest());
-        entity.setEffectClaim("TERMINATION_PROVIDER_CALL");
+        entity.setEffectClaim(intent.authorizationBindingClaim());
         entity.setProofId(fence.proofId());
         entity.setAggregateReferenceId(fence.taskReferenceId());
         entity.setWriterGenerationId(fence.writerGenerationId());
@@ -371,7 +371,8 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 entity.getBindingDigest(),
                 entity.getEffectState(),
                 entity.getOwnerUserId(),
-                entity.getTenantId());
+                entity.getTenantId(),
+                entity.getEffectClaim());
     }
 
     private void requireExactEffectBinding(
@@ -430,6 +431,8 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         required(intent.bindingDigest(), "BINDING_DIGEST");
         required(intent.ownerUserId(), "OWNER_USER_ID");
         required(intent.tenantId(), "TENANT_ID");
+        required(intent.authorizationBindingClaim(),
+                "AUTHORIZATION_BINDING_CLAIM");
         if (!"ENFORCED".equals(intent.ownershipMode())) {
             throw new IllegalArgumentException(
                     "TERMINATION_OWNERSHIP_MODE_NOT_ENFORCED");
@@ -437,6 +440,12 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
         if (!"JCS_SHA256_V1".equals(intent.bindingDigestVersion())) {
             throw new IllegalArgumentException(
                     "TERMINATION_BINDING_DIGEST_VERSION_UNSUPPORTED");
+        }
+        if (!RuntimeTerminationIntent.LEGACY_AUTHORIZATION_BINDING_CLAIM.equals(
+                intent.authorizationBindingClaim())
+                && !intent.authorizationBindingClaim().matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException(
+                    "TERMINATION_AUTHORIZATION_BINDING_CLAIM_INVALID");
         }
     }
 
@@ -456,7 +465,9 @@ public class TaskTerminationIntentRecorder implements RuntimeTerminationIntentPo
                 existing.getBindingDigestVersion())
                 || !intent.bindingDigest().equals(existing.getBindingDigest())
                 || !intent.ownerUserId().equals(existing.getOwnerUserId())
-                || !intent.tenantId().equals(existing.getTenantId())) {
+                || !intent.tenantId().equals(existing.getTenantId())
+                || !intent.authorizationBindingClaim().equals(
+                existing.getEffectClaim())) {
             throw new IllegalStateException(
                     "TERMINATION_DELIVERY_BINDING_MISMATCH");
         }

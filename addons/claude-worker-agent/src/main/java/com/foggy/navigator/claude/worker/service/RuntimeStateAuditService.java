@@ -32,6 +32,7 @@ import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.repository.ErrorDiagnosticRepository;
 import com.foggy.navigator.session.repository.TerminationOperationRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -446,23 +447,95 @@ public class RuntimeStateAuditService {
         ResolvedClientAppCredentialDTO owner = requireOwner(appKey, appSecret);
         requireText(upstreamUserId, "RUNTIME_TASK_UPSTREAM_USER_REQUIRED");
         requireText(taskId, "RUNTIME_TASK_REQUIRED");
-        SessionTaskEntity task = sessionTaskRepository.findByTaskId(taskId.trim())
-                .orElseThrow(() -> new IllegalArgumentException("RUNTIME_TASK_NOT_FOUND"));
+        return requireOwnedTask(
+                owner, upstreamUserId.trim(), taskId.trim(), null,
+                null, false);
+    }
+
+    /**
+     * Resolves one Agent task from a fresh runtime access token. The token id
+     * is validated as authority evidence and then deliberately discarded; all
+     * returned identity comes from durable ClientApp and Task ownership facts.
+     */
+    @Transactional(readOnly = true)
+    public OwnedRuntimeTask requireOwnedAgentTaskByAccessToken(
+            String appKey,
+            String accessToken,
+            String upstreamUserId,
+            String canonicalPathAgentId,
+            String taskId) {
+        ResolvedClientAppCredentialDTO owner = requireAccessOwner(
+                appKey, accessToken);
+        requireText(upstreamUserId,
+                "RUNTIME_AGENT_TASK_UPSTREAM_USER_REQUIRED");
+        requireText(canonicalPathAgentId,
+                "RUNTIME_AGENT_TASK_AGENT_REQUIRED");
+        requireText(taskId, "RUNTIME_AGENT_TASK_REQUIRED");
+        String pathAgentId = canonicalPathAgentId.trim();
+        A2AgentResourceResolver.ResolvedVisibleAgent agentResource =
+                requireAccessAgentResource(
+                        owner, upstreamUserId.trim(), pathAgentId);
+        return requireOwnedTask(
+                owner, upstreamUserId.trim(), taskId.trim(),
+                pathAgentId, agentResource, true);
+    }
+
+    private OwnedRuntimeTask requireOwnedTask(
+            ResolvedClientAppCredentialDTO owner,
+            String upstreamUserId,
+            String taskId,
+            String expectedAgentId,
+            A2AgentResourceResolver.ResolvedVisibleAgent agentResource,
+            boolean accessTokenAgentIngress) {
+        SessionTaskEntity task = sessionTaskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        accessTokenAgentIngress
+                                ? "RUNTIME_AGENT_TASK_NOT_FOUND"
+                                : "RUNTIME_TASK_NOT_FOUND"));
+        if (!taskId.equals(task.getTaskId())) {
+            throw new SecurityException(accessTokenAgentIngress
+                    ? "RUNTIME_AGENT_TASK_FORBIDDEN"
+                    : "RUNTIME_TASK_FORBIDDEN");
+        }
         if (!owner.getTenantId().equals(task.getTenantId())) {
-            throw new SecurityException("RUNTIME_TASK_FORBIDDEN");
+            throw new SecurityException(accessTokenAgentIngress
+                    ? "RUNTIME_AGENT_TASK_FORBIDDEN"
+                    : "RUNTIME_TASK_FORBIDDEN");
         }
         Optional<BusinessTaskTerminalStateEntity> terminal =
-                terminalStateRepository.findByTenantIdAndWorkerTaskId(owner.getTenantId(), task.getTaskId());
-        Optional<BusinessTaskScopedTokenEntity> token = resolveOwnedToken(owner, task, terminal);
-        requireTaskOwnership(owner, upstreamUserId.trim(), task, token);
+                terminalStateRepository.findByTenantIdAndWorkerTaskId(
+                        owner.getTenantId(), task.getTaskId());
+        Optional<BusinessTaskScopedTokenEntity> token =
+                resolveOwnedToken(owner, task, terminal);
+        try {
+            requireTaskOwnership(owner, upstreamUserId, task, token);
+        } catch (SecurityException forbidden) {
+            if (!accessTokenAgentIngress) throw forbidden;
+            throw new SecurityException(
+                    "RUNTIME_AGENT_TASK_FORBIDDEN", forbidden);
+        }
+        if (accessTokenAgentIngress) {
+            requireExactAgentTaskBinding(
+                    expectedAgentId, agentResource, task);
+        }
         TaskAttemptCounts counts = resolveAttemptCounts(task);
+        String durableStatus = normalizedStatus(task.getStatus());
+        if (accessTokenAgentIngress && terminal.isPresent()) {
+            String terminalStatus = normalizedStatus(
+                    terminal.get().getTerminalStatus());
+            if (!TERMINAL_STATUSES.contains(terminalStatus)) {
+                throw new IllegalStateException(
+                        "RUNTIME_AGENT_TERMINAL_STATUS_INVALID");
+            }
+            durableStatus = terminalStatus;
+        }
         return new OwnedRuntimeTask(
                 task.getTaskId(), task.getSessionId(), task.getProviderTaskId(),
                 task.getUserId(), task.getTenantId(), task.getProviderType(),
-                task.getWorkerId(), normalizedStatus(task.getStatus()),
-                TERMINAL_STATUSES.contains(normalizedStatus(task.getStatus())) || terminal.isPresent(),
+                task.getWorkerId(), durableStatus,
+                TERMINAL_STATUSES.contains(durableStatus) || terminal.isPresent(),
                 counts.dispatchCount(), task.getAgentId(), task.getModelConfigId(),
-                owner.getClientAppId(), owner.getCredentialId(), upstreamUserId.trim());
+                owner.getClientAppId(), owner.getCredentialId(), upstreamUserId);
     }
 
     public record OwnedRuntimeTask(
@@ -672,6 +745,75 @@ public class RuntimeStateAuditService {
     private ResolvedClientAppCredentialDTO requireOwner(String appKey, String appSecret) {
         return credentialResolver.resolve(appKey, appSecret)
                 .orElseThrow(() -> new IllegalArgumentException("RUNTIME_AUDIT_CREDENTIAL_REQUIRED"));
+    }
+
+    private ResolvedClientAppCredentialDTO requireAccessOwner(
+            String appKey, String accessToken) {
+        if (!StringUtils.hasText(appKey)
+                || !StringUtils.hasText(accessToken)) {
+            throw new IllegalArgumentException(
+                    "RUNTIME_ACCESS_TOKEN_REQUIRED");
+        }
+        try {
+            ResolvedClientAppCredentialDTO owner = credentialResolver
+                    .resolveAccessToken(appKey, accessToken)
+                    .orElseThrow(() -> new SecurityException(
+                            "RUNTIME_ACCESS_TOKEN_INVALID"));
+            if (!StringUtils.hasText(owner.getTenantId())
+                    || !StringUtils.hasText(owner.getClientAppId())
+                    || !StringUtils.hasText(owner.getCredentialId())
+                    || !StringUtils.hasText(
+                    owner.getRuntimeAccessTokenId())) {
+                throw new SecurityException(
+                        "RUNTIME_ACCESS_TOKEN_INVALID");
+            }
+            return owner;
+        } catch (IllegalArgumentException | IllegalStateException
+                 | SecurityException rejected) {
+            throw new SecurityException("RUNTIME_ACCESS_TOKEN_INVALID");
+        } catch (RuntimeException unavailable) {
+            throw new SecurityException(
+                    "RUNTIME_ACCESS_AUTHORITY_UNAVAILABLE");
+        }
+    }
+
+    private A2AgentResourceResolver.ResolvedVisibleAgent
+    requireAccessAgentResource(
+            ResolvedClientAppCredentialDTO owner,
+            String upstreamUserId,
+            String pathAgentId) {
+        try {
+            A2AgentResourceResolver.ResolvedVisibleAgent resource =
+                    resourceResolver.resolveRequiredVisibleAgent(
+                            owner.getTenantId(), owner.getClientAppId(),
+                            upstreamUserId, pathAgentId);
+            if (resource == null) {
+                throw new SecurityException(
+                        "RUNTIME_AGENT_TASK_FORBIDDEN");
+            }
+            return resource;
+        } catch (IllegalArgumentException | IllegalStateException
+                 | SecurityException rejected) {
+            throw new SecurityException("RUNTIME_AGENT_TASK_FORBIDDEN");
+        } catch (RuntimeException unavailable) {
+            throw new SecurityException(
+                    "RUNTIME_AGENT_RESOURCE_AUTHORITY_UNAVAILABLE");
+        }
+    }
+
+    private void requireExactAgentTaskBinding(
+            String expectedAgentId,
+            A2AgentResourceResolver.ResolvedVisibleAgent agentResource,
+            SessionTaskEntity task) {
+        String taskBackend = ProviderRouteRegistry
+                .workerBackendForRouteTokenOrNull(task.getProviderType());
+        if (agentResource == null
+                || !expectedAgentId.equals(task.getAgentId())
+                || !expectedAgentId.equals(agentResource.agentId())
+                || taskBackend == null
+                || !StringUtils.hasText(task.getWorkerId())) {
+            throw new SecurityException("RUNTIME_AGENT_TASK_FORBIDDEN");
+        }
     }
 
     private Integer parsePort(String value) {
