@@ -201,6 +201,56 @@ class WorkbenchFapServiceTest {
                 .isEqualTo("provider-content-must-remain");
     }
 
+    @Test
+    void resourceTransportSanitizesCanonicalItemsCollection() {
+        WorkbenchFapConversationBindingEntity binding = activeBinding();
+        when(bindings.findByConversationIdAndOwnerUserId("conversation-1", OWNER))
+                .thenReturn(Optional.of(binding));
+        ObjectNode page = mapper.createObjectNode();
+        ObjectNode resource = page.putArray("items").addObject();
+        resource.put("resourceId", "resource-1");
+        resource.put("kind", "FINAL_OUTPUT");
+        resource.put("producerTicketId", "ticket-private");
+        when(platform.resources("execution-1")).thenReturn(page);
+
+        JsonNode result = service.resources(OWNER, "conversation-1");
+
+        assertThat(result.path("items").get(0).path("resourceId").asText())
+                .isEqualTo("resource-1");
+        assertThat(result.path("items").get(0).has("producerTicketId")).isFalse();
+    }
+
+    @Test
+    void recoveryTransportKeepsDecisionsButRemovesWorkerCapabilitiesAndProviderResumeId() {
+        WorkbenchFapConversationBindingEntity binding = activeBinding();
+        when(bindings.findByConversationIdAndOwnerUserId("conversation-1", OWNER))
+                .thenReturn(Optional.of(binding));
+        ObjectNode snapshot = mapper.createObjectNode();
+        snapshot.put("workerId", "worker-private");
+        snapshot.put("workerConversationId", "worker-conversation-private");
+        snapshot.putObject("activePrimaryTicketRef").put("operationTicketId", "ticket-private");
+        snapshot.put("lastTerminalReceiptRef", "receipt-private");
+        snapshot.putObject("reattach").put("available", true).put("reasonCode", "STATE_LOADED");
+        snapshot.putObject("resume")
+                .put("available", true)
+                .put("reasonCode", "PROVIDER_CONVERSATION_AVAILABLE")
+                .put("resumePointRef", "provider-conversation-private");
+        snapshot.putArray("resourceRefs").addObject()
+                .put("resourceId", "resource-1")
+                .put("producerTicketId", "ticket-private");
+        when(platform.recovery("execution-1")).thenReturn(snapshot);
+
+        JsonNode result = service.recovery(OWNER, "conversation-1");
+
+        assertThat(result.path("reattach").path("available").asBoolean()).isTrue();
+        assertThat(result.has("workerId")).isFalse();
+        assertThat(result.has("workerConversationId")).isFalse();
+        assertThat(result.has("activePrimaryTicketRef")).isFalse();
+        assertThat(result.has("lastTerminalReceiptRef")).isFalse();
+        assertThat(result.path("resume").has("resumePointRef")).isFalse();
+        assertThat(result.path("resourceRefs").get(0).has("producerTicketId")).isFalse();
+    }
+
     private StartExecutionResult startResult() {
         return new StartExecutionResult(
                 "decision-start",

@@ -79,6 +79,9 @@ public class WorkbenchFapProjectionMapper {
     public JsonNode sanitizeResources(JsonNode value) {
         JsonNode result = value.deepCopy();
         if (result instanceof ObjectNode page) {
+            // Canonical Worker ResourcePage uses `items`; retain `resources` only as an
+            // additive compatibility key. Both paths must stay browser-safe.
+            sanitizeResourceRefs(page.path("items"));
             sanitizeResourceRefs(page.path("resources"));
         }
         return result;
@@ -91,7 +94,13 @@ public class WorkbenchFapProjectionMapper {
                     "workerId",
                     "workerStateStoreId",
                     "workerProcessInstanceId",
-                    "workerConversationId"));
+                    "workerConversationId",
+                    "activePrimaryTicketRef",
+                    "lastTerminalReceiptRef"));
+            if (object.path("resume") instanceof ObjectNode resume) {
+                resume.remove("resumePointRef");
+            }
+            sanitizeResourceRefs(object.path("resourceRefs"));
         }
         return result;
     }

@@ -41,3 +41,10 @@ not a reason to copy DTOs or client source into Navigator.
 Development `ddl-auto=update` creates the new binding table for disposable canary
 data. A forward migration is required before any shared/production promotion; no
 old data backfill or legacy conversation import is planned.
+
+The frontend counterpart is the separate `/workers/fap` route. Its navigation item
+appears only when `/api/v1/workbench/fap/availability` reports that the packaged
+module, runtime switch, and owner allowlist all admit the current user. It does not
+import `useTaskPane`, the legacy Session transport, or unified SSE. Event polling is
+active only while the FAP page is active, stops after a definitive terminal state,
+and pauses after three consecutive failures until the user resumes it.
