@@ -223,4 +223,18 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Packaged only for the owner's isolated FAP Workbench canary. -->
+        <profile>
+            <id>fap-workbench-canary</id>
+            <dependencies>
+                <dependency>
+                    <groupId>com.foggy.navigator</groupId>
+                    <artifactId>workbench-fap-adapter</artifactId>
+                    <version>${project.version}</version>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 </project>
