@@ -24,8 +24,24 @@ class AuthorizationContractTest {
     @Test
     void catalog_isFrozenAtTheApprovedDeploymentAwareManifest() {
         assertEquals(469, catalog.size());
-        assertEquals("76c83b04f57ac4698cb8f3f4b2700643b546853300856dddae34fe62299fb837",
+        assertEquals("f0d1e35004858f41dea3af676bb7c583318cefbceab7765562b5bd545dfb742d",
                 catalog.checksum());
+
+        AuthorizationRouteManifestEntry cancelRoute = catalog.findByRouteId(
+                        "mvc:post:/api/v1/open/agents/{agentId}/tasks/{taskId}/cancel")
+                .orElseThrow();
+        assertEquals("task.terminate", cancelRoute.canonicalAction());
+        assertEquals("LEGACY_ENFORCE", cancelRoute.migrationMode());
+        assertTrue(cancelRoute.currentGuard().contains("exact cancel-route credential census"));
+        assertTrue(cancelRoute.currentTargetPredicate().contains("MANAGEMENT:"));
+        assertTrue(cancelRoute.currentTargetPredicate().contains("RUNTIME:"));
+        assertTrue(cancelRoute.currentTargetPredicate().contains("no cross-lane fallback"));
+        assertTrue(cancelRoute.acceptedPrincipalLanes().contains("NAVIGATOR_API_KEY"));
+        assertTrue(cancelRoute.acceptedPrincipalLanes().contains("RUNTIME_ACCESS"));
+        assertTrue(cancelRoute.targetResolver().contains("NON_ENFORCED_RESOLVER"));
+        assertTrue(cancelRoute.targetResolver().contains("ENFORCED_PROVIDER_RESOLVER"));
+        assertTrue(cancelRoute.requires(AuthorizationRequiredSection.AUTHORITY));
+        assertTrue(cancelRoute.requires(AuthorizationRequiredSection.DELEGATION));
 
         AuthorizationRouteManifestEntry actuatorRoot = catalog.findByRouteId("framework:get:/actuator")
                 .orElseThrow();

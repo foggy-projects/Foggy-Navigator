@@ -30,7 +30,7 @@ public class AuthorizationRouteCatalog {
     public static final String RESOURCE_PATH = "authorization/route-manifest-v1.csv";
     public static final int EXPECTED_ENTRY_COUNT = 469;
     public static final String EXPECTED_SHA_256 =
-            "76c83b04f57ac4698cb8f3f4b2700643b546853300856dddae34fe62299fb837";
+            "f0d1e35004858f41dea3af676bb7c583318cefbceab7765562b5bd545dfb742d";
     public static final String DEPLOYMENT_LAUNCHER = "NAVIGATOR_LAUNCHER";
     public static final String DEPLOYMENT_OBSERVER_BFF = "OBSERVER_BFF";
 
