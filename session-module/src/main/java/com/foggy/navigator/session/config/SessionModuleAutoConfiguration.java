@@ -32,7 +32,10 @@ import java.time.Duration;
     "com.foggy.navigator.session.agent",
     "com.foggy.navigator.session.util",
     "com.foggy.navigator.session.lifecycle",
-    "com.foggy.navigator.session.command"
+    "com.foggy.navigator.session.command",
+    // Plain @Repository capabilities live beside Spring Data interfaces. They
+    // require component scanning; @EnableJpaRepositories discovers interfaces only.
+    "com.foggy.navigator.session.repository"
 })
 @EntityScan(basePackages = {
     "com.foggy.navigator.common.entity",

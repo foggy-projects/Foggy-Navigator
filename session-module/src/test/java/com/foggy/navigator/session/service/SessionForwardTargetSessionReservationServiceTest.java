@@ -1,6 +1,7 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.session.config.SessionModuleAutoConfiguration;
 import com.foggy.navigator.session.repository.SessionForwardTargetSessionReservationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import jakarta.persistence.EntityManager;
@@ -309,6 +310,15 @@ class SessionForwardTargetSessionReservationServiceTest {
                 .filter(method -> Modifier.isPublic(method.getModifiers()))
                 .map(Method::getName))
                 .containsExactly("insertAndFlush");
+    }
+
+    @Test
+    void productionAutoConfigurationScansTheInsertOnlyRepositoryCapability() {
+        ComponentScan scan = SessionModuleAutoConfiguration.class
+                .getAnnotation(ComponentScan.class);
+
+        assertThat(scan.basePackages())
+                .contains("com.foggy.navigator.session.repository");
     }
 
     private SessionForwardTargetSessionReservationService.ReservationResult await(

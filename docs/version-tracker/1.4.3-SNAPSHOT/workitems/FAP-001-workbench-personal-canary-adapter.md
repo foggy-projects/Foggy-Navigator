@@ -1,7 +1,7 @@
 ---
 doc_type: implementation-record
 workitem: FAP-001
-status: P2C_PERSONAL_PANE_IMPLEMENTED
+status: P2E_PERSONAL_CANARY_ACTIVE
 canonical_boundary: /home/sa/ultra/sim-navi/docs/decisions/FAP-003-workbench-personal-canary-coexistence-boundary.md
 external_enablement: no
 production_enablement: no
@@ -26,6 +26,12 @@ Default/company builds do not resolve the FAP SDK or package this module. Existi
 `TaskController`, legacy Session/message persistence, provider addons, unified SSE, and deployed
 company behavior are unchanged.
 
+The owner's isolated canary is now running beside the legacy deployment. The new Navigator uses
+8122, its frontend uses 5175, and its Host/CodexWorker/Runtime/Access use 4700/4720/4850/4860;
+every endpoint is loopback-only. The legacy Navigator remained on its original PID and 8112, and
+the legacy 303x Workers were not restarted. Other users continue to use the unchanged stable
+deployment.
+
 ## Boundary implemented
 
 - New conversations receive an immutable `FAP_V1` lane and have no legacy Session ID.
@@ -49,6 +55,14 @@ company behavior are unchanged.
   never automatically replayed.
 - Orchestration, SDK command compilation, and browser-safe projection/sanitization are separate
   classes; changes in one concern must not turn the adapter into a second Runtime or policy engine.
+- The canary launcher promotes H2 from test-only to runtime only under `fap-workbench-canary`; its
+  database, root login, JWT key, Access/Runtime credentials, logs, and process records are private
+  new state below gitignored canary roots.
+- The profile-local FAP security filter only hands `/api/v1/workbench/fap/**` to Navigator's
+  canonical MVC JWT interceptor. It grants no authority: missing identity or a non-owner identity
+  still fails the exact backend owner allowlist. The global stable security chain is unchanged.
+- Start/status/stop validates PID, Linux start ticks, process group, cwd, and exact argv. It never
+  kills by port and cannot target legacy/company processes.
 
 ## Build and validation
 
@@ -61,14 +75,30 @@ company behavior are unchanged.
 - Frontend focused tests: 10 passed across the FAP API, bounded polling, canary menu discovery, and
   route isolation.
 - Frontend `vue-tsc` type-check passed; the Vite production bundle generated the lazy FAP page.
+- `SessionForwardTargetSessionReservationServiceTest`: 9 passed after the live candidate exposed
+  that a plain insert-only `@Repository` was absent from the production component scan.
+- Canary-profile package with H2 runtime and FAP adapter: PASS using
+  `-Pfap-workbench-canary -pl launcher -am -Dmaven.test.skip=true package`. Test compilation was
+  deliberately skipped because an unrelated existing launcher integration test still targets an
+  older `RuntimeTerminationAcceptanceCoordinator.accept(...)` signature; it was not repaired or
+  promoted to a canary blocker.
+- Personal Workbench managed lane: PASS. A new disposable Codex Conversation completed START and
+  CONTINUE as canonical `SUCCEEDED`, exposed `worker.operation.input.accepted`, loaded recovery,
+  accepted reattach, and returned two resource references.
+- The actual Vite proxy returned `packaged=true`, `enabled=true`, `eligible=true`, lane `FAP_V1`;
+  the same catalog route without identity returned 403.
 - Default/company profile and old data were not modified. No repository-wide/full-provider/E2E test
   was run or authorized.
 
-## Remaining before personal live canary
+## Operations and remaining stabilization
 
-1. Prepare a private Access principal/bootstrap entry for the owner and new disposable FAP data.
-2. Package the personal launcher with `-Pfap-workbench-canary`, keep company deployment unchanged,
-   then run one focused real Codex START/CONTINUE/reconnect lane.
-3. Publish the SDK/protocol artifacts to the private package registry before any multi-user or clean
-   runner promotion. Add a forward schema migration before production/shared enablement; no old-data
-   backfill is planned.
+The composite controller is `scripts/workbench-fap-personal-canary.py` with `start`, `status`,
+`smoke`, and `stop`. Login data is generated once in the private canary state root and is never
+printed or committed. `smoke` creates new provider facts, so it is an explicit focused validation
+operation rather than part of ordinary startup.
+
+1. Use the personal instance for ordinary Workbench tasks and record concrete defects; do not
+   repeatedly run the smoke after documentation-only changes.
+2. Keep company/stable unchanged until the owner explicitly declares the personal candidate stable.
+3. Publish SDK/protocol artifacts and add a forward-only schema migration before any clean-runner or
+   multi-user promotion. No old-data backfill or legacy Conversation import is planned.
