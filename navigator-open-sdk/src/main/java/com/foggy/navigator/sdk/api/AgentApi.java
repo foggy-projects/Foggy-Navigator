@@ -478,6 +478,22 @@ public class AgentApi {
         return headers;
     }
 
+    private String canonicalCancelRequestId(String supplied) {
+        if (supplied == null || supplied.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        try {
+            String trimmed = supplied.trim();
+            if (trimmed.length() != 36) {
+                throw new IllegalArgumentException();
+            }
+            return UUID.fromString(trimmed).toString();
+        } catch (IllegalArgumentException invalid) {
+            throw new NavigatorApiException(
+                    "clientRequestId must be a canonical UUID", invalid);
+        }
+    }
+
     private String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
@@ -623,8 +639,22 @@ public class AgentApi {
      * 取消任务
      */
     public void cancelTask(String agentId, String taskId) {
-        http.post("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/cancel",
-                null, new TypeReference<String>() {});
+        cancelTask(agentId, taskId, null);
+    }
+
+    /**
+     * 取消任务并返回服务端的真实非终态/终态投影。
+     */
+    public AgentTask cancelTask(
+            String agentId,
+            String taskId,
+            String clientRequestId) {
+        String canonicalRequestId = canonicalCancelRequestId(clientRequestId);
+        return http.postWithNavigatorUserAuth(
+                "/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/cancel",
+                null,
+                Map.of("X-Navigator-Client-Request-Id", canonicalRequestId),
+                new TypeReference<>() {});
     }
 
     public void cancelTaskWithClientAppAccessToken(
@@ -633,10 +663,34 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
-        http.post("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/cancel",
+        cancelTaskWithClientAppAccessToken(
+                agentId,
+                taskId,
+                clientAppKey,
+                clientAppAccessToken,
+                upstreamUserId,
+                null);
+    }
+
+    /**
+     * 使用 ClientApp runtime access token 取消任务，并抑制全部默认认证 header。
+     */
+    public AgentTask cancelTaskWithClientAppAccessToken(
+            String agentId,
+            String taskId,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId,
+            String clientRequestId) {
+        String canonicalRequestId = canonicalCancelRequestId(clientRequestId);
+        Map<String, String> headers = clientAppHeaders(
+                clientAppKey, clientAppAccessToken, upstreamUserId);
+        headers.put("X-Navigator-Client-Request-Id", canonicalRequestId);
+        return http.postWithExclusiveHeaders(
+                "/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/cancel",
                 null,
-                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
-                new TypeReference<String>() {});
+                headers,
+                new TypeReference<>() {});
     }
 
     /**

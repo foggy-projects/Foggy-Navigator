@@ -31,8 +31,23 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        // 尝试从请求中获取用户信息
-        CurrentUser currentUser = extractUser(request, response);
+        OpenApiAgentCancelCredentialCensus.Decision cancelDecision =
+                OpenApiAgentCancelCredentialCensus.inspect(request);
+        CurrentUser currentUser;
+        if (cancelDecision != null) {
+            OpenApiAgentCancelCredentialCensus.store(request, cancelDecision);
+            // The exact cancel route must never inherit stale management identity.
+            UserContext.clear();
+            if (!cancelDecision.management()) {
+                // Runtime and rejected requests must not touch JWT/API-key resolvers.
+                return true;
+            }
+            currentUser = extractCancelManagementUser(
+                    request, response, cancelDecision);
+        } else {
+            // Preserve the legacy precedence contract outside the exact cancel route.
+            currentUser = extractUser(request, response);
+        }
 
         if (currentUser != null) {
             UserContext.setCurrentUser(currentUser);
@@ -58,6 +73,26 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private static final String RENEW_TOKEN_HEADER = "X-New-Token";
 
+    private CurrentUser extractCancelManagementUser(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            OpenApiAgentCancelCredentialCensus.Decision decision) {
+        return switch (decision.managementSource()) {
+            case BEARER -> {
+                String authHeader = request.getHeader(AUTHORIZATION_HEADER);
+                if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
+                    yield null;
+                }
+                yield extractBearerToken(
+                        authHeader.substring(BEARER_PREFIX.length()), response);
+            }
+            case QUERY_TOKEN -> extractFromToken(
+                    OpenApiAgentCancelCredentialCensus
+                            .requireSelectedManagementQueryToken(request, decision));
+            case API_KEY -> extractFromApiKey(request.getHeader(API_KEY_HEADER));
+        };
+    }
+
     /**
      * 从请求中提取用户信息，并在 token 剩余有效期不足一半时自动续期
      */
@@ -66,13 +101,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         String authHeader = request.getHeader(AUTHORIZATION_HEADER);
         if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
             String token = authHeader.substring(BEARER_PREFIX.length());
-            CurrentUser user = extractFromToken(token);
-            if (user != null && jwtUtil.needsRenewal(token)) {
-                String newToken = jwtUtil.renewToken(token);
-                response.setHeader(RENEW_TOKEN_HEADER, newToken);
-                log.debug("Token renewed for user: {}", user.getUsername());
-            }
-            return user;
+            return extractBearerToken(token, response);
         }
 
         // 2. 尝试从 URL query param 获取 token（SSE 场景，EventSource 不支持自定义 header）
@@ -88,6 +117,18 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
 
         return null;
+    }
+
+    private CurrentUser extractBearerToken(
+            String token,
+            HttpServletResponse response) {
+        CurrentUser user = extractFromToken(token);
+        if (user != null && jwtUtil.needsRenewal(token)) {
+            String newToken = jwtUtil.renewToken(token);
+            response.setHeader(RENEW_TOKEN_HEADER, newToken);
+            log.debug("Token renewed for user: {}", user.getUsername());
+        }
+        return user;
     }
 
     /**

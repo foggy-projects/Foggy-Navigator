@@ -1036,6 +1036,54 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void cancelTaskDelegatesOnlyToDualLaneFacadeWithoutLegacyAgentResolution() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        OpenApiController controller = newController(agentResolver, null);
+        OpenApiAgentTaskTerminationFacade terminationFacade =
+                (OpenApiAgentTaskTerminationFacade) ReflectionTestUtils.getField(
+                        controller, "agentTaskTerminationFacade");
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        OpenApiTaskDTO projected = OpenApiTaskDTO.builder()
+                .clientRequestId("a4af5a56-c7c9-4c59-861d-19d7670b2254")
+                .taskId("task-1")
+                .agentId("agent-1")
+                .status("CANCEL_REQUESTED")
+                .build();
+        when(request.getHeader("X-Navigator-Client-Request-Id"))
+                .thenReturn(projected.getClientRequestId());
+        when(terminationFacade.terminate(
+                request,
+                "agent-1",
+                "task-1",
+                projected.getClientRequestId()))
+                .thenReturn(projected);
+
+        OpenApiTaskDTO result = controller.cancelTask(
+                "agent-1", "task-1", request).getData();
+
+        assertEquals(projected, result);
+        verify(terminationFacade).terminate(
+                request,
+                "agent-1",
+                "task-1",
+                projected.getClientRequestId());
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
+    void cancelTaskRouteRemainsPostBodylessAndMovesRoleGateOffController() throws Exception {
+        Method method = OpenApiController.class.getDeclaredMethod(
+                "cancelTask", String.class, String.class, HttpServletRequest.class);
+
+        org.springframework.web.bind.annotation.PostMapping mapping =
+                method.getAnnotation(org.springframework.web.bind.annotation.PostMapping.class);
+        assertNotNull(mapping);
+        assertEquals("/agents/{agentId}/tasks/{taskId}/cancel", mapping.value()[0]);
+        assertNull(method.getAnnotation(
+                com.foggy.navigator.common.annotation.RequireAuth.class));
+    }
+
+    @Test
     void getTaskMessagesReturnsSyntheticErrorWhenFailedTaskHasNoPersistedMessages() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
@@ -3849,7 +3897,8 @@ class OpenApiControllerMessageMappingTest {
                 launchPlanner,
                 createFacade,
                 durableTaskSessionQueryFacade,
-                sessionProjectionMapper
+                sessionProjectionMapper,
+                mock(OpenApiAgentTaskTerminationFacade.class)
         );
     }
 

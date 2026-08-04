@@ -201,6 +201,7 @@ public class OpenApiController {
     private final OpenApiRuntimeTaskCreateFacade runtimeTaskCreateFacade;
     private final OpenApiDurableTaskSessionQueryFacade durableTaskSessionQueryFacade;
     private final OpenApiSessionProjectionMapper sessionProjectionMapper;
+    private final OpenApiAgentTaskTerminationFacade agentTaskTerminationFacade;
     private final OpenApiTaskProjectionMapper taskProjectionMapper = new OpenApiTaskProjectionMapper();
 
     // ===== 1. 自助注册（无需认证） =====
@@ -1846,25 +1847,15 @@ public class OpenApiController {
      * 取消 Agent 任务
      */
     @PostMapping("/agents/{agentId}/tasks/{taskId}/cancel")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenApiTaskDTO> cancelTask(
             @PathVariable String agentId,
-            @PathVariable String taskId) {
-        String tenantId = UserContext.getCurrentTenantId();
-        AgentResolveContext ctx = AgentResolveContext.builder()
-                .tenantId(tenantId).requestSource("OPEN_API").build();
-        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
-                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
-        agent.cancelTask(taskId);
-
-        // 重新查询任务状态返回
-        A2aTask task = agent.getTask(taskId)
-                .orElse(null);
-        if (task != null) {
-            return RX.ok(toOpenApiTaskDTO(task, agentId));
-        }
-        return RX.ok(OpenApiTaskDTO.builder()
-                .taskId(taskId).status("CANCELLED").build());
+            @PathVariable String taskId,
+            HttpServletRequest request) {
+        return RX.ok(agentTaskTerminationFacade.terminate(
+                request,
+                agentId,
+                taskId,
+                firstHeader(request, "X-Navigator-Client-Request-Id")));
     }
 
     /**

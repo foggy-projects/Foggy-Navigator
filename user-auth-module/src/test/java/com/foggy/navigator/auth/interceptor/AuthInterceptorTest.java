@@ -14,6 +14,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.HandlerMapping;
 
 import java.util.Optional;
 
@@ -208,6 +210,103 @@ class AuthInterceptorTest {
         verify(userAuthService, never()).getUserByApiKey(any());
     }
 
+    @Test
+    void exactCancelRuntimeCensusSkipsJwtAndApiKeyResolvers() {
+        MockHttpServletRequest runtime = cancelRequest();
+        runtime.addHeader("X-Client-App-Key", "app-key");
+        runtime.addHeader("X-Client-App-Access-Token", "access-token");
+        runtime.addHeader("X-Upstream-User-Id", "upstream-user");
+        UserContext.setCurrentUser(CurrentUser.builder()
+                .userId("stale-management-user")
+                .build());
+
+        assertTrue(interceptor.preHandle(runtime, response, new Object()));
+
+        OpenApiAgentCancelCredentialCensus.Decision decision =
+                OpenApiAgentCancelCredentialCensus.requireStored(runtime);
+        assertTrue(decision.runtimeAccess());
+        assertNull(UserContext.getCurrentUser());
+        verifyNoInteractions(jwtUtil, userAuthService);
+    }
+
+    @Test
+    void exactCancelRawQueryTokenAuthenticatesWithoutServletParameterMerge() {
+        MockHttpServletRequest management = cancelRequest();
+        management.setQueryString("token=query-jwt");
+        management.addParameter("token", "form-value-must-not-win");
+        when(jwtUtil.validateToken("query-jwt")).thenReturn(true);
+        when(jwtUtil.getUserIdFromToken("query-jwt")).thenReturn("manager-2");
+        when(jwtUtil.getUsernameFromToken("query-jwt")).thenReturn("query-manager");
+        when(jwtUtil.getTenantIdFromToken("query-jwt")).thenReturn("tenant-2");
+        when(jwtUtil.getRolesFromToken("query-jwt")).thenReturn("DEVELOPER");
+
+        assertTrue(interceptor.preHandle(management, response, new Object()));
+
+        assertEquals("manager-2", UserContext.getCurrentUser().getUserId());
+        assertEquals(OpenApiAgentCancelCredentialCensus.ManagementSource.QUERY_TOKEN,
+                OpenApiAgentCancelCredentialCensus.requireStored(management)
+                        .managementSource());
+        verify(jwtUtil).validateToken("query-jwt");
+        verify(jwtUtil, never()).validateToken("form-value-must-not-win");
+        verifyNoInteractions(userAuthService);
+    }
+
+    @Test
+    void exactCancelFormOnlyTokenRejectsBeforeEveryResolver() {
+        MockHttpServletRequest form = cancelRequest();
+        form.setContentType("application/x-www-form-urlencoded");
+        form.addParameter("token", "form-only-token");
+
+        assertTrue(interceptor.preHandle(form, response, new Object()));
+
+        OpenApiAgentCancelCredentialCensus.Decision decision =
+                OpenApiAgentCancelCredentialCensus.requireStored(form);
+        assertTrue(decision.rejected());
+        assertEquals(OpenApiAgentCancelCredentialCensus.CREDENTIAL_LANE_REJECTED,
+                decision.rejectionCode());
+        assertNull(UserContext.getCurrentUser());
+        verifyNoInteractions(jwtUtil, userAuthService);
+    }
+
+    @Test
+    void exactCancelMixedCensusRejectsBeforeJwtAndApiKeyResolvers() {
+        MockHttpServletRequest mixed = cancelRequest();
+        mixed.addHeader("Authorization", "Bearer jwt-token");
+        mixed.addHeader("X-Client-App-Key", "app-key");
+        mixed.addHeader("X-Client-App-Access-Token", "access-token");
+        mixed.addHeader("X-Upstream-User-Id", "upstream-user");
+
+        assertTrue(interceptor.preHandle(mixed, response, new Object()));
+
+        OpenApiAgentCancelCredentialCensus.Decision decision =
+                OpenApiAgentCancelCredentialCensus.requireStored(mixed);
+        assertTrue(decision.rejected());
+        assertEquals(OpenApiAgentCancelCredentialCensus.CREDENTIAL_MIXED,
+                decision.rejectionCode());
+        verifyNoInteractions(jwtUtil, userAuthService);
+    }
+
+    @Test
+    void exactCancelManagementCensusPreservesApiKeyAuthentication() {
+        MockHttpServletRequest management = cancelRequest();
+        management.addHeader("X-API-Key", "management-api-key");
+        UserDTO dto = new UserDTO();
+        dto.setId("manager-1");
+        dto.setUsername("manager");
+        dto.setTenantId("tenant-1");
+        dto.setRoles("DEVELOPER");
+        when(userAuthService.getUserByApiKey("management-api-key"))
+                .thenReturn(Optional.of(dto));
+
+        assertTrue(interceptor.preHandle(management, response, new Object()));
+
+        assertTrue(OpenApiAgentCancelCredentialCensus
+                .requireStored(management).management());
+        assertEquals("manager-1", UserContext.getCurrentUser().getUserId());
+        verify(userAuthService).getUserByApiKey("management-api-key");
+        verifyNoInteractions(jwtUtil);
+    }
+
     // ---- afterCompletion 清理 ----
 
     @Test
@@ -218,5 +317,14 @@ class AuthInterceptorTest {
         interceptor.afterCompletion(request, response, new Object(), null);
 
         assertNull(UserContext.getCurrentUser());
+    }
+
+    private static MockHttpServletRequest cancelRequest() {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/v1/open/agents/agent-1/tasks/task-1/cancel");
+        request.setAttribute(
+                HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+                OpenApiAgentCancelCredentialCensus.ROUTE_PATTERN);
+        return request;
     }
 }

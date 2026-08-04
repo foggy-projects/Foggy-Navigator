@@ -119,6 +119,29 @@ public class HttpHelper {
         return execute(buildRequest("POST", path, body, true, headers), type);
     }
 
+    /**
+     * Route-scoped Navigator-user POST. Exactly one API key or bearer token is emitted;
+     * configured control/operator/admin credentials are rejected before network I/O.
+     */
+    public <T> T postWithNavigatorUserAuth(
+            String path,
+            Object body,
+            Map<String, String> additionalHeaders,
+            TypeReference<T> type) {
+        return execute(buildRequest(
+                "POST", path, body, false,
+                navigatorUserOnlyHeaders(additionalHeaders)), type);
+    }
+
+    /** POST with only the explicitly supplied headers and no configured default identity. */
+    public <T> T postWithExclusiveHeaders(
+            String path,
+            Object body,
+            Map<String, String> headers,
+            TypeReference<T> type) {
+        return execute(buildRequest("POST", path, body, false, headers), type);
+    }
+
     public <T> T getWithUpstreamAdminAuth(String path, String upstreamAdminApiKeyOverride, TypeReference<T> type) {
         return execute(buildRequest("GET", path, null, false,
                 upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), type);
@@ -242,6 +265,48 @@ public class HttpHelper {
         }
         if (tenantId != null && !tenantId.isBlank()) {
             headers.put("X-Tenant-Id", tenantId);
+        }
+        return headers;
+    }
+
+    private Map<String, String> navigatorUserOnlyHeaders(
+            Map<String, String> additionalHeaders) {
+        boolean hasApiKey = apiKey != null && !apiKey.isBlank();
+        boolean hasBearer = bearerToken != null && !bearerToken.isBlank();
+        if (hasApiKey == hasBearer) {
+            throw new NavigatorApiException(
+                    "cancelTask requires exactly one Navigator API key or bearer token");
+        }
+        if ((clientAppControlKey != null && !clientAppControlKey.isBlank())
+                || (operatorApiKey != null && !operatorApiKey.isBlank())
+                || (upstreamAdminApiKey != null && !upstreamAdminApiKey.isBlank())) {
+            throw new NavigatorApiException(
+                    "cancelTask rejects mixed default credential families");
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (hasApiKey) {
+            headers.put("X-API-Key", apiKey);
+        } else {
+            headers.put("Authorization", normalizeBearerToken(bearerToken));
+        }
+        // Retained for management SDK compatibility; the server never treats it as authority.
+        if (tenantId != null && !tenantId.isBlank()) {
+            headers.put("X-Tenant-Id", tenantId);
+        }
+        if (additionalHeaders != null) {
+            additionalHeaders.forEach((name, value) -> {
+                if (name != null && !name.isBlank()
+                        && value != null && !value.isBlank()) {
+                    boolean conflict = headers.keySet().stream()
+                            .anyMatch(existing -> existing.equalsIgnoreCase(name));
+                    if (conflict) {
+                        throw new NavigatorApiException(
+                                "cancelTask additional header conflicts with management identity");
+                    }
+                    headers.put(name, value);
+                }
+            });
         }
         return headers;
     }
