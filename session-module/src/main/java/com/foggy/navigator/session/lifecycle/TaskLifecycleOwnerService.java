@@ -69,7 +69,8 @@ public class TaskLifecycleOwnerService {
             WorkerLifecycleIdentity identity,
             WorkerLifecycleTask workerTask,
             String writerGenerationId) {
-        SessionTaskEntity canonical = canonicalTasks.findByTaskId(workerTask.navigatorTaskId())
+        SessionTaskEntity canonical = canonicalTasks
+                .findByTaskIdForUpdate(workerTask.navigatorTaskId())
                 .orElseThrow(() -> new IllegalStateException(
                         "LIFECYCLE_CANONICAL_TASK_NOT_FOUND"));
         if (canonical.getProviderTaskId() != null

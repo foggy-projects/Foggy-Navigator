@@ -44,6 +44,16 @@ final class TaskTerminationCommandCoordinator {
         this.receipts = Objects.requireNonNull(receipts, "receipts must not be null");
     }
 
+    static String canonicalTenantReference(@Nullable String tenantId) {
+        String reference = tenantId == null
+                ? PlanBinding.TENANT_ABSENT
+                : PlanBinding.TENANT_PRESENT_PREFIX + tenantId;
+        if (reference.length() > CanonicalCommandEnvelope.MAX_REFERENCE_LENGTH) {
+            throw new IllegalArgumentException("tenantReference exceeds maximum length");
+        }
+        return reference;
+    }
+
     TerminationCommandResult execute(
             TerminationExecutionPlan plan,
             CanonicalCommandEnvelope envelope,
@@ -491,7 +501,7 @@ final class TaskTerminationCommandCoordinator {
         static PlanBinding from(TerminationExecutionPlan plan) {
             Objects.requireNonNull(plan, "termination plan must not be null");
             TerminationIdentity identity = plan.identity();
-            String tenantReference = tenantReference(identity.tenantId());
+            String tenantReference = canonicalTenantReference(identity.tenantId());
             CanonicalCommandEnvelope.Target target = new CanonicalCommandEnvelope.Target(
                     CanonicalCommandEnvelope.TargetKind.TASK,
                     identity.taskId(),
@@ -536,16 +546,6 @@ final class TaskTerminationCommandCoordinator {
 
         CanonicalCommandEnvelope.Effect effect() {
             return effect;
-        }
-
-        private static String tenantReference(@Nullable String tenantId) {
-            String reference = tenantId == null
-                    ? TENANT_ABSENT
-                    : TENANT_PRESENT_PREFIX + tenantId;
-            if (reference.length() > CanonicalCommandEnvelope.MAX_REFERENCE_LENGTH) {
-                throw new IllegalArgumentException("tenantReference exceeds maximum length");
-            }
-            return reference;
         }
 
         private static String scopeReference(TerminationIdentity identity) {

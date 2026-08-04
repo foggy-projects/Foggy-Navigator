@@ -52,6 +52,18 @@ public class LifecycleEnrollmentService {
         if (!decision.enrolled()) return decision;
 
         WorkerLifecycleIdentity identity = command.identity();
+        WorkerLifecycleTask enforcedTask = new WorkerLifecycleTask(
+                command.task().navigatorTaskId(),
+                command.task().providerTaskId(),
+                LifecycleOwnershipMode.ENFORCED,
+                command.task().initialDispatchId(),
+                command.task().safeBindingDigestVersion(),
+                command.task().safeBindingDigest(),
+                command.task().lifecycleState(),
+                command.task().lastSequence());
+        owner.enrollInventoryTask(
+                identity, enforcedTask, command.writerGenerationId());
+
         var worker = workers.findForUpdate(identity.physicalWorkerId())
                 .orElseThrow(() -> new IllegalStateException(
                         "LIFECYCLE_SHADOW_DISCOVERY_REQUIRED"));
@@ -110,17 +122,6 @@ public class LifecycleEnrollmentService {
         session.setWriterGenerationId(command.writerGenerationId());
         sessions.save(session);
 
-        WorkerLifecycleTask enforcedTask = new WorkerLifecycleTask(
-                command.task().navigatorTaskId(),
-                command.task().providerTaskId(),
-                LifecycleOwnershipMode.ENFORCED,
-                command.task().initialDispatchId(),
-                command.task().safeBindingDigestVersion(),
-                command.task().safeBindingDigest(),
-                command.task().lifecycleState(),
-                command.task().lastSequence());
-        owner.enrollInventoryTask(
-                identity, enforcedTask, command.writerGenerationId());
         var task = tasks.findForUpdate(
                         enforcedTask.navigatorTaskId()).orElseThrow();
         task.setOwnershipMode(LifecycleOwnershipMode.ENFORCED.name());

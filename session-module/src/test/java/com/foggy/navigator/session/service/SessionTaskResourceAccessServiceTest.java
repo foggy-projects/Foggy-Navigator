@@ -220,6 +220,84 @@ class SessionTaskResourceAccessServiceTest {
         verifyNoInteractions(sessionRepository, sessionTaskRepository);
     }
 
+    @Test
+    void requireTenantTask_sameTenantCrossOwnerReturnsDurableIdentity() {
+        SessionTaskEntity task = managedTask(
+                "task-managed", "session-managed", "durable-owner", TENANT_ID,
+                "agent-managed");
+        SessionEntity session = ownedSession(
+                "session-managed", "durable-owner", TENANT_ID);
+        when(sessionTaskRepository.findByTaskId("task-managed"))
+                .thenReturn(Optional.of(task));
+        when(sessionRepository.findByIdAndUserIdAndTenantId(
+                "session-managed", "durable-owner", TENANT_ID))
+                .thenReturn(Optional.of(session));
+
+        SessionTaskResourceAccessService.ManagedTaskIdentity result =
+                service.requireTenantTask("task-managed", TENANT_ID);
+
+        assertEquals("task-managed", result.taskId());
+        assertEquals("session-managed", result.sessionId());
+        assertEquals("durable-owner", result.ownerUserId());
+        assertEquals(TENANT_ID, result.tenantId());
+        assertEquals("agent-managed", result.logicalAgentId());
+        assertEquals("ManagedTaskIdentity[content-free]", result.toString());
+    }
+
+    @Test
+    void requireTenantTask_crossTenantAndTenantlessFailBeforeSessionLookup() {
+        when(sessionTaskRepository.findByTaskId("task-cross-tenant"))
+                .thenReturn(Optional.of(managedTask(
+                        "task-cross-tenant", "session-1", "owner-1",
+                        "tenant-other", "agent-1")));
+
+        assertDenied(() -> service.requireTenantTask(
+                "task-cross-tenant", TENANT_ID));
+        assertDenied(() -> service.requireTenantTask("task-tenantless", null));
+
+        verifyNoInteractions(sessionRepository);
+    }
+
+    @Test
+    void requireTenantTask_incompleteTaskAndSessionDriftFailClosed() {
+        SessionTaskEntity incomplete = managedTask(
+                "task-incomplete", "session-1", "owner-1", TENANT_ID, null);
+        when(sessionTaskRepository.findByTaskId("task-incomplete"))
+                .thenReturn(Optional.of(incomplete));
+        assertDenied(() -> service.requireTenantTask("task-incomplete", TENANT_ID));
+
+        SessionTaskEntity task = managedTask(
+                "task-session-drift", "session-drift", "owner-1", TENANT_ID,
+                "agent-1");
+        SessionEntity drift = ownedSession(
+                "session-drift", "owner-other", TENANT_ID);
+        when(sessionTaskRepository.findByTaskId("task-session-drift"))
+                .thenReturn(Optional.of(task));
+        when(sessionRepository.findByIdAndUserIdAndTenantId(
+                "session-drift", "owner-1", TENANT_ID))
+                .thenReturn(Optional.of(drift));
+
+        assertDenied(() -> service.requireTenantTask(
+                "task-session-drift", TENANT_ID));
+    }
+
+    @Test
+    void requireTenantTask_deletedSessionFailsClosed() {
+        SessionTaskEntity task = managedTask(
+                "task-deleted", "session-deleted", "owner-1", TENANT_ID,
+                "agent-1");
+        SessionEntity deleted = ownedSession(
+                "session-deleted", "owner-1", TENANT_ID);
+        deleted.setStatus("DELETED");
+        when(sessionTaskRepository.findByTaskId("task-deleted"))
+                .thenReturn(Optional.of(task));
+        when(sessionRepository.findByIdAndUserIdAndTenantId(
+                "session-deleted", "owner-1", TENANT_ID))
+                .thenReturn(Optional.of(deleted));
+
+        assertDenied(() -> service.requireTenantTask("task-deleted", TENANT_ID));
+    }
+
     private static void assertDenied(Runnable invocation) {
         SecurityException exception = assertThrows(SecurityException.class, invocation::run);
         assertEquals(DENIED_MESSAGE, exception.getMessage());
@@ -242,6 +320,17 @@ class SessionTaskResourceAccessServiceTest {
         task.setSessionId(sessionId);
         task.setUserId(userId);
         task.setTenantId(tenantId);
+        return task;
+    }
+
+    private static SessionTaskEntity managedTask(
+            String taskId,
+            String sessionId,
+            String userId,
+            String tenantId,
+            String agentId) {
+        SessionTaskEntity task = ownedTask(taskId, sessionId, userId, tenantId);
+        task.setAgentId(agentId);
         return task;
     }
 }

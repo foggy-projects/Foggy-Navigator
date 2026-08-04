@@ -41,6 +41,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
@@ -62,6 +63,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -372,6 +374,98 @@ class CommandOnceReceiptServiceTest {
     }
 
     @Test
+    void managementFenceRunsInsidePrepareReplayAndBeginWriteTransactions() {
+        ControllableManagementFence fence = new ControllableManagementFence();
+        CommandOnceReceiptService fenced = new CommandOnceReceiptService(
+                receipts, authority, clock, transactionManager, List.of(fence));
+        Issued issued = issue(authority, managementBinding("domain-drift"));
+
+        assertThat(fenced.prepare(issued.envelope(), issued.decision()).disposition())
+                .isEqualTo(PrepareDisposition.CREATED);
+        fence.reject("TERMINATION_MANAGEMENT_DOMAIN_NOT_NON_ENFORCED");
+
+        assertThatThrownBy(() -> fenced.prepare(
+                issued.envelope(), issued.decision()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("TERMINATION_MANAGEMENT_DOMAIN_NOT_NON_ENFORCED");
+        assertThatThrownBy(() -> fenced.beginEffect(
+                issued.envelope(), issued.decision()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("TERMINATION_MANAGEMENT_DOMAIN_NOT_NON_ENFORCED");
+
+        assertThat(fence.calls()).isEqualTo(3);
+        assertThat(service.find("request-management-domain-drift"))
+                .hasValueSatisfying(snapshot -> assertThat(snapshot.state())
+                        .isEqualTo(ReceiptState.PREPARED));
+    }
+
+    @Test
+    void recordedManagementResultReplaysWithoutCurrentDomainRecheck() {
+        ControllableManagementFence fence = new ControllableManagementFence();
+        CommandOnceReceiptService fenced = new CommandOnceReceiptService(
+                receipts, authority, clock, transactionManager, List.of(fence));
+        Issued issued = issue(authority, managementBinding("recorded-domain"));
+        fenced.prepare(issued.envelope(), issued.decision());
+        EffectPermit permit = fenced.beginEffect(issued.envelope(), issued.decision());
+        fenced.recordResult(
+                issued.envelope().binding().request().clientRequestId(),
+                permit.snapshot().effectAttemptId(),
+                "TASK:task-recorded-domain",
+                "TERMINATION_REQUEST_ACCEPTED");
+        assertThat(fence.calls()).isEqualTo(2);
+        fence.reject("TERMINATION_MANAGEMENT_DOMAIN_NOT_NON_ENFORCED");
+
+        assertThat(fenced.prepare(
+                issued.envelope(), issued.decision()).snapshot().state())
+                .isEqualTo(ReceiptState.RESULT_RECORDED);
+        assertThat(fenced.beginEffect(
+                issued.envelope(), issued.decision()).disposition())
+                .isEqualTo(BeginEffectDisposition.RESULT_RECORDED);
+        assertThat(fence.calls()).isEqualTo(2);
+    }
+
+    @Test
+    void fourArgumentConstructorFailsClosedForManagementRoute() {
+        CommandOnceReceiptService unfenced = new CommandOnceReceiptService(
+                receipts, authority, clock, transactionManager);
+        Issued issued = issue(authority, managementBinding("missing-fence"));
+
+        assertThatThrownBy(() -> unfenced.prepare(
+                issued.envelope(), issued.decision()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("TERMINATION_MANAGEMENT_DOMAIN_FENCE_MISSING");
+        assertThat(rowCount()).isZero();
+    }
+
+    @Test
+    void duplicateManagementPrepareRecoveryReentersWriteFence() throws Exception {
+        CommandBinding binding = managementBinding("duplicate-fence");
+        Issued first = issue(authority, binding);
+        Issued second = issue(authority, binding);
+        FirstMissingBarrierRepository barrierRepository =
+                new FirstMissingBarrierRepository(receipts);
+        ControllableManagementFence fence = new ControllableManagementFence();
+        CommandOnceReceiptService firstService = new CommandOnceReceiptService(
+                barrierRepository, authority, clock, transactionManager, List.of(fence));
+        CommandOnceReceiptService secondService = new CommandOnceReceiptService(
+                barrierRepository, authority, clock, transactionManager, List.of(fence));
+
+        List<CommandOnceReceiptService.PrepareResult> results = concurrently(
+                () -> firstService.prepare(first.envelope(), first.decision()),
+                () -> secondService.prepare(second.envelope(), second.decision()));
+
+        assertThat(results)
+                .filteredOn(result -> result.disposition() == PrepareDisposition.CREATED)
+                .hasSize(1);
+        assertThat(results)
+                .filteredOn(result -> result.disposition()
+                        == PrepareDisposition.AUTHORIZATION_RENEWAL_ACCEPTED)
+                .hasSize(1);
+        assertThat(fence.calls()).isEqualTo(3);
+        assertThat(rowCount()).isEqualTo(1);
+    }
+
+    @Test
     void startedReceiptNeverReplaysAndTerminalUpdatesAreExactWithoutLiveDecision() {
         CommandBinding ambiguousBinding = binding("ambiguous");
         Issued ambiguousIssued = issue(authority, ambiguousBinding);
@@ -624,6 +718,42 @@ class CommandOnceReceiptServiceTest {
                 new Effect("create-task", "scope-" + suffix));
     }
 
+    private static CommandBinding managementBinding(String suffix) {
+        String requestId = "request-management-" + suffix;
+        String taskId = "task-" + suffix;
+        return new CommandBinding(
+                CommandKind.TERMINATE,
+                new Ingress(
+                        CommandIngress.OPENAPI,
+                        CommandReceiptTransactionFence.OPEN_API_CLIENT_SURFACE,
+                        CommandReceiptTransactionFence
+                                .OPEN_API_AGENT_TASK_CANCEL_ROUTE),
+                new Request(requestId, requestId, requestId),
+                new Actor(
+                        ActorKind.AUTHENTICATED_PRINCIPAL,
+                        AuthorizationPrincipalType.NAVIGATOR_USER,
+                        AuthorizationCredentialLane.NAVIGATOR_JWT,
+                        "management-fingerprint-" + suffix,
+                        null),
+                new Ownership(
+                        "navi.tenant.present.v1:tenant-1",
+                        "durable-owner",
+                        null,
+                        null),
+                new Target(
+                        TargetKind.TASK,
+                        taskId,
+                        "agent-1",
+                        "codex-worker",
+                        "worker-1",
+                        "model-config-1",
+                        taskId,
+                        "session-1"),
+                new Effect(
+                        CommandReceiptTransactionFence.TASK_TERMINATE_ACTION,
+                        "termination-scope-" + suffix));
+    }
+
     private static CommandBinding withKind(CommandBinding value, CommandKind kind) {
         return new CommandBinding(kind, value.ingress(), value.request(), value.actor(),
                 value.ownership(), value.target(), value.effect());
@@ -705,16 +835,53 @@ class CommandOnceReceiptServiceTest {
     private record BindingVariant(String field, CommandBinding binding) {
     }
 
+    private static final class ControllableManagementFence
+            implements CommandReceiptTransactionFence {
+
+        private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicReference<LockedDomain> result =
+                new AtomicReference<>(LockedDomain.allowed());
+
+        @Override
+        public boolean claims(CommandBinding binding) {
+            return CommandReceiptTransactionFence
+                    .requiresOpenApiAgentTaskTerminationFence(binding);
+        }
+
+        @Override
+        public LockedDomain lock(CommandBinding binding) {
+            if (!TransactionSynchronizationManager.isActualTransactionActive()
+                    || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                throw new AssertionError(
+                        "management fence requires an active write transaction");
+            }
+            calls.incrementAndGet();
+            return result.get();
+        }
+
+        void reject(String safeCode) {
+            result.set(LockedDomain.rejected(safeCode));
+        }
+
+        int calls() {
+            return calls.get();
+        }
+    }
+
     /**
-     * Forces only the two initial reads to observe a missing row. All database operations still
-     * use the actual Spring Data proxy so the losing save must exit its failed transaction before
-     * the service performs the recovery lookup in a new transaction.
+     * Forces the two initial reads to observe a missing row. For fenced prepare it also makes the
+     * first two receipt-lock lookups return missing together, deterministically exercising the
+     * duplicate-insert recovery path instead of allowing either valid database scheduling. All
+     * writes still use the actual Spring Data proxy, so the losing save must exit its failed
+     * transaction before the service performs recovery in a new transaction.
      */
     private static final class FirstMissingBarrierRepository
             implements CommandOnceReceiptRepository {
 
         private final CommandOnceReceiptRepository delegate;
         private final CountDownLatch bothInitialReadsCompleted = new CountDownLatch(2);
+        private final CountDownLatch bothInitialReceiptLocksCompleted =
+                new CountDownLatch(2);
 
         private FirstMissingBarrierRepository(CommandOnceReceiptRepository delegate) {
             this.delegate = delegate;
@@ -755,6 +922,21 @@ class CommandOnceReceiptServiceTest {
 
         @Override
         public Optional<CommandOnceReceiptEntity> findByReceiptIdForUpdate(String receiptId) {
+            if (bothInitialReceiptLocksCompleted.getCount() > 0) {
+                bothInitialReceiptLocksCompleted.countDown();
+                try {
+                    if (!bothInitialReceiptLocksCompleted.await(
+                            5, TimeUnit.SECONDS)) {
+                        throw new AssertionError(
+                                "concurrent receipt-lock barrier timed out");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(
+                            "concurrent receipt-lock barrier interrupted", interrupted);
+                }
+                return Optional.empty();
+            }
             return delegate.findByReceiptIdForUpdate(receiptId);
         }
     }

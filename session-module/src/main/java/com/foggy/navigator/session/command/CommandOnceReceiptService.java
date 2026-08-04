@@ -5,6 +5,7 @@ import com.foggy.navigator.session.command.repository.CommandOnceReceiptReposito
 import com.foggy.navigator.session.config.SessionModuleAutoConfiguration;
 import com.foggy.navigator.spi.command.CanonicalCommandEnvelope;
 import com.foggy.navigator.spi.command.VerifiedCommandAuthorizationDecision;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -55,6 +57,7 @@ public class CommandOnceReceiptService {
     private final Clock clock;
     private final TransactionTemplate writes;
     private final TransactionTemplate reads;
+    private final List<CommandReceiptTransactionFence> transactionFences;
 
     public CommandOnceReceiptService(
             CommandOnceReceiptRepository receipts,
@@ -62,43 +65,92 @@ public class CommandOnceReceiptService {
             @Qualifier(SessionModuleAutoConfiguration.CANONICAL_COMMAND_AUTHORITY_CLOCK)
             Clock clock,
             PlatformTransactionManager transactionManager) {
+        this(receipts, authority, clock, transactionManager, List.of());
+    }
+
+    @Autowired
+    public CommandOnceReceiptService(
+            CommandOnceReceiptRepository receipts,
+            VerifiedCommandAuthorizationDecision.ServerAuthority authority,
+            @Qualifier(SessionModuleAutoConfiguration.CANONICAL_COMMAND_AUTHORITY_CLOCK)
+            Clock clock,
+            PlatformTransactionManager transactionManager,
+            List<CommandReceiptTransactionFence> transactionFences) {
         this.receipts = Objects.requireNonNull(receipts, "receipts must not be null");
         this.authority = Objects.requireNonNull(authority, "authority must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
         Objects.requireNonNull(transactionManager, "transactionManager must not be null");
         this.writes = requiresNew(transactionManager, false);
         this.reads = requiresNew(transactionManager, true);
+        this.transactionFences = List.copyOf(Objects.requireNonNull(
+                transactionFences, "transactionFences must not be null"));
     }
 
     public PrepareResult prepare(
             CanonicalCommandEnvelope envelope,
             VerifiedCommandAuthorizationDecision decision) {
         Candidate candidate = verifiedCandidate(envelope, decision);
+        if (!hasTransactionFenceDomain(candidate.binding())) {
+            return prepareWithoutFence(envelope, candidate);
+        }
+        CommandOnceReceiptEntity.ReceiptState observed = observeReceiptState(candidate);
+        try {
+            return writes.execute(status -> prepareFencedInTransaction(
+                    envelope, candidate, observed));
+        } catch (DataIntegrityViolationException duplicate) {
+            CommandOnceReceiptEntity.ReceiptState recovered =
+                    observeReceiptState(candidate);
+            if (recovered == null) {
+                throw duplicate;
+            }
+            return writes.execute(status -> prepareFencedInTransaction(
+                    envelope, candidate, recovered));
+        }
+    }
+
+    public EffectPermit beginEffect(
+            CanonicalCommandEnvelope envelope,
+            VerifiedCommandAuthorizationDecision decision) {
+        Candidate candidate = verifiedCandidate(envelope, decision);
+        if (!hasTransactionFenceDomain(candidate.binding())) {
+            return writes.execute(status -> beginEffectInTransaction(
+                    candidate,
+                    CommandReceiptTransactionFence.LockedDomain.allowed()));
+        }
+        CommandOnceReceiptEntity.ReceiptState observed = observeReceiptState(candidate);
+        if (observed == null) {
+            throw conflict(RECEIPT_NOT_FOUND);
+        }
+        return writes.execute(status -> {
+            CommandReceiptTransactionFence.LockedDomain lockedDomain =
+                    observed == CommandOnceReceiptEntity.ReceiptState.PREPARED
+                            ? lockClaimedDomain(candidate.binding())
+                            : null;
+            return beginEffectInTransaction(candidate, lockedDomain);
+        });
+    }
+
+    private PrepareResult prepareWithoutFence(
+            CanonicalCommandEnvelope envelope,
+            Candidate candidate) {
         try {
             return writes.execute(status -> {
                 CommandOnceReceiptEntity existing = receipts
                         .findByClientRequestId(candidate.clientRequestId())
                         .orElse(null);
                 if (existing != null) {
-                    return replay(existing, candidate);
+                    requireStableBinding(existing, candidate);
+                    return replayAfterStableBinding(existing, candidate);
                 }
-                CommandOnceReceiptEntity created = CommandOnceReceiptEntity.prepared(
-                        candidate.receiptId(),
-                        envelope,
-                        DIGEST_VERSION,
-                        candidate.bindingDigest(),
-                        DIGEST_VERSION,
-                        candidate.authorizationBindingDigest(),
-                        now());
-                receipts.saveAndFlush(created);
-                return new PrepareResult(
-                        PrepareDisposition.CREATED,
-                        snapshot(created));
+                return createPrepared(envelope, candidate);
             });
         } catch (DataIntegrityViolationException duplicate) {
             PrepareResult recovered = reads.execute(status -> receipts
                     .findByClientRequestId(candidate.clientRequestId())
-                    .map(existing -> replay(existing, candidate))
+                    .map(existing -> {
+                        requireStableBinding(existing, candidate);
+                        return replayAfterStableBinding(existing, candidate);
+                    })
                     .orElse(null));
             if (recovered == null) {
                 throw duplicate;
@@ -107,32 +159,122 @@ public class CommandOnceReceiptService {
         }
     }
 
-    public EffectPermit beginEffect(
-            CanonicalCommandEnvelope envelope,
-            VerifiedCommandAuthorizationDecision decision) {
-        Candidate candidate = verifiedCandidate(envelope, decision);
-        return writes.execute(status -> {
-            CommandOnceReceiptEntity receipt = locked(candidate.receiptId());
-            requireStableBinding(receipt, candidate);
-            return switch (receipt.getState()) {
-                case PREPARED -> {
-                    receipt.beginEffect(UUID.randomUUID().toString(), now());
-                    receipts.saveAndFlush(receipt);
-                    yield new EffectPermit(
-                            BeginEffectDisposition.PERMITTED,
-                            snapshot(receipt));
+    private EffectPermit beginEffectInTransaction(
+            Candidate candidate,
+            CommandReceiptTransactionFence.LockedDomain lockedDomain) {
+        CommandOnceReceiptEntity receipt = locked(candidate.receiptId());
+        requireStableBinding(receipt, candidate);
+        return switch (receipt.getState()) {
+            case PREPARED -> {
+                if (lockedDomain == null) {
+                    throw conflict(STATE_CONFLICT);
                 }
-                case EFFECT_STARTED -> new EffectPermit(
-                        BeginEffectDisposition.ALREADY_STARTED,
+                lockedDomain.requireEligible();
+                receipt.beginEffect(UUID.randomUUID().toString(), now());
+                receipts.saveAndFlush(receipt);
+                yield new EffectPermit(
+                        BeginEffectDisposition.PERMITTED,
                         snapshot(receipt));
-                case RESULT_RECORDED -> new EffectPermit(
-                        BeginEffectDisposition.RESULT_RECORDED,
-                        snapshot(receipt));
-                case AMBIGUOUS -> new EffectPermit(
-                        BeginEffectDisposition.AMBIGUOUS,
-                        snapshot(receipt));
-            };
-        });
+            }
+            case EFFECT_STARTED -> new EffectPermit(
+                    BeginEffectDisposition.ALREADY_STARTED,
+                    snapshot(receipt));
+            case RESULT_RECORDED -> new EffectPermit(
+                    BeginEffectDisposition.RESULT_RECORDED,
+                    snapshot(receipt));
+            case AMBIGUOUS -> new EffectPermit(
+                    BeginEffectDisposition.AMBIGUOUS,
+                    snapshot(receipt));
+        };
+    }
+
+    private PrepareResult prepareFencedInTransaction(
+            CanonicalCommandEnvelope envelope,
+            Candidate candidate,
+            CommandOnceReceiptEntity.ReceiptState observed) {
+        CommandReceiptTransactionFence.LockedDomain lockedDomain =
+                observed == null
+                        || observed == CommandOnceReceiptEntity.ReceiptState.PREPARED
+                        ? lockClaimedDomain(candidate.binding())
+                        : null;
+        CommandOnceReceiptEntity existing = receipts
+                .findByReceiptIdForUpdate(candidate.receiptId())
+                .orElse(null);
+        if (existing != null) {
+            requireStableBinding(existing, candidate);
+            if (existing.getState() == CommandOnceReceiptEntity.ReceiptState.PREPARED) {
+                if (lockedDomain == null) {
+                    throw conflict(STATE_CONFLICT);
+                }
+                lockedDomain.requireEligible();
+            }
+            return replayAfterStableBinding(existing, candidate);
+        }
+        if (observed != null) {
+            throw conflict(RECEIPT_NOT_FOUND);
+        }
+        if (lockedDomain == null) {
+            throw conflict(STATE_CONFLICT);
+        }
+        lockedDomain.requireEligible();
+        return createPrepared(envelope, candidate);
+    }
+
+    private PrepareResult createPrepared(
+            CanonicalCommandEnvelope envelope,
+            Candidate candidate) {
+        CommandOnceReceiptEntity created = CommandOnceReceiptEntity.prepared(
+                candidate.receiptId(),
+                envelope,
+                DIGEST_VERSION,
+                candidate.bindingDigest(),
+                DIGEST_VERSION,
+                candidate.authorizationBindingDigest(),
+                now());
+        receipts.saveAndFlush(created);
+        return new PrepareResult(
+                PrepareDisposition.CREATED,
+                snapshot(created));
+    }
+
+    private boolean hasTransactionFenceDomain(
+            CanonicalCommandEnvelope.CommandBinding binding) {
+        return CommandReceiptTransactionFence
+                .requiresOpenApiAgentTaskTerminationFence(binding)
+                || transactionFences.stream().anyMatch(fence -> fence.claims(binding));
+    }
+
+    private CommandOnceReceiptEntity.ReceiptState observeReceiptState(
+            Candidate candidate) {
+        return reads.execute(status -> receipts
+                .findByClientRequestId(candidate.clientRequestId())
+                .map(receipt -> {
+                    requireStableBinding(receipt, candidate);
+                    return receipt.getState();
+                })
+                .orElse(null));
+    }
+
+    private CommandReceiptTransactionFence.LockedDomain lockClaimedDomain(
+            CanonicalCommandEnvelope.CommandBinding binding) {
+        List<CommandReceiptTransactionFence> claiming = transactionFences.stream()
+                .filter(fence -> fence.claims(binding))
+                .toList();
+        boolean required = CommandReceiptTransactionFence
+                .requiresOpenApiAgentTaskTerminationFence(binding);
+        if (claiming.isEmpty()) {
+            return required
+                    ? CommandReceiptTransactionFence.LockedDomain.rejected(
+                    "TERMINATION_MANAGEMENT_DOMAIN_FENCE_MISSING")
+                    : CommandReceiptTransactionFence.LockedDomain.allowed();
+        }
+        if (claiming.size() != 1) {
+            return CommandReceiptTransactionFence.LockedDomain.rejected(
+                    "TERMINATION_COMMAND_DOMAIN_FENCE_CONFLICT");
+        }
+        return Objects.requireNonNull(
+                claiming.get(0).lock(binding),
+                "transaction fence locked domain must not be null");
     }
 
     public ReceiptSnapshot recordResult(
@@ -235,13 +377,13 @@ public class CommandOnceReceiptService {
                 receiptId(clientRequestId),
                 envelopeBindingDigest,
                 authorizationBindingDigest,
-                authorization);
+                authorization,
+                envelope.binding());
     }
 
-    private PrepareResult replay(
+    private PrepareResult replayAfterStableBinding(
             CommandOnceReceiptEntity existing,
             Candidate candidate) {
-        requireStableBinding(existing, candidate);
         PrepareDisposition disposition = sameInitialAuthorization(
                 existing, candidate.authorization())
                 ? PrepareDisposition.EXACT_REPLAY
@@ -509,7 +651,8 @@ public class CommandOnceReceiptService {
             String receiptId,
             String bindingDigest,
             String authorizationBindingDigest,
-            CanonicalCommandEnvelope.AuthorizationMetadata authorization) {
+            CanonicalCommandEnvelope.AuthorizationMetadata authorization,
+            CanonicalCommandEnvelope.CommandBinding binding) {
     }
 
     private static final class CanonicalDigest {

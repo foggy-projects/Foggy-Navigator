@@ -186,6 +186,38 @@ class TrustedNavigatorCommandIngressAuthorityTest {
         assertEquals("clientRequestId must be a canonical UUID", invalid.getMessage());
     }
 
+    @Test
+    void openApiManagementTerminationDescriptorKeepsExistingCredentialLanes() {
+        String route = "/api/v1/open/agents/{agentId}/tasks/{taskId}/cancel";
+        TrustedNavigatorCommandIngressAuthority.IngressDescriptor descriptor =
+                TrustedNavigatorCommandIngressAuthority.IngressDescriptor
+                        .OPEN_API_MANAGEMENT_TASK_TERMINATE;
+        MockHttpServletRequest request = bindRequest("POST", route);
+        request.addParameter("token", "raw-query-secret");
+        AgentResolveContext openApi = AgentResolveContext.builder()
+                .userId(USER_ID)
+                .tenantId(TENANT_ID)
+                .requestSource("OPEN_API")
+                .build();
+
+        TrustedNavigatorCommandIngressAuthority.VerifiedIngress verified =
+                authority.require(openApi, List.of(descriptor), "ROUTE_CONFLICT");
+
+        assertEquals(CanonicalCommandEnvelope.CommandIngress.OPENAPI,
+                verified.commandIngress());
+        assertEquals("NAVIGATOR_OPEN_API", verified.clientSurface());
+        assertEquals(route, verified.routeId());
+        assertEquals(AuthorizationCredentialLane.NAVIGATOR_JWT,
+                verified.credentialLane());
+
+        MockHttpServletRequest wrongSource = bindRequest("POST", route);
+        wrongSource.addHeader("X-API-Key", "raw-api-key-secret");
+        SecurityException rejected = assertThrows(SecurityException.class,
+                () -> authority.require(
+                        context(), List.of(descriptor), "ROUTE_CONFLICT"));
+        assertEquals("ROUTE_CONFLICT", rejected.getMessage());
+    }
+
     private void assertSafeSecurity(String expectedCode) {
         SecurityException failure = assertThrows(SecurityException.class,
                 () -> authority.require(context(), List.of(EXPECTED), "ROUTE_CONFLICT"));

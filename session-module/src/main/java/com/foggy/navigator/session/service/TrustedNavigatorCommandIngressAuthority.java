@@ -297,6 +297,11 @@ final class TrustedNavigatorCommandIngressAuthority {
                 "NAVIGATOR_A2A",
                 "/api/v1/agents/{agentId}/tasks/{taskId}/cancel",
                 "A2A"),
+        OPEN_API_MANAGEMENT_TASK_TERMINATE(
+                CanonicalCommandEnvelope.CommandIngress.OPENAPI,
+                "NAVIGATOR_OPEN_API",
+                "/api/v1/open/agents/{agentId}/tasks/{taskId}/cancel",
+                "OPEN_API"),
         SESSION_FORWARD_CREATE(
                 CanonicalCommandEnvelope.CommandIngress.DIRECT,
                 "NAVIGATOR_UI_FORWARD",

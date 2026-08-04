@@ -68,6 +68,44 @@ public class SessionTaskResourceAccessService {
         return task;
     }
 
+    /**
+     * Resolves a management-visible Task by tenant while preserving its durable owner.
+     *
+     * <p>This is not an owner bypass for ordinary callers. It is a narrow input to the trusted
+     * OpenAPI management adapter, which binds the returned owner into the canonical command and
+     * Provider plan. Tenantless Tasks and inconsistent Task/Session ownership fail closed.</p>
+     */
+    ManagedTaskIdentity requireTenantTask(String taskId, String tenantId) {
+        if (!hasText(taskId) || !hasText(tenantId)) {
+            throw accessDenied();
+        }
+        SessionTaskEntity task = sessionTaskRepository.findByTaskId(taskId)
+                .orElseThrow(SessionTaskResourceAccessService::accessDenied);
+        if (!taskId.equals(task.getTaskId())
+                || !tenantId.equals(task.getTenantId())
+                || !hasText(task.getUserId())
+                || !hasText(task.getSessionId())
+                || !hasText(task.getAgentId())) {
+            throw accessDenied();
+        }
+        SessionEntity session = sessionRepository
+                .findByIdAndUserIdAndTenantId(
+                        task.getSessionId(), task.getUserId(), tenantId)
+                .orElseThrow(SessionTaskResourceAccessService::accessDenied);
+        if (!task.getSessionId().equals(session.getId())
+                || !task.getUserId().equals(session.getUserId())
+                || !tenantId.equals(session.getTenantId())
+                || isDeleted(session)) {
+            throw accessDenied();
+        }
+        return new ManagedTaskIdentity(
+                task.getTaskId(),
+                task.getSessionId(),
+                task.getUserId(),
+                task.getTenantId(),
+                task.getAgentId());
+    }
+
     private Optional<SessionEntity> findOwnedSession(String sessionId,
                                                      String userId,
                                                      String tenantId) {
@@ -115,5 +153,28 @@ public class SessionTaskResourceAccessService {
 
     private static SecurityException accessDenied() {
         return new SecurityException(ACCESS_DENIED_MESSAGE);
+    }
+
+    record ManagedTaskIdentity(
+            String taskId,
+            String sessionId,
+            String ownerUserId,
+            String tenantId,
+            String logicalAgentId) {
+        ManagedTaskIdentity {
+            if (!hasText(taskId)
+                    || !hasText(sessionId)
+                    || !hasText(ownerUserId)
+                    || !hasText(tenantId)
+                    || !hasText(logicalAgentId)) {
+                throw new IllegalArgumentException(
+                        "managed Task identity must be complete");
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "ManagedTaskIdentity[content-free]";
+        }
     }
 }
