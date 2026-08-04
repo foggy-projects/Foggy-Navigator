@@ -28,9 +28,11 @@ company behavior are unchanged.
 
 The owner's isolated canary is now running beside the legacy deployment. The new Navigator uses
 8122, its frontend uses 5175, and its Host/CodexWorker/Runtime/Access use 4700/4720/4850/4860;
-every endpoint is loopback-only. The legacy Navigator remained on its original PID and 8112, and
-the legacy 303x Workers were not restarted. Other users continue to use the unchanged stable
-deployment.
+the backend and platform endpoints remain loopback-only. The frontend serves the built static
+bundle on WSL `0.0.0.0:5175`; a scoped Windows helper is provided to expose only host port 5175 to
+its Private local subnet after administrator approval. The legacy Navigator remained on its
+original PID and 8112, and the legacy 303x Workers were not restarted. Other users continue to use
+the unchanged stable deployment.
 
 ## Boundary implemented
 
@@ -87,6 +89,14 @@ deployment.
   accepted reattach, and returned two resource references.
 - The actual Vite proxy returned `packaged=true`, `enabled=true`, `eligible=true`, lane `FAP_V1`;
   the same catalog route without identity returned 403.
+- The personal frontend now runs `vite preview` against the built bundle instead of exposing the
+  Vite source/HMR development surface. Its WSL-address root returned 200 while an unauthenticated
+  FAP catalog request through the same proxy returned 403. Type-check and the affected frontend
+  package build passed.
+- The Windows helper resolved `tms-dev` as `172.19.203.16` and the Private LAN address as
+  `192.168.31.119`. Host port-proxy and firewall activation still require an interactive Windows
+  administrator approval; until `Status` reports both configured flags as true, the LAN URL is not
+  an active delivery claim.
 - Default/company profile and old data were not modified. No repository-wide/full-provider/E2E test
   was run or authorized.
 
@@ -96,6 +106,13 @@ The composite controller is `scripts/workbench-fap-personal-canary.py` with `sta
 `smoke`, and `stop`. Login data is generated once in the private canary state root and is never
 printed or committed. `smoke` creates new provider facts, so it is an explicit focused validation
 operation rather than part of ordinary startup.
+
+Windows NAT-mode WSL ingress is managed by `scripts/workbench-fap-wsl-lan.ps1`. `Apply` resolves the
+current `tms-dev` WSL IPv4 address, replaces only the exact Windows `0.0.0.0:5175` port-proxy entry,
+and installs one inbound firewall rule restricted to the Private profile and `LocalSubnet` remote
+scope. `Status` is read-only and `Remove` removes only that exact mapping and named rule. Because a
+NAT-mode WSL address can change after the WSL VM restarts, rerun `Apply` when `Status` reports
+`portProxyConfigured=false`; no backend, Runtime, Access, Host, or Worker port is exposed.
 
 1. Use the personal instance for ordinary Workbench tasks and record concrete defects; do not
    repeatedly run the smoke after documentation-only changes.

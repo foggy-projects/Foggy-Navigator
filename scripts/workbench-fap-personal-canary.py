@@ -76,7 +76,7 @@ def start_canary() -> None:
         raise RuntimeError(f"PERSONAL_WORKBENCH_PARTIAL_OR_UNSAFE_STATE: {states}")
     assert_artifacts()
     assert_port_available(BACKEND_PORT)
-    assert_port_available(FRONTEND_PORT)
+    assert_port_available(FRONTEND_PORT, "0.0.0.0")
     private = load_or_create_secrets()
 
     if not OWNER_PATH.is_file():
@@ -404,8 +404,9 @@ def spawn_frontend() -> None:
         [
             required_executable("node"),
             str(vite),
+            "preview",
             "--host",
-            "127.0.0.1",
+            "0.0.0.0",
             "--port",
             str(FRONTEND_PORT),
             "--strictPort",
@@ -658,6 +659,7 @@ def assert_artifacts() -> None:
     required = (
         REPOSITORY_ROOT / "launcher/target/launcher-1.0.0-SNAPSHOT.jar",
         REPOSITORY_ROOT / "packages/navigator-frontend/node_modules/vite/bin/vite.js",
+        REPOSITORY_ROOT / "packages/navigator-frontend/dist/index.html",
         PLATFORM_CONTROLLER,
     )
     missing = [str(path) for path in required if not path.is_file()]
@@ -691,11 +693,11 @@ def clean_navigator_environment(values: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def assert_port_available(port: int) -> None:
+def assert_port_available(port: int, host: str = "127.0.0.1") -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
         candidate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            candidate.bind(("127.0.0.1", port))
+            candidate.bind((host, port))
         except OSError as error:
             raise RuntimeError(f"PERSONAL_FAP_PORT_{port}_NOT_AVAILABLE") from error
 
