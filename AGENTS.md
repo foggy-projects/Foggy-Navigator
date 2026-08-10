@@ -1,5 +1,18 @@
 # Foggy Navigator Repository Guidance
 
+## Product Lifecycle Status: Legacy Frozen
+
+自 2026-08-10 起，本仓库作为仍在内网运行的旧版 Navigator 保持封版维护，不再推进新功能。
+
+- 新产品能力、体验优化、新 Worker、新业务接入和平台演进统一进入 Foggy Agent Platform；不得在本仓库复制实现。
+- 仅允许修复严重安全问题、数据不可恢复风险、影响现有内网使用的 P0/P1 缺陷，以及完成必要的依赖或凭据轮换。
+- 维护修改不得改变既有产品定位、公共契约、数据事实或默认运行拓扑；不得借维护名义恢复已退役模块。
+- 对封版范围之外的请求，先给出迁移到 FAP 或在 FAP 重新设计的建议；除非用户明确解除封版，不在本仓库实施。
+- 当前部署可以继续使用；封版不授权停服、删除历史数据、归档数据库、迁移用户或清理运行资源。
+
+Canonical 决策记录见
+[`docs/version-tracker/1.4.4-SNAPSHOT/README.md`](docs/version-tracker/1.4.4-SNAPSHOT/README.md)。
+
 Foggy Navigator 是基于 LangChain4j 的个人 AI Agent 编排中枢。本文件是仓库根目录唯一的 Agent 记忆与开发指引；开始仓库工作前先阅读本文件，不再维护根级 `CLAUDE.md`。
 
 ## Project Sources of Truth

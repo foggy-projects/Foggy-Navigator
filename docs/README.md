@@ -2,6 +2,11 @@
 
 > 当前代码实现对应的文档索引
 
+> [!IMPORTANT]
+> Navigator 已于 2026-08-10 进入旧版封版维护。本文档继续服务既有内网部署和必要维护，
+> 不再作为新功能规划入口；新产品能力转入 Foggy Agent Platform。
+> 参见 [1.4.4-SNAPSHOT 封版维护决策](./version-tracker/1.4.4-SNAPSHOT/README.md)。
+
 ## 核心文档
 
 | 文档 | 说明 | 状态 |

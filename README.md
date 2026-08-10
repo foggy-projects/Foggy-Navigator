@@ -2,6 +2,11 @@
 
 > 多 Worker 远程编程工作台与 Session/Task/A2A 治理平台
 
+> [!IMPORTANT]
+> 本项目自 2026-08-10 起进入旧版封版维护：现有内网部署继续运行，不再新增产品功能。
+> 新能力统一进入 Foggy Agent Platform；本仓库仅接受严重安全、数据可恢复性和 P0/P1 兼容维护。
+> 详见[封版决策](./docs/version-tracker/1.4.4-SNAPSHOT/README.md)。
+
 ## 项目简介
 
 Foggy Navigator 当前是面向内部开发协作的多 Worker 远程编程工作台。平台基于 Spring Boot、Vue 和多类 Worker 运行时，统一治理 Session、Task、A2A、Provider、工作目录和上游集成；当前 Addon 是编译期模块化单体，不是动态插件平台。
