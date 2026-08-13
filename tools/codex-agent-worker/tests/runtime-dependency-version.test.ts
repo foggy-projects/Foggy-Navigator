@@ -92,3 +92,10 @@ test('direct SDK update scripts refuse a resolved version below the installed SD
     assert.match(content, /leaving it unchanged/)
   }
 })
+
+test('PowerShell SDK resolvers silence npm informational stderr before capture', () => {
+  for (const source of ['update-sdk.ps1', 'release/update-sdk.ps1']) {
+    const content = fs.readFileSync(source, 'utf8')
+    assert.match(content, /\$viewArgs = @\("--loglevel=silent", "view", "@openai\/codex-sdk@\$spec", "version"\)/)
+  }
+})

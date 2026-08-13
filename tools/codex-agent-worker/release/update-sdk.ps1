@@ -148,7 +148,11 @@ function Resolve-SdkVersion {
     )
 
     $spec = if ($RequestedVersion) { $RequestedVersion } else { "latest" }
-    $viewArgs = @("view", "@openai/codex-sdk@$spec", "version")
+    # npm 10 writes informational logs to stderr. Keep native stderr quiet while
+    # PowerShell captures the single version value from stdout; with
+    # $ErrorActionPreference = "Stop", an unsilenced npm info line becomes a
+    # NativeCommandError even when npm exits successfully.
+    $viewArgs = @("--loglevel=silent", "view", "@openai/codex-sdk@$spec", "version")
     if ($Registry) { $viewArgs += "--registry=$Registry" }
     $lines = @(& $NpmPath @viewArgs 2>$null)
     if ($LASTEXITCODE -ne 0 -or $lines.Count -eq 0) { return "" }
