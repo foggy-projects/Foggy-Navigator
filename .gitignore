@@ -193,6 +193,7 @@ uploads/
 exports/
 temp/
 cache/
+/BOOT-INF/
 .foggy-attachments/
 
 # Local agent notes
